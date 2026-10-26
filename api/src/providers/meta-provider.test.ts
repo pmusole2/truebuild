@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { createDemoManual, type CheckResult, type ParsedManual } from '@truebuild/contracts'
+import { createDemoManual, manualSessionSchema, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import sharp from 'sharp'
+import { createHeroResponse } from '@truebuild/contracts/hero'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
@@ -9,6 +10,7 @@ import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaPr
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const signal = (): AbortSignal => new AbortController().signal
 const result: CheckResult = {
+    orientationAssessment: 'correct',
     decision: 'pass',
     reason: 'The visible connection matches the cited source.',
     sourceRefs: [{ pageId: 'demo-page-1', region: null }],
@@ -128,6 +130,101 @@ function jsonResponder(body: unknown): Responder {
 }
 
 describe('inactive direct Meta transport', (): void => {
+    it.each(['correct', 'reversed', 'uncertain'] as const)(
+        'accepts conservative synthetic %s orientation',
+        async (orientation) => {
+            const value = createHeroResponse(orientation)
+            await localServer(jsonResponder(responseBody(value)), async (transport) => {
+                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual(value)
+                expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
+            })
+        },
+    )
+
+    it('rejects a new panel pass that omits the optional public orientation field', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+            expect(transport.dispatches()).toBe(1)
+        })
+    })
+
+    it('recognizes a panel by its reviewed name even when parsed IDs are opaque', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            const input = await validInput()
+            input.session = manualSessionSchema.parse(
+                JSON.parse(JSON.stringify(input.session).replaceAll('side-panel', 'part-01')),
+            )
+            await expect(transport.provider.checkStep(input, signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('recognizes underscore-separated panel identities without relying on a groove description', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            const input = await validInput()
+            input.session = manualSessionSchema.parse(
+                JSON.parse(
+                    JSON.stringify(input.session)
+                        .replaceAll('side-panel', 'side_panel')
+                        .replaceAll('Side panel', 'side_panel'),
+                ),
+            )
+            const orientation = input.session.reviewedSteps[0]!.orientation
+            if (orientation.state === 'known') {
+                orientation.value.description = 'Marked face points inward.'
+            }
+            await expect(transport.provider.checkStep(input, signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('rejects explicit correct orientation without the expected diagram citation', async () => {
+        const value = {
+            ...result,
+            sourceRefs: [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }],
+        }
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('rejects reversed citations that do not identify the expected orientation diagram', async () => {
+        const value = createHeroResponse('reversed')
+        value.sourceRefs = [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }]
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it.each([
+        { ...createHeroResponse('reversed'), decision: 'pass' },
+        { ...createHeroResponse('uncertain'), decision: 'pass', missingEvidence: [] },
+    ])('rejects a confident contradictory orientation result %#', async (value) => {
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('accepts only a positive check budget at or below eight seconds', () => {
+        expect(() => createMetaProvider({ checkTimeoutMs: 500 })).not.toThrow()
+        for (const checkTimeoutMs of [0, -1, NaN, Infinity, 8001]) {
+            expect(() => createMetaProvider({ checkTimeoutMs })).toThrow(MetaProviderError)
+        }
+    })
+
     it('fails unconfigured before any validation/media/network work', async (): Promise<void> => {
         const fetchImpl = vi.fn<typeof fetch>()
         const input = await validInput()
@@ -251,7 +348,14 @@ describe('inactive direct Meta transport', (): void => {
         const fetchImpl = vi.fn<typeof fetch>()
         const provider = createMetaProvider({ apiKey: 'synthetic-test-key', fetchImpl })
 
-        for (const variant of ['stale', 'unreviewed', 'foreign-source', 'changed-bytes', 'bad-step'] as const) {
+        for (const variant of [
+            'stale',
+            'unreviewed',
+            'unknown-orientation',
+            'foreign-source',
+            'changed-bytes',
+            'bad-step',
+        ] as const) {
             const input = await validInput()
 
             if (variant === 'stale') {
@@ -259,6 +363,12 @@ describe('inactive direct Meta transport', (): void => {
             }
             if (variant === 'unreviewed') {
                 input.session.reviewStatus = 'unreviewed'
+            }
+            if (variant === 'unknown-orientation') {
+                input.session.reviewedSteps[0]!.orientation = {
+                    state: 'unknown',
+                    reason: 'Facing direction is hidden.',
+                }
             }
             if (variant === 'foreign-source' && input.sourceImages[0]) {
                 input.sourceImages[0].page = { ...input.sourceImages[0].page, assetId: 'foreign' }
