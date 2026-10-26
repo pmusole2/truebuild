@@ -1,0 +1,183 @@
+# TrueBuild .gitignore. First layer only: ignore rules do not remove files that
+# are already tracked (use git rm --cached), and `git add -f` can still stage an
+# ignored file. .githooks/pre-commit refuses any indexed path that matches these
+# rules (git check-ignore --no-index) and also checks its own private-path list.
+
+# Publish only the normal root README. Keep agent notes, research, handoffs,
+# planning/specification documents and extra READMEs local. Automated *.spec.ts
+# tests are source code and remain eligible.
+*.[mM][dD]
+*.[mM][dD][xX]
+*.[mM][aA][rR][kK][dD][oO][wW][nN]
+*.[rR][sS][tT]
+*.[aA][dD][oO][cC]
+[rR][eE][aA][dD][mM][eE]
+[rR][eE][aA][dD][mM][eE].*
+[dD][oO][cC]/
+[dD][oO][cC][sS]/
+[pP][lL][aA][nN]/
+[pP][lL][aA][nN][sS]/
+[pP][lL][aA][nN][nN][iI][nN][gG]/
+[sS][pP][eE][cC]/
+[sS][pP][eE][cC][sS]/
+[sS][pP][eE][cC][iI][fF][iI][cC][aA][tT][iI][oO][nN][sS]/
+!/README.md
+
+# Dotenv and local environment. Sanitized templates stay tracked.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.env
+.envrc
+
+# Credentials, client secrets and app service configs
+.netrc
+.npmrc
+.pypirc
+.aws/
+credentials.json
+*service-account*.json
+*service_account*.json
+*serviceaccount*.json
+client_secret*.json
+client-secret*.json
+secrets.json
+secrets.yaml
+secrets.yml
+[gG][oO][oO][gG][lL][eE][sS][eE][rR][vV][iI][cC][eE]-[iI][nN][fF][oO].[pP][lL][iI][sS][tT]
+[gG][oO][oO][gG][lL][eE]-[sS][eE][rR][vV][iI][cC][eE][sS].[jJ][sS][oO][nN]
+
+# Private keys and certificates
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+*.crt
+*.cer
+*.der
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+
+# Mobile signing and store credentials
+*.mobileprovision
+*.provisionprofile
+key.properties
+keystore.properties
+
+# Local uploads, provider responses and private scratch space
+.local/
+.private/
+uploads/
+provider-responses/
+provider_responses/
+
+# Known personal application draft stems, with any extension, anywhere.
+# Character classes match any case, whatever core.ignorecase says.
+[mM][eE][tT][aA]-[hH][aA][cC][kK][aA][tT][hH][oO][nN]-[aA][pP][pP][lL][iI][cC][aA][tT][iI][oO][nN]
+[mM][eE][tT][aA]-[hH][aA][cC][kK][aA][tT][hH][oO][nN]-[aA][pP][pP][lL][iI][cC][aA][tT][iI][oO][nN].*
+[mM][eE][tT][aA]-[hH][aA][cC][kK][aA][tT][hH][oO][nN]-[pP][aA][sS][tT][eE]-[rR][eE][aA][dD][yY]
+[mM][eE][tT][aA]-[hH][aA][cC][kK][aA][tT][hH][oO][nN]-[pP][aA][sS][tT][eE]-[rR][eE][aA][dD][yY].*
+
+# Logs
+*.log
+*.log.*
+logs/
+
+# Archives (originals are never committed)
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tbz2
+*.tar.xz
+*.txz
+*.zip
+*.7z
+*.rar
+*.gz
+*.xz
+*.bz2
+
+# Raw media captures
+*.mov
+*.mp4
+*.m4v
+*.avi
+*.mkv
+*.webm
+*.heic
+*.heif
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.bmp
+*.tif
+*.tiff
+*.dng
+*.raw
+
+# Raw manual PDFs and audio captures
+*.pdf
+*.m4a
+*.mp3
+*.wav
+*.aac
+*.caf
+*.aiff
+*.flac
+*.ogg
+*.3gp
+*.amr
+
+# Mobile binaries and native build output
+*.apk
+*.aab
+*.ipa
+*.xcarchive
+*.dSYM/
+Pods/
+DerivedData/
+android/build/
+android/app/build/
+android/local.properties
+ios/build/
+ios/**/xcuserdata/
+.gradle/
+
+# Dependencies, build output and caches
+node_modules/
+.expo/
+.expo-shared/
+.next/
+.turbo/
+.vercel/
+.convex/
+dist/
+build/
+out/
+coverage/
+test-results/
+playwright-report/
+.cache/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/

@@ -1,0 +1,11 @@
+{
+  "name": "truebuild-gate-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sam": "tsx sam-smoke.ts",
+    "spark": "tsx spark-manual-smoke.ts"
+  },
+  "dependencies": { "openai": "^4.0.0" },
+  "devDependencies": { "tsx": "^4.0.0" }
+}

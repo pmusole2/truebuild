@@ -1,0 +1,12 @@
+node_modules/
+.local/
+.next/
+.expo/
+dist/
+coverage/
+gate-check/
+docs/
+tests/test_git_guard.py
+playwright-report/
+test-results/
+api/next-env.d.ts

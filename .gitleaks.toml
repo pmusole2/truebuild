@@ -1,0 +1,17 @@
+# TrueBuild gitleaks config. Extends the built-in Gitleaks rules with one rule for
+# a MODEL_API_KEY assignment whose value is 8 or more characters. Shorter values
+# and an empty value are not flagged, so keep real keys in a local .env only.
+# There is intentionally no allowlist here, and the pre-commit hook rejects any
+# .gitleaksignore file or allowlist. Fix the value or use a placeholder instead.
+
+title = "TrueBuild"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "truebuild-model-api-key-assignment"
+description = "MODEL_API_KEY assignment with an 8+ character value (keep the real value in a local .env)"
+regex = '''MODEL_API_KEY[ \t]*[:=][ \t]*["'`]?([^\s"'`<>$]{8,})'''
+secretGroup = 1
+keywords = ["MODEL_API_KEY"]

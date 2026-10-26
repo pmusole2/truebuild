@@ -1,0 +1,45 @@
+{
+    "name": "truebuild",
+    "version": "0.1.0",
+    "private": true,
+    "workspaces": [
+        "packages/contracts",
+        "api",
+        "app"
+    ],
+    "engines": {
+        "node": ">=24.0.0 <25"
+    },
+    "scripts": {
+        "dev": "concurrently -k -n api,app \"npm run dev:api\" \"npm run dev:web\"",
+        "dev:api": "npm run dev --workspace @truebuild/api",
+        "dev:web": "npm run web --workspace @truebuild/app",
+        "typecheck": "npm run typecheck --workspaces && tsc --noEmit -p tsconfig.tools.json",
+        "lint": "eslint packages/contracts/src api/src app playwright.config.ts tests/e2e tools vitest.config.ts eslint.config.mjs --max-warnings 0",
+        "lint:fix": "npm run lint -- --fix",
+        "format": "prettier --write package.json package-lock.json tsconfig.base.json vitest.config.ts eslint.config.mjs .prettierrc.json packages/contracts api app playwright.config.ts tests/e2e tsconfig.tools.json tools",
+        "format:check": "prettier --check package.json package-lock.json tsconfig.base.json vitest.config.ts eslint.config.mjs .prettierrc.json packages/contracts api app playwright.config.ts tests/e2e tsconfig.tools.json tools",
+        "test:unit": "vitest run",
+        "test:ui": "npm run test --workspace @truebuild/app",
+        "test": "npm run test:unit && npm run test:ui",
+        "test:e2e": "playwright test",
+        "evaluate": "tsx tools/evaluate.ts",
+        "dev:api:owner": "node --env-file-if-exists=.env --import tsx tools/dev-owner.ts --resume",
+        "dev:api:new-run": "node --env-file-if-exists=.env --import tsx tools/dev-owner.ts --new-run"
+    },
+    "devDependencies": {
+        "@eslint/js": "10.0.1",
+        "@playwright/test": "1.64.1",
+        "@types/node": "24.10.1",
+        "concurrently": "9.2.5",
+        "eslint": "10.13.0",
+        "fake-indexeddb": "6.2.6",
+        "prettier": "3.9.10",
+        "tsx": "4.23.15",
+        "typescript": "5.9.3",
+        "typescript-eslint": "8.72.1",
+        "vite": "8.3.5",
+        "vitest": "5.0.5"
+    },
+    "type": "module"
+}
