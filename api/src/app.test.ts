@@ -96,6 +96,18 @@ describe('Hono HTTP boundary', (): void => {
             expect(preflight.headers.get('access-control-allow-origin')).toBe(origin)
             expect(preflight.headers.get('access-control-allow-headers')).toBe('Content-Type, X-TrueBuild-Key')
         }
+        const foreignPreflight = await api.request('/api/session', {
+            method: 'OPTIONS',
+            headers: { origin: 'https://foreign.example', 'access-control-request-method': 'GET' },
+        })
+        expect(foreignPreflight.status).toBe(401)
+        expect(await foreignPreflight.json()).toEqual({
+            status: 'unavailable',
+            requestId: 'invalid-request',
+            binding: null,
+            code: 'unauthorized',
+            retryable: false,
+        })
         const denied = await api.request('/api/checks', {
             method: 'POST',
             headers: { origin: 'https://foreign.example' },

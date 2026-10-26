@@ -71,6 +71,9 @@ export function createApp(
             )
         try {
             if (!isAllowedOrigin(request, runtime.allowedOrigins)) {
+                if (request.method === 'OPTIONS') {
+                    return deniedOrigin(401)
+                }
                 return context.req.path === '/api/session' ? sessionFailure() : deniedOrigin()
             }
             const method = methods.get(context.req.path)
