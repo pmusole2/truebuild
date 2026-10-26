@@ -48,8 +48,8 @@ type Summary = {
     reason: string
     requests: number
     latenciesMs: number[]
-    stepAccuracyPercent?: number
-    correctSteps?: number
+    strictStructuralMatchPercent?: number
+    structurallyMatchedSteps?: number
     expectedSteps?: number
     returnedSteps?: number
     sourceCount?: number
@@ -67,22 +67,24 @@ Manifest: {pages:[{path,pageId,assetId,mimeType,width,height}], expected:ParsedM
  prompt?:"side panel", clip?:{path,mimeType:"video/mp4"|"video/quicktime"}}.
 Paths are relative to cwd. Supply real manual/observation media and independently reviewed ground truth.
 --confirm-critical-facts attests that the operator reviewed EVERY critical expected fact and correction against the manual.
-Gate 1: exact expected step/parts agreement, including citations; ~10 expected steps recommended.
+Gate 1: strict structural match of expected steps/parts, including IDs, wording and citations; not semantic step accuracy.
+~10 expected steps recommended. Parse max 3 pages; results report strictStructuralMatchPercent.
 Gate 2: frozen image and original short H264 MP4/MOV through /api/segments; no extracted/synthesized frames.
 Track stability means equal nonempty IDs across >=2 clip snapshots, NOT verified object identity.
-Gate 3: supported source count plus observation against 8000ms; parse max3, check max2.
+Gate 3: one check request against 8000ms using independently operator-reviewed manifest.expected; no parse request.
+The manual registry supports up to 20 pages; the check submits only 1-2 selected cited pages plus observation.
 With >2 pages, full check is rejected locally by the frozen contract; supply sourcePageIds for relevant 1-2 pages.
-A selected-page result is unverified for the full-manual gate. >3 parse pages are refused before network.
+A selected-page result is unverified for the full-manual gate. Only Gate 1 refuses >3 parse pages before network.
 Aggregate-only results append to local docs/gate-results.md. Never commit that runtime file.
 No payloads, filenames, media, secrets, model text, or exception details are printed or persisted.`
 
 export function scoreExtraction(
     actual: ParsedManual,
     expected: ParsedManual,
-): { correctSteps: number; expectedSteps: number; returnedSteps: number } {
+): { structurallyMatchedSteps: number; expectedSteps: number; returnedSteps: number } {
     const partsMatch = isDeepStrictEqual(actual.parts, expected.parts)
     return {
-        correctSteps: expected.steps.filter(
+        structurallyMatchedSteps: expected.steps.filter(
             (step) =>
                 partsMatch &&
                 isDeepStrictEqual(
@@ -246,7 +248,6 @@ export async function runGate(
                     }
                     if (
                         !matchesBinding(event.snapshot.binding, capture) ||
-                        !event.snapshot.complete ||
                         event.snapshot.frameIndex <= frameIndex ||
                         (streamId && streamId !== event.snapshot.streamId)
                     )
@@ -269,7 +270,7 @@ export async function runGate(
             summary.fullManual = !manifest.sourcePageIds || manifest.sourcePageIds.length === manifest.pages.length
             if (summary.sourceCount > 2) throw new Error('check_source_limit_2')
         }
-        if (manifest.pages.length > LIMITS.requestImages) throw new Error('parse_source_limit_3')
+        if (gate === 1 && manifest.pages.length > LIMITS.requestImages) throw new Error('parse_source_limit_3')
         const sources = await Promise.all(
             manifest.pages.map(async (page) => {
                 const data = await bytes(cwd, page.path, LIMITS.imageBytes)
@@ -284,50 +285,50 @@ export async function runGate(
                 return { data, metadata }
             }),
         )
-        const requestId = randomUUID()
-        const parseMetadata = modelParseMetadataSchema.parse({
-            mode: 'model',
-            requestId,
-            binding,
-            pages: sources.map((source) => source.metadata),
-        })
-        const parsed = apiResultSchema(parsedManualSchema).parse(
-            JSON.parse(
-                await post(
-                    '/api/manuals/parse',
-                    parseMetadata,
-                    sources.map((source, index) => ({
-                        name: `source-${index}`,
-                        data: source.data,
-                        mime: source.metadata.mimeType,
-                    })),
-                ),
-            ),
-        )
-        if (
-            parsed.status !== 'ok' ||
-            parsed.mode !== 'model' ||
-            parsed.requestId !== requestId ||
-            !matchesBinding(parsed.binding, binding)
-        )
-            throw new Error('invalid_parse')
-        Object.assign(summary, scoreExtraction(parsed.value, manifest.expected))
-        summary.stepAccuracyPercent = summary.expectedSteps
-            ? Math.round((10000 * summary.correctSteps!) / summary.expectedSteps) / 100
-            : 0
-        const exact =
-            summary.correctSteps === summary.expectedSteps &&
-            summary.returnedSteps === summary.expectedSteps &&
-            (summary.expectedSteps ?? 0) > 0 &&
-            isDeepStrictEqual(parsed.value, manifest.expected)
-        if (!exact) {
-            summary.status = 'fail'
-            summary.reason = 'ground_truth_mismatch'
-            return summary
-        }
         if (gate === 1) {
+            const requestId = randomUUID()
+            const parseMetadata = modelParseMetadataSchema.parse({
+                mode: 'model',
+                requestId,
+                binding,
+                pages: sources.map((source) => source.metadata),
+            })
+            const parsed = apiResultSchema(parsedManualSchema).parse(
+                JSON.parse(
+                    await post(
+                        '/api/manuals/parse',
+                        parseMetadata,
+                        sources.map((source, index) => ({
+                            name: `source-${index}`,
+                            data: source.data,
+                            mime: source.metadata.mimeType,
+                        })),
+                    ),
+                ),
+            )
+            if (
+                parsed.status !== 'ok' ||
+                parsed.mode !== 'model' ||
+                parsed.requestId !== requestId ||
+                !matchesBinding(parsed.binding, binding)
+            )
+                throw new Error('invalid_parse')
+            Object.assign(summary, scoreExtraction(parsed.value, manifest.expected))
+            summary.strictStructuralMatchPercent = summary.expectedSteps
+                ? Math.round((10000 * summary.structurallyMatchedSteps!) / summary.expectedSteps) / 100
+                : 0
+            const exact =
+                summary.structurallyMatchedSteps === summary.expectedSteps &&
+                summary.returnedSteps === summary.expectedSteps &&
+                (summary.expectedSteps ?? 0) > 0 &&
+                isDeepStrictEqual(parsed.value, manifest.expected)
+            if (!exact) {
+                summary.status = 'fail'
+                summary.reason = 'strict_structural_mismatch'
+                return summary
+            }
             summary.status = 'pass'
-            summary.reason = 'exact_ground_truth_agreement'
+            summary.reason = 'strict_structural_match'
             return summary
         }
         const session = manualSessionSchema.parse({
@@ -336,9 +337,9 @@ export async function runGate(
             title: 'Operator gate',
             updatedAt: new Date().toISOString(),
             pages: sources.map((source) => source.metadata),
-            parts: parsed.value.parts,
-            rawExtraction: parsed.value,
-            reviewedSteps: parsed.value.steps.map((step) => ({
+            parts: manifest.expected.parts,
+            rawExtraction: manifest.expected,
+            reviewedSteps: manifest.expected.steps.map((step) => ({
                 ...step,
                 correction: step.correction ? { ...step.correction, reviewed: true } : null,
             })),

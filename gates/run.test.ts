@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -37,12 +38,12 @@ afterEach(async () => {
 })
 
 describe('future operator gates with synthetic data only', () => {
-    it('refuses without a local key; writes aggregate only', async () => {
+    it.each([1, 2, 3])('gate %s refuses without a local key; writes aggregate only', async (gate) => {
         const { cwd } = await setup()
         const fetchMock = vi.fn()
         vi.stubGlobal('fetch', fetchMock)
         const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-        expect(await main(['1', '--dispatch'], cwd)).toBe(2)
+        expect(await main([String(gate), '--dispatch'], cwd)).toBe(2)
         expect(log).toHaveBeenCalledWith(expect.stringContaining('local_key_required'))
         expect(fetchMock).not.toHaveBeenCalled()
         const report = await readFile(join(cwd, 'docs/gate-results.md'), 'utf8')
@@ -74,58 +75,71 @@ describe('future operator gates with synthetic data only', () => {
     it('scores missing, extra and incorrect steps honestly', async () => {
         const { manifest } = await setup()
         expect(scoreExtraction({ ...manifest.expected, steps: [] }, manifest.expected)).toMatchObject({
-            correctSteps: 0,
+            structurallyMatchedSteps: 0,
             expectedSteps: 2,
             returnedSteps: 0,
         })
         const changed = structuredClone(manifest.expected)
         changed.steps[0]!.orientation = { state: 'unknown', reason: 'Not visible' }
-        expect(scoreExtraction(changed, manifest.expected).correctSteps).toBe(1)
+        expect(scoreExtraction(changed, manifest.expected).structurallyMatchedSteps).toBe(1)
     })
-    it('runs exact parse then reviewed check using model multipart and shared header', async () => {
+    it('sends exactly one check from operator-reviewed truth with source hashes and no parse', async () => {
         const { cwd, manifest } = await setup()
+        manifest.expected.steps[0]!.title = 'Operator reviewed wording'
+        manifest.expected.steps[0]!.stepId = 'operator-step'
+        manifest.stepId = 'operator-step'
         const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+            expect(String(url)).toBe('http://localhost:3001/api/checks')
             expect(init?.headers).toEqual({ 'x-truebuild-key': 'synthetic-shared' })
             expect(init?.redirect).toBe('error')
             const form = init?.body as FormData
             const metadata = JSON.parse(String(form.get('metadata')))
             expect(metadata.mode).toBe('model')
-            const parse = String(url).endsWith('/api/manuals/parse')
-            if (!parse) {
-                expect(metadata.session.rawExtraction).toEqual(manifest.expected)
-                expect(metadata.session.reviewStatus).toBe('reviewed')
-                expect(form.has('observation')).toBe(true)
-            }
+            expect(metadata.session.rawExtraction).toEqual(manifest.expected)
+            expect(metadata.session.reviewStatus).toBe('reviewed')
+            expect(metadata.session.reviewedSteps[0].title).toBe('Operator reviewed wording')
+            expect(metadata.session.reviewedSteps[0].correction.reviewed).toBe(true)
+            expect(form.has('observation')).toBe(true)
+            const source = new Uint8Array(await (form.get('source-0') as File).arrayBuffer())
+            expect(metadata.session.pages[0].contentHash).toBe(createHash('sha256').update(source).digest('hex'))
             return Response.json({
                 status: 'ok',
                 mode: 'model',
                 requestId: metadata.requestId,
                 binding: metadata.binding,
-                value: parse ? manifest.expected : createHeroResponse('reversed'),
+                value: createHeroResponse('reversed'),
             })
         })
         const result = await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic-shared', fetchMock)
-        expect(result).toMatchObject({ status: 'pass', requests: 2, fullManual: true, correctSteps: 2 })
-        expect(fetchMock).toHaveBeenCalledTimes(2)
+        expect(result).toMatchObject({ status: 'pass', requests: 1, fullManual: true })
+        expect(result).not.toHaveProperty('structurallyMatchedSteps')
+        expect(fetchMock).toHaveBeenCalledTimes(1)
     })
     it.each([false, true])(
         'reports selected-source scope and rejects check latency beyond 8s, slow=%s',
         async (slow) => {
             const { cwd, manifest } = await setup()
-            manifest.pages.push({ ...manifest.pages[0]!, pageId: 'extra-page', assetId: 'extra-asset' })
+            for (let index = 1; index < 5; index++)
+                manifest.pages.push({
+                    ...manifest.pages[0]!,
+                    pageId: `extra-page-${index}`,
+                    assetId: `extra-asset-${index}`,
+                })
             manifest.sourcePageIds = ['demo-page-1']
             let now = 0
             vi.spyOn(performance, 'now').mockImplementation(() => now)
             const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
                 const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
-                const parse = String(url).endsWith('/api/manuals/parse')
-                now += !parse && slow ? 8001 : 10
+                expect(String(url)).toBe('http://localhost:3001/api/checks')
+                expect(metadata.session.pages).toHaveLength(5)
+                expect((init?.body as FormData).has('source-1')).toBe(false)
+                now += slow ? 8001 : 10
                 return Response.json({
                     status: 'ok',
                     mode: 'model',
                     requestId: metadata.requestId,
                     binding: metadata.binding,
-                    value: parse ? manifest.expected : createHeroResponse('reversed'),
+                    value: createHeroResponse('reversed'),
                 })
             })
             expect(
@@ -134,6 +148,7 @@ describe('future operator gates with synthetic data only', () => {
                 status: slow ? 'fail' : 'unverified',
                 fullManual: false,
                 sourceCount: 1,
+                requests: 1,
                 reason: slow ? 'decision_or_latency_failed' : 'selected_sources_only_full_manual_unverified',
             })
         },
@@ -157,7 +172,35 @@ describe('future operator gates with synthetic data only', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
-    it('does not build a reviewed session from mismatched extraction or accept fixture mode', async () => {
+    it.each([false, true])(
+        'Gate1 labels strict structural match rather than semantic accuracy, renamed=%s',
+        async (renamed) => {
+            const { cwd, manifest } = await setup()
+            const extracted = structuredClone(manifest.expected)
+            if (renamed) extracted.steps[0]!.title = 'Stand the same side panel vertically'
+            const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+                expect(String(url)).toBe('http://localhost:3001/api/manuals/parse')
+                const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+                return Response.json({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: metadata.requestId,
+                    binding: metadata.binding,
+                    value: extracted,
+                })
+            })
+            const result = await runGate(1, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)
+            expect(result).toMatchObject({
+                status: renamed ? 'fail' : 'pass',
+                reason: renamed ? 'strict_structural_mismatch' : 'strict_structural_match',
+                strictStructuralMatchPercent: renamed ? 50 : 100,
+                requests: 1,
+            })
+            expect(result).not.toHaveProperty('stepAccuracyPercent')
+        },
+    )
+
+    it('Gate1 reports strict structural mismatch and rejects fixture mode', async () => {
         const { cwd, manifest } = await setup()
         for (const mode of ['model', 'fixture']) {
             const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
@@ -171,11 +214,31 @@ describe('future operator gates with synthetic data only', () => {
                 })
             })
             expect(
-                (await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).status,
+                (await runGate(1, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).status,
             ).not.toBe('pass')
             expect(fetchMock).toHaveBeenCalledTimes(1)
         }
     })
+    it.each(['unknown-critical-fact', 'unresolved-citation', 'unselected-citation'] as const)(
+        'Gate3 rejects %s before any dispatch',
+        async (scenario) => {
+            const { cwd, manifest } = await setup()
+            if (scenario === 'unknown-critical-fact')
+                manifest.expected.steps[0]!.orientation = { state: 'unknown', reason: 'unobservable' }
+            if (scenario === 'unresolved-citation')
+                manifest.expected.steps[0]!.sourceRefs = [{ pageId: 'absent-page', region: null }]
+            if (scenario === 'unselected-citation') {
+                manifest.pages.push({ ...manifest.pages[0]!, pageId: 'uncited-page', assetId: 'uncited-asset' })
+                manifest.sourcePageIds = ['uncited-page']
+            }
+            const fetchMock = vi.fn<typeof fetch>()
+            expect(
+                await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock),
+            ).toMatchObject({ status: 'unverified', requests: 0 })
+            expect(fetchMock).not.toHaveBeenCalled()
+        },
+    )
+
     it('reports check>=3 and parse>=4 source limits without dispatch', async () => {
         const { cwd, manifest } = await setup()
         const fetchMock = vi.fn<typeof fetch>()
@@ -193,7 +256,17 @@ describe('future operator gates with synthetic data only', () => {
         )
         expect(fetchMock).not.toHaveBeenCalled()
     })
-    it.each([true, false])('measures clip ID stability, stable=%s, without synthesizing frames', async (stable) => {
+    it.each([
+        'stable',
+        'unstable',
+        'missing-terminal',
+        'unavailable',
+        'repeated-frame',
+        'wrong-stream',
+        'wrong-binding',
+        'after-terminal',
+    ] as const)('validates SAM false snapshots and terminal protocol: %s', async (scenario) => {
+        const stable = scenario !== 'unstable'
         const { cwd, manifest } = await setup()
         const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
             const form = init?.body as FormData
@@ -208,7 +281,7 @@ describe('future operator gates with synthetic data only', () => {
                     streamId: 'synthetic-stream',
                     frameIndex: index,
                     capturedAt: metadata.capturedAt,
-                    complete: true,
+                    complete: false,
                     records: [
                         {
                             objectId: stable ? 'object-1' : `object-${index}`,
@@ -218,7 +291,16 @@ describe('future operator gates with synthetic data only', () => {
                     ],
                 },
             }))
-            const events = [...snapshots, { type: 'completed' }]
+            if (clip && scenario === 'repeated-frame') snapshots[1]!.snapshot.frameIndex = 0
+            if (clip && scenario === 'wrong-stream') snapshots[1]!.snapshot.streamId = 'wrong-stream'
+            if (clip && scenario === 'wrong-binding')
+                snapshots[1]!.snapshot.binding = { ...metadata.binding, captureId: 'wrong-capture' }
+            const terminal =
+                scenario === 'unavailable' && clip
+                    ? { type: 'unavailable', code: 'provider_error' }
+                    : { type: 'completed' }
+            const events = clip && scenario === 'missing-terminal' ? snapshots : [...snapshots, terminal]
+            if (clip && scenario === 'after-terminal') events.push(snapshots[0]!)
             return new Response(
                 events
                     .map(
@@ -229,6 +311,11 @@ describe('future operator gates with synthetic data only', () => {
             )
         })
         const result = await runGate(2, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)
-        expect(result).toMatchObject({ status: stable ? 'pass' : 'unverified', stableTrackIds: stable, requests: 2 })
+        expect(result).toMatchObject({ status: scenario === 'stable' ? 'pass' : 'unverified', requests: 2 })
+        if (scenario === 'stable' || scenario === 'unstable') {
+            expect(result.stableTrackIds).toBe(stable)
+        } else {
+            expect(result.stableTrackIds).toBeUndefined()
+        }
     })
 })
