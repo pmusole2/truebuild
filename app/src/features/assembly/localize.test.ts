@@ -24,7 +24,11 @@ const observation: Observation = {
 
 function request(streamFetch: StreamFetch, signal = new AbortController().signal): LocateRequest {
     return {
-        client: new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: 'public-demo-key-for-tests', streamFetch }),
+        client: new ModelApiClient({
+            baseUrl: 'http://127.0.0.1:3001',
+            secret: 'public-demo-key-for-tests',
+            streamFetch,
+        }),
         requestId: 'localize-1',
         binding,
         prompt: 'side panel',

@@ -1,5 +1,4 @@
 import {
-    apiResultSchema,
     checkResultSchema,
     LIMITS,
     matchesBinding,
@@ -23,7 +22,7 @@ import {
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
 } from '@truebuild/contracts/model'
-import { z } from 'zod'
+import type { z } from 'zod'
 import { streamFetch as defaultStreamFetch, type StreamFetch } from './stream-fetch'
 import {
     awaitStopped,

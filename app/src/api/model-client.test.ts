@@ -21,9 +21,6 @@ import {
 const BASE_URL = 'http://127.0.0.1:3001'
 const SECRET = 'public-demo-key-for-tests'
 const REQUEST_ID = 'req-model-1'
-// Owner-session expiry on the wire is epoch milliseconds; this value is in the future for the whole run.
-const FUTURE_EXPIRY = Date.now() + 60 * 60 * 1000
-
 const session: ManualSession = createDemoManual()
 const captureBinding: CaptureBinding = {
     kind: 'capture',

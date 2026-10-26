@@ -1,4 +1,4 @@
-import { useMemo, useReducer, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react'
 import { Image, ScrollView, StyleSheet, Text, View } from 'react-native'
 import Svg, { Rect } from 'react-native-svg'
 import {
@@ -7,8 +7,7 @@ import {
     type CheckResult,
     type ManualSession,
     type ManualStep,
-    type ParsedManual,
-    type QuestionTarget,
+    type QuestionResult,
 } from '@truebuild/contracts'
 import { BoundedApiClient } from '../api/client'
 import { ModelApiClient } from '../api/model-client'
@@ -16,31 +15,43 @@ import { ActionButton, Notice, Panel, SectionTitle, Tag } from '../components/ui
 import { palette, radius, space } from '../components/theme'
 import { askModelQuestion, runModelCheck, type SourcePageAsset } from '../features/assembly/model-check'
 import { checkReducer, createCheckState, type Scenario } from '../features/assembly/check-state'
-import { runCheck } from '../features/assembly/check-runner'
 import { FrozenPhoto } from '../features/assembly/frozen-photo'
 import { freshCaptureId, freshRequestId } from '../features/assembly/identity'
-import { boxOnDisplay } from '../features/assembly/frame-geometry'
-import { localizationReducer, createLocalizationState, localizationReady } from '../features/assembly/localization-state'
+import {
+    localizationReducer,
+    createLocalizationState,
+    localizationReady,
+} from '../features/assembly/localization-state'
 import { locateInPhoto } from '../features/assembly/localize'
 import { LocalizationPanel } from '../features/assembly/localization-panel'
-import { captureObservation, observationForSegmentation, type Observation } from '../features/assembly/observation'
+import {
+    captureObservation,
+    observationForSegmentation,
+    type CaptureResult,
+    type Observation,
+} from '../features/assembly/observation'
 import { QuestionPanel } from '../features/assembly/question-panel'
-import { createQuestionState, questionReady, questionReducer, stepPartChoices } from '../features/assembly/question-state'
+import {
+    createQuestionState,
+    questionReady,
+    questionReducer,
+    stepPartChoices,
+} from '../features/assembly/question-state'
 import { bytesToDataUri } from '../media/image-source'
 import { userMessageForMediaError } from '../media/media-errors'
-import { ManualDiagram } from './manual-diagram'
-import { confirmParsedPlan } from './sample-manual'
+import { PlanSummary } from './plan-summary'
+import { SAMPLE_MANUAL_LABEL, confirmParsedPlan, sampleManual, unknownCriticalFacts } from './sample-manual'
 import { parseManualPhoto, type ParseOutcome, type ParseRuntime } from './parse-photo'
-import { SAMPLE_MANUAL_LABEL, sampleManual } from './sample-manual'
 
 export type DemoRuntime = ParseRuntime
 
 type Capture = {
-    readonly captureId: string
     readonly binding: CaptureBinding
     readonly observation: Observation | null
     readonly scenario: Scenario
 }
+
+type PlanOrigin = 'sample' | 'parsed'
 
 const SIMULATED_PHOTOS: readonly { readonly scenario: Scenario; readonly label: string }[] = [
     { scenario: 'correct', label: 'Simulated correct photo' },
@@ -48,25 +59,33 @@ const SIMULATED_PHOTOS: readonly { readonly scenario: Scenario; readonly label: 
     { scenario: 'unclear', label: 'Simulated unclear photo' },
 ]
 
+const CAMERA_DENIED = 'Camera access was not allowed. Allow the camera in Settings, or try again.'
+
 function unavailableText(code: string): string {
     return `Unavailable (${code}). Nothing was shown as a result.`
 }
 
 /**
- * One direct demo: sample or parsed manual → step picker → photo → check (pass, refuse or cannot_verify) → Ask →
- * part localization on the frozen photo. Fixture mode simulates every photo and labels every result as simulated.
+ * Direct demo: manual (photographed or synthetic sample) → confirmed plan → step → photo → check (pass, refuse or
+ * cannot_verify) → Ask → part search on the frozen photo.
+ *
+ * Every context change (step, plan, photo, unmount) invalidates the visible verdict, answer and boxes at once and aborts
+ * in-flight work. A completion from an earlier context is discarded instead of published.
  */
 export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): ReactElement {
     const simulated = runtime.mode === 'fixture'
     const [plan, setPlan] = useState<ManualSession | null>(simulated ? sampleManual() : null)
+    const [origin, setOrigin] = useState<PlanOrigin | null>(simulated ? 'sample' : null)
     const [planSources, setPlanSources] = useState<readonly SourcePageAsset[]>([])
     const [parseOutcome, setParseOutcome] = useState<ParseOutcome | null>(null)
     const [parsing, setParsing] = useState(false)
     const [planMessage, setPlanMessage] = useState<string | null>(null)
-    const [stepId, setStepId] = useState<string | null>(null)
+    const [stepId, setStepId] = useState<string | null>(
+        simulated ? (sampleManual().reviewedSteps[0]?.stepId ?? null) : null,
+    )
     const [capture, setCapture] = useState<Capture | null>(null)
     const [photoMessage, setPhotoMessage] = useState<string | null>(null)
-    const [pickedParsedPlan, setPickedParsedPlan] = useState(false)
+    const [photoPending, setPhotoPending] = useState(false)
 
     const emptyBinding: CaptureBinding = {
         kind: 'capture',
@@ -81,15 +100,27 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
     }))
     const [question, dispatchQuestion] = useReducer(questionReducer, emptyBinding, createQuestionState)
     const [locate, dispatchLocate] = useReducer(localizationReducer, emptyBinding, createLocalizationState)
-    const abortRef = useRef<AbortController | null>(null)
+
+    // The plan scope covers step, plan, photo, check, question and part search. Starting any new context aborts it.
+    // The parse scope covers only the photographed-manual request; a sample choice or confirmation also aborts it.
+    const scopeRef = useRef(new AbortController())
+    const parseScopeRef = useRef<AbortController | null>(null)
+
+    useEffect(() => {
+        // StrictMode runs effects twice; a scope aborted by the previous cleanup must not stay dead.
+        if (scopeRef.current.signal.aborted) {
+            scopeRef.current = new AbortController()
+        }
+        return (): void => {
+            scopeRef.current.abort()
+            parseScopeRef.current?.abort()
+        }
+    }, [])
 
     const steps: readonly ManualStep[] = plan?.reviewedSteps ?? []
     const step = steps.find((candidate) => candidate.stepId === stepId) ?? steps[0] ?? null
     const parts = plan !== null && step !== null ? stepPartChoices(plan, step) : []
-    const sourcesById = useMemo(
-        () => new Map(planSources.map((source) => [source.assetId, source])),
-        [planSources],
-    )
+    const sourcesById = useMemo(() => new Map(planSources.map((source) => [source.assetId, source])), [planSources])
     const loadPageAsset = async (assetId: string): Promise<SourcePageAsset | null> => sourcesById.get(assetId) ?? null
 
     const modelClient = useMemo(
@@ -97,53 +128,95 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
         [runtime.baseUrl, runtime.secret, runtime.fetch],
     )
     const fixtureClient = useMemo(
-        () => new BoundedApiClient({ baseUrl: runtime.baseUrl, mode: 'fixture', secret: runtime.secret, fetch: runtime.fetch }),
+        () =>
+            new BoundedApiClient({
+                baseUrl: runtime.baseUrl,
+                mode: 'fixture',
+                secret: runtime.secret,
+                fetch: runtime.fetch,
+            }),
         [runtime.baseUrl, runtime.secret, runtime.fetch],
     )
 
     const actionReady = plan !== null && step !== null && capture !== null
     const unavailableReason =
         plan === null
-            ? 'Photograph a manual and confirm its plan first.'
+            ? 'Photograph a manual, or use the sample manual, then confirm the plan.'
             : step === null
               ? 'Pick a step first.'
               : capture === null
                 ? 'Take a photo of the assembly for this step first.'
                 : null
 
-    // A parse result becomes checkable only after explicit confirmation. Nothing is filled in silently.
+    /** Starts a new plan-level context: aborts all in-flight work and clears every visible verdict, answer and box. */
+    function beginContext(): AbortController {
+        scopeRef.current.abort()
+        const next = new AbortController()
+        scopeRef.current = next
+        dispatchCheck({ type: 'invalidated' })
+        dispatchQuestion({ type: 'invalidated' })
+        dispatchLocate({ type: 'invalidated' })
+        setCapture(null)
+        setPhotoMessage(null)
+        setPhotoPending(false)
+        return next
+    }
+
     async function photographManual(): Promise<void> {
+        parseScopeRef.current?.abort()
+        const controller = new AbortController()
+        parseScopeRef.current = controller
         setParsing(true)
         setPlanMessage(null)
-        setPickedParsedPlan(false)
-        const outcome = await parseManualPhoto(runtime)
+        setParseOutcome(null)
+        const outcome = await parseManualPhoto(runtime, controller.signal)
+        if (controller.signal.aborted) {
+            return
+        }
         setParsing(false)
         if (outcome.status === 'cancelled') {
             return
         }
-        setParseOutcome(outcome)
+        if (outcome.status === 'denied') {
+            setPlanMessage(CAMERA_DENIED)
+            return
+        }
         if (outcome.status === 'failed') {
             setPlanMessage(outcome.message)
+            return
         }
+        setParseOutcome(outcome)
+    }
+
+    function useSampleManual(): void {
+        parseScopeRef.current?.abort()
+        beginContext()
+        const sample = sampleManual()
+        setPlan(sample)
+        setPlanSources([])
+        setOrigin('sample')
+        setParseOutcome(null)
+        setParsing(false)
+        setPlanMessage(null)
+        setStepId(sample.reviewedSteps[0]?.stepId ?? null)
     }
 
     function confirmPlan(): void {
-        if (parseOutcome?.status !== 'parsed' || plan === null) {
+        if (parseOutcome?.status !== 'parsed') {
             return
         }
-        const outcome = confirmParsedPlan(plan, parseOutcome.parsed, parseOutcome.pages)
+        const outcome = confirmParsedPlan(plan, parseOutcome.parsed, parseOutcome.pages, parseOutcome.binding)
         if (outcome.status === 'blocked') {
-            setPlanMessage(
-                'Not confirmed: a critical fact is unknown or cites a page that is not in this plan. Nothing was filled in. Use a clearer photo of the manual.',
-            )
+            setPlanMessage(`Not confirmed. Resolve these first; nothing was filled in: ${outcome.unknowns.join('; ')}`)
             return
         }
+        parseScopeRef.current?.abort()
+        beginContext()
         setPlan(outcome.session)
         setPlanSources(parseOutcome.sources)
+        setOrigin('parsed')
         setParseOutcome(null)
-        setPickedParsedPlan(true)
         setStepId(outcome.session.reviewedSteps[0]?.stepId ?? null)
-        setCapture(null)
         setPlanMessage('Plan confirmed. Model corrections were not applied; check each step against the manual.')
     }
 
@@ -151,77 +224,110 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
         if (nextStepId === step?.stepId) {
             return
         }
-        abortRef.current?.abort()
+        beginContext()
         setStepId(nextStepId)
-        setCapture(null)
-        setPhotoMessage(null)
     }
 
     async function takeCapture(source: Scenario | 'camera' | 'library'): Promise<void> {
         if (plan === null || step === null) {
             return
         }
-        abortRef.current?.abort()
-        const controller = new AbortController()
-        abortRef.current = controller
-
-        let observation: Observation | null = null
-        let scenario: Scenario = 'correct'
+        const session = plan
+        const target = step
+        const scope = beginContext()
         if (source === 'camera' || source === 'library') {
+            setPhotoPending(true)
+            let captured: CaptureResult
             try {
-                const picked = await captureObservation(source)
-                if (picked === null) {
-                    return
-                }
-                observation = picked
+                captured = await captureObservation(source)
             } catch (error: unknown) {
-                setPhotoMessage(userMessageForMediaError(error))
+                if (!scope.signal.aborted) {
+                    setPhotoPending(false)
+                    setPhotoMessage(userMessageForMediaError(error))
+                }
                 return
             }
-        } else {
-            scenario = source
+            // A camera or library return can arrive after the step or plan changed; it must not overwrite the newer one.
+            if (scope.signal.aborted) {
+                return
+            }
+            setPhotoPending(false)
+            if (captured.status === 'cancelled') {
+                return
+            }
+            if (captured.status === 'denied') {
+                setPhotoMessage(CAMERA_DENIED)
+                return
+            }
+            publishCapture(session, target, captured.observation, 'correct', scope)
+            return
         }
+        publishCapture(session, target, null, source, scope)
+    }
 
+    function publishCapture(
+        session: ManualSession,
+        target: ManualStep,
+        observation: Observation | null,
+        scenario: Scenario,
+        scope: AbortController,
+    ): void {
         const binding: CaptureBinding = {
             kind: 'capture',
-            manualId: plan.manualId,
-            revision: plan.revision,
-            stepId: step.stepId,
+            manualId: session.manualId,
+            revision: session.revision,
+            stepId: target.stepId,
             captureId: freshCaptureId(),
         }
-        const next: Capture = { captureId: binding.captureId, binding, observation, scenario }
+        const next: Capture = { binding, observation, scenario }
         setCapture(next)
-        setPhotoMessage(null)
         dispatchCheck({ type: 'bindingSynced', binding })
         dispatchQuestion({ type: 'bindingSynced', binding })
         dispatchLocate({ type: 'bindingSynced', binding })
-        void runCheckFor(next, plan, step, controller.signal)
+        void runCheckFor(next, session, target, scope)
     }
 
     async function runCheckFor(
         current: Capture,
         session: ManualSession,
         target: ManualStep,
-        signal: AbortSignal,
+        scope: AbortController,
     ): Promise<void> {
         const requestId = freshRequestId('check')
         dispatchCheck({ type: 'checkStarted', requestId })
-        const result: ApiResult<CheckResult> =
-            runtime.mode === 'fixture'
-                ? await runCheck({ mode: 'fixture', requestId, binding: current.binding, scenario: current.scenario }, signal)
-                : current.observation === null
-                  ? { status: 'unavailable', requestId, binding: current.binding, code: 'invalid_input', retryable: false }
-                  : await runModelCheck({
-                        client: modelClient,
-                        requestId,
-                        binding: current.binding,
-                        session,
-                        step: target,
-                        observation: current.observation,
-                        loadPageAsset,
-                        signal,
-                    })
-        if (signal.aborted) {
+        let result: ApiResult<CheckResult>
+        try {
+            result =
+                runtime.mode === 'fixture'
+                    ? await fixtureClient.check(current.binding, current.scenario, { requestId, signal: scope.signal })
+                    : current.observation === null
+                      ? {
+                            status: 'unavailable',
+                            requestId,
+                            binding: current.binding,
+                            code: 'invalid_input',
+                            retryable: false,
+                        }
+                      : await runModelCheck({
+                            client: modelClient,
+                            requestId,
+                            binding: current.binding,
+                            session,
+                            step: target,
+                            observation: current.observation,
+                            loadPageAsset,
+                            signal: scope.signal,
+                        })
+        } catch {
+            result = {
+                status: 'unavailable',
+                requestId,
+                binding: current.binding,
+                code: 'provider_error',
+                retryable: true,
+            }
+        }
+        if (scope.signal.aborted) {
             return
         }
         dispatchCheck({ type: 'checkFinished', requestId, binding: current.binding, result })
@@ -231,28 +337,37 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
         if (plan === null || step === null || capture === null || question.target === null) {
             return
         }
+        const scope = scopeRef.current
         const requestId = freshRequestId('question')
         dispatchQuestion({ type: 'started', requestId })
         const binding = capture.binding
-        const target: QuestionTarget = question.target
+        const target = question.target
         const text = question.question.trim()
-        const result =
-            runtime.mode === 'fixture'
-                ? await fixtureClient.questions(binding, text, target, { requestId })
-                : capture.observation === null
-                  ? { status: 'unavailable' as const, requestId, binding, code: 'invalid_input' as const, retryable: false }
-                  : await askModelQuestion({
-                        client: modelClient,
-                        requestId,
-                        binding,
-                        session: plan,
-                        step,
-                        observation: capture.observation,
-                        question: text,
-                        target,
-                        loadPageAsset,
-                        signal: new AbortController().signal,
-                    })
+        let result: ApiResult<QuestionResult>
+        try {
+            result =
+                runtime.mode === 'fixture'
+                    ? await fixtureClient.questions(binding, text, target, { requestId, signal: scope.signal })
+                    : capture.observation === null
+                      ? { status: 'unavailable', requestId, binding, code: 'invalid_input', retryable: false }
+                      : await askModelQuestion({
+                            client: modelClient,
+                            requestId,
+                            binding,
+                            session: plan,
+                            step,
+                            observation: capture.observation,
+                            question: text,
+                            target,
+                            loadPageAsset,
+                            signal: scope.signal,
+                        })
+        } catch {
+            result = { status: 'unavailable', requestId, binding, code: 'provider_error', retryable: true }
+        }
+        if (scope.signal.aborted) {
+            return
+        }
         dispatchQuestion({ type: 'finished', requestId, binding, result })
     }
 
@@ -260,49 +375,72 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
         if (plan === null || capture === null) {
             return
         }
+        const scope = scopeRef.current
         const requestId = freshRequestId('locate')
         dispatchLocate({ type: 'started', requestId })
         const binding = capture.binding
         const prompt = locate.prompt.trim()
+        const failed = (code: 'invalid_input' | 'provider_error'): void =>
+            dispatchLocate({
+                type: 'received',
+                requestId,
+                result: { status: 'unavailable', requestId, binding, code, retryable: code === 'provider_error' },
+            })
+
         if (runtime.mode === 'fixture') {
-            const result = await fixtureClient.segments(binding, 'normal', { requestId })
-            if (result.status !== 'ok') {
-                dispatchLocate({ type: 'received', requestId, result })
-                return
-            }
-            for (const event of result.value.events) {
-                dispatchLocate({ type: 'received', requestId, result: { ...result, value: event } })
+            try {
+                const result = await fixtureClient.segments(binding, 'normal', { requestId, signal: scope.signal })
+                if (scope.signal.aborted) {
+                    return
+                }
+                if (result.status !== 'ok') {
+                    dispatchLocate({ type: 'received', requestId, result })
+                    return
+                }
+                for (const event of result.value.events) {
+                    dispatchLocate({ type: 'received', requestId, result: { ...result, value: event } })
+                }
+            } catch {
+                failed('provider_error')
             }
             return
         }
         if (capture.observation === null) {
-            dispatchLocate({
-                type: 'received',
-                requestId,
-                result: { status: 'unavailable', requestId, binding, code: 'invalid_input', retryable: false },
-            })
+            failed('invalid_input')
             return
         }
-        const frozen = await observationForSegmentation(capture.observation)
-        for await (const result of locateInPhoto({
-            client: modelClient,
-            requestId,
-            binding,
-            prompt,
-            observation: frozen,
-            signal: new AbortController().signal,
-        })) {
-            dispatchLocate({ type: 'received', requestId, result })
+        try {
+            const frozen = await observationForSegmentation(capture.observation)
+            if (scope.signal.aborted) {
+                return
+            }
+            for await (const result of locateInPhoto({
+                client: modelClient,
+                requestId,
+                binding,
+                prompt,
+                observation: frozen,
+                signal: scope.signal,
+            })) {
+                if (scope.signal.aborted) {
+                    return
+                }
+                dispatchLocate({ type: 'received', requestId, result })
+            }
+        } catch {
+            // Preparation failures (for example, a segmentation resize) end the search as unavailable, never pending.
+            if (!scope.signal.aborted) {
+                failed('invalid_input')
+            }
         }
     }
 
     const checkResult = check.result
     const checkOk = checkResult?.status === 'ok' ? checkResult.value : null
-    // The cited page is shown only when its original is held in this session (model mode). Fixture never has one.
-    const citedPage = plan === null || step === null
-        ? undefined
-        : plan.pages.find((page) => step.sourceRefs.some((ref) => ref.pageId === page.pageId))
-    const pageForStep = citedPage === undefined ? undefined : sourcesById.get(citedPage.assetId)
+    const citedPageId = checkOk?.sourceRefs[0]?.pageId ?? null
+    const citedPage = citedPageId === null ? undefined : plan?.pages.find((page) => page.pageId === citedPageId)
+    const citedSource = citedPage === undefined ? undefined : sourcesById.get(citedPage.assetId)
+    const unknowns = parseOutcome?.status === 'parsed' ? unknownCriticalFacts(parseOutcome.parsed) : []
 
     return (
         <ScrollView contentContainerStyle={styles.content}>
@@ -318,33 +456,49 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
             <Panel>
                 <SectionTitle>1. Manual</SectionTitle>
                 <Text style={styles.body}>
-                    {pickedParsedPlan ? 'Confirmed plan from your photo.' : plan === null ? 'No plan yet.' : SAMPLE_MANUAL_LABEL}
+                    {origin === 'sample'
+                        ? SAMPLE_MANUAL_LABEL
+                        : origin === 'parsed'
+                          ? 'Confirmed plan from your photo.'
+                          : 'No plan yet.'}
                 </Text>
                 <ActionButton
                     label={parsing ? 'Reading photo…' : 'Photograph a manual'}
                     tone="primary"
                     disabled={parsing}
-                    onPress={() => void photographManual()}
+                    onPress={() => photographManual()}
                 />
+                {simulated ? (
+                    <ActionButton label="Use sample manual (synthetic fixture)" onPress={useSampleManual} />
+                ) : null}
                 {parseOutcome?.status === 'parsed' ? (
                     <View style={styles.stack}>
-                        <Tag tone={parseOutcome.mode === 'fixture' ? 'simulated' : 'unreviewed'} text={parseOutcome.mode === 'fixture' ? 'Simulated parse result' : 'Parsed from your photo · unconfirmed'} />
+                        <Tag
+                            tone={parseOutcome.mode === 'fixture' ? 'simulated' : 'unreviewed'}
+                            text={
+                                parseOutcome.mode === 'fixture'
+                                    ? 'Simulated parse result'
+                                    : 'Parsed from your photo · unconfirmed'
+                            }
+                        />
                         {parseOutcome.mode === 'fixture' ? (
                             <Notice tone="caution" text="Simulated parse result. Your photo was not analysed." />
                         ) : null}
-                        <Text style={styles.body}>Parts: {parseOutcome.parsed.parts.map((part) => (part.name.state === 'known' ? part.name.value : 'unknown part')).join(', ') || 'none'}</Text>
-                        {parseOutcome.parsed.steps.map((candidate) => (
-                            <Text key={candidate.stepId} style={styles.body}>
-                                {candidate.order}. {candidate.title}
-                            </Text>
-                        ))}
-                        {parseOutcome.parsed.unknowns.map((unknown) => (
-                            <Text key={unknown} style={styles.body}>
-                                Unknown: {unknown}
-                            </Text>
-                        ))}
-                        <Notice tone="caution" text="Model corrections are not applied. Only expected facts you confirm are used." />
-                        <ActionButton label="Confirm expected facts" tone="primary" onPress={confirmPlan} />
+                        <PlanSummary
+                            parts={parseOutcome.parsed.parts}
+                            steps={parseOutcome.parsed.steps}
+                            unknowns={unknowns}
+                        />
+                        <Notice
+                            tone="caution"
+                            text="Model corrections are not applied. Only expected facts you confirm are used."
+                        />
+                        <ActionButton
+                            label="Confirm expected facts"
+                            tone="primary"
+                            disabled={unknowns.length > 0}
+                            onPress={confirmPlan}
+                        />
                     </View>
                 ) : null}
                 {planMessage === null ? null : <Notice text={planMessage} />}
@@ -361,6 +515,9 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                         onPress={() => selectStep(candidate.stepId)}
                     />
                 ))}
+                {plan !== null && step !== null ? (
+                    <PlanSummary parts={plan.parts} steps={[step]} unknowns={[]} />
+                ) : null}
             </Panel>
 
             <Panel>
@@ -372,16 +529,26 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                                 key={photo.scenario}
                                 label={photo.label}
                                 disabled={plan === null || step === null}
-                                onPress={() => void takeCapture(photo.scenario)}
+                                onPress={() => takeCapture(photo.scenario)}
                             />
                         ))}
                     </View>
                 ) : (
                     <View style={styles.stack}>
-                        <ActionButton label="Take photo" tone="primary" disabled={plan === null || step === null} onPress={() => void takeCapture('camera')} />
-                        <ActionButton label="Choose photo" disabled={plan === null || step === null} onPress={() => void takeCapture('library')} />
+                        <ActionButton
+                            label="Take photo"
+                            tone="primary"
+                            disabled={plan === null || step === null || photoPending}
+                            onPress={() => takeCapture('camera')}
+                        />
+                        <ActionButton
+                            label="Choose photo"
+                            disabled={plan === null || step === null || photoPending}
+                            onPress={() => takeCapture('library')}
+                        />
                     </View>
                 )}
+                {photoPending ? <Text style={styles.body}>Preparing photo…</Text> : null}
                 {photoMessage === null ? null : <Notice tone="error" text={photoMessage} />}
                 {unavailableReason === null ? null : <Text style={styles.body}>{unavailableReason}</Text>}
                 {capture === null ? null : (
@@ -391,30 +558,40 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                                 observation={capture.observation}
                                 caption="Frozen photo for this capture."
                                 overlay={(displayed) =>
-                                    locate.boxes.map((box) => {
-                                        const rect = boxOnDisplay(box.box, displayed)
-                                        return <Rect key={box.label} x={rect.x} y={rect.y} width={rect.width} height={rect.height} stroke={palette.signal} strokeWidth={3} fill="none" />
-                                    })
+                                    locate.boxes.map((box) => (
+                                        <Rect
+                                            key={box.label}
+                                            x={displayed.x + box.box.x * displayed.width}
+                                            y={displayed.y + box.box.y * displayed.height}
+                                            width={box.box.width * displayed.width}
+                                            height={box.box.height * displayed.height}
+                                            stroke={palette.signal}
+                                            strokeWidth={3}
+                                            fill="none"
+                                        />
+                                    ))
                                 }
                             />
                         ) : (
-                            <Svg width="100%" height={180}>
+                            <Svg width="100%" height={180} viewBox="0 0 1 1" preserveAspectRatio="none">
                                 {locate.boxes.map((box) => (
                                     <Rect
                                         key={box.label}
-                                        x={`${box.box.x * 100}%`}
-                                        y={`${box.box.y * 100}%`}
-                                        width={`${box.box.width * 100}%`}
-                                        height={`${box.box.height * 100}%`}
+                                        x={box.box.x}
+                                        y={box.box.y}
+                                        width={box.box.width}
+                                        height={box.box.height}
                                         stroke={palette.signal}
-                                        strokeWidth={3}
+                                        strokeWidth={0.01}
                                         fill="none"
                                     />
                                 ))}
                             </Svg>
                         )}
                         <Text style={styles.body}>
-                            {capture.observation === null ? 'Simulated photo: no image was captured or analysed.' : 'Your photo, frozen for this capture.'}
+                            {capture.observation === null
+                                ? 'Simulated photo: no image was captured or analysed.'
+                                : 'Your photo, frozen for this capture.'}
                         </Text>
                     </View>
                 )}
@@ -422,16 +599,24 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
 
             <Panel>
                 <SectionTitle>4. Check this step</SectionTitle>
-                {checkResult === null ? <Text style={styles.body}>No check yet.</Text> : null}
+                {checkResult === null && check.pendingRequestId === null ? (
+                    <Text style={styles.body}>No check yet.</Text>
+                ) : null}
+                {check.pendingRequestId !== null ? <Text style={styles.body}>Checking…</Text> : null}
                 {checkResult !== null && checkOk === null && checkResult.status === 'unavailable' ? (
                     <Notice tone="error" text={unavailableText(checkResult.code)} />
                 ) : null}
-                {check.pendingRequestId !== null ? <Text style={styles.body}>Checking…</Text> : null}
                 {checkOk !== null ? (
                     <View style={styles.stack}>
                         <Tag
                             tone={checkOk.decision === 'pass' ? 'reviewed' : 'unreviewed'}
-                            text={checkOk.decision === 'pass' ? 'Pass' : checkOk.decision === 'refuse' ? 'Refuse' : 'Cannot verify'}
+                            text={
+                                checkOk.decision === 'pass'
+                                    ? 'Pass'
+                                    : checkOk.decision === 'refuse'
+                                      ? 'Refuse'
+                                      : 'Cannot verify'
+                            }
                         />
                         <Text style={styles.body}>{checkOk.reason}</Text>
                         {checkOk.missingEvidence.map((missing) => (
@@ -439,20 +624,23 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                                 Missing: {missing}
                             </Text>
                         ))}
-                        {checkOk.decision === 'refuse' && step !== null ? (
-                            pageForStep !== undefined ? (
-                                <Image
-                                    accessibilityLabel="Cited manual page"
-                                    source={{ uri: bytesToDataUri(pageForStep.bytes, pageForStep.mimeType) }}
-                                    style={styles.pageImage}
-                                    resizeMode="contain"
-                                />
-                            ) : (
-                                <ManualDiagram title={step.title} simulated={simulated} />
-                            )
+                        {citedPageId === null ? null : <Text style={styles.body}>Cited page: {citedPageId}</Text>}
+                        {checkOk.decision === 'refuse' && citedSource !== undefined ? (
+                            <Image
+                                accessibilityLabel="Cited manual page"
+                                source={{ uri: bytesToDataUri(citedSource.bytes, citedSource.mimeType) }}
+                                style={styles.pageImage}
+                                resizeMode="contain"
+                            />
                         ) : null}
-                        {checkOk.decision === 'pass' ? (
-                            <Notice text="Pass: the photo matches the cited manual step. Still compare with the physical manual." />
+                        {checkOk.decision === 'refuse' && citedSource === undefined ? (
+                            <Notice
+                                text={
+                                    simulated
+                                        ? 'The cited page is a synthetic fixture page. No image is shown here.'
+                                        : 'The cited page image is not held in this session.'
+                                }
+                            />
                         ) : null}
                     </View>
                 ) : null}
@@ -466,9 +654,11 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                     ready={questionReady(question) && actionReady}
                     disabledReason={unavailableReason}
                     onQuestionChange={(text) => dispatchQuestion({ type: 'questionChanged', question: text })}
-                    onPartTarget={(partId) => dispatchQuestion({ type: 'targetChanged', target: { kind: 'part', partId } })}
+                    onPartTarget={(partId) =>
+                        dispatchQuestion({ type: 'targetChanged', target: { kind: 'part', partId } })
+                    }
                     onClearTarget={() => dispatchQuestion({ type: 'targetChanged', target: null })}
-                    onAsk={() => void askQuestion()}
+                    onAsk={() => askQuestion()}
                 />
             ) : null}
 
@@ -483,7 +673,7 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                           : null
                 }
                 onPromptChange={(prompt) => dispatchLocate({ type: 'promptChanged', prompt })}
-                onLocate={() => void locatePart()}
+                onLocate={() => locatePart()}
             />
 
             <View style={styles.footer}>

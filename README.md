@@ -21,6 +21,8 @@ EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3001 EXPO_PUBLIC_API_SECRET=truebuild-
 EXPO_PUBLIC_PROVIDER_MODE=fixture EXPO_NO_DOTENV=1 npm run web --workspace @truebuild/app
 ```
 
+`EXPO_PUBLIC_PROVIDER_MODE` accepts `fixture` (default, simulated results) or `meta` (live backend path, sent to the wire as `model`). Any other value stops the app at startup instead of silently simulating. Plain HTTP is accepted only in a development build for loopback or LAN hosts; a production build requires HTTPS.
+
 Fixture mode needs no `MODEL_API_KEY`, and it does not disable the shared-key check: the server still expects `x-truebuild-key`. Known gap: the current Next API does not yet allow `x-truebuild-key` in CORS preflight, so a browser cannot send it to that API until the CORS bridge lands. Until then the Playwright run with the header fails at preflight; the same UI flows pass when the app is started without the header.
 
 ## API contract

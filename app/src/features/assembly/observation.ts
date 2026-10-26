@@ -7,8 +7,9 @@ import { normalizeImage } from '../../media/normalize-image'
 import { SEGMENTATION_MAX_PIXELS, segmentationSize } from './segmentation-size'
 
 /**
- * One photo of the assembly for one capture. It is held in memory only: it is never saved, and it is sent to the
- * configured backend only when the user asks for a check, a question or a part search. A new capture replaces it.
+ * One photo for one capture, held in memory and sent only when the user asks for a check, question or part search.
+ * A new capture replaces it. Native picker and manipulator outputs are temporary platform cache files; this app does not
+ * delete them, so they may remain until the platform clears its cache.
  */
 export type Observation = {
     readonly bytes: Uint8Array<ArrayBuffer>
@@ -20,18 +21,32 @@ export type Observation = {
 
 export type PhotoSource = 'camera' | 'library'
 
-/** Null when the user cancels; nothing is captured and the current photo stays in place. */
-export async function captureObservation(source: PhotoSource): Promise<Observation | null> {
+export type CaptureResult =
+    | { readonly status: 'picked'; readonly observation: Observation }
+    | { readonly status: 'cancelled' }
+    | { readonly status: 'denied' }
+
+/**
+ * Camera use requests permission explicitly first; the native picker refuses to open the camera without it. A denied or
+ * cancelled request ends here: no picker result, no bytes and no network use.
+ */
+export async function captureObservation(source: PhotoSource): Promise<CaptureResult> {
     const options = { mediaTypes: ['images'] as ['images'], allowsMultipleSelection: false }
+    if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync()
+        if (!permission.granted) {
+            return { status: 'denied' }
+        }
+    }
     const result =
         source === 'camera'
             ? await ImagePicker.launchCameraAsync(options)
             : await ImagePicker.launchImageLibraryAsync(options)
     const asset = result.assets?.[0]
     if (result.canceled || asset === undefined) {
-        return null
+        return { status: 'cancelled' }
     }
-    return normalizeImage(asset)
+    return { status: 'picked', observation: await normalizeImage(asset) }
 }
 
 /**
