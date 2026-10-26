@@ -199,8 +199,8 @@ function isPanelOrientationCheck(step: ManualStep, session: ManualSession): bool
     const partId = step.orientation.value.partId
     const part = session.parts.find((candidate) => candidate.partId === partId)
     return (
-        /\bpanel\b/iu.test(partId) ||
-        (part?.name.state === 'known' && /\bpanel\b/iu.test(part.name.value)) ||
+        /\bpanel\b/iu.test(partId.replace(/[_-]+/gu, ' ')) ||
+        (part?.name.state === 'known' && /\bpanel\b/iu.test(part.name.value.replace(/[_-]+/gu, ' '))) ||
         /\b(panel|groove)\b/iu.test(step.orientation.value.description)
     )
 }

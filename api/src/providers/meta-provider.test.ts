@@ -164,6 +164,27 @@ describe('inactive direct Meta transport', (): void => {
         })
     })
 
+    it('recognizes underscore-separated panel identities without relying on a groove description', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            const input = await validInput()
+            input.session = manualSessionSchema.parse(
+                JSON.parse(
+                    JSON.stringify(input.session)
+                        .replaceAll('side-panel', 'side_panel')
+                        .replaceAll('Side panel', 'side_panel'),
+                ),
+            )
+            const orientation = input.session.reviewedSteps[0]!.orientation
+            if (orientation.state === 'known') {
+                orientation.value.description = 'Marked face points inward.'
+            }
+            await expect(transport.provider.checkStep(input, signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
     it('rejects explicit correct orientation without the expected diagram citation', async () => {
         const value = {
             ...result,
@@ -327,7 +348,14 @@ describe('inactive direct Meta transport', (): void => {
         const fetchImpl = vi.fn<typeof fetch>()
         const provider = createMetaProvider({ apiKey: 'synthetic-test-key', fetchImpl })
 
-        for (const variant of ['stale', 'unreviewed', 'foreign-source', 'changed-bytes', 'bad-step'] as const) {
+        for (const variant of [
+            'stale',
+            'unreviewed',
+            'unknown-orientation',
+            'foreign-source',
+            'changed-bytes',
+            'bad-step',
+        ] as const) {
             const input = await validInput()
 
             if (variant === 'stale') {
@@ -335,6 +363,12 @@ describe('inactive direct Meta transport', (): void => {
             }
             if (variant === 'unreviewed') {
                 input.session.reviewStatus = 'unreviewed'
+            }
+            if (variant === 'unknown-orientation') {
+                input.session.reviewedSteps[0]!.orientation = {
+                    state: 'unknown',
+                    reason: 'Facing direction is hidden.',
+                }
             }
             if (variant === 'foreign-source' && input.sourceImages[0]) {
                 input.sourceImages[0].page = { ...input.sourceImages[0].page, assetId: 'foreign' }
