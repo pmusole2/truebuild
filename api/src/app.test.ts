@@ -42,9 +42,14 @@ describe('Hono HTTP boundary', (): void => {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload),
         })
+        const read = vi.spyOn(request, 'json')
+        const readMultipart = vi.spyOn(request, 'formData')
+        const cancel = vi.spyOn(request.body!, 'cancel')
         const denied = await api.fetch(request)
         expect(denied.status).toBe(401)
-        expect(request.bodyUsed).toBe(false)
+        expect(read).not.toHaveBeenCalled()
+        expect(readMultipart).not.toHaveBeenCalled()
+        expect(cancel).toHaveBeenCalledOnce()
         const accepted = await api.request('/api/checks', {
             method: 'POST',
             headers: { 'content-type': 'application/json', 'x-truebuild-key': 'synthetic-local-test-value' },

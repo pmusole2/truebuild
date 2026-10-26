@@ -36,6 +36,18 @@ try {
     }
     const manual = { kind: 'manual', manualId: 'demo-divider', revision: 1 }
     const capture = { kind: 'capture', manualId: 'demo-divider', revision: 1, stepId: 'step-1', captureId: 'capture-1' }
+    for (const [headers, status] of [
+        [{ 'x-truebuild-key': '' }, 401],
+        [{ origin: 'https://foreign.example' }, 403],
+    ] as const) {
+        const denied = await send('/api/checks', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...headers },
+            body: '{}',
+        })
+        assert.equal(denied.status, status)
+        assert.equal((await denied.json()).code, 'unauthorized')
+    }
     for (const path of ['/health', '/api/health']) {
         const response = await send(path)
         assert.equal(response.status, 200)

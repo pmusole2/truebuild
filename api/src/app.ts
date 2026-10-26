@@ -71,6 +71,7 @@ export function createApp(
             )
         try {
             if (!isAllowedOrigin(request, runtime.allowedOrigins)) {
+                await request.body?.cancel().catch((): void => {})
                 if (request.method === 'OPTIONS') {
                     return deniedOrigin(401)
                 }
@@ -84,6 +85,7 @@ export function createApp(
                 try {
                     runtime.auth.authenticate(request)
                 } catch {
+                    await request.body?.cancel().catch((): void => {})
                     return context.req.path === '/api/session'
                         ? sessionFailure()
                         : corsResponse(request, deniedOrigin(401), runtime.allowedOrigins)
