@@ -1,14 +1,25 @@
 import { createDemoManual } from '@truebuild/contracts'
 import { describe, expect, it, vi } from 'vitest'
 
-import { GET } from './app/api/health/route'
-import { POST as checkRoute } from './app/api/checks/route'
-import { OPTIONS as checkOptions } from './app/api/checks/route'
-import { POST as parseRoute } from './app/api/manuals/parse/route'
-import { POST as questionRoute } from './app/api/questions/route'
-import { POST as segmentRoute } from './app/api/segments/route'
+import { createApp } from './app'
+import { createRuntimeFromEnvironment } from './server/model-runtime'
 import { createFixtureProvider } from './providers/fixture'
 import { createApiHandlers } from './server/handlers'
+
+const app = createApp({
+    runtime: createRuntimeFromEnvironment({ PROVIDER_MODE: 'fixture', API_SHARED_SECRET: 'truebuild-fixture-demo' }),
+    onDuration: (): void => {},
+})
+const GET = (): Response | Promise<Response> => app.request('/api/health')
+const route =
+    (path: string) =>
+    (request: Request): Promise<Response> =>
+        Promise.resolve(app.fetch(new Request(`http://localhost${path}`, request)))
+const checkRoute = route('/api/checks')
+const parseRoute = route('/api/manuals/parse')
+const questionRoute = route('/api/questions')
+const segmentRoute = route('/api/segments')
+const checkOptions = (request: Request): Response | Promise<Response> => app.fetch(request)
 
 const manualBinding = { kind: 'manual', manualId: 'demo-divider', revision: 1 } as const
 const captureBinding = {
@@ -22,7 +33,7 @@ const captureBinding = {
 function request(body: unknown, headers: Record<string, string> = {}): Request {
     return new Request('http://localhost/api/checks', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...headers },
+        headers: { 'content-type': 'application/json', 'x-truebuild-key': 'truebuild-fixture-demo', ...headers },
         body: JSON.stringify(body),
     })
 }
@@ -33,7 +44,7 @@ function checkInput(overrides: Record<string, unknown> = {}): Record<string, unk
 
 describe('fixture API request boundary', () => {
     it('exercises the actual health and parse route exports', async () => {
-        expect(await GET().json()).toMatchObject({ status: 'ok', live: 'unconfigured', fixture: 'available' })
+        expect(await (await GET()).json()).toMatchObject({ status: 'ok', live: 'unconfigured', fixture: 'available' })
         const response = await parseRoute(request({ mode: 'fixture', requestId: 'parse-1', binding: manualBinding }))
 
         expect(response.status).toBe(200)
@@ -69,13 +80,13 @@ describe('fixture API request boundary', () => {
 
     it('allows only the two local Expo origins and supported preflight headers', async () => {
         for (const origin of ['http://localhost:8081', 'http://127.0.0.1:8081']) {
-            const response = checkOptions(
+            const response = await checkOptions(
                 new Request('http://localhost/api/checks', {
                     method: 'OPTIONS',
                     headers: {
                         origin,
                         'access-control-request-method': 'POST',
-                        'access-control-request-headers': 'content-type, authorization',
+                        'access-control-request-headers': 'content-type, x-truebuild-key',
                     },
                 }),
             )
@@ -83,11 +94,11 @@ describe('fixture API request boundary', () => {
             expect(response.status).toBe(204)
             expect(response.headers.get('access-control-allow-origin')).toBe(origin)
             expect(response.headers.get('vary')).toBe('Origin')
-            expect(response.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization')
+            expect(response.headers.get('access-control-allow-headers')).toBe('Content-Type, X-TrueBuild-Key')
             expect(response.headers.has('access-control-allow-credentials')).toBe(false)
         }
 
-        const deniedHeader = checkOptions(
+        const deniedHeader = await checkOptions(
             new Request('http://localhost/api/checks', {
                 method: 'OPTIONS',
                 headers: {

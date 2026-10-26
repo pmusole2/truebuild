@@ -32,9 +32,9 @@ import {
     type ParseManualInput,
 } from '../providers/meta-provider'
 import type { SamInput, SamProvider } from '../providers/sam'
-import { requireOwnerSession, SessionError, type OwnerSessionManager, type OwnerSession } from './auth'
-import { BudgetError, type RunLedger } from './budget'
-import { corsResponse, isAllowedOrigin } from './cors'
+import { AuthenticationError, type SharedKeyAuth } from './auth'
+import { BudgetError, type ModelCallCounter } from './budget'
+import { corsResponse, isAllowedOrigin, preflight } from './cors'
 import { createDeadline, RequestStoppedError, type Deadline } from './deadline'
 import {
     exactModelFiles,
@@ -59,7 +59,7 @@ class AdmissionError extends Error {
     }
 }
 
-/** Trusted server composition only. A caller cannot provide endpoints or bypass the current reservation context. */
+/** Trusted server composition only. A caller cannot provide endpoints or bypass the current admitted request context. */
 export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
     return (input, init): Promise<Response> => {
         const context = effects.getStore()
@@ -104,131 +104,48 @@ function fail(code: FailureCode, identity?: Identity): ApiResult<never> {
     }
 }
 
-export function unconfiguredModelResponse(request: Request): Response {
-    return corsResponse(
-        request,
-        Response.json(fail('unconfigured'), { status: 503, headers: { 'cache-control': 'no-store' } }),
-    )
-}
-
 export function modelOptions(request: Request): Response {
-    const method = request.headers.get('access-control-request-method')
-    const headers = request.headers.get('access-control-request-headers')
-    if (
-        !isAllowedOrigin(request) ||
-        (method !== null && !['GET', 'POST'].includes(method)) ||
-        (headers !== null &&
-            !headers
-                .split(',')
-                .every((header) => ['content-type', 'authorization'].includes(header.trim().toLowerCase())))
-    ) {
-        return Response.json(fail('unauthorized'), {
-            status: 401,
-            headers: { 'cache-control': 'no-store', vary: 'Origin' },
-        })
-    }
-    return corsResponse(
-        request,
-        new Response(null, {
-            status: 204,
-            headers: {
-                'cache-control': 'no-store',
-                'access-control-allow-methods': 'GET, POST, OPTIONS',
-                'access-control-allow-headers': 'Content-Type, Authorization',
-            },
-        }),
-    )
-}
-
-class Reservation {
-    #reserved = false
-    #closed = false
-    #finalizing: Promise<void> | undefined
-    constructor(
-        readonly ledger: RunLedger,
-        readonly runId: string,
-        readonly requestId: string,
-    ) {}
-    async reserve(allowanceMicros: number): Promise<void> {
-        await this.ledger.reserve({ runId: this.runId, requestId: this.requestId, allowanceMicros })
-        this.#reserved = true
-        if (this.#closed) {
-            void this.finalize('unknown').catch((): void => {})
-        }
-    }
-    finalize(outcome: 'completed' | 'unknown'): Promise<void> {
-        this.#closed = true
-        if (!this.#reserved) {
-            return Promise.resolve()
-        }
-        this.#finalizing ??= this.ledger.finalize({ runId: this.runId, requestId: this.requestId, outcome })
-        void this.#finalizing.catch((): void => {})
-        return this.#finalizing
-    }
+    return preflight(request)
 }
 
 interface Execution {
     deadline: Deadline
-    session: OwnerSession
     context: EffectContext
     check(): void
     stop(): void
     dispose(): void
 }
 
-function admit(request: Request, manager: OwnerSessionManager, duration: number): Execution {
+function admit(request: Request, auth: SharedKeyAuth, duration: number, origins?: readonly string[]): Execution {
+    auth.authenticate(request)
+    if (!isAllowedOrigin(request, origins)) {
+        throw new AuthenticationError()
+    }
     const abort = new AbortController()
     const deadline = createDeadline(duration, AbortSignal.any([request.signal, abort.signal]))
-    let timer: ReturnType<typeof setTimeout> | undefined
+    const check = (): void => deadline.checkpoint()
     try {
-        const authority = new Request(request.url, {
-            headers: {
-                ...(request.headers.get('authorization') === null
-                    ? {}
-                    : { authorization: request.headers.get('authorization') ?? '' }),
-                ...(request.headers.get('origin') === null ? {} : { origin: request.headers.get('origin') ?? '' }),
-            },
-        })
-        const session = requireOwnerSession(authority, manager)
-        deadline.checkpoint()
-        const check = (): void => {
-            const current = requireOwnerSession(authority, manager)
-            if (current.runId !== session.runId || current.expiresAt !== session.expiresAt) {
-                throw new SessionError('unauthorized')
-            }
-            deadline.checkpoint()
-        }
-        timer = setTimeout((): void => abort.abort(), Math.max(0, session.expiresAt - Date.now()))
-        timer.unref?.()
-        return {
-            deadline,
-            session,
-            check,
-            context: { check, deadline, dispatched: false },
-            stop: (): void => abort.abort(),
-            dispose: (): void => {
-                clearTimeout(timer)
-                deadline.dispose()
-            },
-        }
+        check()
     } catch (error) {
-        clearTimeout(timer)
         deadline.dispose()
         throw error
+    }
+    return {
+        deadline,
+        check,
+        context: { check, deadline, dispatched: false },
+        stop: (): void => abort.abort(),
+        dispose: (): void => deadline.dispose(),
     }
 }
 
 function errorResult(error: unknown, execution?: Execution): { code: FailureCode; status: number } {
-    // A poisoned ledger also invalidates session admission; preserve the original persistence failure.
-    if (error instanceof BudgetError && !['duplicate_request', 'budget_exhausted'].includes(error.code)) {
-        return { code: 'provider_error', status: 502 }
-    }
     try {
         execution?.check()
     } catch (current) {
         error = current
     }
-    if (error instanceof SessionError) {
+    if (error instanceof AuthenticationError) {
         return { code: 'unauthorized', status: 401 }
     }
     if (error instanceof AdmissionError) {
@@ -241,13 +158,7 @@ function errorResult(error: unknown, execution?: Execution): { code: FailureCode
         return error.reason === 'timeout' ? { code: 'timeout', status: 504 } : { code: 'provider_error', status: 502 }
     }
     if (error instanceof BudgetError) {
-        if (error.code === 'duplicate_request') {
-            return { code: 'duplicate_request', status: 409 }
-        }
-        if (error.code === 'budget_exhausted') {
-            return { code: 'budget_exhausted', status: 429 }
-        }
-        return { code: 'provider_error', status: 502 }
+        return { code: 'budget_exhausted', status: 429 }
     }
     if (error instanceof MetaProviderError) {
         return {
@@ -352,14 +263,15 @@ async function segmentFiles(
 export function createModelHandlers(options: {
     provider: MetaProvider | null
     samProvider: SamProvider | null
-    manager: OwnerSessionManager
-    ledger: RunLedger
-    allowanceMicros?: number
+    auth: SharedKeyAuth
+    counter: ModelCallCounter
+    checkTimeoutMs?: number
+    allowedOrigins?: readonly string[]
 }): { parse: Handler; check: Handler; question: Handler; segment: Handler; options: typeof modelOptions } {
-    const { provider, samProvider, manager, ledger } = options
-    const allowanceMicros = options.allowanceMicros ?? 100_000
-    if (!Number.isSafeInteger(allowanceMicros) || allowanceMicros <= 0) {
-        throw new Error('invalid_allowance')
+    const { provider, samProvider, auth, counter, allowedOrigins } = options
+    const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
+    if (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
+        throw new Error('invalid_timeout')
     }
 
     function jsonHandler<M extends Identity, I, T>(
@@ -373,9 +285,8 @@ export function createModelHandlers(options: {
         return async (request): Promise<Response> => {
             let execution: Execution | undefined
             let metadata: M | undefined
-            let reservation: Reservation | undefined
             try {
-                execution = admit(request, manager, duration)
+                execution = admit(request, auth, duration, allowedOrigins)
                 if (!dispatch) {
                     throw new AdmissionError('unconfigured', 503)
                 }
@@ -384,8 +295,7 @@ export function createModelHandlers(options: {
                 metadata = parsed.metadata
                 const input = await prepare(metadata, parsed.files, execution.deadline)
                 execution.check()
-                reservation = new Reservation(ledger, execution.session.runId, metadata.requestId)
-                await withinModelDeadline(reservation.reserve(allowanceMicros), execution.deadline)
+                counter.claim()
                 execution.check()
                 const providerSignal = execution.deadline.signal
                 const raw = await withinModelDeadline(
@@ -398,8 +308,6 @@ export function createModelHandlers(options: {
                     throw new AdmissionError('invalid_output', 502)
                 }
                 execution.check()
-                await withinModelDeadline(reservation.finalize('completed'), execution.deadline)
-                execution.check()
                 const response = Response.json(
                     {
                         status: 'ok',
@@ -411,21 +319,16 @@ export function createModelHandlers(options: {
                     { headers: { 'cache-control': 'no-store' } },
                 )
                 execution.check()
-                return corsResponse(request, response)
+                return corsResponse(request, response, allowedOrigins)
             } catch (error) {
                 const failure = errorResult(error, execution)
-                if (reservation) {
-                    const cleanup = reservation.finalize('unknown')
-                    if (execution) {
-                        await withinModelDeadline(cleanup, execution.deadline).catch((): void => {})
-                    }
-                }
                 return corsResponse(
                     request,
                     Response.json(fail(failure.code, metadata), {
                         status: failure.status,
                         headers: { 'cache-control': 'no-store' },
                     }),
+                    allowedOrigins,
                 )
             } finally {
                 execution?.dispose()
@@ -457,7 +360,7 @@ export function createModelHandlers(options: {
     const check = jsonHandler(
         modelCheckMetadataSchema,
         checkResultSchema,
-        8_000,
+        checkTimeoutMs,
         checkFiles,
         provider ? (input, signal): ReturnType<MetaProvider['checkStep']> => provider.checkStep(input, signal) : null,
         (value, metadata): boolean => value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
@@ -465,7 +368,7 @@ export function createModelHandlers(options: {
     const question = jsonHandler(
         modelQuestionMetadataSchema,
         questionResultSchema,
-        8_000,
+        checkTimeoutMs,
         async (
             metadata: ModelQuestionMetadata,
             files,
@@ -484,9 +387,8 @@ export function createModelHandlers(options: {
     const segment: Handler = async (request): Promise<Response> => {
         let execution: Execution | undefined
         let metadata: ModelSegmentMetadata | undefined
-        let reservation: Reservation | undefined
         try {
-            execution = admit(request, manager, 30_000)
+            execution = admit(request, auth, 30_000, allowedOrigins)
             if (!samProvider) {
                 throw new AdmissionError('unconfigured', 503)
             }
@@ -500,15 +402,11 @@ export function createModelHandlers(options: {
             metadata = parsed.metadata
             const input = await segmentFiles(metadata, parsed.files, execution.deadline)
             execution.check()
-            reservation = new Reservation(ledger, execution.session.runId, metadata.requestId)
-            await withinModelDeadline(reservation.reserve(allowanceMicros), execution.deadline)
+            counter.claim()
             execution.check()
-            return corsResponse(request, segmentResponse(input, metadata, execution, reservation, samProvider))
+            return corsResponse(request, segmentResponse(input, metadata, execution, samProvider), allowedOrigins)
         } catch (error) {
             const failure = errorResult(error, execution)
-            if (reservation) {
-                void reservation.finalize('unknown').catch((): void => {})
-            }
             execution?.dispose()
             return corsResponse(
                 request,
@@ -516,6 +414,7 @@ export function createModelHandlers(options: {
                     status: failure.status,
                     headers: { 'cache-control': 'no-store' },
                 }),
+                allowedOrigins,
             )
         }
     }
@@ -526,7 +425,6 @@ function segmentResponse(
     input: SamInput,
     metadata: ModelSegmentMetadata,
     execution: Execution,
-    reservation: Reservation,
     provider: SamProvider,
 ): Response {
     let providerIterator: AsyncIterator<SegmentEvent> | undefined
@@ -546,7 +444,6 @@ function segmentResponse(
     }
     const stop = (): void => {
         execution.stop()
-        void reservation.finalize('unknown').catch((): void => {})
         closeProvider()
     }
     async function* events(): AsyncGenerator<ApiResult<SegmentEvent>> {
@@ -585,12 +482,6 @@ function segmentResponse(
                         throw new AdmissionError('invalid_output', 502)
                     }
                     streamId = value.snapshot.streamId
-                } else {
-                    await withinModelDeadline(
-                        reservation.finalize(value.type === 'completed' ? 'completed' : 'unknown'),
-                        execution.deadline,
-                    )
-                    execution.check()
                 }
                 yield { status: 'ok', mode: 'model', requestId: metadata.requestId, binding: metadata.binding, value }
                 if (value.type !== 'snapshot') {
@@ -599,7 +490,6 @@ function segmentResponse(
             }
         } catch (error) {
             const failure = errorResult(error, execution)
-            await withinModelDeadline(reservation.finalize('unknown'), execution.deadline).catch((): void => {})
             if (!closed) {
                 yield fail(failure.code, metadata)
             }
@@ -610,7 +500,6 @@ function segmentResponse(
     }
     const source = events()
     const abort = (): void => {
-        void reservation.finalize('unknown').catch((): void => {})
         closeProvider()
     }
     execution.deadline.signal.addEventListener('abort', abort, { once: true })

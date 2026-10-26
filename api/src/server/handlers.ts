@@ -81,6 +81,7 @@ function createHandler<TInput extends Input, TValue>(
     dispatch: (input: TInput) => Promise<TValue>,
     validateInput: (input: TInput) => boolean = (): boolean => true,
     validateOutput: (value: TValue, input: TInput) => boolean = (): boolean => true,
+    allowedOrigins?: readonly string[],
 ): Handler {
     const handle = async (request: Request): Promise<Response> => {
         let body: unknown
@@ -134,17 +135,17 @@ function createHandler<TInput extends Input, TValue>(
     }
 
     return async (request: Request): Promise<Response> => {
-        if (!isAllowedOrigin(request)) {
+        if (!isAllowedOrigin(request, allowedOrigins)) {
             await request.body?.cancel().catch((): void => {})
 
             return deniedOrigin()
         }
 
-        return corsResponse(request, await handle(request))
+        return corsResponse(request, await handle(request), allowedOrigins)
     }
 }
 
-export function createApiHandlers(provider: FixtureProvider): ApiHandlers {
+export function createApiHandlers(provider: FixtureProvider, allowedOrigins?: readonly string[]): ApiHandlers {
     return {
         parse: createHandler(
             parseInputSchema,
@@ -154,6 +155,7 @@ export function createApiHandlers(provider: FixtureProvider): ApiHandlers {
             (value): boolean =>
                 value.unknowns.includes(DEMO_LABEL) &&
                 manualSessionSchema.safeParse({ ...createDemoManual(), rawExtraction: value }).success,
+            allowedOrigins,
         ),
         check: createHandler(
             checkInputSchema,
@@ -161,6 +163,7 @@ export function createApiHandlers(provider: FixtureProvider): ApiHandlers {
             (input) => provider.check(input),
             undefined,
             (value): boolean => value.reason.includes(DEMO_LABEL) && hasDemoSources(value.sourceRefs),
+            allowedOrigins,
         ),
         question: createHandler(
             questionInputSchema,
@@ -172,6 +175,7 @@ export function createApiHandlers(provider: FixtureProvider): ApiHandlers {
                     (part) => input.target.kind === 'part' && part.partId === input.target.partId,
                 ),
             (value): boolean => value.answer.includes(DEMO_LABEL) && hasDemoSources(value.sourceRefs),
+            allowedOrigins,
         ),
         segment: createHandler(
             segmentInputSchema,
@@ -182,6 +186,7 @@ export function createApiHandlers(provider: FixtureProvider): ApiHandlers {
                 value.events.every(
                     (event) => event.type !== 'snapshot' || matchesBinding(event.snapshot.binding, input.binding),
                 ),
+            allowedOrigins,
         ),
     }
 }
