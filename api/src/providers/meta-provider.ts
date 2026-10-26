@@ -193,6 +193,18 @@ function currentStep(input: CheckStepInput): ManualStep {
     return step
 }
 
+/** Panel checks need an explicit assessment even though legacy public responses may omit it. */
+function isPanelOrientationCheck(step: ManualStep, session: ManualSession): boolean {
+    if (step.orientation.state !== 'known') return false
+    const partId = step.orientation.value.partId
+    const part = session.parts.find((candidate) => candidate.partId === partId)
+    return (
+        /\bpanel\b/iu.test(partId) ||
+        (part?.name.state === 'known' && /\bpanel\b/iu.test(part.name.value)) ||
+        /\b(panel|groove)\b/iu.test(step.orientation.value.description)
+    )
+}
+
 function sourceObservations(sources: SourceImage[]): ObservationImage[] {
     return sources.map((source): ObservationImage => ({
         bytes: source.bytes,
@@ -570,7 +582,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
                 if (
                     !refsResolve(value.sourceRefs, parsed.sourceImages) ||
-                    (value.orientationAssessment === 'reversed' &&
+                    (value.decision === 'pass' &&
+                        isPanelOrientationCheck(step, parsed.session) &&
+                        value.orientationAssessment !== 'correct') ||
+                    ((value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
                         (step.orientation.state !== 'known' ||
                             !value.sourceRefs.some(
                                 (ref) =>

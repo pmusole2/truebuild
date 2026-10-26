@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { createDemoManual, type CheckResult, type ParsedManual } from '@truebuild/contracts'
+import { createDemoManual, manualSessionSchema, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import sharp from 'sharp'
 import { createHeroResponse } from '@truebuild/contracts/hero'
 import { describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaPr
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const signal = (): AbortSignal => new AbortController().signal
 const result: CheckResult = {
+    orientationAssessment: 'correct',
     decision: 'pass',
     reason: 'The visible connection matches the cited source.',
     sourceRefs: [{ pageId: 'demo-page-1', region: null }],
@@ -139,6 +140,41 @@ describe('inactive direct Meta transport', (): void => {
             })
         },
     )
+
+    it('rejects a new panel pass that omits the optional public orientation field', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+            expect(transport.dispatches()).toBe(1)
+        })
+    })
+
+    it('recognizes a panel by its reviewed name even when parsed IDs are opaque', async () => {
+        const { orientationAssessment: _, ...legacyPass } = result
+        await localServer(jsonResponder(responseBody(legacyPass)), async (transport) => {
+            const input = await validInput()
+            input.session = manualSessionSchema.parse(
+                JSON.parse(JSON.stringify(input.session).replaceAll('side-panel', 'part-01')),
+            )
+            await expect(transport.provider.checkStep(input, signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('rejects explicit correct orientation without the expected diagram citation', async () => {
+        const value = {
+            ...result,
+            sourceRefs: [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }],
+        }
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
 
     it('rejects reversed citations that do not identify the expected orientation diagram', async () => {
         const value = createHeroResponse('reversed')
