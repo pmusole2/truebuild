@@ -10,7 +10,7 @@ import {
 } from 'react-native'
 import Svg from 'react-native-svg'
 import { palette, radius, space } from '../../components/theme'
-import { bytesToDataUri } from '../manuals/image-source'
+import { bytesToDataUri } from '../../media/image-source'
 import { containRect, normalizedPointFromTap, type Point, type Rect } from './frame-geometry'
 import type { Observation } from './observation'
 

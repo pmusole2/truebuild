@@ -1,11 +1,25 @@
-import type { ApiResult, CaptureBinding, CheckResult, ManualSession, ManualStep } from '@truebuild/contracts'
+import type {
+    ApiResult,
+    CaptureBinding,
+    CheckResult,
+    ManualPage,
+    ManualSession,
+    ManualStep,
+    QuestionResult,
+    QuestionTarget,
+} from '@truebuild/contracts'
 import type { ImageBytes, ModelApiClient } from '../../api/model-client'
-import type { QuestionTarget, QuestionResult } from '@truebuild/contracts'
 import { MODEL_CHECK_TIMEOUT_MS } from '../../api/model-client'
 import { awaitStopped, unavailableResult, type CallGuard } from '../../api/transport'
 import { beforeDispatch, type PrepStopReason } from './prep-budget'
-import type { StoredPageAsset } from '../../storage/manual-store.types'
 import type { Observation } from './observation'
+
+/** A page original held in memory for the current session, as the model check needs it. */
+export type SourcePageAsset = {
+    readonly assetId: string
+    readonly mimeType: ManualPage['mimeType']
+    readonly bytes: Uint8Array
+}
 
 /** Every page a reviewed step cites, including the registry names of the parts it uses. Sorted and unique. */
 export function citedPageIds(session: ManualSession, step: ManualStep): string[] {
@@ -38,7 +52,7 @@ export type ModelCheckRequest = {
     readonly session: ManualSession
     readonly step: ManualStep
     readonly observation: Observation
-    readonly loadPageAsset: (assetId: string) => Promise<StoredPageAsset | null>
+    readonly loadPageAsset: (assetId: string) => Promise<SourcePageAsset | null>
     readonly signal: AbortSignal
 }
 

@@ -89,7 +89,7 @@ type TextFieldProps = {
     readonly placeholder?: string
     readonly onSubmitEditing?: () => void
     readonly keyboardType?: 'default' | 'number-pad'
-    // Secret entry (owner token): masked, never autocorrected or autocapitalised.
+    // Secret entry (shared key): masked, never autocorrected or autocapitalised.
     readonly secure?: boolean
 }
 

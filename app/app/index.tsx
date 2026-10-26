@@ -1,13 +1,7 @@
-import { useRouter } from 'expo-router'
 import type { ReactElement } from 'react'
-import { LibraryScreen } from '../src/features/manuals/library-screen'
+import { DemoScreen } from '../src/demo/demo-screen'
+import { API_BASE_URL, API_SECRET, DEMO_MODE } from '../src/config'
 
 export default function IndexRoute(): ReactElement {
-    const router = useRouter()
-    return (
-        <LibraryScreen
-            onOpenManual={(manualId) => router.push(`/manual/${manualId}`)}
-            onOpenConnection={() => router.push('/connection')}
-        />
-    )
+    return <DemoScreen runtime={{ mode: DEMO_MODE, baseUrl: API_BASE_URL, secret: API_SECRET }} />
 }

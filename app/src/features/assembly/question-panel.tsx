@@ -19,7 +19,7 @@ type QuestionPanelProps = {
 
 const UNAVAILABLE_QUESTION: Record<string, string> = {
     unconfigured: 'Live questions are not configured on the connected backend. No model was called.',
-    unauthorized: 'The owner token was rejected. Reconnect on the connection screen.',
+    unauthorized: 'The backend rejected the shared key (x-truebuild-key). Check EXPO_PUBLIC_API_SECRET.',
     timeout: 'The question timed out. Nothing was answered; try again.',
     budget_exhausted: 'The check budget is used up. Nothing was answered.',
     invalid_input: 'This question cannot be sent for this step and photo. Check the wording and target.',
@@ -27,7 +27,7 @@ const UNAVAILABLE_QUESTION: Record<string, string> = {
 
 export function targetText(target: QuestionTarget | null, parts: QuestionPanelProps['parts']): string {
     if (target === null) {
-        return 'No target chosen. Pick a part of this step, or tap a spot on the photo.'
+        return 'No target chosen. Pick a part of this step.'
     }
     if (target.kind === 'part') {
         return `Target: part ${parts.find((part) => part.partId === target.partId)?.label ?? target.partId}`
@@ -56,7 +56,7 @@ export function QuestionPanel({
                 Answers come from this step&apos;s cited pages and the frozen photo. A model answer is not verified
                 until you confirm it against the manual.
             </Text>
-            <Tag tone="unreviewed" text="Live model question" />
+            <Tag tone="unreviewed" text="Question about this photo" />
             <TextField
                 label="Question about this step"
                 value={state.question}
@@ -95,7 +95,7 @@ export function QuestionPanel({
             />
             {result === null ? null : result.status === 'ok' ? (
                 <View style={styles.result}>
-                    <Tag tone="unreviewed" text="Live model answer" />
+                    <Tag tone="unreviewed" text="Answer" />
                     <Text style={styles.answer}>{result.value.answer}</Text>
                     <Text style={styles.body}>
                         Cited:{' '}

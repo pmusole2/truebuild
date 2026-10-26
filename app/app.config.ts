@@ -14,13 +14,6 @@ const config: ExpoConfig = {
     plugins: [
         'expo-router',
         [
-            'expo-camera',
-            {
-                cameraPermission:
-                    'Take a photo of your assembly to check it against the manual. The photo stays on this device until you choose to send it for a check.',
-            },
-        ],
-        [
             'expo-image-picker',
             {
                 photosPermission:

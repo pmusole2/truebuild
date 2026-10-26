@@ -4,20 +4,17 @@
     "private": true,
     "main": "expo-router/entry",
     "scripts": {
-        "start": "EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 expo start --localhost",
+        "start": "EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 expo start",
         "web": "EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 expo start --web --localhost --port 8081",
         "typecheck": "tsc --noEmit",
         "test": "jest --runInBand --no-watchman"
     },
     "dependencies": {
         "@expo/metro-runtime": "58.0.15",
-        "@react-native-async-storage/async-storage": "2.2.0",
         "@truebuild/contracts": "0.1.0",
         "expo": "58.0.19",
-        "expo-camera": "58.0.12",
         "expo-constants": "58.0.13",
         "expo-crypto": "58.0.7",
-        "expo-file-system": "58.0.11",
         "expo-image-manipulator": "58.0.15",
         "expo-image-picker": "58.0.10",
         "expo-linking": "58.0.14",

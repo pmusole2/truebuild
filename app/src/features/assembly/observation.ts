@@ -1,16 +1,15 @@
-import { LIMITS, type ManualPage } from '@truebuild/contracts'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import * as ImagePicker from 'expo-image-picker'
-import { readCappedResponse } from '../manuals/capped-read'
-import { ImportRejectedError } from '../manuals/import-errors'
-import { normalizeImage, type SourceImageAsset } from '../manuals/import-pages'
+import { LIMITS, type ManualPage } from '@truebuild/contracts'
+import { readCappedResponse } from '../../media/capped-read'
+import { MediaRejectedError } from '../../media/media-errors'
+import { normalizeImage } from '../../media/normalize-image'
 import { SEGMENTATION_MAX_PIXELS, segmentationSize } from './segmentation-size'
 
 /**
- * A photo of the assembly for one check. It is never a manual page and is never written to the manual. It is kept on this
- * device until the user chooses to send it for a check. Native picker and manipulator outputs are temporary platform cache
- * files: they may remain until the device clears them, and this app does not clean them up. The capture identity (in the
- * binding) changes with every new photo.
+ * One photo for one capture, held in memory and sent only when the user asks for a check, question or part search.
+ * A new capture replaces it. Native picker and manipulator outputs are temporary platform cache files; this app does not
+ * delete them, so they may remain until the platform clears its cache.
  */
 export type Observation = {
     readonly bytes: Uint8Array<ArrayBuffer>
@@ -20,35 +19,34 @@ export type Observation = {
     readonly uri: string
 }
 
-const OBSERVATION_MIME: ManualPage['mimeType'] = 'image/jpeg'
+export type PhotoSource = 'camera' | 'library'
 
-async function toObservation(asset: SourceImageAsset): Promise<Observation> {
-    const normalized = await normalizeImage(asset)
-    return {
-        bytes: normalized.bytes,
-        mimeType: OBSERVATION_MIME,
-        width: normalized.width,
-        height: normalized.height,
-        uri: normalized.uri,
+export type CaptureResult =
+    | { readonly status: 'picked'; readonly observation: Observation }
+    | { readonly status: 'cancelled' }
+    | { readonly status: 'denied' }
+
+/**
+ * Camera use requests permission explicitly first; the native picker refuses to open the camera without it. A denied or
+ * cancelled request ends here: no picker result, no bytes and no network use.
+ */
+export async function captureObservation(source: PhotoSource): Promise<CaptureResult> {
+    const options = { mediaTypes: ['images'] as ['images'], allowsMultipleSelection: false }
+    if (source === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync()
+        if (!permission.granted) {
+            return { status: 'denied' }
+        }
     }
-}
-
-/** Fresh observation from the photo library. Returns null when the user cancels; nothing is stored. */
-export async function pickObservationFromLibrary(): Promise<Observation | null> {
-    const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: false,
-    })
+    const result =
+        source === 'camera'
+            ? await ImagePicker.launchCameraAsync(options)
+            : await ImagePicker.launchImageLibraryAsync(options)
     const asset = result.assets?.[0]
     if (result.canceled || asset === undefined) {
-        return null
+        return { status: 'cancelled' }
     }
-    return toObservation(asset)
-}
-
-/** Observation from an explicit camera capture (the caller owns the camera UI and its permission step). */
-export async function observationFromCapture(asset: SourceImageAsset): Promise<Observation> {
-    return toObservation(asset)
+    return { status: 'picked', observation: await normalizeImage(asset) }
 }
 
 /**
@@ -67,7 +65,7 @@ export async function observationForSegmentation(observation: Observation): Prom
     const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.92 })
     const bytes = await readCappedResponse(await fetch(saved.uri), LIMITS.imageBytes)
     if (saved.width * saved.height > SEGMENTATION_MAX_PIXELS) {
-        throw new ImportRejectedError('pixels')
+        throw new MediaRejectedError('pixels')
     }
-    return { bytes, mimeType: OBSERVATION_MIME, width: saved.width, height: saved.height, uri: saved.uri }
+    return { bytes, mimeType: observation.mimeType, width: saved.width, height: saved.height, uri: saved.uri }
 }

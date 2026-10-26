@@ -9,7 +9,19 @@ import { z } from 'zod'
 
 export const MAX_RESPONSE_BYTES = 262_144
 
+// Plain HTTP is accepted only for loopback or private LAN hosts in a non-production build. Production requires HTTPS.
 const LOOPBACK_HOSTS: readonly string[] = ['127.0.0.1', 'localhost']
+const PRIVATE_LAN =
+    /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/u
+
+/** Metro/Next inline NODE_ENV at build time; a production bundle has no development escape hatch. */
+export function isDevelopmentBuild(): boolean {
+    return process.env.NODE_ENV !== 'production'
+}
+
+function isDevelopmentHost(hostname: string): boolean {
+    return LOOPBACK_HOSTS.includes(hostname) || PRIVATE_LAN.test(hostname)
+}
 
 export type UnavailableCode = Extract<ApiResult<never>, { status: 'unavailable' }>['code']
 export type ApiMode = 'fixture' | 'model'
@@ -35,16 +47,20 @@ export class InvalidResponseError extends Error {
 export function parseBaseUrl(raw: string): string {
     const url = new URL(raw)
 
+    const schemeAllowed =
+        url.protocol === 'https:' ||
+        (url.protocol === 'http:' && isDevelopmentBuild() && isDevelopmentHost(url.hostname))
     if (
-        url.protocol !== 'http:' ||
-        !LOOPBACK_HOSTS.includes(url.hostname) ||
+        !schemeAllowed ||
         url.username !== '' ||
         url.password !== '' ||
         url.pathname !== '/' ||
         url.search !== '' ||
         url.hash !== ''
     ) {
-        throw new Error('API base URL must be a plain loopback http origin without credentials, path, query or hash')
+        throw new Error(
+            'API base URL must be an https origin. Plain http is allowed only for loopback or LAN hosts in a development build, without credentials, path, query or hash',
+        )
     }
 
     return url.origin

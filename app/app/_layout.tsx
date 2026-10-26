@@ -12,10 +12,7 @@ export default function RootLayout(): ReactElement {
                 contentStyle: { backgroundColor: palette.paper },
             }}
         >
-            <Stack.Screen name="index" options={{ title: 'TrueBuild' }} />
-            <Stack.Screen name="manual/[manualId]" options={{ title: 'Manual' }} />
-            <Stack.Screen name="assembly/[manualId]/[stepId]" options={{ title: 'Step check' }} />
-            <Stack.Screen name="connection" options={{ title: 'Live backend' }} />
+            <Stack.Screen name="index" options={{ title: 'TrueBuild demo' }} />
         </Stack>
     )
 }
