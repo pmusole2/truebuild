@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHeroManual, createHeroResponse, HERO_DIAGRAM_PNG_BASE64 } from '@truebuild/contracts/hero'
-import { manifestSchema, main, runGate, scoreExtraction } from './run'
+import { manifestSchema, main, runGate, scoreExtraction, reviewDisplay, type StepReviewer } from './run'
 
 const dirs: string[] = []
 async function setup(): Promise<{ cwd: string; manifest: ReturnType<typeof manifestSchema.parse> }> {
@@ -191,14 +191,100 @@ describe('future operator gates with synthetic data only', () => {
             })
             const result = await runGate(1, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)
             expect(result).toMatchObject({
-                status: renamed ? 'fail' : 'pass',
-                reason: renamed ? 'strict_structural_mismatch' : 'strict_structural_match',
+                status: 'unverified',
+                reason: 'structural_score_only_semantic_unverified',
+                semanticStepAccuracy: 'unverified',
                 strictStructuralMatchPercent: renamed ? 50 : 100,
                 requests: 1,
             })
             expect(result).not.toHaveProperty('stepAccuracyPercent')
         },
     )
+
+    it.each([
+        'correct',
+        'incorrect',
+        'unverifiable',
+        'missing',
+        'extra',
+        'unknown-fact',
+        'unknown-extraction',
+    ] as const)('Gate1 human grading is independent of harmless IDs/wording: %s', async (scenario) => {
+        const { cwd, manifest } = await setup()
+        const extracted = structuredClone(manifest.expected)
+        extracted.steps.forEach((step) => {
+            step.stepId = `new-${step.stepId}`
+            step.title = `Equivalent wording ${step.order}`
+        })
+        if (scenario === 'missing') extracted.steps.pop()
+        if (scenario === 'extra') extracted.steps.push({ ...extracted.steps[0]!, stepId: 'extra', order: 3 })
+        if (scenario === 'unknown-fact') extracted.steps[0]!.orientation = { state: 'unknown', reason: 'Not visible' }
+        if (scenario === 'unknown-extraction') extracted.unknowns.push('Unclear diagram')
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+            return Response.json({
+                status: 'ok',
+                mode: 'model',
+                requestId: metadata.requestId,
+                binding: metadata.binding,
+                value: extracted,
+            })
+        })
+        const reviewer = vi.fn<StepReviewer>(async () =>
+            scenario === 'incorrect' || scenario === 'unverifiable' ? scenario : 'correct',
+        )
+        const result = await runGate(
+            1,
+            manifest,
+            cwd,
+            new URL('http://localhost:3001'),
+            'synthetic',
+            fetchMock,
+            reviewer,
+        )
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(reviewer).toHaveBeenCalledTimes(scenario === 'missing' ? 1 : 2)
+        expect(reviewer.mock.calls[0]?.[0].parsedStep.stepId).toBe('new-step-1')
+        expect(result.strictStructuralMatchPercent).toBe(0)
+        expect(result.humanStepAccuracyPercent).toBe(
+            scenario === 'incorrect' || scenario === 'unverifiable'
+                ? 0
+                : scenario === 'missing' || scenario === 'unknown-fact'
+                  ? 50
+                  : 100,
+        )
+        expect(result.status).toBe(
+            scenario === 'incorrect' || scenario === 'missing' || scenario === 'extra'
+                ? 'fail'
+                : scenario === 'unverifiable' || scenario.startsWith('unknown')
+                  ? 'unverified'
+                  : 'pass',
+        )
+        if (scenario === 'missing') expect(result).toMatchObject({ missingSteps: 1, incorrectSteps: 1 })
+        if (scenario === 'extra') expect(result.extraSteps).toBe(1)
+        if (scenario === 'unknown-fact') expect(result.unverifiableSteps).toBe(1)
+        if (scenario === 'unknown-extraction') expect(result.extractionUnknowns).toBe(1)
+    })
+
+    it('bounds and JSON-escapes untrusted review facts including terminal and bidi controls', async () => {
+        const { manifest } = await setup()
+        const step = structuredClone(manifest.expected.steps[0]!)
+        step.title = 'untrusted\u001b[2J\n\r\u009b\u202e'
+        const input = { expectedOrder: 1, parsedStep: step, parts: manifest.expected.parts }
+        const display = reviewDisplay(input)
+        expect(
+            [...display.text].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) < 127),
+        ).toBe(true)
+        expect(() => JSON.parse(display.text)).not.toThrow()
+        step.visibleChecks = Array.from({ length: 100 }, (_, i) => ({
+            checkId: String(i),
+            description: { state: 'unknown' as const, reason: 'x'.repeat(500) },
+        }))
+        const bounded = reviewDisplay(input)
+        expect(bounded.truncated).toBe(true)
+        expect(bounded.text.length).toBeLessThanOrEqual(24_002)
+        expect(() => JSON.parse(bounded.text)).not.toThrow()
+    })
 
     it('Gate1 reports strict structural mismatch and rejects fixture mode', async () => {
         const { cwd, manifest } = await setup()

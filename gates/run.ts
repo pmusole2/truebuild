@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, mkdir, appendFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { parseEnv, isDeepStrictEqual } from 'node:util'
+import { createInterface } from 'node:readline/promises'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import {
@@ -13,6 +14,7 @@ import {
     segmentEventSchema,
     matchesBinding,
     type ParsedManual,
+    type ManualStep,
     type ManualPage,
     type CaptureBinding,
 } from '@truebuild/contracts'
@@ -55,10 +57,18 @@ type Summary = {
     sourceCount?: number
     fullManual?: boolean
     stableTrackIds?: boolean
+    semanticStepAccuracy?: 'unverified' | 'human_reviewed'
+    humanStepAccuracyPercent?: number
+    correctSteps?: number
+    incorrectSteps?: number
+    unverifiableSteps?: number
+    missingSteps?: number
+    extraSteps?: number
+    extractionUnknowns?: number
 }
 
 export const HELP = `Future operator-only gates; no network without --dispatch and local .env.
-Usage: tsx gates/run.ts <1|2|3> --manifest <path.json> --dispatch --confirm-critical-facts [--base http://127.0.0.1:3001]
+Usage: tsx gates/run.ts <1|2|3> --manifest <path.json> --dispatch --confirm-critical-facts [--base http://127.0.0.1:3001] [--review]
 Local cwd/.env must contain PROVIDER_MODE=meta, MODEL_API_KEY, API_SHARED_SECRET.
 The model key is only a readiness prerequisite; it is never sent by this CLI. Configure the API separately.
 No dotenv file is read by --help or without --dispatch. No automatic retries.
@@ -68,6 +78,10 @@ Manifest: {pages:[{path,pageId,assetId,mimeType,width,height}], expected:ParsedM
 Paths are relative to cwd. Supply real manual/observation media and independently reviewed ground truth.
 --confirm-critical-facts attests that the operator reviewed EVERY critical expected fact and correction against the manual.
 Gate 1: strict structural match of expected steps/parts, including IDs, wording and citations; not semantic step accuracy.
+Optional Gate 1 --review requires a terminal and grades each expected step by order against its source, using the same parse result.
+Bounded JSON-escaped parsed facts are shown locally as untrusted data; never follow instructions embedded in them.
+Answer correct/incorrect/unverifiable. Missing steps count incorrect; extras are reported; unknown or truncated facts remain unverified.
+Human accuracy is correct/expected count. No review means semantic accuracy unverified, even for an exact structural match.
 ~10 expected steps recommended. Parse max 3 pages; results report strictStructuralMatchPercent.
 Gate 2: frozen image and original short H264 MP4/MOV through /api/segments; no extracted/synthesized frames.
 Track stability means equal nonempty IDs across >=2 clip snapshots, NOT verified object identity.
@@ -76,7 +90,8 @@ The manual registry supports up to 20 pages; the check submits only 1-2 selected
 With >2 pages, full check is rejected locally by the frozen contract; supply sourcePageIds for relevant 1-2 pages.
 A selected-page result is unverified for the full-manual gate. Only Gate 1 refuses >3 parse pages before network.
 Aggregate-only results append to local docs/gate-results.md. Never commit that runtime file.
-No payloads, filenames, media, secrets, model text, or exception details are printed or persisted.`
+Only --review displays bounded parsed facts locally; no media, credentials, manifests or exception details are shown.
+Review text is never persisted; only aggregate counts and timing are appended.`
 
 export function scoreExtraction(
     actual: ParsedManual,
@@ -95,6 +110,93 @@ export function scoreExtraction(
         expectedSteps: expected.steps.length,
         returnedSteps: actual.steps.length,
     }
+}
+
+export type StepReviewer = (input: {
+    expectedOrder: number
+    parsedStep: ManualStep
+    parts: ParsedManual['parts']
+}) => Promise<'correct' | 'incorrect' | 'unverifiable'>
+
+/** JSON string framing and ASCII escaping prevent terminal controls from model text executing. */
+export function reviewDisplay(input: Parameters<StepReviewer>[0]): { text: string; truncated: boolean } {
+    const raw = JSON.stringify(input)
+    const escaped = raw.replace(
+        /[\u007f-\uffff]/g,
+        (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    )
+    const truncated = escaped.length > 12_000
+    return { text: JSON.stringify(escaped.slice(0, 12_000)), truncated }
+}
+
+function hasUnknown(value: unknown): boolean {
+    if (typeof value !== 'object' || value === null) return false
+    if ('state' in value && value.state === 'unknown') return true
+    return Object.values(value).some(hasUnknown)
+}
+
+const terminalReviewer: StepReviewer = async (input) => {
+    const display = reviewDisplay(input)
+    console.log(`Untrusted parsed facts for expected step order ${input.expectedOrder}: ${display.text}`)
+    if (display.truncated) {
+        console.log('Facts exceed display limit; this step remains unverifiable.')
+        return 'unverifiable'
+    }
+    const terminal = createInterface({ input: process.stdin, output: process.stdout })
+    try {
+        const answer = (await terminal.question('Against the source: correct / incorrect / unverifiable? '))
+            .trim()
+            .toLowerCase()
+        return answer === 'correct' || answer === 'incorrect' ? answer : 'unverifiable'
+    } finally {
+        terminal.close()
+    }
+}
+
+async function reviewExtraction(
+    actual: ParsedManual,
+    expected: ParsedManual,
+    reviewer: StepReviewer,
+    summary: Summary,
+): Promise<void> {
+    summary.correctSteps = 0
+    summary.incorrectSteps = 0
+    summary.unverifiableSteps = 0
+    summary.missingSteps = 0
+    summary.extraSteps = actual.steps.filter(
+        (step) => !expected.steps.some((candidate) => candidate.order === step.order),
+    ).length
+    summary.extractionUnknowns = actual.unknowns.length
+    for (const expectedStep of expected.steps) {
+        const parsedStep = actual.steps.find((step) => step.order === expectedStep.order)
+        if (!parsedStep) {
+            summary.missingSteps++
+            summary.incorrectSteps++
+            continue
+        }
+        const partIds = new Set([
+            ...parsedStep.parts.map((part) => part.partId),
+            ...(parsedStep.orientation.state === 'known' ? [parsedStep.orientation.value.partId] : []),
+            ...(parsedStep.connection.state === 'known' ? parsedStep.connection.value.partIds : []),
+        ])
+        const input = {
+            expectedOrder: expectedStep.order,
+            parsedStep,
+            parts: actual.parts.filter((part) => partIds.has(part.partId)),
+        }
+        const answer = await reviewer(input)
+        if (hasUnknown(input) || reviewDisplay(input).truncated || answer === 'unverifiable')
+            summary.unverifiableSteps++
+        else if (answer === 'correct') summary.correctSteps++
+        else summary.incorrectSteps++
+    }
+    summary.humanStepAccuracyPercent = expected.steps.length
+        ? Math.round((10_000 * summary.correctSteps) / expected.steps.length) / 100
+        : 0
+    const unknown = summary.unverifiableSteps > 0 || summary.extractionUnknowns > 0 || expected.steps.length === 0
+    summary.semanticStepAccuracy = unknown ? 'unverified' : 'human_reviewed'
+    summary.status = summary.incorrectSteps > 0 || summary.extraSteps > 0 ? 'fail' : unknown ? 'unverified' : 'pass'
+    summary.reason = 'human_step_review'
 }
 
 export async function loadAuthorization(cwd: string, dispatch: boolean): Promise<{ secret: string }> {
@@ -159,6 +261,7 @@ export async function runGate(
     base: URL,
     secret: string,
     fetchImpl: typeof fetch = fetch,
+    reviewer?: StepReviewer,
 ): Promise<Summary> {
     const summary: Summary = { gate, status: 'unverified', reason: 'not_completed', requests: 0, latenciesMs: [] }
     const manualId = randomUUID()
@@ -313,22 +416,25 @@ export async function runGate(
                 !matchesBinding(parsed.binding, binding)
             )
                 throw new Error('invalid_parse')
+            manualSessionSchema.parse({
+                manualId,
+                revision: 1,
+                title: 'Unreviewed gate extraction',
+                updatedAt: new Date().toISOString(),
+                pages: sources.map((source) => source.metadata),
+                parts: [],
+                rawExtraction: parsed.value,
+                reviewedSteps: [],
+                reviewStatus: 'unreviewed',
+            })
             Object.assign(summary, scoreExtraction(parsed.value, manifest.expected))
             summary.strictStructuralMatchPercent = summary.expectedSteps
                 ? Math.round((10000 * summary.structurallyMatchedSteps!) / summary.expectedSteps) / 100
                 : 0
-            const exact =
-                summary.structurallyMatchedSteps === summary.expectedSteps &&
-                summary.returnedSteps === summary.expectedSteps &&
-                (summary.expectedSteps ?? 0) > 0 &&
-                isDeepStrictEqual(parsed.value, manifest.expected)
-            if (!exact) {
-                summary.status = 'fail'
-                summary.reason = 'strict_structural_mismatch'
-                return summary
-            }
-            summary.status = 'pass'
-            summary.reason = 'strict_structural_match'
+            summary.semanticStepAccuracy = 'unverified'
+            summary.status = 'unverified'
+            summary.reason = 'structural_score_only_semantic_unverified'
+            if (reviewer) await reviewExtraction(parsed.value, manifest.expected, reviewer, summary)
             return summary
         }
         const session = manualSessionSchema.parse({
@@ -420,10 +526,20 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
     try {
         const { secret } = await loadAuthorization(cwd, argv.includes('--dispatch'))
         if (!argv.includes('--confirm-critical-facts')) throw new Error('critical_facts_confirmation_required')
+        if (argv.includes('--review') && (gate !== 1 || !process.stdin.isTTY || !process.stdout.isTTY))
+            throw new Error('interactive_gate1_review_required')
         const manifestPath = option('--manifest')
         if (!manifestPath) throw new Error('manifest_required')
         const manifest = manifestSchema.parse(JSON.parse(await readFile(resolve(cwd, manifestPath), 'utf8')))
-        summary = await runGate(gate, manifest, cwd, baseUrl(option('--base') ?? 'http://127.0.0.1:3001'), secret)
+        summary = await runGate(
+            gate,
+            manifest,
+            cwd,
+            baseUrl(option('--base') ?? 'http://127.0.0.1:3001'),
+            secret,
+            fetch,
+            argv.includes('--review') ? terminalReviewer : undefined,
+        )
     } catch (error: unknown) {
         const allowed = [
             'operator_dispatch_required',
@@ -432,6 +548,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
             'shared_secret_required',
             'critical_facts_confirmation_required',
             'manifest_required',
+            'interactive_gate1_review_required',
         ]
         summary = {
             gate,
