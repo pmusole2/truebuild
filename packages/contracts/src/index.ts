@@ -294,12 +294,25 @@ const bindingSchema = z.discriminatedUnion('kind', [manualBindingSchema, capture
 export const checkResultSchema = z
     .strictObject({
         decision: z.enum(['pass', 'refuse', 'cannot_verify']),
+        orientationAssessment: z.enum(['correct', 'reversed', 'uncertain']).optional(),
         reason: descriptionSchema,
         sourceRefs: sourceRefsSchema,
         observedRegion: normalizedBoxSchema.nullable(),
         missingEvidence: z.array(descriptionSchema).max(100),
     })
     .superRefine((result, ctx) => {
+        if (
+            result.orientationAssessment === 'reversed' &&
+            (result.decision !== 'refuse' || result.sourceRefs.length === 0)
+        ) {
+            ctx.addIssue({
+                code: 'custom',
+                message: 'Reversed orientation requires refusal and expected diagram citation',
+            })
+        }
+        if (result.orientationAssessment === 'uncertain' && result.decision !== 'cannot_verify') {
+            ctx.addIssue({ code: 'custom', message: 'Uncertain orientation cannot establish a decision' })
+        }
         if (result.decision === 'pass' && (result.sourceRefs.length === 0 || result.missingEvidence.length !== 0)) {
             ctx.addIssue({ code: 'custom', message: 'Pass requires source evidence without missing evidence' })
         }

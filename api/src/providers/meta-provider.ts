@@ -72,6 +72,8 @@ export interface MetaProvider {
 
 export interface MetaProviderOptions {
     apiKey?: string
+    /** Trusted server configuration only; defaults to the frozen eight-second check budget. */
+    checkTimeoutMs?: number
     /** Tests map the same fixed Meta URL to controlled loopback HTTP; never supply this from a request. */
     fetchImpl?: typeof fetch
 }
@@ -189,6 +191,18 @@ function currentStep(input: CheckStepInput): ManualStep {
     }
 
     return step
+}
+
+/** Panel checks need an explicit assessment even though legacy public responses may omit it. */
+function isPanelOrientationCheck(step: ManualStep, session: ManualSession): boolean {
+    if (step.orientation.state !== 'known') return false
+    const partId = step.orientation.value.partId
+    const part = session.parts.find((candidate) => candidate.partId === partId)
+    return (
+        /\bpanel\b/iu.test(partId.replace(/[_-]+/gu, ' ')) ||
+        (part?.name.state === 'known' && /\bpanel\b/iu.test(part.name.value.replace(/[_-]+/gu, ' '))) ||
+        /\b(panel|groove)\b/iu.test(step.orientation.value.description)
+    )
 }
 
 function sourceObservations(sources: SourceImage[]): ObservationImage[] {
@@ -370,6 +384,10 @@ const INSTRUCTIONS = [
 
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
 export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
+    const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
+    if (!Number.isFinite(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
+        throw new MetaProviderError('invalid_input')
+    }
     const apiKey = options.apiKey
     const transport = options.fetchImpl ?? fetch
 
@@ -440,7 +458,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             instructions: `${INSTRUCTIONS} ${
                 operation === 'parse'
                     ? 'Extract supplied manual pages. Any proposed correction is unreviewed; reviewed must be false.'
-                    : 'Evaluate only the current step against the final observation image.'
+                    : operation === 'check'
+                      ? 'Evaluate only the current step against the final observation image. ORIENTATION ASSESSMENT: Include orientationAssessment correct, reversed, or uncertain. Compare observable groove/face/edge cues to the cited expected manual diagram. Reversed requires refuse, a reason explaining the visible mismatch, and sourceRefs citing the expected orientation diagram. Unobservable or ambiguous orientation requires uncertain and cannot_verify; never force a reversed diagnosis. Correct orientation alone does not establish other checks or a pass.'
+                      : 'Evaluate only the current step against the final observation image.'
             }`,
             input: [{ type: 'message', role: 'user', content }],
             text: {
@@ -547,7 +567,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         },
 
         async checkStep(input, signal): Promise<CheckResult> {
-            return execute(8_000, signal, async (deadline): Promise<CheckResult> => {
+            return execute(checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
                 const parsed = inputValue(checkInputSchema, input)
                 const step = currentStep(parsed)
                 const context = stepContext(parsed, step)
@@ -560,7 +580,23 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 )
                 const value = await dispatch('check', context, images, checkResultSchema, deadline)
 
-                if (!refsResolve(value.sourceRefs, parsed.sourceImages)) {
+                if (
+                    !refsResolve(value.sourceRefs, parsed.sourceImages) ||
+                    (value.decision === 'pass' &&
+                        isPanelOrientationCheck(step, parsed.session) &&
+                        value.orientationAssessment !== 'correct') ||
+                    ((value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
+                        (step.orientation.state !== 'known' ||
+                            !value.sourceRefs.some(
+                                (ref) =>
+                                    step.orientation.state === 'known' &&
+                                    step.orientation.sourceRefs.some(
+                                        (expected) =>
+                                            expected.pageId === ref.pageId &&
+                                            JSON.stringify(expected.region) === JSON.stringify(ref.region),
+                                    ),
+                            )))
+                ) {
                     throw new MetaProviderError('invalid_output')
                 }
 

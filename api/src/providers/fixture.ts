@@ -7,6 +7,8 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 
+import { createHeroResponse } from '@truebuild/contracts/hero'
+
 import {
     DEMO_LABEL,
     type CheckInput,
@@ -45,6 +47,12 @@ export function createFixtureProvider(): FixtureProvider {
 
         async check(input: CheckInput): Promise<CheckResult> {
             const step = getStep(input.binding.stepId)
+
+            if (step.stepId === 'step-1') {
+                return createHeroResponse(
+                    input.scenario === 'wrong' ? 'reversed' : input.scenario === 'unclear' ? 'uncertain' : 'correct',
+                )
+            }
 
             if (input.scenario === 'unclear') {
                 return {
