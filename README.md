@@ -1,6 +1,15 @@
 # TrueBuild
 
-A manuals-first assembly guide with a local Expo app and a protected Next.js backend. Import page images, review cited step facts, and use a fresh assembly photo for a check, a grounded question, or part localization in one frozen photo.
+A phone flat-pack camera guide. Photograph a manual, build a step plan from it, then photograph the assembly at a chosen step and get `pass`, `refuse` (with the reason and manual diagram) or `cannot_verify`. Ask a question about the photo, or localize parts in one frozen photo with SAM.
+
+## API contract
+
+- Base URL: `EXPO_PUBLIC_API_BASE_URL`. Fixture mode is the default and needs no key. HTTPS is allowed; plain HTTP is for LAN development only. Loopback is not hardcoded.
+- Auth: the app sends `x-truebuild-key`. The server checks it against `API_SHARED_SECRET`.
+- `EXPO_PUBLIC_API_SECRET` is a PUBLIC demo-only shared key. It ships inside the app bundle, so it is never a Meta credential and must not be treated as one.
+- Meta credentials stay server-side only (`MODEL_API_KEY`). Never add an `EXPO_PUBLIC_` prefix to them.
+- Routes (unchanged): `POST /api/manuals/parse`, `POST /api/checks`, `POST /api/questions`, `POST /api/segments`, `GET /api/session`, `GET /api/health`. The Hono migration keeps these paths and adds `GET /health`.
+- Fixture requests are JSON and return `mode: "fixture"`. Model requests are multipart and return `mode: "model"`. Every response carries an explicit simulated label in fixture mode.
 
 The software can be developed and exercised before the physical kit arrives. The built-in demo and browser fixtures are synthetic. Real Meta access, phone execution, and physical assembly accuracy still need qualification.
 
