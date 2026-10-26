@@ -18,11 +18,17 @@ test('parse action calls the fixture parse route and labels the result simulated
     expect(parseRequests).toEqual([KEY])
 })
 
-test('hero panel is refused, a fresh correct photo passes, and an unclear photo cannot verify', async ({ page }) => {
+test('hero panel is refused with the actual cited image, a fresh correct photo passes, and an unclear photo cannot verify', async ({
+    page,
+}) => {
     await page.goto('/')
+    await page.getByRole('button', { name: 'Photograph a manual', exact: true }).click()
+    await expect(page.getByText('Simulated parse result', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Confirm expected facts', exact: true }).click()
+    await expect(page.getByText('Plan confirmed.', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: 'Simulated reversed panel', exact: true }).click()
     await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
-    await expect(page.getByText('Synthetic diagram for the sample manual', { exact: false })).toBeVisible()
+    await expect(page.getByRole('img', { name: 'Cited manual page' })).toBeVisible()
 
     await page.getByRole('button', { name: 'Simulated correct photo', exact: true }).click()
     await expect(page.getByText('Pass', { exact: true })).toBeVisible()

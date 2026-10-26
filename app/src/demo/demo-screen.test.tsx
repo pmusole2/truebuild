@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { createDemoManual } from '@truebuild/contracts'
 import * as ImagePicker from 'expo-image-picker'
 import { jpegHeader } from '../media/test-fixtures'
@@ -146,7 +146,10 @@ describe('fixture mode (simulated photos, sample manual)', () => {
         await press('Simulated reversed panel')
         expect(await screen.findByText('Refuse')).toBeTruthy()
         expect(screen.getByText('Cited page: demo-page-1')).toBeTruthy()
-        expect(screen.getByText(/synthetic fixture page/)).toBeTruthy()
+        const citedImage = screen.getByLabelText('Cited manual page') as unknown as {
+            props: { source: { uri: string } }
+        }
+        expect(citedImage.props.source.uri).toMatch(/^data:image\/png;base64,/)
 
         await press('Simulated correct photo')
         expect(await screen.findByText('Pass')).toBeTruthy()
@@ -185,6 +188,53 @@ describe('fixture mode (simulated photos, sample manual)', () => {
 
         await press('Simulated correct photo')
         expect(await screen.findByText('Pass')).toBeTruthy()
+    })
+
+    it('parses, confirms, then shows the actual cited image on a reversed refusal', async () => {
+        const backend = fakeBackend((path, request) => {
+            if (path === '/api/manuals/parse') {
+                return { value: parseValueFor('demo-page-1') }
+            }
+            return {
+                value: {
+                    decision: request.scenario === 'wrong' ? 'refuse' : 'pass',
+                    reason: `${DEMO_LABEL}. ${request.scenario === 'wrong' ? 'reversed' : 'correct'}.`,
+                    sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                    observedRegion: null,
+                    missingEvidence: [],
+                },
+            }
+        })
+        await renderDemo({ mode: 'fixture', fetch: backend.fetch })
+
+        await press('Photograph a manual')
+        expect(await screen.findByText('Simulated parse result')).toBeTruthy()
+        await press('Confirm expected facts')
+        expect(await screen.findByText(/Plan confirmed\./)).toBeTruthy()
+
+        await press('Simulated reversed panel')
+        expect(await screen.findByText('Refuse')).toBeTruthy()
+        expect(screen.getByLabelText('Cited manual page')).toBeTruthy()
+    })
+
+    it('clears a visible pass as soon as a new manual photo is started', async () => {
+        const backend = fakeBackend(() => ({
+            value: {
+                decision: 'pass',
+                reason: `${DEMO_LABEL}. ok.`,
+                sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                observedRegion: null,
+                missingEvidence: [],
+            },
+        }))
+        await renderDemo({ mode: 'fixture', fetch: backend.fetch })
+
+        await press('Simulated correct photo')
+        expect(await screen.findByText('Pass')).toBeTruthy()
+
+        await press('Photograph a manual')
+        expect(screen.queryByText('Pass')).toBeNull()
+        expect(screen.queryByText('Cited manual page')).toBeNull()
     })
 
     it('discards a check that completes after the step changed, so no stale PASS appears', async () => {
@@ -305,7 +355,7 @@ describe('model mode (photographed manual and camera)', () => {
         })
         await renderDemo({ mode: 'model', fetch: backend.fetch })
 
-        expect(screen.queryByText('Use sample manual (synthetic fixture)')).toBeNull()
+        expect(screen.getByText('Use sample manual (synthetic, not physically qualified)')).toBeTruthy()
         await press('Photograph a manual')
         expect(await screen.findByText('Confirm expected facts')).toBeTruthy()
         expect(screen.getByText(/Orientation: Groove faces inward/)).toBeTruthy()
@@ -377,6 +427,39 @@ describe('model mode (photographed manual and camera)', () => {
     })
 })
 
+describe('late camera return', () => {
+    it('discards a photo that arrives after the step changed: no check, no verdict, no preview', async () => {
+        permissionMock.mockResolvedValue({ granted: true })
+        let deliverCamera: ((value: unknown) => void) | undefined
+        cameraMock.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    deliverCamera = resolve
+                }),
+        )
+        const backend = fakeBackend(() => ({ value: {} }))
+        await renderDemo({ mode: 'model', fetch: backend.fetch })
+
+        await press('Use sample manual (synthetic, not physically qualified)')
+        // The camera is still open when the user moves on to step 2; its eventual return belongs to step 1.
+        const pendingPhoto = fireEvent(screen.getByRole('button', { name: 'Take photo' }), 'press')
+        await press('2. Seat the divider in the groove')
+        deliverCamera?.({ canceled: false, assets: [{ uri: 'file:///cache/late.jpg', width: 600, height: 400 }] })
+        await pendingPhoto
+        // Give a late, unguarded publish time to commit, so the negative assertions below are meaningful.
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+
+        expect(cameraMock).toHaveBeenCalledTimes(1)
+        expect(backend.calls.filter((call) => call.url.endsWith('/api/checks'))).toHaveLength(0)
+        expect(screen.queryByText('Pass')).toBeNull()
+        expect(screen.queryByText('Cannot verify')).toBeNull()
+        expect(screen.queryByText('Your photo, frozen for this capture.')).toBeNull()
+        expect(screen.queryByText('Simulated photo: no image was captured or analysed.')).toBeNull()
+    })
+})
+
 describe('sample manual selection', () => {
     it('resets a visible verdict when the synthetic sample is selected explicitly', async () => {
         const backend = fakeBackend(() => ({
@@ -393,7 +476,7 @@ describe('sample manual selection', () => {
         await press('Simulated correct photo')
         expect(await screen.findByText('Pass')).toBeTruthy()
 
-        await press('Use sample manual (synthetic fixture)')
+        await press('Use sample manual (synthetic, not physically qualified)')
         expect(screen.queryByText('Pass')).toBeNull()
         expect(screen.getByText(/Sample manual — original synthetic fixture/)).toBeTruthy()
     })

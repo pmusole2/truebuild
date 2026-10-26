@@ -1,5 +1,4 @@
 import {
-    createDemoManual,
     manualSessionSchema,
     type Fact,
     type ManualBinding,
@@ -8,12 +7,36 @@ import {
     type ManualStep,
     type ParsedManual,
 } from '@truebuild/contracts'
+import { createHeroManual, HERO_DIAGRAM_PNG_BASE64 } from '@truebuild/contracts/hero'
+import type { SourcePageAsset } from '../features/assembly/model-check'
 
 /** Original synthetic reviewed fixture. It is not a real manual and is not physically qualified. */
 export const SAMPLE_MANUAL_LABEL = 'Sample manual — original synthetic fixture, not physically qualified'
 
 export function sampleManual(): ManualSession {
-    return createDemoManual()
+    return createHeroManual()
+}
+
+/** Decodes standard base64 with the platform's atob (Hermes, browsers and Node); no extra dependency. */
+export function decodeBase64(text: string): Uint8Array<ArrayBuffer> {
+    const binary = atob(text)
+    const bytes = new Uint8Array(new ArrayBuffer(binary.length))
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index)
+    }
+    return bytes
+}
+
+/**
+ * The sample's one source image: the original synthetic PNG whose hash and dimensions the sample page declares. Used
+ * for fixture and model requests alike, so a refusal can show the actual cited image in either mode.
+ */
+export function sampleSourceAsset(): SourcePageAsset {
+    const page = sampleManual().pages[0]
+    if (page === undefined) {
+        throw new Error('The sample manual has no source page')
+    }
+    return { assetId: page.assetId, mimeType: page.mimeType, bytes: decodeBase64(HERO_DIAGRAM_PNG_BASE64) }
 }
 
 export type PlanConfirmation =

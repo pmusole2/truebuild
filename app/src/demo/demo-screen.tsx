@@ -40,7 +40,13 @@ import {
 import { bytesToDataUri } from '../media/image-source'
 import { userMessageForMediaError } from '../media/media-errors'
 import { PlanSummary } from './plan-summary'
-import { SAMPLE_MANUAL_LABEL, confirmParsedPlan, sampleManual, unknownCriticalFacts } from './sample-manual'
+import {
+    SAMPLE_MANUAL_LABEL,
+    confirmParsedPlan,
+    sampleManual,
+    sampleSourceAsset,
+    unknownCriticalFacts,
+} from './sample-manual'
 import { parseManualPhoto, type ParseOutcome, type ParseRuntime } from './parse-photo'
 
 export type DemoRuntime = ParseRuntime
@@ -52,6 +58,9 @@ type Capture = {
 }
 
 type PlanOrigin = 'sample' | 'parsed'
+
+/** Honest label: a synthetic sample, not a real manual and not physically qualified. */
+const SAMPLE_BUTTON_LABEL = 'Use sample manual (synthetic, not physically qualified)'
 
 const SIMULATED_PHOTOS: readonly { readonly scenario: Scenario; readonly label: string }[] = [
     { scenario: 'correct', label: 'Simulated correct photo' },
@@ -74,9 +83,11 @@ function unavailableText(code: string): string {
  */
 export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): ReactElement {
     const simulated = runtime.mode === 'fixture'
-    const [plan, setPlan] = useState<ManualSession | null>(simulated ? sampleManual() : null)
+    const [plan, setPlan] = useState<ManualSession | null>(() => (simulated ? sampleManual() : null))
     const [origin, setOrigin] = useState<PlanOrigin | null>(simulated ? 'sample' : null)
-    const [planSources, setPlanSources] = useState<readonly SourcePageAsset[]>([])
+    const [planSources, setPlanSources] = useState<readonly SourcePageAsset[]>(() =>
+        simulated ? [sampleSourceAsset()] : [],
+    )
     const [parseOutcome, setParseOutcome] = useState<ParseOutcome | null>(null)
     const [parsing, setParsing] = useState(false)
     const [planMessage, setPlanMessage] = useState<string | null>(null)
@@ -164,6 +175,8 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
 
     async function photographManual(): Promise<void> {
         parseScopeRef.current?.abort()
+        // A new manual photo starts a fresh candidate: any visible verdict, answer or photo from before must not remain.
+        beginContext()
         const controller = new AbortController()
         parseScopeRef.current = controller
         setParsing(true)
@@ -193,7 +206,7 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
         beginContext()
         const sample = sampleManual()
         setPlan(sample)
-        setPlanSources([])
+        setPlanSources([sampleSourceAsset()])
         setOrigin('sample')
         setParseOutcome(null)
         setParsing(false)
@@ -448,8 +461,8 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                 tone={simulated ? 'caution' : 'info'}
                 text={
                     simulated
-                        ? 'Demo data — simulated results. Photos are simulated and nothing is analysed.'
-                        : 'Live backend. Photos are sent to the configured server only when you ask for a check, question or part search.'
+                        ? 'Demo data — simulated results. Photographing a manual parses it and taking a photo checks it right away. Both are simulated; nothing is analysed.'
+                        : 'Live backend. Photographing a manual parses it and taking a photo checks it right away, both sent to the configured server. Questions and part search run only when you ask.'
                 }
             />
 
@@ -468,9 +481,7 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                     disabled={parsing}
                     onPress={() => photographManual()}
                 />
-                {simulated ? (
-                    <ActionButton label="Use sample manual (synthetic fixture)" onPress={useSampleManual} />
-                ) : null}
+                <ActionButton label={SAMPLE_BUTTON_LABEL} onPress={useSampleManual} />
                 {parseOutcome?.status === 'parsed' ? (
                     <View style={styles.stack}>
                         <Tag
@@ -634,13 +645,7 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
                             />
                         ) : null}
                         {checkOk.decision === 'refuse' && citedSource === undefined ? (
-                            <Notice
-                                text={
-                                    simulated
-                                        ? 'The cited page is a synthetic fixture page. No image is shown here.'
-                                        : 'The cited page image is not held in this session.'
-                                }
-                            />
+                            <Notice text="The cited page image is not held in this session, so no image is shown." />
                         ) : null}
                     </View>
                 ) : null}

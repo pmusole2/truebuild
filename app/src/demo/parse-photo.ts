@@ -6,7 +6,7 @@ import type { SourcePageAsset } from '../features/assembly/model-check'
 import { freshRequestId } from '../features/assembly/identity'
 import { captureObservation } from '../features/assembly/observation'
 import { MediaRejectedError, userMessageForMediaError } from '../media/media-errors'
-import { sampleManual } from './sample-manual'
+import { sampleManual, sampleSourceAsset } from './sample-manual'
 
 export type ParseRuntime = {
     readonly mode: 'fixture' | 'model'
@@ -55,7 +55,7 @@ async function parseFixture(runtime: ParseRuntime, signal: AbortSignal): Promise
         binding: PARSE_BINDING,
         parsed: result.value,
         pages: sampleManual().pages,
-        sources: [],
+        sources: [sampleSourceAsset()],
     }
 }
 
