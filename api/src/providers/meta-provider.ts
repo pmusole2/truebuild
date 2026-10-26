@@ -72,6 +72,8 @@ export interface MetaProvider {
 
 export interface MetaProviderOptions {
     apiKey?: string
+    /** Trusted server configuration only; defaults to the frozen eight-second check budget. */
+    checkTimeoutMs?: number
     /** Tests map the same fixed Meta URL to controlled loopback HTTP; never supply this from a request. */
     fetchImpl?: typeof fetch
 }
@@ -370,6 +372,10 @@ const INSTRUCTIONS = [
 
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
 export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
+    const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
+    if (!Number.isFinite(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
+        throw new MetaProviderError('invalid_input')
+    }
     const apiKey = options.apiKey
     const transport = options.fetchImpl ?? fetch
 
@@ -440,7 +446,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             instructions: `${INSTRUCTIONS} ${
                 operation === 'parse'
                     ? 'Extract supplied manual pages. Any proposed correction is unreviewed; reviewed must be false.'
-                    : 'Evaluate only the current step against the final observation image.'
+                    : operation === 'check'
+                      ? 'Evaluate only the current step against the final observation image. ORIENTATION ASSESSMENT: Include orientationAssessment correct, reversed, or uncertain. Compare observable groove/face/edge cues to the cited expected manual diagram. Reversed requires refuse, a reason explaining the visible mismatch, and sourceRefs citing the expected orientation diagram. Unobservable or ambiguous orientation requires uncertain and cannot_verify; never force a reversed diagnosis. Correct orientation alone does not establish other checks or a pass.'
+                      : 'Evaluate only the current step against the final observation image.'
             }`,
             input: [{ type: 'message', role: 'user', content }],
             text: {
@@ -547,7 +555,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         },
 
         async checkStep(input, signal): Promise<CheckResult> {
-            return execute(8_000, signal, async (deadline): Promise<CheckResult> => {
+            return execute(checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
                 const parsed = inputValue(checkInputSchema, input)
                 const step = currentStep(parsed)
                 const context = stepContext(parsed, step)
@@ -560,7 +568,20 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 )
                 const value = await dispatch('check', context, images, checkResultSchema, deadline)
 
-                if (!refsResolve(value.sourceRefs, parsed.sourceImages)) {
+                if (
+                    !refsResolve(value.sourceRefs, parsed.sourceImages) ||
+                    (value.orientationAssessment === 'reversed' &&
+                        (step.orientation.state !== 'known' ||
+                            !value.sourceRefs.some(
+                                (ref) =>
+                                    step.orientation.state === 'known' &&
+                                    step.orientation.sourceRefs.some(
+                                        (expected) =>
+                                            expected.pageId === ref.pageId &&
+                                            JSON.stringify(expected.region) === JSON.stringify(ref.region),
+                                    ),
+                            )))
+                ) {
                     throw new MetaProviderError('invalid_output')
                 }
 

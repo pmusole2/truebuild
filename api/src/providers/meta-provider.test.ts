@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createDemoManual, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import sharp from 'sharp'
+import { createHeroResponse } from '@truebuild/contracts/hero'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
@@ -128,6 +129,45 @@ function jsonResponder(body: unknown): Responder {
 }
 
 describe('inactive direct Meta transport', (): void => {
+    it.each(['correct', 'reversed', 'uncertain'] as const)(
+        'accepts conservative synthetic %s orientation',
+        async (orientation) => {
+            const value = createHeroResponse(orientation)
+            await localServer(jsonResponder(responseBody(value)), async (transport) => {
+                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual(value)
+                expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
+            })
+        },
+    )
+
+    it('rejects reversed citations that do not identify the expected orientation diagram', async () => {
+        const value = createHeroResponse('reversed')
+        value.sourceRefs = [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }]
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it.each([
+        { ...createHeroResponse('reversed'), decision: 'pass' },
+        { ...createHeroResponse('uncertain'), decision: 'pass', missingEvidence: [] },
+    ])('rejects a confident contradictory orientation result %#', async (value) => {
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    })
+
+    it('accepts only a positive check budget at or below eight seconds', () => {
+        expect(() => createMetaProvider({ checkTimeoutMs: 500 })).not.toThrow()
+        for (const checkTimeoutMs of [0, -1, NaN, Infinity, 8001]) {
+            expect(() => createMetaProvider({ checkTimeoutMs })).toThrow(MetaProviderError)
+        }
+    })
+
     it('fails unconfigured before any validation/media/network work', async (): Promise<void> => {
         const fetchImpl = vi.fn<typeof fetch>()
         const input = await validInput()
