@@ -1,5 +1,5 @@
 import { readCappedResponse, type ByteResponse } from './capped-read'
-import { ImportRejectedError } from './import-errors'
+import { MediaRejectedError } from './media-errors'
 
 const LIMIT = 16
 
@@ -37,7 +37,7 @@ async function failureOf(promise: Promise<unknown>): Promise<string | null> {
         await promise
         return null
     } catch (error: unknown) {
-        return error instanceof ImportRejectedError ? error.failure : 'other'
+        return error instanceof MediaRejectedError ? error.failure : 'other'
     }
 }
 

@@ -484,17 +484,19 @@ describe('BoundedApiClient input, mode and origin boundaries', () => {
 
     it.each([
         'http://example.com:3001',
-        'https://127.0.0.1:3001',
+        'https://user:secret@example.com',
         'http://user:secret@127.0.0.1:3001',
         'http://127.0.0.1:3001/api',
         'http://127.0.0.1:3001?x=1',
-    ])('refuses the non-loopback or credentialed base URL %s', (baseUrl: string) => {
-        expect(() => client({ baseUrl })).toThrow(/loopback http origin/)
+    ])('refuses the plain-http public, credentialed, path or query base URL %s', (baseUrl: string) => {
+        expect(() => client({ baseUrl })).toThrow(/origin/)
     })
 
-    it('accepts the fixed loopback origins', () => {
+    it('accepts https origins and loopback or LAN http origins for development', () => {
+        expect(() => client({ baseUrl: 'https://api.example.com' })).not.toThrow()
         expect(() => client({ baseUrl: 'http://localhost:3001' })).not.toThrow()
         expect(() => client({ baseUrl: 'http://127.0.0.1:3001' })).not.toThrow()
+        expect(() => client({ baseUrl: 'http://192.168.1.20:3001' })).not.toThrow()
     })
 })
 

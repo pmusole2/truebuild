@@ -81,6 +81,8 @@ const segmentInputSchema = z.strictObject({
 export interface ApiClientOptions {
     baseUrl: string
     mode: 'fixture' | 'model'
+    /** Public demo-only shared key (EXPO_PUBLIC_API_SECRET). Sent as x-truebuild-key only when non-empty. */
+    secret?: string
     fetch?: FetchLike
 }
 
@@ -99,10 +101,12 @@ export class BoundedApiClient {
     private readonly baseUrl: string
     private readonly mode: 'fixture' | 'model'
     private readonly fetchImpl: FetchLike
+    private readonly secret: string
 
     constructor(options: ApiClientOptions) {
         this.baseUrl = parseBaseUrl(options.baseUrl)
         this.mode = options.mode
+        this.secret = options.secret ?? ''
         this.fetchImpl = options.fetch ?? ((url: string, init: RequestInit): Promise<Response> => fetch(url, init))
     }
 
@@ -214,7 +218,10 @@ export class BoundedApiClient {
             ownedResponse = await awaitStopped(
                 this.fetchImpl(new URL(call.path, this.baseUrl).toString(), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(this.secret.length > 0 ? { 'x-truebuild-key': this.secret } : {}),
+                    },
                     body: JSON.stringify({ mode: this.mode, requestId, binding, ...call.fields }),
                     signal: guard.signal,
                     redirect: 'error',

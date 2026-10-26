@@ -46,7 +46,6 @@ export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 export const MODEL_PARSE_TIMEOUT_MS = 30_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
-export const SESSION_TIMEOUT_MS = 8_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
 const MAX_SSE_EVENT_BYTES = 262_144
@@ -96,23 +95,11 @@ function composeCheckpoint(
 
 export interface ModelClientOptions {
     readonly baseUrl: string
-    readonly token: string
+    /** Public demo-only shared key (EXPO_PUBLIC_API_SECRET). Never a Meta credential. */
+    readonly secret: string
     readonly fetch?: ModelFetch
     readonly streamFetch?: StreamFetch
 }
-
-export type SessionStatus =
-    | { readonly status: 'verified'; readonly model: 'configured' | 'unconfigured'; readonly expiresAt: number }
-    | { readonly status: 'unauthorized' }
-    | { readonly status: 'unavailable'; readonly code: 'unconfigured' | 'provider_error' | 'timeout' }
-
-const sessionBodySchema = z.strictObject({
-    status: z.literal('ok'),
-    runId: z.string().min(1).max(128),
-    // Frozen wire: owner-session expiry is epoch milliseconds (OwnerSession manager), not an ISO string.
-    expiresAt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    model: z.enum(['configured', 'unconfigured']),
-})
 
 const SOURCE_EXTENSION: Record<ManualPage['mimeType'], string> = {
     'image/jpeg': 'jpg',
@@ -174,62 +161,22 @@ function ssePayload(block: string): string | null | undefined {
 }
 
 /**
- * Model-mode client for the owner-authenticated local backend. The owner token is held only in memory by the caller and
- * sent only in the Authorization header to this instance's origin. Every call makes at most one request (no retries),
+ * Model-mode client for the TrueBuild backend. The shared key is sent only in the x-truebuild-key header to the configured
+ * origin. Every call makes at most one request (no retries),
  * is bounded by one absolute monotonic deadline, validates the request and response against the frozen schemas, and
  * never publishes a value that does not echo its requestId, binding and mode.
  */
 export class ModelApiClient {
     private readonly baseUrl: string
-    private readonly token: string
+    private readonly secret: string
     private readonly fetchImpl: ModelFetch
     private readonly streamImpl: StreamFetch
 
     constructor(options: ModelClientOptions) {
         this.baseUrl = parseBaseUrl(options.baseUrl)
-        if (options.token.length === 0) {
-            throw new Error('An owner session token is required')
-        }
-        this.token = options.token
+        this.secret = options.secret
         this.fetchImpl = options.fetch ?? ((url: string, init: RequestInit): Promise<Response> => fetch(url, init))
         this.streamImpl = options.streamFetch ?? defaultStreamFetch
-    }
-
-    /** Authenticated status probe. It never dispatches a model call and reports only whether a key is configured. */
-    async session(signal?: AbortSignal): Promise<SessionStatus> {
-        if (signal?.aborted === true) {
-            return { status: 'unavailable', code: 'provider_error' }
-        }
-        const guard = createCallGuard(SESSION_TIMEOUT_MS, signal)
-        let owned: Response | undefined
-        try {
-            guard.checkpoint()
-            owned = await awaitStopped(
-                this.fetchImpl(new URL('/api/session', this.baseUrl).toString(), {
-                    method: 'GET',
-                    headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
-                    credentials: 'omit',
-                    redirect: 'error',
-                    signal: guard.signal,
-                }),
-                guard.signal,
-                discardResponse,
-            )
-            guard.checkpoint()
-            const text = await readBoundedText(owned, guard.signal, guard.checkpoint)
-            guard.checkpoint()
-            return interpretSession(owned.status, text)
-        } catch {
-            if (guard.timedOut()) {
-                return { status: 'unavailable', code: 'timeout' }
-            }
-            return { status: 'unavailable', code: 'provider_error' }
-        } finally {
-            guard.dispose()
-            if (owned !== undefined) {
-                discardResponse(owned)
-            }
-        }
     }
 
     async parse(
@@ -474,7 +421,7 @@ export class ModelApiClient {
     private init(form: FormData, signal: AbortSignal): RequestInit {
         return {
             method: 'POST',
-            headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json, text/event-stream' },
+            headers: { 'x-truebuild-key': this.secret, Accept: 'application/json, text/event-stream' },
             body: form,
             credentials: 'omit',
             redirect: 'error',
@@ -655,37 +602,4 @@ function everyRefInside(parsed: ParsedManual, pageIds: ReadonlySet<string>): boo
         ]),
     ]
     return refs.every((ref) => pageIds.has(ref.pageId))
-}
-
-/** An expired owner session can no longer authorize anything, so it is reported as unauthorized (never verified). */
-function sessionVerified(body: z.infer<typeof sessionBodySchema>): SessionStatus {
-    if (body.expiresAt <= Date.now()) {
-        return { status: 'unauthorized' }
-    }
-    return { status: 'verified', model: body.model, expiresAt: body.expiresAt }
-}
-
-function interpretSession(status: number, text: string): SessionStatus {
-    if (status === 401 || status === 403) {
-        return { status: 'unauthorized' }
-    }
-    let json: unknown
-    try {
-        json = JSON.parse(text)
-    } catch {
-        return { status: 'unavailable', code: 'provider_error' }
-    }
-    if (status === 503) {
-        // Pre-body refusal from the backend when model calls are off: the status alone is the classification.
-        return { status: 'unavailable', code: 'unconfigured' }
-    }
-    if (status >= 200 && status < 300) {
-        const body = sessionBodySchema.safeParse(json)
-        return body.success ? sessionVerified(body.data) : { status: 'unavailable', code: 'provider_error' }
-    }
-    const failure = apiResultSchema(z.unknown()).safeParse(json)
-    if (failure.success && failure.data.status === 'unavailable' && failure.data.code === 'unconfigured') {
-        return { status: 'unavailable', code: 'unconfigured' }
-    }
-    return { status: 'unavailable', code: 'provider_error' }
 }

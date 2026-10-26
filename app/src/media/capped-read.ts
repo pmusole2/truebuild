@@ -1,4 +1,4 @@
-import { ImportRejectedError } from './import-errors'
+import { MediaRejectedError } from './media-errors'
 
 // The subset of a fetch Response needed to read bytes under a cap.
 export type ByteResponse = {
@@ -11,17 +11,17 @@ export type ByteResponse = {
 // Stops reading as soon as the cap is crossed, whether or not the platform declared a length.
 export async function readCappedResponse(response: ByteResponse, limitBytes: number): Promise<Uint8Array<ArrayBuffer>> {
     if (!response.ok) {
-        throw new ImportRejectedError('unreadable')
+        throw new MediaRejectedError('unreadable')
     }
     const declared = Number(response.headers.get('content-length'))
     if (Number.isFinite(declared) && declared > limitBytes) {
-        throw new ImportRejectedError('oversize')
+        throw new MediaRejectedError('oversize')
     }
     const reader = response.body?.getReader()
     if (reader === undefined) {
         const buffer = await response.arrayBuffer()
         if (buffer.byteLength > limitBytes) {
-            throw new ImportRejectedError('oversize')
+            throw new MediaRejectedError('oversize')
         }
         return new Uint8Array(buffer)
     }
@@ -35,7 +35,7 @@ export async function readCappedResponse(response: ByteResponse, limitBytes: num
         total += value.byteLength
         if (total > limitBytes) {
             await reader.cancel()
-            throw new ImportRejectedError('oversize')
+            throw new MediaRejectedError('oversize')
         }
         chunks.push(value)
     }

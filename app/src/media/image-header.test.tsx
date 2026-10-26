@@ -1,4 +1,4 @@
-import { ImportRejectedError } from './import-errors'
+import { MediaRejectedError } from './media-errors'
 import { inspectSourceImage } from './image-header'
 
 function u32be(value: number): number[] {
@@ -57,7 +57,7 @@ function isRejectedWith(bytes: Uint8Array, failure: string): boolean {
         inspectSourceImage(bytes)
         return false
     } catch (error: unknown) {
-        return error instanceof ImportRejectedError && error.failure === failure
+        return error instanceof MediaRejectedError && error.failure === failure
     }
 }
 

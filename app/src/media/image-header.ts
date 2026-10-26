@@ -1,5 +1,5 @@
 import { LIMITS } from '@truebuild/contracts'
-import { ImportRejectedError } from './import-errors'
+import { MediaRejectedError } from './media-errors'
 
 export type SourceFormat = 'image/jpeg' | 'image/png' | 'image/webp'
 
@@ -22,7 +22,7 @@ function at(bytes: Uint8Array, index: number): number {
 // Dimension reads require the bytes to exist; short or truncated headers are unreadable.
 function need(bytes: Uint8Array, length: number): void {
     if (bytes.byteLength < length) {
-        throw new ImportRejectedError('unreadable')
+        throw new MediaRejectedError('unreadable')
     }
 }
 
@@ -59,7 +59,7 @@ function readPng(bytes: Uint8Array): Dimensions | null {
     }
     need(bytes, 24)
     if (!matchesAscii(bytes, 12, 'IHDR')) {
-        throw new ImportRejectedError('unreadable')
+        throw new MediaRejectedError('unreadable')
     }
     return { width: u32be(bytes, 16), height: u32be(bytes, 20) }
 }
@@ -72,7 +72,7 @@ function readJpeg(bytes: Uint8Array): Dimensions | null {
     let offset = 2
     while (offset + 4 <= bytes.byteLength) {
         if (at(bytes, offset) !== 0xff) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         const marker = at(bytes, offset + 1)
         if (marker === 0xff) {
@@ -80,7 +80,7 @@ function readJpeg(bytes: Uint8Array): Dimensions | null {
             continue
         }
         if (marker === 0xd9 || marker === 0xda) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
             offset += 2
@@ -88,7 +88,7 @@ function readJpeg(bytes: Uint8Array): Dimensions | null {
         }
         const length = u16be(bytes, offset + 2)
         if (length < 2) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         if (JPEG_START_OF_FRAME.has(marker)) {
             need(bytes, offset + 9)
@@ -96,7 +96,7 @@ function readJpeg(bytes: Uint8Array): Dimensions | null {
         }
         offset += 2 + length
     }
-    throw new ImportRejectedError('unreadable')
+    throw new MediaRejectedError('unreadable')
 }
 
 function readWebp(bytes: Uint8Array): Dimensions | null {
@@ -106,13 +106,13 @@ function readWebp(bytes: Uint8Array): Dimensions | null {
     need(bytes, 30)
     if (matchesAscii(bytes, 12, 'VP8 ')) {
         if (at(bytes, 23) !== 0x9d || at(bytes, 24) !== 0x01 || at(bytes, 25) !== 0x2a) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         return { width: u16le(bytes, 26) & 0x3fff, height: u16le(bytes, 28) & 0x3fff }
     }
     if (matchesAscii(bytes, 12, 'VP8L')) {
         if (at(bytes, 20) !== 0x2f) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         const word = at(bytes, 21) | (at(bytes, 22) << 8) | (at(bytes, 23) << 16) | (at(bytes, 24) << 24)
         return { width: (word & 0x3fff) + 1, height: ((word >>> 14) & 0x3fff) + 1 }
@@ -120,7 +120,7 @@ function readWebp(bytes: Uint8Array): Dimensions | null {
     if (matchesAscii(bytes, 12, 'VP8X')) {
         return { width: u24le(bytes, 24) + 1, height: u24le(bytes, 27) + 1 }
     }
-    throw new ImportRejectedError('unreadable')
+    throw new MediaRejectedError('unreadable')
 }
 
 // Identifies the original file and its dimensions from headers only, before any decode.
@@ -138,12 +138,12 @@ export function inspectSourceImage(bytes: Uint8Array): SourceImageInfo {
         }
         const { width, height } = dimensions
         if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
-            throw new ImportRejectedError('unreadable')
+            throw new MediaRejectedError('unreadable')
         }
         if (width * height > LIMITS.imagePixels) {
-            throw new ImportRejectedError('pixels')
+            throw new MediaRejectedError('pixels')
         }
         return { mimeType, width, height }
     }
-    throw new ImportRejectedError('unsupported')
+    throw new MediaRejectedError('unsupported')
 }

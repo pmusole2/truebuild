@@ -1,16 +1,14 @@
-import { LIMITS, type ManualPage } from '@truebuild/contracts'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import * as ImagePicker from 'expo-image-picker'
-import { readCappedResponse } from '../manuals/capped-read'
-import { ImportRejectedError } from '../manuals/import-errors'
-import { normalizeImage, type SourceImageAsset } from '../manuals/import-pages'
+import { LIMITS, type ManualPage } from '@truebuild/contracts'
+import { readCappedResponse } from '../../media/capped-read'
+import { MediaRejectedError } from '../../media/media-errors'
+import { normalizeImage } from '../../media/normalize-image'
 import { SEGMENTATION_MAX_PIXELS, segmentationSize } from './segmentation-size'
 
 /**
- * A photo of the assembly for one check. It is never a manual page and is never written to the manual. It is kept on this
- * device until the user chooses to send it for a check. Native picker and manipulator outputs are temporary platform cache
- * files: they may remain until the device clears them, and this app does not clean them up. The capture identity (in the
- * binding) changes with every new photo.
+ * One photo of the assembly for one capture. It is held in memory only: it is never saved, and it is sent to the
+ * configured backend only when the user asks for a check, a question or a part search. A new capture replaces it.
  */
 export type Observation = {
     readonly bytes: Uint8Array<ArrayBuffer>
@@ -20,35 +18,20 @@ export type Observation = {
     readonly uri: string
 }
 
-const OBSERVATION_MIME: ManualPage['mimeType'] = 'image/jpeg'
+export type PhotoSource = 'camera' | 'library'
 
-async function toObservation(asset: SourceImageAsset): Promise<Observation> {
-    const normalized = await normalizeImage(asset)
-    return {
-        bytes: normalized.bytes,
-        mimeType: OBSERVATION_MIME,
-        width: normalized.width,
-        height: normalized.height,
-        uri: normalized.uri,
-    }
-}
-
-/** Fresh observation from the photo library. Returns null when the user cancels; nothing is stored. */
-export async function pickObservationFromLibrary(): Promise<Observation | null> {
-    const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: false,
-    })
+/** Null when the user cancels; nothing is captured and the current photo stays in place. */
+export async function captureObservation(source: PhotoSource): Promise<Observation | null> {
+    const options = { mediaTypes: ['images'] as ['images'], allowsMultipleSelection: false }
+    const result =
+        source === 'camera'
+            ? await ImagePicker.launchCameraAsync(options)
+            : await ImagePicker.launchImageLibraryAsync(options)
     const asset = result.assets?.[0]
     if (result.canceled || asset === undefined) {
         return null
     }
-    return toObservation(asset)
-}
-
-/** Observation from an explicit camera capture (the caller owns the camera UI and its permission step). */
-export async function observationFromCapture(asset: SourceImageAsset): Promise<Observation> {
-    return toObservation(asset)
+    return normalizeImage(asset)
 }
 
 /**
@@ -67,7 +50,7 @@ export async function observationForSegmentation(observation: Observation): Prom
     const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.92 })
     const bytes = await readCappedResponse(await fetch(saved.uri), LIMITS.imageBytes)
     if (saved.width * saved.height > SEGMENTATION_MAX_PIXELS) {
-        throw new ImportRejectedError('pixels')
+        throw new MediaRejectedError('pixels')
     }
-    return { bytes, mimeType: OBSERVATION_MIME, width: saved.width, height: saved.height, uri: saved.uri }
+    return { bytes, mimeType: observation.mimeType, width: saved.width, height: saved.height, uri: saved.uri }
 }

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { askModelQuestion, citedPageIds, runModelCheck, type ModelCheckRequest } from './model-check'
 import type { ApiResult, CheckResult, QuestionResult } from '@truebuild/contracts'
-import type { StoredPageAsset } from '../../storage/manual-store.types'
+import type { SourcePageAsset } from './model-check'
 import type { Observation } from './observation'
 
 const observation: Observation = {
@@ -15,7 +15,7 @@ const observation: Observation = {
 }
 
 function clientWith(fetch: ModelFetch): ModelApiClient {
-    return new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', token: 'owner-token-for-tests', fetch })
+    return new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: 'public-demo-key-for-tests', fetch })
 }
 
 function request(
@@ -109,7 +109,7 @@ describe('complete model action deadline', () => {
         'includes seven seconds of source loading in the eight-second %s budget',
         async (action) => {
             vi.useFakeTimers()
-            let releaseSource: (asset: StoredPageAsset) => void = (): void => undefined
+            let releaseSource: (asset: SourcePageAsset) => void = (): void => undefined
             let releaseFetch: (response: Response) => void = (): void => undefined
             const fetch = vi.fn<ModelFetch>(
                 () =>
@@ -122,7 +122,7 @@ describe('complete model action deadline', () => {
                 session,
                 clientWith(fetch),
                 () =>
-                    new Promise<StoredPageAsset>((resolve): void => {
+                    new Promise<SourcePageAsset>((resolve): void => {
                         releaseSource = resolve
                     }),
             )
@@ -167,7 +167,7 @@ describe('complete model action deadline', () => {
         const fetch = vi.fn<ModelFetch>().mockResolvedValue(new Response('', { status: 502 }))
         const session = createDemoManual()
         const result = await runModelCheck(
-            request(session, clientWith(fetch), async (): Promise<StoredPageAsset> => {
+            request(session, clientWith(fetch), async (): Promise<SourcePageAsset> => {
                 now += 8001
                 return { assetId: 'demo-asset-1', mimeType: 'image/png', bytes: new Uint8Array([4, 5, 6]) }
             }),

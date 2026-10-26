@@ -2,6 +2,12 @@
 
 A phone flat-pack camera guide. Photograph a manual, build a step plan from it, then photograph the assembly at a chosen step and get `pass`, `refuse` (with the reason and manual diagram) or `cannot_verify`. Ask a question about the photo, or localize parts in one frozen photo with SAM.
 
+## Run the app
+
+- Web (localhost): `npm run web --workspace @truebuild/app`, then open `http://localhost:8081`.
+- Phone (Expo Go on the same LAN; not device-qualified yet): `npm run start --workspace @truebuild/app` shows a LAN QR code. Set the public variables in your shell first, using your computer's LAN address for the API, for example `EXPO_PUBLIC_API_BASE_URL=http://192.168.1.20:3001 EXPO_PUBLIC_API_SECRET=<demo key> npm run start --workspace @truebuild/app`.
+- The start scripts set `EXPO_NO_DOTENV=1`, so a `.env` file is **not** loaded by the app. Export `EXPO_PUBLIC_*` values in the shell (or pass them explicitly at launch). Never put a Meta key in an `EXPO_PUBLIC_` variable.
+
 ## API contract
 
 - Base URL: `EXPO_PUBLIC_API_BASE_URL`. Fixture mode is the default and needs no key. HTTPS is allowed; plain HTTP is for LAN development only. Loopback is not hardcoded.

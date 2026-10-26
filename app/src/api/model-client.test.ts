@@ -19,7 +19,7 @@ import {
 } from './model-client'
 
 const BASE_URL = 'http://127.0.0.1:3001'
-const TOKEN = 'owner-token-for-tests'
+const SECRET = 'public-demo-key-for-tests'
 const REQUEST_ID = 'req-model-1'
 // Owner-session expiry on the wire is epoch milliseconds; this value is in the future for the whole run.
 const FUTURE_EXPIRY = Date.now() + 60 * 60 * 1000
@@ -61,7 +61,7 @@ function scripted(response: () => Response): { fetch: ModelFetch; calls: Recorde
 }
 
 function client(fetch: ModelFetch): ModelApiClient {
-    return new ModelApiClient({ baseUrl: BASE_URL, token: TOKEN, fetch })
+    return new ModelApiClient({ baseUrl: BASE_URL, secret: SECRET, fetch })
 }
 
 function okCheck(overrides: Record<string, unknown> = {}): unknown {
@@ -172,7 +172,7 @@ async function collect(
 function segmentStream(response: Response): ModelApiClient {
     return new ModelApiClient({
         baseUrl: BASE_URL,
-        token: TOKEN,
+        secret: SECRET,
         fetch: () => Promise.resolve(jsonResponse(500, { status: 'unavailable' })),
         streamFetch: () => Promise.resolve(response),
     })
@@ -186,47 +186,16 @@ const segmentMetadata = {
     image: observation,
 }
 
-describe('ModelApiClient construction and session status', () => {
-    it('refuses a non-loopback origin, a path, or an empty token before any I/O', () => {
-        expect(() => new ModelApiClient({ baseUrl: 'https://example.com', token: TOKEN })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001/api', token: TOKEN })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: BASE_URL, token: '' })).toThrow('owner session token')
+describe('ModelApiClient construction', () => {
+    it('refuses a non-loopback http origin, a path, or a credentialed origin before any I/O', () => {
+        expect(() => new ModelApiClient({ baseUrl: 'http://example.com', secret: SECRET })).toThrow()
+        expect(() => new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001/api', secret: SECRET })).toThrow()
+        expect(() => new ModelApiClient({ baseUrl: 'https://user:pass@example.com', secret: SECRET })).toThrow()
     })
 
-    it('reports only the configured flag from one authenticated GET and never calls a model route', async () => {
-        const { fetch, calls } = scripted(() =>
-            jsonResponse(200, {
-                status: 'ok',
-                runId: 'run-1',
-                expiresAt: FUTURE_EXPIRY,
-                model: 'configured',
-            }),
-        )
-
-        const status = await client(fetch).session()
-
-        expect(status).toEqual({ status: 'verified', model: 'configured', expiresAt: FUTURE_EXPIRY })
-        expect(calls).toHaveLength(1)
-        expect(calls[0]?.url).toBe(`${BASE_URL}/api/session`)
-        expect(calls[0]?.init.method).toBe('GET')
-        expect(new Headers(calls[0]?.init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`)
-        expect(calls[0]?.url).not.toContain(TOKEN)
-    })
-
-    it('maps 401 to unauthorized and a 503 unconfigured envelope to unconfigured', async () => {
-        const unauthorized = scripted(() => jsonResponse(401, { status: 'unavailable' }))
-        const unconfigured = scripted(() =>
-            jsonResponse(503, {
-                status: 'unavailable',
-                requestId: REQUEST_ID,
-                binding: null,
-                code: 'unconfigured',
-                retryable: false,
-            }),
-        )
-
-        expect(await client(unauthorized.fetch).session()).toEqual({ status: 'unauthorized' })
-        expect(await client(unconfigured.fetch).session()).toEqual({ status: 'unavailable', code: 'unconfigured' })
+    it('accepts https and LAN http origins for development', () => {
+        expect(() => new ModelApiClient({ baseUrl: 'https://api.example.com', secret: SECRET })).not.toThrow()
+        expect(() => new ModelApiClient({ baseUrl: 'http://192.168.1.20:3001', secret: SECRET })).not.toThrow()
     })
 })
 
@@ -276,7 +245,7 @@ describe('ModelApiClient request validation (zero dispatch when invalid)', () =>
 })
 
 describe('ModelApiClient multipart dispatch', () => {
-    it('sends one metadata field, fixed source and observation file names, and the bearer token only in the header', async () => {
+    it('sends one metadata field, fixed source and observation file names, and the shared key only in the x-truebuild-key header', async () => {
         const { fetch, calls } = scripted(() => jsonResponse(200, okCheck()))
 
         const result = await client(fetch).check(captureBinding, session, sourcePageIds, [source], observation, {
@@ -292,8 +261,9 @@ describe('ModelApiClient multipart dispatch', () => {
         ;(form as FormData).forEach((_value, key) => names.push(key))
         expect(names.sort()).toEqual(['metadata', 'observation', 'source-0'])
         expect(typeof (form as FormData).get('metadata')).toBe('string')
-        expect(JSON.stringify(call?.init.body ?? '')).not.toContain(TOKEN)
-        expect(call?.url).not.toContain(TOKEN)
+        expect(JSON.stringify(call?.init.body ?? '')).not.toContain(SECRET)
+        expect(call?.url).not.toContain(SECRET)
+        expect(call?.init.headers).toMatchObject({ 'x-truebuild-key': SECRET })
         expect(call?.init.redirect).toBe('error')
     })
 
@@ -480,40 +450,6 @@ describe('ModelApiClient segment stream', () => {
         }
 
         expect(cancelled).toHaveBeenCalled()
-    })
-})
-
-describe('owner session expiry on the wire', () => {
-    it('rejects an ISO string where the frozen epoch-millisecond expiry is required', async () => {
-        const { fetch } = scripted(() =>
-            jsonResponse(200, {
-                status: 'ok',
-                runId: 'run-1',
-                expiresAt: '2026-10-26T12:00:00.000Z',
-                model: 'configured',
-            }),
-        )
-        expect(await client(fetch).session()).toEqual({ status: 'unavailable', code: 'provider_error' })
-    })
-
-    it('treats an expired session as unauthorized rather than verified', async () => {
-        const { fetch } = scripted(() =>
-            jsonResponse(200, { status: 'ok', runId: 'run-1', expiresAt: Date.now() - 1000, model: 'configured' }),
-        )
-        expect(await client(fetch).session()).toEqual({ status: 'unauthorized' })
-    })
-
-    it('rejects an extra session identifier field (strict wire)', async () => {
-        const { fetch } = scripted(() =>
-            jsonResponse(200, {
-                status: 'ok',
-                runId: 'run-1',
-                sessionId: 'extra',
-                expiresAt: FUTURE_EXPIRY,
-                model: 'configured',
-            }),
-        )
-        expect(await client(fetch).session()).toEqual({ status: 'unavailable', code: 'provider_error' })
     })
 })
 
