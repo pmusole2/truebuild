@@ -83,7 +83,9 @@ describe('fixture API request boundary', () => {
             expect(response.status).toBe(204)
             expect(response.headers.get('access-control-allow-origin')).toBe(origin)
             expect(response.headers.get('vary')).toBe('Origin')
-            expect(response.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization')
+            expect(response.headers.get('access-control-allow-headers')).toBe(
+                'Content-Type, Authorization, X-TrueBuild-Key',
+            )
             expect(response.headers.has('access-control-allow-credentials')).toBe(false)
         }
 

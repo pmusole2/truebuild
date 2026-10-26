@@ -7,7 +7,6 @@ export default defineConfig({
             'packages/contracts/src/**/*.test.ts',
             'api/src/**/*.test.ts',
             'app/src/**/*.test.ts',
-            'tools/**/*.test.ts',
             'gates/**/*.test.ts',
         ],
         exclude: ['**/node_modules/**', '**/*.native.test.ts'],

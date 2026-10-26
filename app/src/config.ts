@@ -20,7 +20,7 @@ export function resolveProviderMode(value: string | undefined): DemoMode {
     if (value === 'meta') {
         return 'model'
     }
-    throw new Error(`EXPO_PUBLIC_PROVIDER_MODE must be "fixture" or "meta", not "${value}"`)
+    throw new Error('EXPO_PUBLIC_PROVIDER_MODE must be "fixture" or "meta"')
 }
 
 export const DEMO_MODE: DemoMode = resolveProviderMode(process.env.EXPO_PUBLIC_PROVIDER_MODE)

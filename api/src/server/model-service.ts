@@ -120,7 +120,9 @@ export function modelOptions(request: Request): Response {
         (headers !== null &&
             !headers
                 .split(',')
-                .every((header) => ['content-type', 'authorization'].includes(header.trim().toLowerCase())))
+                .every((header) =>
+                    ['content-type', 'authorization', 'x-truebuild-key'].includes(header.trim().toLowerCase()),
+                ))
     ) {
         return Response.json(fail('unauthorized'), {
             status: 401,
@@ -134,7 +136,7 @@ export function modelOptions(request: Request): Response {
             headers: {
                 'cache-control': 'no-store',
                 'access-control-allow-methods': 'GET, POST, OPTIONS',
-                'access-control-allow-headers': 'Content-Type, Authorization',
+                'access-control-allow-headers': 'Content-Type, Authorization, X-TrueBuild-Key',
             },
         }),
     )

@@ -1,7 +1,5 @@
-# TrueBuild .gitignore. First layer only: ignore rules do not remove files that
-# are already tracked (use git rm --cached), and `git add -f` can still stage an
-# ignored file. .githooks/pre-commit refuses any indexed path that matches these
-# rules (git check-ignore --no-index) and also checks its own private-path list.
+# Ignore private local material during ordinary adds. Forced adds can bypass these
+# rules; review staged paths. The local hook scans staged content with Gitleaks.
 
 # Publish only the normal root README. Keep agent notes, research, handoffs,
 # planning/specification documents and extra READMEs local. Automated *.spec.ts
