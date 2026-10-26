@@ -474,7 +474,7 @@ export function DemoScreen({ runtime }: { readonly runtime: DemoRuntime }): Reac
 
             <LocalizationPanel
                 state={locate}
-                ready={localizationReady(locate) && capture !== null && capture.observation !== null}
+                ready={localizationReady(locate) && capture !== null && (simulated || capture.observation !== null)}
                 disabledReason={
                     capture === null
                         ? unavailableReason

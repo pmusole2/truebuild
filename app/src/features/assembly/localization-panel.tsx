@@ -14,7 +14,7 @@ type LocalizationPanelProps = {
 
 const UNAVAILABLE_LOCATE: Record<string, string> = {
     unconfigured: 'Locating parts is not configured on the connected backend. No model was called.',
-    unauthorized: 'The owner token was rejected. Reconnect on the connection screen.',
+    unauthorized: 'The backend rejected the shared key (x-truebuild-key). Check EXPO_PUBLIC_API_SECRET.',
     timeout: 'Locating timed out. Nothing was shown; try again.',
     budget_exhausted: 'The check budget is used up. Nothing was located.',
     invalid_input:
@@ -48,7 +48,7 @@ export function LocalizationPanel({
     return (
         <Panel>
             <SectionTitle>Find a part in the photo</SectionTitle>
-            <Tag tone="unreviewed" text="Live model · one frozen photo" />
+            <Tag tone="unreviewed" text="One frozen photo" />
             <TextField
                 label="Part to find in the photo"
                 value={state.prompt}

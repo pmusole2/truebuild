@@ -4,9 +4,12 @@
  */
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:3001'
 
-/** Public demo-only shared key sent as x-truebuild-key. Not a Meta credential and not a secret. */
+/**
+ * Public demo-only shared key sent as x-truebuild-key. Synthetic and visible in the bundle, so it is never a Meta or
+ * other real credential. The default is empty: set it explicitly for a local or test backend.
+ */
 export const API_SECRET = process.env.EXPO_PUBLIC_API_SECRET ?? ''
 
 export type DemoMode = 'fixture' | 'model'
 
-export const DEMO_MODE: DemoMode = process.env.EXPO_PUBLIC_TRUEBUILD_MODE === 'model' ? 'model' : 'fixture'
+export const DEMO_MODE: DemoMode = process.env.EXPO_PUBLIC_PROVIDER_MODE === 'model' ? 'model' : 'fixture'
