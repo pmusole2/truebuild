@@ -32,6 +32,7 @@ afterEach(async (): Promise<void> => {
 
 const checked: CheckResult = {
     decision: 'pass',
+    orientationAssessment: 'correct',
     reason: 'Synthetic check',
     sourceRefs: [{ pageId: 'demo-page-1', region: null }],
     observedRegion: null,
