@@ -228,9 +228,32 @@ function Preview(): ReactElement {
 
             <PreviewSection title="Comparison">
                 <ComparisonFrame
-                    diagram={<Caption>Placeholder diagram</Caption>}
-                    photo={<Caption>Placeholder photo</Caption>}
-                    photoRegions={[SAMPLE_REGION]}
+                    diagram={{
+                        caption: 'Manual diagram',
+                        media: <Caption>Placeholder diagram (landscape)</Caption>,
+                        mediaSize: { width: 4, height: 3 },
+                    }}
+                    photo={{
+                        caption: 'Your photo (portrait)',
+                        media: <Caption>Placeholder photo</Caption>,
+                        mediaSize: { width: 3, height: 4 },
+                        regions: [SAMPLE_REGION],
+                    }}
+                />
+                <Caption>Refusal layout: side by side at phone width, stacked under large text.</Caption>
+                <ComparisonFrame
+                    layout="row"
+                    diagram={{
+                        caption: 'Manual diagram',
+                        media: <Caption>Placeholder diagram</Caption>,
+                        mediaSize: { width: 4, height: 3 },
+                    }}
+                    photo={{
+                        caption: 'Your photo',
+                        media: <Caption>Placeholder photo</Caption>,
+                        mediaSize: { width: 3, height: 4 },
+                        regions: [SAMPLE_REGION],
+                    }}
                 />
             </PreviewSection>
         </Screen>

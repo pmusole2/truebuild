@@ -1,6 +1,6 @@
 // Static examples for the component preview only. They are synthetic labels and placeholder geometry: none of them is
 // a manual, a photo, a model answer or a check result, and no preview control sends anything.
-import type { NormalizedBox } from '../comparison-geometry'
+import type { NormalizedBox } from '@truebuild/contracts'
 import type { StepListItem } from '../progress'
 import type { Verdict } from '../status'
 
