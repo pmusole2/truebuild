@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 import { createDemoManual, type CheckResult, type SegmentEvent } from '@truebuild/contracts'
 import { modelCheckMetadataSchema, type ModelCheckMetadata } from '@truebuild/contracts/model'
@@ -11,11 +8,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, type MetaProvider } from '../providers/meta-provider'
 import type { SamProvider } from '../providers/sam'
-import { OwnerSessionManager } from './auth'
-import { RunLedger } from './budget'
+import { SharedKeyAuth } from './auth'
+import { ModelCallCounter } from './budget'
 import { createModelHandlers, guardModelFetch, modelOptions } from './model-service'
 
-const directories: string[] = []
 const servers: Server[] = []
 afterEach(async (): Promise<void> => {
     await Promise.all(
@@ -27,7 +23,6 @@ afterEach(async (): Promise<void> => {
                 }),
         ),
     )
-    await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
 const checked: CheckResult = {
@@ -52,22 +47,15 @@ function provider(check: MetaProvider['checkStep']): MetaProvider {
 }
 
 async function setup(): Promise<{
-    path: string
-    token: string
-    manager: OwnerSessionManager
-    ledger: RunLedger
+    key: string
+    auth: SharedKeyAuth
+    counter: ModelCallCounter
     metadata: ModelCheckMetadata
     bytes: Uint8Array
-    expire: () => void
 }> {
-    const path = await mkdtemp(join(tmpdir(), 'truebuild-model-service-'))
-    directories.push(path)
-    await chmod(path, 0o700)
-    let now = Date.now()
-    const ledger = new RunLedger({ privateDirectory: path })
-    const manager = new OwnerSessionManager({ privateDirectory: path, ledger, now: (): number => now })
-    await manager.createSession({ newRun: true })
-    const token = await readFile(join(path, 'session-token'), 'utf8')
+    const key = 'synthetic-local-test-value'
+    const auth = new SharedKeyAuth({ sharedSecret: key })
+    const counter = new ModelCallCounter(1)
     const bytes = new Uint8Array(
         await sharp({ create: { width: 20, height: 16, channels: 3, background: 'red' } })
             .png()
@@ -89,15 +77,11 @@ async function setup(): Promise<{
         observation: { mimeType: 'image/png', width: 20, height: 16 },
     })
     return {
-        path,
-        token,
-        manager,
-        ledger,
+        key,
+        auth,
+        counter,
         metadata,
         bytes,
-        expire: (): void => {
-            now += 30 * 60 * 1_000
-        },
     }
 }
 
@@ -110,7 +94,7 @@ function request(state: Awaited<ReturnType<typeof setup>>, mutate?: (form: FormD
     return new Request('http://127.0.0.1:3001/api/checks', {
         method: 'POST',
         headers: {
-            authorization: `Bearer ${state.token}`,
+            'x-truebuild-key': state.key,
             origin: 'http://localhost:8081',
         },
         body: form,
@@ -133,7 +117,7 @@ function segmentRequest(state: Awaited<ReturnType<typeof setup>>): Request {
     form.set('media', new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'capture.png')
     return new Request('http://127.0.0.1:3001/api/segments', {
         method: 'POST',
-        headers: { authorization: `Bearer ${state.token}` },
+        headers: { 'x-truebuild-key': state.key },
         body: form,
     })
 }
@@ -156,7 +140,7 @@ describe('protected model composition', (): void => {
         })
         const handlers = createModelHandlers({ ...state, provider: configured, samProvider: null })
         const wrong = request(state)
-        wrong.headers.set('authorization', 'Bearer wrong')
+        wrong.headers.set('x-truebuild-key', 'wrong')
         expect((await handlers.check(wrong)).status).toBe(401)
         expect(wrong.bodyUsed).toBe(false)
         const foreign = request(state)
@@ -183,9 +167,10 @@ describe('protected model composition', (): void => {
             ).status,
         ).toBe(400)
         expect(calls).toBe(0)
+        expect(state.counter.used).toBe(0)
     })
 
-    it('reserves once for concurrent duplicate requests and finalizes before success', async (): Promise<void> => {
+    it('enforces the shared process cap across concurrent model attempts', async (): Promise<void> => {
         const state = await setup()
         let calls = 0
         const handlers = createModelHandlers({
@@ -197,11 +182,42 @@ describe('protected model composition', (): void => {
             }),
         })
         const responses = await Promise.all([handlers.check(request(state)), handlers.check(request(state))])
-        expect(responses.map((response) => response.status).sort()).toEqual([200, 409])
+        expect(responses.map((response) => response.status).sort()).toEqual([200, 429])
         expect(calls).toBe(1)
-        expect((await readFile(join(state.path, 'run-ledger.json'), 'utf8')).includes('"outcome":"completed"')).toBe(
-            true,
-        )
+        expect(state.counter.used).toBe(1)
+        const exhausted = responses.find((response) => response.status === 429)!
+        expect(await exhausted.json()).toEqual({
+            status: 'unavailable',
+            requestId: state.metadata.requestId,
+            binding: state.metadata.binding,
+            code: 'budget_exhausted',
+            retryable: false,
+        })
+    })
+
+    it('rejects a late provider success at the configured absolute check deadline', async (): Promise<void> => {
+        const state = await setup()
+        let now = 0
+        vi.spyOn(performance, 'now').mockImplementation((): number => now)
+        const handlers = createModelHandlers({
+            ...state,
+            checkTimeoutMs: 15,
+            samProvider: null,
+            provider: provider(async (): Promise<CheckResult> => {
+                now = 16
+                return checked
+            }),
+        })
+        const response = await handlers.check(request(state))
+        expect(response.status).toBe(504)
+        expect(await response.json()).toEqual({
+            status: 'unavailable',
+            requestId: state.metadata.requestId,
+            binding: state.metadata.binding,
+            code: 'timeout',
+            retryable: false,
+        })
+        expect(state.counter.used).toBe(1)
     })
 
     it('wires parse source order and question target without falling back to fixture', async (): Promise<void> => {
@@ -222,7 +238,12 @@ describe('protected model composition', (): void => {
             questionCalls += 1
             return { answer: 'Synthetic answer', sourceRefs: [], missingEvidence: [] }
         }
-        const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(2),
+            provider: testProvider,
+            samProvider: null,
+        })
         const parse = request(state, (form): void => {
             form.delete('observation')
             form.set(
@@ -252,10 +273,11 @@ describe('protected model composition', (): void => {
         expect(questionCalls).toBe(1)
     })
 
-    it('withholds late success after session rotation and retains usage', async (): Promise<void> => {
+    it('withholds late success after cancellation and retains the consumed attempt', async (): Promise<void> => {
         const state = await setup()
         const entered = latch()
         const release = latch()
+        const controller = new AbortController()
         const handlers = createModelHandlers({
             ...state,
             samProvider: null,
@@ -265,32 +287,16 @@ describe('protected model composition', (): void => {
                 return checked
             }),
         })
-        const pending = handlers.check(request(state))
+        const template = request(state)
+        const pending = handlers.check(new Request(template, { signal: controller.signal }))
         await entered.promise
-        await state.manager.createSession({ newRun: false })
+        controller.abort()
         release.resolve()
-        expect((await pending).status).toBe(401)
-        expect((await readFile(join(state.path, 'run-ledger.json'), 'utf8')).includes('"outcome":"unknown"')).toBe(true)
+        expect((await pending).status).toBe(502)
+        expect(state.counter.used).toBe(1)
     })
 
-    it('never publishes pass when finalization persistence is unavailable', async (): Promise<void> => {
-        const state = await setup()
-        const moved = `${state.path}-moved`
-        directories.push(moved)
-        const handlers = createModelHandlers({
-            ...state,
-            samProvider: null,
-            provider: provider(async (): Promise<CheckResult> => {
-                await rename(state.path, moved)
-                return checked
-            }),
-        })
-        const response = await handlers.check(request(state))
-        expect(response.status).toBe(502)
-        expect((await readFile(join(moved, 'run-ledger.json'), 'utf8')).includes('"outcome":"reserved"')).toBe(true)
-    })
-
-    it('guards actual Meta transport after authority expires during native media awaits', async (): Promise<void> => {
+    it('guards actual Meta transport after cancellation during native media awaits', async (): Promise<void> => {
         const state = await setup()
         let networkCalls = 0
         const server = createServer((_request, response): void => {
@@ -305,6 +311,7 @@ describe('protected model composition', (): void => {
         if (!address || typeof address === 'string') {
             throw new Error('fixture_unavailable')
         }
+        const controller = new AbortController()
         const actual = createMetaProvider({
             apiKey: 'synthetic-test-key',
             fetchImpl: guardModelFetch(async (_url, init): Promise<Response> =>
@@ -318,16 +325,16 @@ describe('protected model composition', (): void => {
                 ...actual,
                 checkStep(input, signal): Promise<CheckResult> {
                     const pending = actual.checkStep(input, signal)
-                    state.expire()
+                    controller.abort()
                     return pending
                 },
             },
         })
-        expect((await handlers.check(request(state))).status).toBe(401)
+        expect((await handlers.check(new Request(request(state), { signal: controller.signal }))).status).toBe(502)
         expect(networkCalls).toBe(0)
     })
 
-    it('refuses missing effect context and a second dispatch in the same reserved context', async (): Promise<void> => {
+    it('refuses missing effect context and a second dispatch in the same admitted context', async (): Promise<void> => {
         const state = await setup()
         let calls = 0
         const guarded = guardModelFetch(async (): Promise<Response> => {
@@ -348,7 +355,7 @@ describe('protected model composition', (): void => {
         expect(calls).toBe(1)
     })
 
-    it('keeps ALS effect authority through generator consumption and finalizes streamed terminal', async (): Promise<void> => {
+    it('keeps ALS effect authority through generator consumption and delivers exactly one streamed terminal', async (): Promise<void> => {
         const state = await setup()
         let calls = 0
         const guarded = guardModelFetch(async (): Promise<Response> => {
@@ -379,7 +386,7 @@ describe('protected model composition', (): void => {
         const response = await handlers.segment(
             new Request('http://127.0.0.1:3001/api/segments', {
                 method: 'POST',
-                headers: { authorization: `Bearer ${state.token}` },
+                headers: { 'x-truebuild-key': state.key },
                 body: form,
             }),
         )
@@ -388,9 +395,7 @@ describe('protected model composition', (): void => {
         expect(text.includes('"type":"completed"')).toBe(true)
         expect(text.match(/data:/gu)).toHaveLength(1)
         expect(calls).toBe(1)
-        expect((await readFile(join(state.path, 'run-ledger.json'), 'utf8')).includes('"outcome":"completed"')).toBe(
-            true,
-        )
+        expect(state.counter.used).toBe(1)
     })
 
     it('bounds raw multipart body and absolute body-read time before reservation/dispatch', async (): Promise<void> => {
@@ -407,7 +412,7 @@ describe('protected model composition', (): void => {
         const oversized = new Request('http://localhost:3001/api/checks', {
             method: 'POST',
             headers: {
-                authorization: `Bearer ${state.token}`,
+                'x-truebuild-key': state.key,
                 'content-type': 'multipart/form-data; boundary=synthetic',
             },
             body: new Uint8Array(9 * 1_024 * 1_024 + 1),
@@ -479,17 +484,11 @@ describe('protected model composition', (): void => {
         expect(calls).toBe(1)
     })
 
-    it('cancels generator work and durably retains unknown usage on consumer disconnect', async (): Promise<void> => {
+    it('cancels generator work and retains the consumed attempt on consumer disconnect', async (): Promise<void> => {
         const state = await setup()
         const released = latch()
         const returned = latch()
-        const finalized = latch()
         let observedSignal: AbortSignal | undefined
-        const original = state.ledger.finalize.bind(state.ledger)
-        vi.spyOn(state.ledger, 'finalize').mockImplementation(async (value): Promise<void> => {
-            await original(value)
-            finalized.resolve()
-        })
         const samProvider: SamProvider = {
             async *segment(input, signal): AsyncGenerator<SegmentEvent> {
                 observedSignal = signal
@@ -519,12 +518,11 @@ describe('protected model composition', (): void => {
         await reader.cancel()
         released.resolve()
         await returned.promise
-        await finalized.promise
         expect(observedSignal?.aborted).toBe(true)
-        expect((await readFile(join(state.path, 'run-ledger.json'), 'utf8')).includes('"outcome":"unknown"')).toBe(true)
+        expect(state.counter.used).toBe(1)
     })
 
-    it('never fabricates completed for truncated streams or failed terminal persistence', async (): Promise<void> => {
+    it('never fabricates completed for truncated streams', async (): Promise<void> => {
         const state = await setup()
         const empty: SamProvider = {
             async *segment(): AsyncGenerator<SegmentEvent> {
@@ -535,22 +533,6 @@ describe('protected model composition', (): void => {
         const text = await (await handlers.segment(segmentRequest(state))).text()
         expect(text.includes('"type":"completed"')).toBe(false)
         expect(text.includes('"status":"unavailable"')).toBe(true)
-        const second = await setup()
-        const moved = `${second.path}-moved`
-        directories.push(moved)
-        const failed: SamProvider = {
-            async *segment(): AsyncGenerator<SegmentEvent> {
-                await rename(second.path, moved)
-                yield { type: 'completed' }
-            },
-        }
-        const text2 = await (
-            await createModelHandlers({ ...second, provider: null, samProvider: failed }).segment(
-                segmentRequest(second),
-            )
-        ).text()
-        expect(text2.includes('"type":"completed"')).toBe(false)
-        expect(text2.includes('"status":"unavailable"')).toBe(true)
     })
 
     it('permits only exact local origins and explicit auth/content-type preflight headers', (): void => {
@@ -560,7 +542,7 @@ describe('protected model composition', (): void => {
                 headers: {
                     origin: 'http://localhost:8081',
                     'access-control-request-method': 'POST',
-                    'access-control-request-headers': 'Content-Type, Authorization',
+                    'access-control-request-headers': 'Content-Type, X-TrueBuild-Key',
                 },
             }),
         )

@@ -3,20 +3,21 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "next dev --hostname 127.0.0.1 --port 3001",
-        "build": "next build",
-        "typecheck": "tsc --noEmit"
+        "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+        "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
+        "build": "tsc --noEmit",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run src",
+        "smoke": "tsx scripts/smoke.ts"
     },
     "dependencies": {
         "@meta-sam/parser": "0.1.0",
         "@truebuild/contracts": "0.1.0",
-        "next": "16.4.3",
-        "react": "19.3.0",
-        "react-dom": "19.3.0",
         "sharp": "0.35.5",
-        "zod": "4.6.7"
+        "zod": "4.6.7",
+        "hono": "4.13.14",
+        "@hono/node-server": "2.1.5",
+        "tsx": "4.23.15"
     },
-    "devDependencies": {
-        "@types/react": "19.3.0"
-    }
+    "type": "module"
 }

@@ -18,13 +18,11 @@ export default defineConfig({
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
     webServer: [
         {
-            command: 'npm run dev:api',
+            command: 'node --import tsx api/src/index.ts',
             url: `${API_ORIGIN}/api/health`,
             reuseExistingServer: false,
             timeout: 120_000,
             env: {
-                NEXT_TELEMETRY_DISABLED: '1',
-                TRUEBUILD_ENABLE_MODELS: '0',
                 API_SHARED_SECRET: FIXTURE_DEMO_KEY,
                 PROVIDER_MODE: 'fixture',
             },

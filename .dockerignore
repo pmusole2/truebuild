@@ -1,0 +1,28 @@
+# Only runtime sources and dependency manifests enter the API build context.
+**
+!package.json
+!package-lock.json
+!tsconfig.base.json
+!packages/
+!packages/contracts/
+!packages/contracts/package.json
+!packages/contracts/src/
+!packages/contracts/src/**
+!api/
+!api/package.json
+!api/tsconfig.json
+!api/Dockerfile
+!api/src/
+!api/src/**
+!app/
+!app/package.json
+# Private material stays excluded even if placed below an allowed source folder.
+**/.env*
+**/.local/**
+**/.private/**
+**/uploads/**
+**/provider-responses/**
+**/provider_responses/**
+**/node_modules/**
+**/*.pem
+**/*.key
