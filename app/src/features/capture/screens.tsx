@@ -143,13 +143,16 @@ export function LibraryScreen({
 
 function ManualSummary({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
     const confirmed = entry.session.reviewStatus === 'reviewed'
+    const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Card>
             <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
+                {...focus.focusHandlers}
                 onPress={onOpen}
-                style={styles.manualPress}
+                style={[styles.manualPress, focusRingStyle(focus.focused, colors)]}
             >
                 <Heading>{entry.session.title}</Heading>
                 <Caption>

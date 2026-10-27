@@ -30,11 +30,18 @@ export function useSystemReduceMotion(): boolean {
     const [reduced, setReduced] = useState(true)
     useEffect(() => {
         let active = true
-        void AccessibilityInfo.isReduceMotionEnabled().then((value: boolean): void => {
-            if (active) {
-                setReduced(value)
-            }
-        })
+        // A rejected query (unsupported capability) keeps motion reduced and never surfaces as an unhandled rejection.
+        AccessibilityInfo.isReduceMotionEnabled()
+            .then((value: boolean): void => {
+                if (active) {
+                    setReduced(value)
+                }
+            })
+            .catch((): void => {
+                if (active) {
+                    setReduced(true)
+                }
+            })
         const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', (value: boolean): void => {
             setReduced(value)
         })
