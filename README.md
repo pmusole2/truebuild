@@ -52,10 +52,25 @@ after restart; take a fresh photo before checking or asking.
 
 ## Provider policy and contracts
 
-- Default models: `muse-spark-1.3` and `sam-3.1`. `MODEL_SPARK` explicitly opts into
-  `muse-spark-1.3-contributor` (content may train Meta models) or preview `muse-wonder-1.0`.
+- Default models: `muse-spark-1.3` for parse and check/ask, and `sam-3.1` for segmentation.
+  `MODEL_SPARK` accepts only `muse-spark-1.3`; contributor IDs are rejected because submitted
+  content may train Meta models. `muse-wonder-1.0` is a preview, more expensive Standard
+  model: an explicit parse or separate follow-up choice, never a default or live check/ask model.
+- `MODEL_PARSE` defaults to `muse-spark-1.3`; set `muse-wonder-1.0` explicitly to test Wonder.
+  `MODEL_SECOND_OPINION` is unset/empty by default (off). Set it explicitly to
+  `muse-wonder-1.0` or `muse-spark-1.3` to enable one follow-up after Spark returns
+  `cannot_verify`. The phone first displays Spark, then uses the same frozen context for a
+  separate request with a 60-second deadline. Cancellation retains Spark. A follow-up
+  never promotes an uncertain primary to pass; it can retain uncertainty or show a grounded
+  refusal. Failure retains Spark with a visible note and a bounded outcome log.
+  Wonder requests use high reasoning. Tickets expire after 120 seconds and are one-use;
+  a server restart invalidates them. No follow-up runs after primary pass/refuse.
+- No automatic fallback: no parse, check, ask or second opinion switches to another model
+  after an error, timeout or refusal. A failed Wonder run stays a Wonder failure. Gate 1b
+  reports that arm as incomplete or failed and never substitutes a Spark result for it.
 - Structured output uses Responses `text.format` with a strict, finite JSON schema.
-  Images are user-role `input_image` blocks. Requests use `store:false` and low reasoning.
+  Images are user-role `input_image` blocks. Requests use `store:false`. Reasoning is set
+  per model: Spark uses `low`; the Wonder parse uses `high`.
 - Still overlays use Spark's documented perception grounding in the same check/ask call.
   SAM remains a backend/operator mask and optional clip path; there is no clips UI.
 - Stable instructions, the full reviewed plan/parts and every ordered manual image precede
@@ -75,10 +90,10 @@ after restart; take a fresh photo before checking or asking.
   failures are not retried. Zero rate-limit remaining reserves a conservative 60-second
   local pause because no reset header is documented; a shorter request can time out
   while waiting without dispatching.
-- Logs contain allowlisted model/status/latency and numeric usage only, never bodies,
+- Logs contain allowlisted model/status/latency, numeric usage and fixed outcome metadata, never bodies,
   questions, media or keys.
 
-Routes: `POST /api/manuals/parse`, `/api/checks`, `/api/questions`, `/api/segments`;
+Routes: `POST /api/manuals/parse`, `/api/checks`, `/api/checks/second-opinion`, `/api/questions`, `/api/segments`;
 `GET /api/session`, `/api/health`, `/health`. Data/session routes require `x-truebuild-key`.
 App-to-Hono model calls use multipart; Hono-to-Meta Responses calls use JSON. The app
 wire mode remains `model`. Metadata is limited to 512 KiB,
@@ -119,6 +134,60 @@ grades semantic extraction; structural equality alone is insufficient. Gate 2 co
 box to independent truth. Gate 3 measures one check against 8 seconds, reporting validated
 server context scope. A compact result does not qualify full-manual latency. Aggregate
 results stay local in ignored `docs/gate-results.md`. No real gate has run.
+
+Gate 3 is Spark-only. It refuses before any dispatch when the local `.env` sets
+`MODEL_SPARK` to anything other than `muse-spark-1.3`. It passes only when the returned
+model is exactly `muse-spark-1.3`: a missing returned model is `unverified`
+(`model_provenance_missing`), and any other returned model fails (`non_spark_model_returned`).
+
+### Gate 1b: Spark versus Wonder parse (A/B)
+
+```sh
+npm run gate:1b -- --manifest uploads/gate.json --dispatch --ab --confirm-critical-facts --review
+```
+
+Gate 1b parses the same ordered real pages once with `muse-spark-1.3` and once with
+`muse-wonder-1.0`. Each parse runs in process through the real provider, `createMetaProvider`
+with an explicit `parseModel` per arm, and no request-level model override. The arm order is
+randomized. It does not use the HTTP API route or process-wide environment changes, and it
+does not need `API_SHARED_SECRET`.
+
+- **Key path.** The gate reads `PROVIDER_MODE=meta` and `MODEL_API_KEY` from the local `.env`
+  only after both `--dispatch` and `--ab` are present. The key is passed only to the provider,
+  which sends it as the bearer header of its documented Meta Responses request to
+  `https://api.meta.ai/v1/responses`. The gate never prints, logs or writes the key, and the
+  report contains no key.
+- **Retries.** The provider's documented policy applies: 429, 500 and 503 responses are retried
+  inside one parse call, for at most 3 attempts. The gate itself never re-sends a parse. The
+  report states `providerRetryPolicy` and `gateRetryPolicy: none`. Each arm's `attempts` counts
+  the HTTP responses seen through the provider. It is `exact` only when the arm completed; a
+  failed arm reports `lower_bound`, because a rejected fetch leaves no response to count.
+- **No automatic fallback.** Each arm is attributed to the model it requested. A Wonder
+  error, timeout or missing dispatch attribution makes that arm `failed` or `incomplete`.
+  The gate never retries it, never calls Spark in its place and never reports Spark's result
+  as Wonder's. Attribution comes from server dispatch metrics and any returned model field;
+  a mismatch marks the arm incomplete.
+- **Cost.** Each arm's cost is priced only from actual uncached input, cached input and output
+  tokens at the cited Standard rates; reasoning is inside output. If usage or cached-token
+  counts are missing, cost is `unverified`. The gate never treats a missing count as zero.
+- **Plan quality.** Semantic step accuracy and a whole-plan operator rating are recorded per
+  arm, and both need `--review`. The rating is 1 (poor) to 5 (excellent), with optional issue
+  codes from a fixed list: `orientation`, `connection`, `part_identity`, `citation`,
+  `missing_step`, `extra_step`, `step_order`, `unclear_wording`, `other`. Operator free text is
+  not persisted, and the persisted report holds no model text or media.
+- **Conclusion.** `conclusion` is `unverified` unless both arms completed and were step-reviewed
+  and rated. It is `wonderClearlyWins` only when Wonder's step accuracy and rating are both
+  higher than Spark's. It is `sparkClearlyWins` for the reverse, and `no_clear_win` for a tie or
+  a split verdict. A percent difference alone never decides it. `wonderClearlyWins` is the
+  boolean form of the same result. The conclusion covers one manual in one run.
+- **Default.** Every 1b report states `defaultChange: none` and `recommendation:
+  keep_spark_default`. No result changes configuration. Spark remains the parse default unless
+  the operator changes it explicitly after reviewing the evidence.
+- Only aggregates are appended to `docs/gate-results.md`. A refusal writes an aggregate line
+  with `requests: 0`.
+
+The phone's `EXPO_PUBLIC_API_SECRET` remains public app configuration, not production user
+authentication or a Meta credential. Gate 1b uses no phone header and no shared secret.
 
 ## Local library recovery
 
