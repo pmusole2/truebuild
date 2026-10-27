@@ -94,7 +94,9 @@ test('refusal shows the expected diagram and the frozen photo side by side, and 
     await expect(page.getByText('Your photo', { exact: true })).toBeVisible()
     await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
 
-    await page.getByRole('radio', { name: 'Side panel', exact: true }).click()
+    // A point chosen on the refused photo itself, without retaking it, is a valid question target.
+    await page.getByRole('button', { name: 'Your photo: tap a point to ask about it', exact: true }).click()
+    await expect(page.getByText('Selected point in photo.', { exact: true })).toBeVisible()
     await page.getByLabel('Question about frozen photo').fill('Which way should this part face?')
     const question = page.waitForResponse(
         (response) => response.url() === `${API}/api/questions` && response.request().method() === 'POST',
@@ -104,6 +106,43 @@ test('refusal shows the expected diagram and the frozen photo side by side, and 
     await expect(page.getByText('TEST MOCK ONLY: consult the cited diagram.', { exact: false })).toBeVisible({
         timeout: 60_000,
     })
+    // The answer is neutral: the refused check stays refused and no Pass verdict appears.
+    await expect(page.getByText('Answer', { exact: true })).toBeVisible()
+    await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
+    await expect(page.getByText('Pass', { exact: true })).toHaveCount(0)
+})
+
+test('the library shows its restoring state while it loads, before any manual is listed', async ({ page }) => {
+    // Development-build query parameter: delays only the first restore, so the loading state is observable.
+    await page.goto('/?truebuildTestRestoreDelayMs=3000')
+    await expect(page.getByText('Restoring local library…', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible({ timeout: 60_000 })
+})
+
+test('an unknown critical fact is listed and blocks confirmation until the facts are resolved', async ({ page }) => {
+    await openFreshLibrary(page)
+    const parse = await addTwoPagesAndRead(page)
+    expect((await parse).status()).toBe(200)
+    await expect(page.getByRole('checkbox')).toBeVisible({ timeout: 120_000 })
+    // Test-only, schema-valid local edit of the stored plan: step 1 orientation becomes an unknown critical fact.
+    await page.evaluate(() => {
+        const key = 'truebuild/library/v1'
+        const manifest = JSON.parse(localStorage.getItem(key) ?? '{}')
+        for (const entry of manifest.entries) {
+            entry.session.reviewedSteps[0].orientation = {
+                state: 'unknown',
+                reason: 'Arrow is not visible in the photo.',
+            }
+        }
+        localStorage.setItem(key, JSON.stringify(manifest))
+    })
+    await page.reload()
+    await page.getByRole('button', { name: 'Open Untitled manual', exact: true }).click()
+    await expect(
+        page.getByText('Unresolved critical fact: Step 1 orientation: Arrow is not visible in the photo.'),
+    ).toBeVisible()
+    await expect(page.getByRole('checkbox')).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Confirm reviewed facts', exact: true })).toBeDisabled()
 })
 
 test('a cancelled reading says that no late reply is shown, and the reading is not repeated automatically', async ({
