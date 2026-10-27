@@ -98,3 +98,23 @@ describe('ComparisonFrame layout', () => {
         expect(screen.getByTestId('comparison-stack')).not.toHaveStyle({ flexDirection: 'row' })
     })
 })
+
+describe('ComparisonFrame point selection after a refusal', () => {
+    it('maps a tap on the photo pane through the same letterbox geometry as the highlights', async () => {
+        mockWindow.fontScale = 1
+        const onTapPoint = jest.fn()
+        await render(
+            <ComparisonFrame diagram={pane({ caption: 'Manual diagram', regions: [] })} photo={pane({ onTapPoint })} />,
+        )
+        await measure('photo-frame', 300, 220)
+        // Portrait 3000x4000 sits at x 67.5 with width 165: a tap at the centre of the photo is (0.5, 0.5).
+        await fireEvent.press(screen.getByTestId('photo-frame'), {
+            nativeEvent: { locationX: 150, locationY: 110 },
+        })
+        expect(onTapPoint).toHaveBeenCalledTimes(1)
+        expect(onTapPoint.mock.calls[0]?.[0]).toEqual({ x: expect.any(Number), y: expect.any(Number) })
+        const point = onTapPoint.mock.calls[0]?.[0] as { x: number; y: number }
+        expect(point.x).toBeCloseTo(0.5, 6)
+        expect(point.y).toBeCloseTo(0.5, 6)
+    })
+})

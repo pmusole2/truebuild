@@ -1,7 +1,9 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import type { NormalizedBox } from '@truebuild/contracts'
-import { StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native'
-import { containRect, type Size } from '../features/assembly/frame-geometry'
+import type { GestureResponderEvent } from 'react-native'
+import { Pressable, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native'
+import { containRect, normalizedPointFromTap, type Point, type Size } from '../features/assembly/frame-geometry'
+import { extractTapCoordinates } from '../features/assembly/frozen-photo'
 import { useTheme } from '../theme/theme'
 import { radius, space } from '../theme/tokens'
 import { regionOnFrame } from './comparison-geometry'
@@ -20,6 +22,8 @@ export type ComparisonPane = {
     // Intrinsic size of the image in its own pixels. Portrait and landscape both fit the same frame.
     readonly mediaSize: Size
     readonly regions?: readonly ComparisonRegion[]
+    // Optional point selection on the photo, mapped with the same containRect geometry as the highlights.
+    readonly onTapPoint?: (point: Point) => void
 }
 
 export type ComparisonLayout = 'auto' | 'row' | 'column'
@@ -89,9 +93,23 @@ export function MeasuredPane({
         <View style={[styles.pane, sideBySide && styles.paneRow]} testID={testID}>
             <Caption>{pane.caption}</Caption>
             <View style={[styles.border, { borderColor: colors.borderStrong }]}>
-                <View
+                <Pressable
                     testID={`${testID}-frame`}
                     onLayout={onFrameLayout}
+                    accessibilityRole={pane.onTapPoint === undefined ? undefined : 'button'}
+                    accessibilityLabel={
+                        pane.onTapPoint === undefined ? undefined : `${pane.caption}: tap a point to ask about it`
+                    }
+                    onPress={(event: GestureResponderEvent): void => {
+                        const tap = extractTapCoordinates(event)
+                        if (pane.onTapPoint === undefined || frame === null || tap === null) {
+                            return
+                        }
+                        const point = normalizedPointFromTap(tap, frame, pane.mediaSize)
+                        if (point !== null) {
+                            pane.onTapPoint(point)
+                        }
+                    }}
                     style={[styles.frame, { backgroundColor: colors.surfaceSunken }]}
                 >
                     {mediaRect === null ? null : (
@@ -128,7 +146,7 @@ export function MeasuredPane({
                             ]}
                         />
                     ))}
-                </View>
+                </Pressable>
             </View>
             {highlights.length === 0 ? null : (
                 // The outline is also named in text, so the highlight never depends on colour or shape alone.

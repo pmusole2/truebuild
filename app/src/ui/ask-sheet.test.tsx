@@ -59,3 +59,18 @@ describe('AskSheet', () => {
         expect(screen.getByText('Answer: the groove faces inward.')).toBeTruthy()
     })
 })
+
+describe('AskSheet composition limits', () => {
+    it('disables sending and part choices when the composer is not editable, and caps the question at 500', async () => {
+        const onSubmit = jest.fn()
+        const onSelectPart = jest.fn()
+        await renderAsk({ editable: false, onSubmit, onSelectPart, hasTarget: true, question: 'Which way?' })
+        expect(screen.getByRole('button', { name: 'Send question' }).props.accessibilityState).toMatchObject({
+            disabled: true,
+        })
+        expect(screen.getByRole('radio', { name: 'Side panel' }).props.accessibilityState).toMatchObject({
+            disabled: true,
+        })
+        expect(screen.getByLabelText('Question about frozen photo').props.maxLength).toBe(500)
+    })
+})

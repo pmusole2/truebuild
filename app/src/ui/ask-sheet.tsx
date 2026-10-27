@@ -10,6 +10,9 @@ import { Stack } from './surface'
 
 export type AskPart = { readonly id: string; readonly label: string }
 
+// Same cap the capture controller enforces on question text.
+export const QUESTION_MAX_LENGTH = 500
+
 /**
  * Composer for one question about a frozen photo. A target is either a step part chosen here or a point tapped in the
  * photo (summarised by the caller). Sending needs a target and non-empty text; the caller owns the request.
@@ -44,7 +47,8 @@ export function AskSheet({
     readonly disabledReason?: string
     readonly answer?: ReactNode
 }): ReactElement {
-    const submitDisabled = busy || !hasTarget || question.trim().length === 0 || disabledReason !== undefined
+    const submitDisabled =
+        !editable || busy || !hasTarget || question.trim().length === 0 || disabledReason !== undefined
     return (
         <Stack gap="md">
             <Caption>
@@ -58,6 +62,7 @@ export function AskSheet({
                 hint={disabledReason}
                 multiline={true}
                 editable={editable}
+                maxLength={QUESTION_MAX_LENGTH}
             />
             {parts.length === 0 ? null : (
                 <Stack gap="xs">
@@ -68,6 +73,7 @@ export function AskSheet({
                                 key={part.id}
                                 label={part.label}
                                 selected={part.id === selectedPartId}
+                                disabled={!editable}
                                 onPress={(): void => onSelectPart(part.id)}
                             />
                         ))}
@@ -91,10 +97,12 @@ export function AskSheet({
 function PartChip({
     label,
     selected,
+    disabled,
     onPress,
 }: {
     readonly label: string
     readonly selected: boolean
+    readonly disabled: boolean
     readonly onPress: () => void
 }): ReactElement {
     const { colors } = useTheme()
@@ -103,12 +111,14 @@ function PartChip({
         <Pressable
             accessibilityRole="radio"
             accessibilityLabel={label}
-            accessibilityState={{ checked: selected }}
+            accessibilityState={{ checked: selected, disabled }}
             aria-checked={selected}
+            disabled={disabled}
             {...focus.focusHandlers}
             onPress={onPress}
             style={[
                 styles.chip,
+                disabled && styles.disabled,
                 {
                     borderColor: colors.borderStrong,
                     backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised,
@@ -126,6 +136,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         flexWrap: 'wrap',
         gap: space.xs,
+    },
+    disabled: {
+        opacity: 0.5,
     },
     chip: {
         minHeight: touchTarget,
