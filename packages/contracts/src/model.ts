@@ -6,6 +6,7 @@ import {
     questionTargetSchema,
     type Fact,
     type ManualStep,
+    type ManualSession,
     type SourceRef,
 } from '@truebuild/contracts'
 import { z } from 'zod'
@@ -24,7 +25,7 @@ export const modelParseMetadataSchema = z
     .strictObject({
         ...common,
         binding: manualBindingSchema,
-        pages: z.array(manualSessionSchema.shape.pages.element).min(1).max(LIMITS.requestImages),
+        pages: z.array(manualSessionSchema.shape.pages.element).min(1).max(LIMITS.manualPages),
     })
     .superRefine((value, ctx): void => {
         if (
@@ -57,6 +58,30 @@ function usedParts(step: ManualStep): Set<string> {
     ])
 }
 
+function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
+    const parts = usedParts(step)
+    return [
+        ...step.sourceRefs,
+        ...step.parts.flatMap((part) => refs(part.quantity)),
+        ...refs(step.orientation),
+        ...refs(step.connection),
+        ...step.visibleChecks.flatMap((check) => refs(check.description)),
+        ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
+        ...session.parts.filter((part) => parts.has(part.partId)).flatMap((part) => refs(part.name)),
+    ]
+}
+
+/** Compact check/ask fallback: preserve manual page order and cover every cited current-step fact.
+ * Null means the step cannot safely fit this bounded path; do not silently drop evidence.
+ */
+export function selectStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
+    const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
+    if (!step || session.reviewStatus !== 'reviewed') return null
+    const required = new Set(checkCitations(step, session).map((ref) => ref.pageId))
+    const selected = session.pages.filter((page) => required.has(page.pageId)).map((page) => page.pageId)
+    return selected.length > 0 && selected.length <= 2 && selected.length === required.size ? selected : null
+}
+
 function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
     const { binding, session, sourcePageIds } = value
     const step = session.reviewedSteps.find((candidate) => candidate.stepId === binding.stepId)
@@ -76,16 +101,7 @@ function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
     ) {
         ctx.addIssue({ code: 'custom', message: 'Invalid selected sources' })
     }
-    const parts = usedParts(step)
-    const citations = [
-        ...step.sourceRefs,
-        ...step.parts.flatMap((part) => refs(part.quantity)),
-        ...refs(step.orientation),
-        ...refs(step.connection),
-        ...step.visibleChecks.flatMap((check) => refs(check.description)),
-        ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
-        ...session.parts.filter((part) => parts.has(part.partId)).flatMap((part) => refs(part.name)),
-    ]
+    const citations = checkCitations(step, session)
     if (citations.some((citation) => !pages.has(citation.pageId))) {
         ctx.addIssue({ code: 'custom', message: 'Selected pages must cover every current-step citation' })
     }

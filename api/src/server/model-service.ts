@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash } from 'node:crypto'
+import { RETRY_STATUSES } from '../providers/meta-transport'
 
 import {
     checkResultSchema,
@@ -47,7 +49,15 @@ import {
 type Identity = { requestId: string; binding: ManualBinding | CaptureBinding }
 type FailureCode = Extract<ApiResult<never>, { status: 'unavailable' }>['code']
 type Handler = (request: Request) => Promise<Response>
-type EffectContext = { check: () => void; deadline: Deadline; dispatched: boolean }
+type EffectContext = {
+    check: () => void
+    deadline: Deadline
+    dispatched: boolean
+    counter?: ModelCallCounter
+    retry: boolean
+    fingerprint?: string
+    attempts: number
+}
 const effects = new AsyncLocalStorage<EffectContext>()
 
 class AdmissionError extends Error {
@@ -73,10 +83,20 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
             if (url !== 'https://api.meta.ai/v1/responses' || method !== 'POST') {
                 throw new AdmissionError('unauthorized', 401)
             }
-            if (context.dispatched) {
+            const fingerprint = createHash('sha256')
+                .update(typeof init?.body === 'string' ? init.body : '')
+                .digest('hex')
+            if (
+                context.dispatched &&
+                (!context.retry || fingerprint !== context.fingerprint || context.attempts >= 3)
+            ) {
                 throw new AdmissionError('duplicate_request', 409)
             }
+            if (context.dispatched) context.counter?.claim()
             context.dispatched = true
+            context.retry = false
+            context.fingerprint = fingerprint
+            context.attempts += 1
             const inherited = init?.signal ?? (input instanceof Request ? input.signal : undefined)
             const signal = inherited ? AbortSignal.any([inherited, context.deadline.signal]) : context.deadline.signal
             return transport(input, { ...init, signal, redirect: 'error' }).then((response): Response => {
@@ -86,6 +106,7 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                     void response.body?.cancel().catch((): void => {})
                     throw error
                 }
+                context.retry = RETRY_STATUSES.has(response.status)
                 return response
             })
         } catch (error) {
@@ -133,7 +154,7 @@ function admit(request: Request, auth: SharedKeyAuth, duration: number, origins?
     return {
         deadline,
         check,
-        context: { check, deadline, dispatched: false },
+        context: { check, deadline, dispatched: false, retry: false, attempts: 0 },
         stop: (): void => abort.abort(),
         dispose: (): void => deadline.dispose(),
     }
@@ -296,6 +317,7 @@ export function createModelHandlers(options: {
                 const input = await prepare(metadata, parsed.files, execution.deadline)
                 execution.check()
                 counter.claim()
+                execution.context.counter = counter
                 execution.check()
                 const providerSignal = execution.deadline.signal
                 const raw = await withinModelDeadline(
@@ -403,6 +425,7 @@ export function createModelHandlers(options: {
             const input = await segmentFiles(metadata, parsed.files, execution.deadline)
             execution.check()
             counter.claim()
+            execution.context.counter = counter
             execution.check()
             return corsResponse(request, segmentResponse(input, metadata, execution, samProvider), allowedOrigins)
         } catch (error) {

@@ -8,7 +8,11 @@ const payload = { mode: 'fixture', requestId: 'request-1', binding, scenario: 'c
 
 function app(environment: Record<string, string | undefined> = {}): ReturnType<typeof createApp> {
     return createApp({
-        runtime: createRuntimeFromEnvironment({ API_SHARED_SECRET: 'truebuild-fixture-demo', ...environment }),
+        runtime: createRuntimeFromEnvironment({
+            PROVIDER_MODE: 'fixture',
+            API_SHARED_SECRET: 'truebuild-fixture-demo',
+            ...environment,
+        }),
         onDuration: (): void => {},
     })
 }
@@ -21,6 +25,9 @@ describe('Hono HTTP boundary', (): void => {
             expect(response.status).toBe(200)
             expect(await response.json()).toEqual({
                 status: 'ok',
+                providerMode: 'fixture',
+                sparkModel: 'muse-spark-1.3',
+                samModel: 'sam-3.1',
                 fixture: 'available',
                 live: 'unconfigured',
                 label: 'Demo data — simulated results',
@@ -55,8 +62,8 @@ describe('Hono HTTP boundary', (): void => {
             headers: { 'content-type': 'application/json', 'x-truebuild-key': 'synthetic-local-test-value' },
             body: JSON.stringify(payload),
         })
-        expect(accepted.status).toBe(200)
-        expect(await accepted.json()).toMatchObject({ mode: 'fixture' })
+        expect(accepted.status).toBe(503)
+        expect(await accepted.json()).toMatchObject({ status: 'unavailable', code: 'unconfigured' })
     })
 
     it('requires the demo header for fixture JSON and never turns model intent into fixture success', async (): Promise<void> => {
@@ -143,6 +150,9 @@ describe('Hono HTTP boundary', (): void => {
             runId: expect.any(String),
             expiresAt: Number.MAX_SAFE_INTEGER,
             model: 'unconfigured',
+            providerMode: 'fixture',
+            sparkModel: 'muse-spark-1.3',
+            samModel: 'sam-3.1',
         })
         expect(second).toEqual(first)
         expect((await app({ API_SHARED_SECRET: undefined }).request('/api/session')).status).toBe(401)

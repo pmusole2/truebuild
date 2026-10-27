@@ -325,6 +325,7 @@ export const questionTargetSchema = z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('part'), partId: idSchema }),
 ])
 export const questionResultSchema = z.strictObject({
+    observedRegion: normalizedBoxSchema.nullable().optional(),
     answer: z.string().trim().min(1).max(2_000),
     sourceRefs: sourceRefsSchema,
     missingEvidence: z.array(descriptionSchema).max(100),

@@ -17,13 +17,23 @@ const methods = new Map<string, 'GET' | 'POST'>([
 ])
 
 function health(context: Context<ApiEnv>): Response {
-    return context.json({ status: 'ok', fixture: 'available', live: 'unconfigured', label: DEMO_LABEL })
+    const runtime = context.get('runtime')
+    return context.json({
+        status: 'ok',
+        providerMode: runtime.mode,
+        fixture: runtime.mode === 'fixture' ? 'available' : 'disabled',
+        live: runtime.configured ? 'configured' : 'unconfigured',
+        label: runtime.mode === 'fixture' ? DEMO_LABEL : 'Meta model mode',
+        sparkModel: runtime.sparkModel,
+        samModel: runtime.samModel,
+    })
 }
 
 function dispatch(context: Context<ApiEnv>, operation: Operation): Promise<Response> {
     const runtime = context.get('runtime')
     const request = context.req.raw
-    return request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data')
+    return runtime.mode === 'meta' ||
+        request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data')
         ? runtime.model[operation](request)
         : runtime.fixture[operation](request)
 }
@@ -35,6 +45,9 @@ const routes = new Hono<ApiEnv>()
         context.json({
             status: 'ok',
             ...context.get('runtime').sessionMetadata,
+            providerMode: context.get('runtime').mode,
+            sparkModel: context.get('runtime').sparkModel,
+            samModel: context.get('runtime').samModel,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
         }),
     )

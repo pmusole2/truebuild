@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createRuntimeFromEnvironment } from './model-runtime'
 
 describe('provider runtime configuration', (): void => {
-    it.each([undefined, 'fixture'])('never reads the model key in %s mode', (mode): void => {
+    it.each(['fixture'])('never reads the model key in %s mode', (mode): void => {
         const outbound = vi.fn<typeof fetch>()
         let keyReads = 0
         const runtime = createRuntimeFromEnvironment(
@@ -41,4 +41,9 @@ describe('provider runtime configuration', (): void => {
         expect(runtime.configured).toBe(false)
         expect(outbound).not.toHaveBeenCalled()
     })
+})
+
+it('defaults to meta and rejects unknown server-only Spark model IDs', () => {
+    expect(createRuntimeFromEnvironment({}).mode).toBe('meta')
+    expect(() => createRuntimeFromEnvironment({ MODEL_SPARK: 'untrusted-model' })).toThrow()
 })

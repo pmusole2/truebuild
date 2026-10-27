@@ -53,6 +53,9 @@ try {
         assert.equal(response.status, 200)
         assert.deepEqual(await response.json(), {
             status: 'ok',
+            providerMode: 'fixture',
+            sparkModel: 'muse-spark-1.3',
+            samModel: 'sam-3.1',
             fixture: 'available',
             live: 'unconfigured',
             label: 'Demo data — simulated results',
