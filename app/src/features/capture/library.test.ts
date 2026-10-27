@@ -96,6 +96,121 @@ describe('durable manual library', () => {
         expect(removes).toBe(0)
     })
 
+    it.each(['manifest', 'chunk', 'missing-manifest'])(
+        'retains confirmed facts and photos after a transient %s read failure and refuses writes until explicit retry',
+        async (failure) => {
+            const kv = memory()
+            const original = new LibraryStorage(kv, digest)
+            const manual = await entry()
+            manual.capture = {
+                binding: {
+                    kind: 'capture',
+                    manualId: manual.session.manualId,
+                    revision: manual.session.revision,
+                    stepId: manual.session.reviewedSteps[0]!.stepId,
+                    captureId: 'saved-photo',
+                },
+                page: manual.session.pages[0]!,
+                capturedAt: 100,
+            }
+            await original.save(
+                [manual],
+                [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }],
+            )
+            let fail = false
+            const failing: KeyValueStorage = {
+                ...kv,
+                getItem: async (key): Promise<string | null> => {
+                    if (fail && failure === 'missing-manifest' && key === 'truebuild/library/v1') {
+                        return null
+                    }
+                    if (
+                        fail &&
+                        (failure === 'manifest'
+                            ? key === 'truebuild/library/v1'
+                            : failure === 'chunk' && key.includes('/bytes/'))
+                    ) {
+                        throw new Error('Transient IO')
+                    }
+                    return kv.getItem(key)
+                },
+            }
+            const store = new LibraryStorage(failing, digest)
+            expect((await store.restore()).entries).toEqual([manual])
+            const before = new Map(kv.data)
+            fail = true
+            const restored = await store.restore()
+            expect(restored.entries).toEqual([manual])
+            expect(restored.warning).toMatch(/retry/i)
+            // Recovery of IO alone is not authority to clear a library whose restore failed.
+            fail = false
+            await expect(store.save([])).rejects.toThrow(/read.only|unavailable/i)
+            expect(kv.data).toEqual(before)
+            expect((await store.restore()).entries).toEqual([manual])
+            await store.save([manual])
+            expect(await store.readAsset(manual.capture.page)).toEqual(new Uint8Array([1, 4, 9]))
+        },
+    )
+
+    it('keeps malformed manifest chunks untouched and refuses writes until explicit successful restore', async () => {
+        const kv = memory()
+        const manual = await entry()
+        await new LibraryStorage(kv, digest).save(
+            [manual],
+            [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }],
+        )
+        const validManifest = kv.data.get('truebuild/library/v1')!
+        kv.data.set('truebuild/library/v1', '{"version":9}')
+        const before = new Map(kv.data)
+        const store = new LibraryStorage(kv, digest)
+        await store.restore()
+        await expect(store.save([])).rejects.toThrow(/read.only|unavailable/i)
+        expect(kv.data).toEqual(before)
+        kv.data.set('truebuild/library/v1', validManifest)
+        expect((await store.restore()).entries).toEqual([manual])
+    })
+
+    it('preserves the previous manifest through a mid-chunk write failure and reclaims only orphans on explicit recovery', async () => {
+        const kv = memory()
+        const manual = await entry()
+        await new LibraryStorage(kv, digest).save(
+            [manual],
+            [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }],
+        )
+        const before = new Map(kv.data)
+        let chunks = 0
+        const failing: KeyValueStorage = {
+            ...kv,
+            setItem: async (key, value): Promise<void> => {
+                if (key.includes('/bytes/') && ++chunks === 2) {
+                    throw new Error('Disk write failed')
+                }
+                await kv.setItem(key, value)
+            },
+        }
+        const store = new LibraryStorage(failing, digest)
+        await store.restore()
+        const bytes = new Uint8Array(100_000).fill(7)
+        const page = {
+            ...manual.session.pages[0]!,
+            assetId: 'new-asset',
+            pageId: 'new-page',
+            contentHash: await digest(bytes),
+        }
+        const next = { ...manual, session: { ...manual.session, pages: [...manual.session.pages, page] } }
+        await expect(store.save([next], [{ assetId: page.assetId, bytes }])).rejects.toThrow('Disk write failed')
+        for (const [key, value] of before) {
+            expect(kv.data.get(key)).toBe(value)
+        }
+        const orphan = [...kv.data.keys()].find((key) => key.includes('/new-asset/'))!
+        expect(orphan).toBeDefined()
+        const recovered = new LibraryStorage(kv, digest)
+        expect((await recovered.restore()).entries).toEqual([manual])
+        await recovered.save([manual])
+        expect(kv.data.has(orphan)).toBe(false)
+        expect(await recovered.readAsset(manual.session.pages[0]!)).toEqual(new Uint8Array([1, 4, 9]))
+    })
+
     it('keeps the prior manifest and assets usable when a metadata write fails', async () => {
         const kv = memory()
         const store = new LibraryStorage(kv, digest)

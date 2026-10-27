@@ -91,28 +91,45 @@ function pagesOf(entry: LibraryEntry): ManualPage[] {
  * Chunked values stay below Android's per-entry cursor limit. Total content and metadata are bounded independently.
  * Only this namespace is cleaned, after a successful manifest commit.
  */
+export type LibraryRestore = { entries: LibraryEntry[]; warning: string | null; readOnly: boolean }
+class DamagedLocalAssetError extends Error {}
+
 export class LibraryStorage {
     private assets: StoredAsset[] = []
-    private restored = false
+    private restoreAttempted = false
+    private writable = false
+    private retainedEntries: LibraryEntry[] = []
     private queue: Promise<void> = Promise.resolve()
     constructor(
         private readonly kv: KeyValueStorage,
         private readonly digest: Digest,
     ) {}
 
-    async restore(): Promise<{ entries: LibraryEntry[]; warning: string | null }> {
-        this.restored = false
+    async restore(): Promise<LibraryRestore> {
+        this.restoreAttempted = true
+        this.writable = false
         try {
             const raw = await this.kv.getItem(MANIFEST)
-            this.restored = true
             if (raw === null) {
-                return { entries: [], warning: null }
+                if (
+                    this.retainedEntries.length > 0 ||
+                    this.assets.length > 0 ||
+                    (await this.kv.getAllKeys()).some((key) => key.startsWith(`${PREFIX}bytes/`))
+                ) {
+                    throw new Error('Saved manifest is unavailable; retain original image chunks')
+                }
+                this.assets = []
+                this.retainedEntries = []
+                this.writable = true
+                return { entries: [], warning: null, readOnly: false }
             }
             if (raw.length > MAX_MANIFEST_BYTES || new TextEncoder().encode(raw).length > MAX_MANIFEST_BYTES) {
                 throw new Error('Metadata limit')
             }
             const manifest = manifestSchema.parse(JSON.parse(raw))
             this.assets = manifest.assets
+            // Keep all validated facts and photo references if any asset IO subsequently fails.
+            this.retainedEntries = manifest.entries
             const entries: LibraryEntry[] = []
             for (const entry of manifest.entries) {
                 try {
@@ -120,21 +137,29 @@ export class LibraryStorage {
                         await this.readAsset(page)
                     }
                     entries.push(entry)
-                } catch {
-                    /* One corrupt manual does not discard the others. */
+                } catch (error: unknown) {
+                    if (!(error instanceof DamagedLocalAssetError)) {
+                        throw error
+                    }
+                    // Only positively missing/corrupt bytes can exclude an entry, never storage exceptions.
                 }
             }
+            this.retainedEntries = entries
+            this.writable = true
             return {
                 entries,
+                readOnly: false,
                 warning:
                     entries.length === manifest.entries.length
                         ? null
-                        : 'Some manuals could not be restored. Their local images are missing or damaged. Scan them again.',
+                        : 'Some manuals could not be restored because local images are missing or damaged. Add or retake those pages.',
             }
         } catch {
             return {
-                entries: [],
-                warning: 'The local library could not be restored. Storage may be unavailable or damaged.',
+                entries: this.retainedEntries,
+                readOnly: true,
+                warning:
+                    'Local library is read-only because it could not be restored. Original data is retained. Retry reading the library when storage is available.',
             }
         }
     }
@@ -142,39 +167,49 @@ export class LibraryStorage {
     async readAsset(page: Pick<ManualPage, 'assetId' | 'contentHash'>): Promise<Uint8Array<ArrayBuffer>> {
         const asset = this.assets.find((a) => a.id === page.assetId && a.hash === page.contentHash)
         if (asset === undefined) {
-            throw new Error('Missing local image')
+            throw new DamagedLocalAssetError('Missing local image')
         }
         let encoded = ''
         for (let i = 0; i < asset.chunks; i++) {
             const chunk = await this.kv.getItem(keyOf(asset, i))
             if (chunk === null || chunk.length > CHUNK_CHARS) {
-                throw new Error('Missing image chunk')
+                throw new DamagedLocalAssetError('Missing image chunk')
             }
             encoded += chunk
         }
         if (encoded.length !== 4 * Math.ceil(asset.size / 3)) {
-            throw new Error('Image length mismatch')
+            throw new DamagedLocalAssetError('Image length mismatch')
         }
-        const binary = atob(encoded)
+        let binary: string
+        try {
+            binary = atob(encoded)
+        } catch {
+            throw new DamagedLocalAssetError('Invalid local image encoding')
+        }
         const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
         if (bytes.byteLength !== asset.size || (await this.digest(bytes)) !== asset.hash) {
-            throw new Error('Damaged image')
+            throw new DamagedLocalAssetError('Damaged image')
         }
         return bytes
     }
 
     save(entries: readonly LibraryEntry[], writes: readonly AssetWrite[] = []): Promise<void> {
-        const save = this.queue.then(() => this.commit(entries, writes))
+        const save = this.queue
+            .then(() => this.commit(entries, writes))
+            .catch((error: unknown): never => {
+                this.writable = false
+                throw error
+            })
         this.queue = save.catch((): void => undefined)
         return save
     }
 
     private async commit(entries: readonly LibraryEntry[], writes: readonly AssetWrite[]): Promise<void> {
-        if (!this.restored) {
+        if (!this.restoreAttempted) {
             await this.restore()
-            if (!this.restored) {
-                throw new Error('Storage unavailable')
-            }
+        }
+        if (!this.writable) {
+            throw new Error('Local library is read-only. Storage unavailable; explicitly retry restoration.')
         }
         if (
             entries.length > 10 ||
@@ -208,8 +243,8 @@ export class LibraryStorage {
             }
             if (existing === undefined) {
                 assets.push(asset)
+                encodedWrites.push({ asset, encoded })
             }
-            encodedWrites.push({ asset, encoded })
         }
         const pages = entries.flatMap(pagesOf)
         const referenced = assets.filter((a) => pages.some((p) => p.assetId === a.id && p.contentHash === a.hash))
@@ -230,6 +265,7 @@ export class LibraryStorage {
         }
         await this.kv.setItem(MANIFEST, json)
         this.assets = referenced
+        this.retainedEntries = manifest.entries
         // A cleanup failure cannot roll back an already durable manifest.
         await this.cleanup(referenced).catch((): void => undefined)
     }
