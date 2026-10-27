@@ -335,19 +335,21 @@ describe('plan quality and conclusion', () => {
         async (phase) => {
             const { manifest, cwd } = await setup()
             const { factory } = fakeFactory()
+            const stepReview = vi.fn<StepReviewer>(async () => {
+                if (phase === 'step') throw new Error('synthetic closed review')
+                return 'correct'
+            })
+            const qualityReview = vi.fn<QualityReviewer>(async () => {
+                if (phase === 'quality') throw new Error('synthetic closed review')
+                return { rating: 5, issues: [] }
+            })
             const report = await runAbGate({
                 manifest,
                 cwd,
                 apiKey: '<synthetic-key>',
                 factory,
-                reviewer: async () => {
-                    if (phase === 'step') throw new Error('synthetic closed review')
-                    return 'correct'
-                },
-                qualityReviewer: async () => {
-                    if (phase === 'quality') throw new Error('synthetic closed review')
-                    return { rating: 5, issues: [] }
-                },
+                reviewer: stepReview,
+                qualityReviewer: qualityReview,
                 random: () => false,
             })
             expect(report).toMatchObject({
@@ -362,6 +364,13 @@ describe('plan quality and conclusion', () => {
                 reason: 'operator_review_incomplete',
             })
             expect(report.models.wonder).toMatchObject({ status: 'completed', costStatus: 'priced' })
+            expect(stepReview).toHaveBeenCalledTimes(phase === 'step' ? 1 : manifest.expected.steps.length)
+            expect(qualityReview).toHaveBeenCalledTimes(phase === 'quality' ? 1 : 0)
+            expect(report.models.spark?.semanticStepAccuracy).toBe(
+                phase === 'quality' ? 'human_reviewed' : 'unverified',
+            )
+            expect(report.models.spark?.quality).toEqual({ status: 'unverified' })
+            expect(report.models.wonder?.semanticStepAccuracy).toBe('unverified')
             expect(JSON.stringify(report)).not.toContain('synthetic closed review')
         },
     )
