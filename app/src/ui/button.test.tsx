@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals'
+import { Platform, StyleSheet } from 'react-native'
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import { lightColors, touchTarget } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
@@ -55,6 +56,25 @@ describe('AppButton', () => {
     it('scales its label to 200 percent of the system text size', async () => {
         await render(<AppButton label="Ask question" onPress={(): void => undefined} />)
         expect(screen.getByText('Ask question')).toHaveProp('maxFontSizeMultiplier', 2)
+    })
+})
+
+describe('web keyboard focus', () => {
+    it('shows a visible ring while a control holds keyboard focus on web, and removes it on blur', async () => {
+        const platform = jest.replaceProperty(Platform, 'OS', 'web')
+        try {
+            await render(<AppButton label="Ask question" onPress={(): void => undefined} />)
+            const button = screen.getByRole('button', { name: 'Ask question' })
+            const shadowOf = (): string | undefined =>
+                (StyleSheet.flatten(button.props.style) as { boxShadow?: string }).boxShadow
+            expect(shadowOf()).toBeUndefined()
+            await fireEvent(button, 'focus')
+            expect(shadowOf()).toContain(lightColors.focus)
+            await fireEvent(button, 'blur')
+            expect(shadowOf()).toBeUndefined()
+        } finally {
+            platform.restore()
+        }
     })
 })
 

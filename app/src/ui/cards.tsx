@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react'
 import { Image, Pressable, StyleSheet, View, type ImageSourcePropType } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { radius, space, touchTarget } from '../theme/tokens'
+import { focusRingStyle, useFocusRing } from './focus'
 import { Icon } from './icons'
 import { Body, Caption, Heading } from './text'
 
@@ -24,14 +25,17 @@ export function ThumbnailCard({
     readonly testID?: string
 }): ReactElement {
     const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Pressable
             accessibilityRole="button"
             accessibilityLabel={caption === undefined ? title : `${title}, ${caption}`}
             accessibilityState={{ selected }}
+            {...focus.focusHandlers}
             onPress={onPress}
             testID={testID}
             style={({ pressed }) => [
+                focusRingStyle(focus.focused, colors),
                 styles.card,
                 { backgroundColor: colors.surface, borderColor: selected ? colors.focus : colors.border },
                 pressed && styles.pressed,
@@ -73,13 +77,16 @@ export function ManualCard({
     readonly onPress: () => void
 }): ReactElement {
     const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${title}, ${summary}`}
             accessibilityState={{ selected }}
+            {...focus.focusHandlers}
             onPress={onPress}
             style={({ pressed }) => [
+                focusRingStyle(focus.focused, colors),
                 styles.manual,
                 { backgroundColor: colors.surface, borderColor: selected ? colors.focus : colors.border },
                 pressed && styles.pressed,

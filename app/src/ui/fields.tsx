@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, TextInput, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, touchTarget } from '../theme/tokens'
+import { focusRingStyle, useFocusRing } from './focus'
 import { Caption, Label } from './text'
 
 export type TextFieldProps = {
@@ -61,6 +62,7 @@ export function TextField({
                 style={[
                     type.style,
                     styles.input,
+                    focusRingStyle(focused, colors),
                     multiline && styles.multiline,
                     {
                         color: colors.ink,
@@ -97,26 +99,45 @@ export function SegmentedControl<T extends string>({
             accessibilityLabel={label}
             style={[styles.segmented, { borderColor: colors.borderStrong }]}
         >
-            {options.map((option) => {
-                const selected = option.value === value
-                return (
-                    <Pressable
-                        key={option.value}
-                        accessibilityRole="radio"
-                        accessibilityLabel={option.label}
-                        accessibilityState={{ checked: selected }}
-                        aria-checked={selected}
-                        onPress={(): void => onChange(option.value)}
-                        style={[
-                            styles.segment,
-                            { backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised },
-                        ]}
-                    >
-                        <Caption tone={selected ? 'inverse' : 'default'}>{option.label}</Caption>
-                    </Pressable>
-                )
-            })}
+            {options.map((option) => (
+                <SegmentChoice<T>
+                    key={option.value}
+                    option={option}
+                    selected={option.value === value}
+                    onChange={onChange}
+                />
+            ))}
         </View>
+    )
+}
+
+function SegmentChoice<T extends string>({
+    option,
+    selected,
+    onChange,
+}: {
+    readonly option: SegmentOption<T>
+    readonly selected: boolean
+    readonly onChange: (value: T) => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const focus = useFocusRing()
+    return (
+        <Pressable
+            accessibilityRole="radio"
+            accessibilityLabel={option.label}
+            accessibilityState={{ checked: selected }}
+            aria-checked={selected}
+            {...focus.focusHandlers}
+            onPress={(): void => onChange(option.value)}
+            style={[
+                styles.segment,
+                { backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised },
+                focusRingStyle(focus.focused, colors),
+            ]}
+        >
+            <Caption tone={selected ? 'inverse' : 'default'}>{option.label}</Caption>
+        </Pressable>
     )
 }
 
@@ -135,6 +156,7 @@ export function SettingRow({
     readonly testID?: string
 }): ReactElement {
     const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Pressable
             accessibilityRole="switch"
@@ -142,9 +164,10 @@ export function SettingRow({
             accessibilityHint={description}
             accessibilityState={{ checked: value }}
             aria-checked={value}
+            {...focus.focusHandlers}
             onPress={(): void => onValueChange(!value)}
             testID={testID}
-            style={[styles.setting, { borderColor: colors.border }]}
+            style={[styles.setting, { borderColor: colors.border }, focusRingStyle(focus.focused, colors)]}
         >
             <View style={styles.settingText}>
                 <Label>{label}</Label>

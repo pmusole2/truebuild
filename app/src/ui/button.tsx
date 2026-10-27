@@ -5,6 +5,7 @@ import { typeProps } from '../theme/typography'
 import { radius, space, touchTarget, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
+import { focusRingStyle, useFocusRing } from './focus'
 
 // `accent` is the single amber call to action per screen. `danger` is reserved for refusing or discarding work.
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'quiet' | 'danger'
@@ -40,6 +41,7 @@ export function AppButton({
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
+    const focus = useFocusRing()
     const inactive = disabled || busy
     const tokens = VARIANT_TOKENS[variant]
     const type = typeProps('button')
@@ -51,6 +53,7 @@ export function AppButton({
             accessibilityState={{ disabled: inactive, busy }}
             aria-disabled={inactive}
             disabled={inactive}
+            {...focus.focusHandlers}
             onPress={(): void => {
                 haptic('selection')
                 onPress()
@@ -59,6 +62,7 @@ export function AppButton({
             style={({ pressed }) => [
                 styles.base,
                 { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                focusRingStyle(focus.focused, colors),
                 pressed && !inactive && styles.pressed,
                 inactive && styles.inactive,
             ]}
@@ -96,6 +100,7 @@ export function IconButton({
 }: IconButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
+    const focus = useFocusRing()
     const tokens = VARIANT_TOKENS[variant]
     return (
         <Pressable
@@ -104,6 +109,7 @@ export function IconButton({
             accessibilityState={{ disabled }}
             aria-disabled={disabled}
             disabled={disabled}
+            {...focus.focusHandlers}
             onPress={(): void => {
                 haptic('selection')
                 onPress()
@@ -113,6 +119,7 @@ export function IconButton({
                 styles.base,
                 styles.square,
                 { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                focusRingStyle(focus.focused, colors),
                 pressed && !disabled && styles.pressed,
                 disabled && styles.inactive,
             ]}

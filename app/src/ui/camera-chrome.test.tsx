@@ -3,6 +3,11 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { Text } from 'react-native'
 import { CameraChrome } from './camera-chrome'
 
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
+)
+
 describe('CameraChrome', () => {
     it('gives the shutter and close controls names and fires them once each', async () => {
         const onShutter = jest.fn()

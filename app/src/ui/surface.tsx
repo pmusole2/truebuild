@@ -5,28 +5,33 @@ import { elevationStyle, type ElevationLevel } from '../theme/elevation'
 import { useTheme } from '../theme/theme'
 import { radius, space } from '../theme/tokens'
 
-const EDGES: Edge[] = ['left', 'right', 'bottom']
+// With the native header shown, the header already clears the top inset. With it hidden (full-bleed camera), the shell
+// must clear the top inset itself.
+const EDGES_UNDER_HEADER: Edge[] = ['left', 'right', 'bottom']
+const EDGES_FULL_BLEED: Edge[] = ['top', 'left', 'right', 'bottom']
 
-// The navigation header already covers the top inset; the shell keeps content clear of the home indicator and sides.
 export function Screen({
     children,
     scroll = true,
+    header = 'native',
     testID,
 }: {
     readonly children: ReactNode
     readonly scroll?: boolean
+    readonly header?: 'native' | 'hidden'
     readonly testID?: string
 }): ReactElement {
     const { colors } = useTheme()
+    const edges = header === 'hidden' ? EDGES_FULL_BLEED : EDGES_UNDER_HEADER
     if (!scroll) {
         return (
-            <SafeAreaView edges={EDGES} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
+            <SafeAreaView edges={edges} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
                 <View style={styles.fill}>{children}</View>
             </SafeAreaView>
         )
     }
     return (
-        <SafeAreaView edges={EDGES} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
+        <SafeAreaView edges={edges} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
             <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
                 {children}
             </ScrollView>

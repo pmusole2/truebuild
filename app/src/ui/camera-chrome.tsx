@@ -1,8 +1,10 @@
 import type { ReactElement, ReactNode } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../theme/theme'
 import { darkColors, radius, space } from '../theme/tokens'
 import { IconButton } from './button'
+import { focusRingStyle, useFocusRing } from './focus'
 import { Body } from './text'
 
 // Camera controls are always dark, whatever the system appearance, so the viewfinder reads like a camera.
@@ -23,9 +25,20 @@ export function CameraChrome({
     readonly busy?: boolean
     readonly children: ReactNode
 }): ReactElement {
+    // Full-bleed: the camera does not sit under a header, so it clears the status bar and home indicator itself.
+    const insets = useSafeAreaInsets()
     return (
         <ThemeProvider scheme="dark">
-            <View style={[styles.root, { backgroundColor: darkColors.canvas }]}>
+            <View
+                style={[
+                    styles.root,
+                    {
+                        backgroundColor: darkColors.canvas,
+                        paddingTop: insets.top + space.md,
+                        paddingBottom: insets.bottom + space.md,
+                    },
+                ]}
+            >
                 <View style={styles.topBar}>
                     <IconButton label="Close camera" icon="close" onPress={onClose} />
                 </View>
@@ -64,6 +77,7 @@ function Shutter({
     readonly disabled: boolean
 }): ReactElement {
     const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Pressable
             accessibilityRole="button"
@@ -71,8 +85,10 @@ function Shutter({
             accessibilityState={{ disabled }}
             aria-disabled={disabled}
             disabled={disabled}
+            {...focus.focusHandlers}
             onPress={onPress}
             style={({ pressed }) => [
+                focusRingStyle(focus.focused, colors),
                 styles.shutterRing,
                 { borderColor: colors.ink },
                 pressed && !disabled && styles.pressed,
@@ -89,7 +105,7 @@ const CORNER = 28
 const styles = StyleSheet.create({
     root: {
         flex: 1,
-        padding: space.md,
+        paddingHorizontal: space.md,
         gap: space.md,
     },
     topBar: {

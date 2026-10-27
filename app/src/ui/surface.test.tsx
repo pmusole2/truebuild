@@ -36,6 +36,15 @@ describe('Screen shell', () => {
         expect(screen.getByTestId('shell')).toHaveProp('edges', ['left', 'right', 'bottom'])
     })
 
+    it('a full-bleed shell with the native header hidden clears the top inset itself', async () => {
+        await render(
+            <Screen testID="shell" header="hidden" scroll={false}>
+                <Text>Camera</Text>
+            </Screen>,
+        )
+        expect(screen.getByTestId('shell')).toHaveProp('edges', ['top', 'left', 'right', 'bottom'])
+    })
+
     it('a non-scrolling shell still renders its content', async () => {
         await render(
             <Screen scroll={false}>

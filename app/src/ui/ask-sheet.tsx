@@ -4,6 +4,7 @@ import { useTheme } from '../theme/theme'
 import { radius, space, touchTarget } from '../theme/tokens'
 import { AppButton } from './button'
 import { TextField } from './fields'
+import { focusRingStyle, useFocusRing } from './focus'
 import { Caption } from './text'
 import { Stack } from './surface'
 
@@ -84,14 +85,17 @@ function PartChip({
     readonly onPress: () => void
 }): ReactElement {
     const { colors } = useTheme()
+    const focus = useFocusRing()
     return (
         <Pressable
             accessibilityRole="radio"
             accessibilityLabel={label}
             accessibilityState={{ checked: selected }}
             aria-checked={selected}
+            {...focus.focusHandlers}
             onPress={onPress}
             style={[
+                focusRingStyle(focus.focused, colors),
                 styles.chip,
                 {
                     borderColor: colors.borderStrong,
