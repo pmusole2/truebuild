@@ -1,3 +1,5 @@
+import { requestFetch } from './request-fetch'
+import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
 import {
     checkResultSchema,
     LIMITS,
@@ -17,6 +19,7 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
@@ -39,8 +42,7 @@ import {
     type CallGuard,
 } from './transport'
 
-/** Limits from the frozen wire contract. Metadata JSON is capped; source/observation files are capped by byte limits. */
-export const MODEL_METADATA_MAX_BYTES = 65_536
+export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 export const MODEL_PARSE_TIMEOUT_MS = 30_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000
@@ -106,10 +108,6 @@ const SOURCE_EXTENSION: Record<ManualPage['mimeType'], string> = {
     'image/webp': 'webp',
 }
 
-function blobOf(image: ImageBytes): Blob {
-    return new Blob([Uint8Array.from(image.bytes)], { type: image.mimeType })
-}
-
 function utf8Length(text: string): number {
     return new TextEncoder().encode(text).byteLength
 }
@@ -135,7 +133,12 @@ function buildForm(metadata: unknown, files: readonly FileField[]): FormData | n
     const form = new FormData()
     form.append('metadata', json)
     for (const file of files) {
-        form.append(file.name, blobOf(file.image), `${file.name}.${SOURCE_EXTENSION[file.image.mimeType]}`)
+        try {
+            appendMultipartImage(form, file.name, file.image, `${file.name}.${SOURCE_EXTENSION[file.image.mimeType]}`)
+        } catch {
+            releaseMultipartImages(form)
+            return null
+        }
     }
     return form
 }
@@ -174,7 +177,7 @@ export class ModelApiClient {
     constructor(options: ModelClientOptions) {
         this.baseUrl = parseBaseUrl(options.baseUrl)
         this.secret = options.secret
-        this.fetchImpl = options.fetch ?? ((url: string, init: RequestInit): Promise<Response> => fetch(url, init))
+        this.fetchImpl = options.fetch ?? requestFetch
         this.streamImpl = options.streamFetch ?? defaultStreamFetch
     }
 
@@ -361,6 +364,7 @@ export class ModelApiClient {
     }): Promise<ApiResult<T>> {
         const { requestId, binding, signal } = spec
         if (signal?.aborted === true) {
+            releaseMultipartImages(spec.form)
             return unavailableResult(requestId, binding, 'invalid_input', false)
         }
 
@@ -410,6 +414,7 @@ export class ModelApiClient {
             }
             return unavailableResult(requestId, binding, 'provider_error', true)
         } finally {
+            releaseMultipartImages(spec.form)
             guard.dispose()
             if (owned !== undefined) {
                 discardResponse(owned)
@@ -435,6 +440,7 @@ export class ModelApiClient {
     ): AsyncGenerator<ApiResult<SegmentEvent>, void, void> {
         const { requestId, binding, signal } = call
         if (signal?.aborted === true) {
+            releaseMultipartImages(form)
             yield unavailableResult(requestId, binding, 'invalid_input', false)
             return
         }
@@ -573,6 +579,7 @@ export class ModelApiClient {
                 yield unavailableResult(requestId, binding, 'provider_error', true)
             }
         } finally {
+            releaseMultipartImages(form)
             guard.signal.removeEventListener('abort', onStop)
             guard.dispose()
             if (reader !== undefined) {

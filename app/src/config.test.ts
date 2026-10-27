@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveProviderMode } from './config'
+import { developmentHost, resolveProviderMode } from './config'
 import { parseBaseUrl } from './api/transport'
 
 const originalNodeEnv = process.env.NODE_ENV
@@ -30,8 +30,8 @@ describe('production API origin rule', () => {
 })
 
 describe('provider mode', () => {
-    it('defaults to fixture and maps the public "meta" value to the internal model path', () => {
-        expect(resolveProviderMode(undefined)).toBe('fixture')
+    it('defaults to meta and maps the public "meta" value to the internal model path', () => {
+        expect(resolveProviderMode(undefined)).toBe('model')
         expect(resolveProviderMode('fixture')).toBe('fixture')
         expect(resolveProviderMode('meta')).toBe('model')
     })
@@ -40,5 +40,14 @@ describe('provider mode', () => {
         expect(() => resolveProviderMode('model')).toThrow(/"fixture" or "meta"/)
         expect(() => resolveProviderMode('live')).toThrow(/"fixture" or "meta"/)
         expect(() => resolveProviderMode('')).toThrow()
+    })
+})
+
+describe('development host badge', () => {
+    it('shows only the host without credentials, path, query, fragment or port', () => {
+        expect(developmentHost('https://user:password@api.example.com:444/path?key=private#fragment')).toBe(
+            'api.example.com',
+        )
+        expect(developmentHost('invalid')).toBe('unconfigured')
     })
 })

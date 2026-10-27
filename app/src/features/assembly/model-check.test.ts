@@ -1,4 +1,4 @@
-import { createDemoManual, manualSessionSchema, type ManualSession } from '@truebuild/contracts'
+import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { askModelQuestion, citedPageIds, runModelCheck, type ModelCheckRequest } from './model-check'
@@ -65,10 +65,10 @@ describe('runModelCheck', () => {
         expect(fetch).not.toHaveBeenCalled()
     })
 
-    it('sends nothing when the step would cite more than two pages', async () => {
+    it('sends nothing when full context exceeds twenty source pages', async () => {
         const fetch = vi.fn<ModelFetch>()
         const base = createDemoManual()
-        const extra = [1, 2, 3].map((index) => ({
+        const extra = Array.from({ length: 20 }, (_, index) => ({
             pageId: `extra-${index}`,
             assetId: `extra-asset-${index}`,
             width: 100,
@@ -76,7 +76,7 @@ describe('runModelCheck', () => {
             mimeType: 'image/jpeg' as const,
             contentHash: 'b'.repeat(64),
         }))
-        const session = manualSessionSchema.parse({ ...base, pages: [...base.pages, ...extra] })
+        const session = { ...base, pages: [...base.pages, ...extra] }
         const step = session.reviewedSteps.find((candidate) => candidate.stepId === 'step-1')!
         const cited = {
             ...step,

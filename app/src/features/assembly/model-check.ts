@@ -1,3 +1,4 @@
+import { selectedStepSourcePageIds } from './source-selection'
 import type {
     ApiResult,
     CaptureBinding,
@@ -46,7 +47,7 @@ export function citedPageIds(session: ManualSession, step: ManualStep): string[]
 }
 
 export type ModelCheckRequest = {
-    readonly client: ModelApiClient
+    readonly client: Pick<ModelApiClient, 'check' | 'questions'>
     readonly requestId: string
     readonly binding: CaptureBinding
     readonly session: ManualSession
@@ -72,17 +73,17 @@ export type ModelQuestionRequest = Omit<ModelCheckRequest, 'loadPageAsset'> & {
     readonly loadPageAsset: ModelCheckRequest['loadPageAsset']
 }
 
-/** Grounded question about the current step, answered from its cited pages and the frozen photo only. */
+/** Grounded question about the current step, with the reviewed plan, ordered manual pages, and frozen photo. */
 export async function askModelQuestion(request: ModelQuestionRequest): Promise<ApiResult<QuestionResult>> {
     const { requestId, binding } = request
     const outcome = await beforeDispatch(
         request.signal,
         MODEL_CHECK_TIMEOUT_MS,
         async (guard): Promise<ApiResult<QuestionResult>> => {
-            const pageIds = citedPageIds(request.session, request.step)
+            const pageIds = selectedStepSourcePageIds(request.session, request.step)
             guard.checkpoint()
 
-            if (pageIds.length === 0 || pageIds.length > 2) {
+            if (pageIds.length === 0 || pageIds.length > 20) {
                 return unavailableResult<QuestionResult>(requestId, binding, 'invalid_input', false)
             }
 
@@ -143,8 +144,8 @@ export async function loadCitedSources(
 }
 
 /**
- * Current-step model check. Sources are the step's own cited pages; the observation is the frozen photo for this
- * capture. The client validates the whole request before any I/O, so an out-of-policy step is never dispatched.
+ * Current-step model check. Full context uses all ordered manual pages; server compact policy may narrow them.
+ * The observation is the frozen photo for this capture. The client validates the whole request before any I/O.
  */
 export const runModelCheck: RunModelCheck = async (request): Promise<ApiResult<CheckResult>> => {
     const { requestId, binding } = request
@@ -152,10 +153,10 @@ export const runModelCheck: RunModelCheck = async (request): Promise<ApiResult<C
         request.signal,
         MODEL_CHECK_TIMEOUT_MS,
         async (guard): Promise<ApiResult<CheckResult>> => {
-            const pageIds = citedPageIds(request.session, request.step)
+            const pageIds = selectedStepSourcePageIds(request.session, request.step)
             guard.checkpoint()
 
-            if (pageIds.length === 0 || pageIds.length > 2) {
+            if (pageIds.length === 0 || pageIds.length > 20) {
                 return unavailableResult<CheckResult>(requestId, binding, 'invalid_input', false)
             }
 
