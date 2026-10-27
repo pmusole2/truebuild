@@ -9,8 +9,8 @@ import { Body, Caption, Heading, Label } from '../../ui/text'
 import { ErrorState, LoadingState, PermissionState } from '../../ui/states'
 import { Notice } from '../../ui/status'
 import { Screen } from '../../ui/surface'
-import { ThemeProvider, useTheme } from '../../theme/theme'
-import { radius, space } from '../../theme/tokens'
+import { ThemeProvider } from '../../theme/theme'
+import { darkColors, radius, space } from '../../theme/tokens'
 import type { CameraIntent } from './controller'
 import { PRIVACY_COPY } from './privacy-copy'
 
@@ -58,7 +58,6 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
     const [error, setError] = useState(false)
     const [attempt, setAttempt] = useState(0)
     const { height } = useWindowDimensions()
-    const { colors } = useTheme()
     const assembly = guide !== undefined && intent !== null && intent.kind !== 'page'
     const shutter = (
         <ShutterButton
@@ -158,7 +157,7 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
                                             <Heading>{guide.title}</Heading>
                                         </View>
                                     </View>
-                                    <View style={styles.viewfinder} pointerEvents="none">
+                                    <View style={styles.assemblyViewfinder} pointerEvents="none">
                                         <ViewfinderCorners />
                                     </View>
                                     <ScrollView
@@ -167,8 +166,8 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
                                             styles.panel,
                                             {
                                                 maxHeight: height * PANEL_MAX_RATIO,
-                                                backgroundColor: colors.surface,
-                                                borderColor: colors.border,
+                                                backgroundColor: darkColors.surface,
+                                                borderColor: darkColors.border,
                                             },
                                         ]}
                                         contentContainerStyle={styles.panelContent}
@@ -218,6 +217,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: space.md,
     },
     assembly: { ...StyleSheet.absoluteFill, justifyContent: 'space-between' },
+    assemblyViewfinder: { flex: 1, marginHorizontal: space.xl, marginVertical: space.md },
     assemblyTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md },
     assemblyTitle: { flex: 1 },
     panel: {

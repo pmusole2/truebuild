@@ -93,23 +93,9 @@ export function MeasuredPane({
         <View style={[styles.pane, sideBySide && styles.paneRow]} testID={testID}>
             <Caption>{pane.caption}</Caption>
             <View style={[styles.border, { borderColor: colors.borderStrong }]}>
-                <Pressable
+                <View
                     testID={`${testID}-frame`}
                     onLayout={onFrameLayout}
-                    accessibilityRole={pane.onTapPoint === undefined ? undefined : 'button'}
-                    accessibilityLabel={
-                        pane.onTapPoint === undefined ? undefined : `${pane.caption}: tap a point to ask about it`
-                    }
-                    onPress={(event: GestureResponderEvent): void => {
-                        const tap = extractTapCoordinates(event)
-                        if (pane.onTapPoint === undefined || frame === null || tap === null) {
-                            return
-                        }
-                        const point = normalizedPointFromTap(tap, frame, pane.mediaSize)
-                        if (point !== null) {
-                            pane.onTapPoint(point)
-                        }
-                    }}
                     style={[styles.frame, { backgroundColor: colors.surfaceSunken }]}
                 >
                     {mediaRect === null ? null : (
@@ -146,7 +132,25 @@ export function MeasuredPane({
                             ]}
                         />
                     ))}
-                </Pressable>
+                    {pane.onTapPoint === undefined ? null : (
+                        <Pressable
+                            testID={`${testID}-tap`}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${pane.caption}: tap a point to ask about it`}
+                            onPress={(event: GestureResponderEvent): void => {
+                                const tap = extractTapCoordinates(event)
+                                if (pane.onTapPoint === undefined || frame === null || tap === null) {
+                                    return
+                                }
+                                const point = normalizedPointFromTap(tap, frame, pane.mediaSize)
+                                if (point !== null) {
+                                    pane.onTapPoint(point)
+                                }
+                            }}
+                            style={StyleSheet.absoluteFill}
+                        />
+                    )}
+                </View>
             </View>
             {highlights.length === 0 ? null : (
                 // The outline is also named in text, so the highlight never depends on colour or shape alone.

@@ -108,7 +108,7 @@ describe('ComparisonFrame point selection after a refusal', () => {
         )
         await measure('photo-frame', 300, 220)
         // Portrait 3000x4000 sits at x 67.5 with width 165: a tap at the centre of the photo is (0.5, 0.5).
-        await fireEvent.press(screen.getByTestId('photo-frame'), {
+        await fireEvent.press(screen.getByTestId('photo-tap'), {
             nativeEvent: { locationX: 150, locationY: 110 },
         })
         expect(onTapPoint).toHaveBeenCalledTimes(1)
