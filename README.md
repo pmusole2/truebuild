@@ -33,10 +33,11 @@ npm run start:api
 ngrok http 3001
 
 # Terminal 3: substitute that HTTPS URL and the matching public app shared key.
+EXPO_NO_DOTENV=1 EXPO_OFFLINE=0 \
 EXPO_PUBLIC_API_BASE_URL=https://YOUR-NGROK-HOST \
 EXPO_PUBLIC_API_SECRET=YOUR-APP-SHARED-KEY \
 EXPO_PUBLIC_PROVIDER_MODE=meta \
-npm run start --workspace @truebuild/app -- --lan
+npm exec --workspace @truebuild/app -- expo start --lan
 ```
 
 Scan pages or choose multiple photos, reorder or retake them, then read the manual.
@@ -79,7 +80,8 @@ after restart; take a fresh photo before checking or asking.
 
 Routes: `POST /api/manuals/parse`, `/api/checks`, `/api/questions`, `/api/segments`;
 `GET /api/session`, `/api/health`, `/health`. Data/session routes require `x-truebuild-key`.
-Meta calls use multipart; the wire mode remains `model`. Metadata is limited to 512 KiB,
+App-to-Hono model calls use multipart; Hono-to-Meta Responses calls use JSON. The app
+wire mode remains `model`. Metadata is limited to 512 KiB,
 images to 4 MiB each and 8 MiB total. App uploads use tighter normalization limits.
 
 ## Documented mock and offline fixtures
@@ -96,7 +98,7 @@ node --import tsx api/scripts/mock-server.ts --test-only --scenario=reversed
 
 Use public app key `truebuild-fixture-demo` and Meta app mode against that local mock.
 Fixture mode remains an explicit `PROVIDER_MODE=fixture` option for tests/offline API
-development only. The production app has no sample manual or fixture-mode switch and
+development only. The production app has no sample manual or fixture-mode UI switch and
 rejects fixture envelopes. No key is needed for automated checks.
 
 ## Operator gates after the key arrives
@@ -144,6 +146,9 @@ npm run build:api
 For container deployment use the repository root as build context:
 `docker build -f api/Dockerfile -t truebuild-api .`. Configure provider/server environment
 variables and HTTPS on the hosting platform. Add exact browser origins to `CORS_ORIGINS`;
-native requests do not need a browser Origin. Deployment is not part of this task.
+native requests do not need a browser Origin. The current bundled shared header is public
+and provides no private user authentication. Public deployment requires private server
+access control and host-level request limits; do not use the bundled demo value as a
+private production secret. Deployment and that access-control design are outside this task.
 Optional backend clip processing still needs ffprobe/ffmpeg at the configured Homebrew
 paths and is unqualified. Still-image Spark checks do not need those tools.
