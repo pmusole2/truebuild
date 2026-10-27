@@ -665,3 +665,343 @@ it.each([1, 2])('counts SAM status retries against the shared attempt cap %i', a
     expect(calls).toBe(limit)
     expect(state.counter.used).toBe(limit)
 })
+
+const uncertain: CheckResult = {
+    ...checked,
+    model: 'muse-spark-1.3',
+    decision: 'cannot_verify',
+    orientationAssessment: 'uncertain',
+    missingEvidence: ['Need a clearer view'],
+}
+function secondaryRequest(
+    state: Awaited<ReturnType<typeof setup>>,
+    token: string,
+    mutate?: (form: FormData) => void,
+): Request {
+    return request(state, (form) => {
+        form.set('metadata', JSON.stringify({ ...state.metadata, secondOpinionToken: token }))
+        mutate?.(form)
+    })
+}
+
+describe('separate authenticated second opinion', () => {
+    it('does not offer or dispatch when disabled or when the primary decides', async () => {
+        const state = await setup()
+        const secondOpinion = vi.fn(async () => checked)
+        for (const decision of ['pass', 'refuse', 'cannot_verify'] as const) {
+            const handlers = createModelHandlers({
+                ...state,
+                counter: new ModelCallCounter(5),
+                provider: {
+                    ...provider(async () => ({
+                        ...uncertain,
+                        decision,
+                        orientationAssessment: decision === 'cannot_verify' ? 'uncertain' : 'correct',
+                        missingEvidence: [],
+                    })),
+                    secondOpinion,
+                },
+                samProvider: null,
+                ...(decision === 'cannot_verify' ? {} : { secondOpinionModel: 'muse-wonder-1.0' as const }),
+            })
+            const result = await (await handlers.check(request(state))).json()
+            expect(result.value.secondOpinion).toBeUndefined()
+        }
+        expect(secondOpinion).not.toHaveBeenCalled()
+    })
+    it('consumes concurrent/replayed tokens exactly once and preserves the primary on secondary pass', async () => {
+        const state = await setup()
+        const secondOpinion = vi.fn(async () => ({ ...checked, model: 'muse-wonder-1.0' as const }))
+        const counter = new ModelCallCounter(4)
+        const handlers = createModelHandlers({
+            ...state,
+            counter,
+            provider: { ...provider(async () => uncertain), secondOpinion },
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+        })
+        const primary = await (await handlers.check(request(state))).json()
+        expect(secondOpinion).not.toHaveBeenCalled()
+        const token = primary.value.secondOpinion.token
+        const replies = await Promise.all([
+            handlers.secondOpinion(secondaryRequest(state, token)),
+            handlers.secondOpinion(secondaryRequest(state, token)),
+        ])
+        expect(replies.map((r) => r.status).sort()).toEqual([200, 409])
+        const result = await replies.find((r) => r.status === 200)!.json()
+        expect(result).toMatchObject({
+            requestId: state.metadata.requestId,
+            binding: state.metadata.binding,
+            value: {
+                decision: 'cannot_verify',
+                model: 'muse-spark-1.3',
+                secondOpinion: { model: 'muse-wonder-1.0', status: 'completed' },
+            },
+        })
+        expect(result.value.modelNotes.length).toBeGreaterThan(0)
+        expect(secondOpinion).toHaveBeenCalledTimes(1)
+        expect(counter.used).toBe(2)
+    })
+    it('rejects wrong authentication, CORS, altered intent and bytes before any secondary dispatch', async () => {
+        const state = await setup()
+        const secondOpinion = vi.fn(async () => checked)
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(20),
+            provider: { ...provider(async () => uncertain), secondOpinion },
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+        })
+        for (const mutation of ['key', 'origin', 'capture', 'session', 'source', 'observation']) {
+            const primary = await (await handlers.check(request(state))).json()
+            const token = primary.value.secondOpinion.token
+            const req = secondaryRequest(state, token, (form) => {
+                if (mutation === 'capture')
+                    form.set(
+                        'metadata',
+                        JSON.stringify({
+                            ...state.metadata,
+                            binding: { ...state.metadata.binding, captureId: 'changed' },
+                            secondOpinionToken: token,
+                        }),
+                    )
+                if (mutation === 'session')
+                    form.set(
+                        'metadata',
+                        JSON.stringify({
+                            ...state.metadata,
+                            session: { ...state.metadata.session, title: 'changed' },
+                            secondOpinionToken: token,
+                        }),
+                    )
+                if (mutation === 'source' || mutation === 'observation')
+                    form.set(
+                        mutation === 'source' ? 'source-0' : 'observation',
+                        new Blob([new Uint8Array([1, 2])], { type: 'image/png' }),
+                        'changed.png',
+                    )
+            })
+            if (mutation === 'key') req.headers.set('x-truebuild-key', 'wrong')
+            if (mutation === 'origin') req.headers.set('origin', 'https://invalid.example')
+            expect((await handlers.secondOpinion(req)).status).toBe(
+                mutation === 'key' || mutation === 'origin' ? 401 : 409,
+            )
+        }
+        expect(secondOpinion).not.toHaveBeenCalled()
+    })
+    it('retains the original with an unavailable note after secondary failure or budget exhaustion', async () => {
+        const state = await setup()
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        try {
+            for (const limit of [1, 2]) {
+                log.mockClear()
+                const secondOpinion = vi.fn(async (): Promise<CheckResult> => {
+                    throw new Error('private upstream message')
+                })
+                const handlers = createModelHandlers({
+                    ...state,
+                    counter: new ModelCallCounter(limit),
+                    provider: { ...provider(async () => uncertain), secondOpinion },
+                    samProvider: null,
+                    secondOpinionModel: 'muse-wonder-1.0',
+                })
+                const primary = await (await handlers.check(request(state))).json()
+                const response = await handlers.secondOpinion(
+                    secondaryRequest(state, primary.value.secondOpinion.token),
+                )
+                const body = await response.json()
+                expect(body).toMatchObject({
+                    status: 'ok',
+                    value: {
+                        decision: 'cannot_verify',
+                        model: 'muse-spark-1.3',
+                        secondOpinion: { status: 'unavailable' },
+                    },
+                })
+                expect(body.value.modelNotes.length).toBeGreaterThan(0)
+                expect(JSON.stringify(body)).not.toContain('private upstream')
+                expect(secondOpinion).toHaveBeenCalledTimes(limit - 1)
+                expect(log).toHaveBeenCalledTimes(1)
+                expect(JSON.parse(log.mock.calls[0]![0] as string)).toEqual({
+                    event: 'second_opinion_outcome',
+                    primaryModel: 'muse-spark-1.3',
+                    secondaryModel: 'muse-wonder-1.0',
+                    resultModel: 'muse-spark-1.3',
+                    outcome: 'unavailable_retained',
+                    dispatched: false,
+                })
+            }
+        } finally {
+            log.mockRestore()
+        }
+    })
+    it('logs only the retained outcome when response construction crosses the secondary deadline', async () => {
+        const state = await setup()
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(3),
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+            provider: {
+                ...provider(async () => uncertain),
+                secondOpinion: async () => ({
+                    ...checked,
+                    decision: 'refuse',
+                    orientationAssessment: 'reversed',
+                    observedRegion: { x: 0, y: 0, width: 1, height: 1 },
+                    model: 'muse-wonder-1.0',
+                }),
+            },
+        })
+        const primary = await (await handlers.check(request(state))).json()
+        let now = performance.now()
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const build = Response.json.bind(Response)
+        let advance = true
+        const json = vi.spyOn(Response, 'json').mockImplementation((data, init) => {
+            const response = build(data, init)
+            if (advance) {
+                advance = false
+                now += 60_001
+            }
+            return response
+        })
+        try {
+            const result = await (
+                await handlers.secondOpinion(secondaryRequest(state, primary.value.secondOpinion.token))
+            ).json()
+            expect(result.value).toMatchObject({ decision: 'cannot_verify', secondOpinion: { status: 'unavailable' } })
+            expect(log).toHaveBeenCalledTimes(1)
+            expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({
+                outcome: 'unavailable_retained',
+                resultModel: 'muse-spark-1.3',
+            })
+        } finally {
+            json.mockRestore()
+            log.mockRestore()
+            clock.mockRestore()
+        }
+    })
+    it('has a separate 60s deadline and never publishes a ticket from cancelled primary completion', async () => {
+        const state = await setup()
+        let now = performance.now()
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+        try {
+            const secondOpinion = vi.fn(async () => {
+                now += 8_100
+                return { ...checked, model: 'muse-wonder-1.0' as const }
+            })
+            const handlers = createModelHandlers({
+                ...state,
+                counter: new ModelCallCounter(10),
+                provider: { ...provider(async () => uncertain), secondOpinion },
+                samProvider: null,
+                secondOpinionModel: 'muse-wonder-1.0',
+            })
+            const primary = await (await handlers.check(request(state))).json()
+            expect(
+                (await handlers.secondOpinion(secondaryRequest(state, primary.value.secondOpinion.token))).status,
+            ).toBe(200)
+            const abort = new AbortController()
+            const cancelled = createModelHandlers({
+                ...state,
+                counter: new ModelCallCounter(10),
+                provider: {
+                    ...provider(async () => {
+                        abort.abort()
+                        return uncertain
+                    }),
+                    secondOpinion,
+                },
+                samProvider: null,
+                secondOpinionModel: 'muse-wonder-1.0',
+            })
+            const response = await cancelled.check(new Request(request(state), { signal: abort.signal }))
+            expect(response.status).toBe(502)
+            expect(JSON.stringify(await response.json())).not.toContain('secondOpinion')
+        } finally {
+            clock.mockRestore()
+        }
+    })
+    it('burns a cancelled follow-up and refuses its late result', async () => {
+        const state = await setup()
+        const abort = new AbortController()
+        const secondOpinion = vi.fn(async () => {
+            abort.abort()
+            return { ...checked, model: 'muse-wonder-1.0' as const }
+        })
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(10),
+            provider: { ...provider(async () => uncertain), secondOpinion },
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+        })
+        const primary = await (await handlers.check(request(state))).json()
+        const token = primary.value.secondOpinion.token
+        const response = await handlers.secondOpinion(
+            new Request(secondaryRequest(state, token), { signal: abort.signal }),
+        )
+        expect(response.status).toBe(502)
+        expect((await handlers.secondOpinion(secondaryRequest(state, token))).status).toBe(409)
+        expect(secondOpinion).toHaveBeenCalledTimes(1)
+    })
+    it('guard forbids a second upstream attempt even for a retryable secondary response', async () => {
+        const state = await setup()
+        const outbound = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }))
+        const guarded = guardModelFetch(outbound)
+        const secondOpinion = vi.fn(async (): Promise<CheckResult> => {
+            for (let attempt = 0; attempt < 2; attempt++)
+                await guarded('https://api.meta.ai/v1/responses', { method: 'POST', body: 'same' })
+            return uncertain
+        })
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(10),
+            provider: { ...provider(async () => uncertain), secondOpinion },
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+        })
+        const primary = await (await handlers.check(request(state))).json()
+        const result = await (
+            await handlers.secondOpinion(secondaryRequest(state, primary.value.secondOpinion.token))
+        ).json()
+        expect(result.value.secondOpinion.status).toBe('unavailable')
+        expect(outbound).toHaveBeenCalledTimes(1)
+    })
+})
+
+it('binds tickets to their runtime and retains primary uncertainty after absolute secondary expiry', async () => {
+    const state = await setup()
+    let now = performance.now()
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    try {
+        const secondOpinion = vi.fn(async () => {
+            now += 60_001
+            return { ...checked, model: 'muse-wonder-1.0' as const }
+        })
+        const options = {
+            ...state,
+            counter: new ModelCallCounter(10),
+            provider: { ...provider(async () => uncertain), secondOpinion },
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0' as const,
+        }
+        const first = createModelHandlers(options)
+        const replacement = createModelHandlers(options)
+        const primary = await (await first.check(request(state))).json()
+        const token = primary.value.secondOpinion.token
+        expect((await replacement.secondOpinion(secondaryRequest(state, token))).status).toBe(409)
+        expect(secondOpinion).not.toHaveBeenCalled()
+        const result = await (await first.secondOpinion(secondaryRequest(state, token))).json()
+        expect(result).toMatchObject({
+            status: 'ok',
+            value: { decision: 'cannot_verify', model: 'muse-spark-1.3', secondOpinion: { status: 'unavailable' } },
+        })
+        expect(secondOpinion).toHaveBeenCalledTimes(1)
+        expect((await first.secondOpinion(secondaryRequest(state, token))).status).toBe(409)
+    } finally {
+        clock.mockRestore()
+    }
+})

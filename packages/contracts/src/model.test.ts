@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDemoManual } from './index'
 import {
     modelCheckMetadataSchema,
+    modelSecondOpinionMetadataSchema,
     selectStepSourcePageIds,
     selectCompactStepSourcePageIds,
     modelParseMetadataSchema,
@@ -103,4 +104,67 @@ it('defaults to all ordered manual pages and bounds only explicit compact citati
     expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
     session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'absent', region: null })
     expect(selectStepSourcePageIds(session, 'step-1')).toBeNull()
+})
+
+it('requires a second-opinion token and preserves strict current-step admission', () => {
+    const value = modelCheckMetadataSchema.parse(metadata())
+    expect(modelSecondOpinionMetadataSchema.safeParse(value).success).toBe(false)
+    expect(modelSecondOpinionMetadataSchema.safeParse({ ...value, secondOpinionToken: 'ticket' }).success).toBe(true)
+    expect(
+        modelSecondOpinionMetadataSchema.safeParse({ ...value, secondOpinionToken: '', model: 'muse-wonder-1.0' })
+            .success,
+    ).toBe(false)
+    expect(
+        modelSecondOpinionMetadataSchema.safeParse({
+            ...value,
+            binding: { ...value.binding, revision: 2 },
+            secondOpinionToken: 'ticket',
+        }).success,
+    ).toBe(false)
+})
+
+it('keeps server model provenance Standard-only and second-opinion states coherent', async () => {
+    const { checkResultSchema, parsedManualSchema, questionResultSchema } = await import('./index')
+    const base = {
+        decision: 'cannot_verify',
+        reason: 'Uncertain',
+        sourceRefs: [],
+        observedRegion: null,
+        missingEvidence: [],
+    }
+    const model = 'muse-spark-1.3'
+    for (const schemaAndValue of [
+        { schema: checkResultSchema, value: base },
+        { schema: parsedManualSchema, value: { parts: [], steps: [], unknowns: [] } },
+        { schema: questionResultSchema, value: { answer: 'Uncertain', sourceRefs: [], missingEvidence: [] } },
+    ]) {
+        expect(
+            schemaAndValue.schema.safeParse({ ...schemaAndValue.value, model: 'muse-spark-1.3-contributor' }).success,
+        ).toBe(false)
+        expect(
+            schemaAndValue.schema.safeParse({ ...schemaAndValue.value, model, modelNotes: ['Server note'] }).success,
+        ).toBe(true)
+    }
+    const available = { model: 'muse-wonder-1.0', status: 'available', token: 'ticket' }
+    expect(checkResultSchema.safeParse({ ...base, model, secondOpinion: available }).success).toBe(true)
+    for (const bad of [
+        { ...base, model: 'muse-wonder-1.0', secondOpinion: available },
+        { ...base, secondOpinion: available },
+        { ...base, model, decision: 'pass', sourceRefs: [{ pageId: 'page', region: null }], secondOpinion: available },
+        {
+            ...base,
+            model,
+            decision: 'refuse',
+            sourceRefs: [{ pageId: 'page', region: null }],
+            secondOpinion: available,
+        },
+        { ...base, model, secondOpinion: { model, status: 'available' } },
+    ])
+        expect(checkResultSchema.safeParse(bad).success).toBe(false)
+    for (const status of ['completed', 'unavailable']) {
+        expect(checkResultSchema.safeParse({ ...base, model, secondOpinion: { model, status } }).success).toBe(true)
+        expect(
+            checkResultSchema.safeParse({ ...base, model, secondOpinion: { model, status, token: 'ticket' } }).success,
+        ).toBe(false)
+    }
 })

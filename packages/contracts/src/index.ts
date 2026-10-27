@@ -170,8 +170,21 @@ function validateRegistry(parts: ManualPart[], steps: ManualStep[], ctx: z.Refin
     }
 }
 
+export const standardModelSchema = z.enum(['muse-spark-1.3', 'muse-wonder-1.0'])
+export type StandardModel = z.infer<typeof standardModelSchema>
+const modelProvenance = {
+    model: standardModelSchema.optional(),
+    modelNotes: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
+}
+const secondOpinionSchema = z.discriminatedUnion('status', [
+    z.strictObject({ model: standardModelSchema, status: z.literal('available'), token: z.string().min(1).max(128) }),
+    z.strictObject({ model: standardModelSchema, status: z.literal('completed') }),
+    z.strictObject({ model: standardModelSchema, status: z.literal('unavailable') }),
+])
+
 export const parsedManualSchema = z
     .strictObject({
+        ...modelProvenance,
         parts: z.array(manualPartSchema).max(256),
         steps: z.array(manualStepSchema).max(200),
         unknowns: z.array(descriptionSchema).max(200),
@@ -293,6 +306,8 @@ const bindingSchema = z.discriminatedUnion('kind', [manualBindingSchema, capture
 
 export const checkResultSchema = z
     .strictObject({
+        ...modelProvenance,
+        secondOpinion: secondOpinionSchema.optional(),
         decision: z.enum(['pass', 'refuse', 'cannot_verify']),
         orientationAssessment: z.enum(['correct', 'reversed', 'uncertain']).optional(),
         reason: descriptionSchema,
@@ -301,6 +316,13 @@ export const checkResultSchema = z
         missingEvidence: z.array(descriptionSchema).max(100),
     })
     .superRefine((result, ctx) => {
+        if (
+            result.secondOpinion?.status === 'available' &&
+            (result.decision !== 'cannot_verify' || result.model !== 'muse-spark-1.3')
+        ) {
+            ctx.addIssue({ code: 'custom', message: 'Only an uncertain Spark result can offer a second opinion' })
+        }
+
         if (
             result.orientationAssessment === 'reversed' &&
             (result.decision !== 'refuse' || result.sourceRefs.length === 0)
@@ -328,6 +350,7 @@ export const questionTargetSchema = z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('part'), partId: idSchema }),
 ])
 export const questionResultSchema = z.strictObject({
+    ...modelProvenance,
     observedRegion: normalizedBoxSchema.nullable().optional(),
     answer: z.string().trim().min(1).max(2_000),
     sourceRefs: sourceRefsSchema,

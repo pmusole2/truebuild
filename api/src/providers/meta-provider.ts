@@ -1,11 +1,12 @@
 import { selectStepSourcePageIds, selectCompactStepSourcePageIds } from '@truebuild/contracts/model'
 import { createHash } from 'node:crypto'
 import {
+    standardModelSchema,
+    type StandardModel,
     captureBindingSchema,
     LIMITS,
     manualBindingSchema,
     manualSessionSchema,
-    parsedManualSchema,
     questionTargetSchema,
     type CaptureBinding,
     type CheckResult,
@@ -31,13 +32,30 @@ import {
     type SourceImage,
     type ValidatedImage,
 } from '../server/media'
-import { completedResponseSchema, metaOutputSchemas, providerCheckSchema, providerQuestionSchema } from './meta-schemas'
+import {
+    completedResponseSchema,
+    metaOutputSchemas,
+    providerCheckSchema,
+    providerQuestionSchema,
+    providerParseSchema,
+} from './meta-schemas'
 
-export const SPARK_MODELS = ['muse-spark-1.3', 'muse-spark-1.3-contributor', 'muse-wonder-1.0'] as const
+export const SPARK_MODELS = ['muse-spark-1.3'] as const
 export type SparkModel = (typeof SPARK_MODELS)[number]
 export function sparkModel(value: string | undefined): SparkModel {
     const parsed = z.enum(SPARK_MODELS).safeParse(value ?? 'muse-spark-1.3')
     if (!parsed.success) throw new Error('invalid_model_spark')
+    return parsed.data
+}
+export function parseModel(value: string | undefined): StandardModel {
+    const parsed = standardModelSchema.safeParse(value ?? 'muse-spark-1.3')
+    if (!parsed.success) throw new Error('invalid_model_parse')
+    return parsed.data
+}
+export function secondOpinionModel(value: string | undefined): StandardModel | undefined {
+    if (value === undefined || value === '') return undefined
+    const parsed = standardModelSchema.safeParse(value)
+    if (!parsed.success) throw new Error('invalid_model_second_opinion')
     return parsed.data
 }
 export type CheckContextMode = 'full' | 'compact'
@@ -82,11 +100,14 @@ export interface MetaProvider {
     parseManual(input: ParseManualInput, signal: AbortSignal): Promise<ParsedManual>
     checkStep(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
+    secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
 }
 
 export interface MetaProviderOptions {
     apiKey?: string
     model?: SparkModel
+    parseModel?: StandardModel
+    secondOpinionModel?: StandardModel
     checkContext?: CheckContextMode
     onMetrics?: (metrics: ProviderMetrics) => void
     /** Trusted server configuration only; defaults to the frozen eight-second check budget. */
@@ -140,7 +161,7 @@ function factRefs<T>(fact: Fact<T>): SourceRef[] {
     return fact.state === 'known' ? fact.sourceRefs : []
 }
 
-function stepRefs(step: ManualStep): SourceRef[] {
+export function stepRefs(step: ManualStep): SourceRef[] {
     return [
         ...step.sourceRefs,
         ...step.parts.flatMap((part): SourceRef[] => factRefs(part.quantity)),
@@ -411,7 +432,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     if (!Number.isFinite(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
         throw new MetaProviderError('invalid_input')
     }
-    const model = sparkModel(options.model)
+    const liveModel = sparkModel(options.model)
+    const extractionModel = parseModel(options.parseModel)
+    const secondaryModel = secondOpinionModel(options.secondOpinionModel)
     const contextMode = checkContextMode(options.checkContext)
     const apiKey = options.apiKey
     const transport = new MetaTransport(options.fetchImpl ?? fetch)
@@ -466,6 +489,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         images: ValidatedImage[],
         schema: z.ZodType<T>,
         deadline: Deadline,
+        model: StandardModel,
+        secondary = false,
     ): Promise<T> {
         deadline.checkpoint()
         const { requestId, binding, step, question, target, ...stable } = context
@@ -488,8 +513,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             model,
             store: false,
             stream: false,
-            max_output_tokens: operation === 'parse' ? 24000 : 1500,
-            reasoning: { effort: 'low' },
+            // High reasoning shares the output budget with the JSON; this is an app cap, not a measured need.
+            max_output_tokens: operation === 'parse' ? 24000 : secondary && model === 'muse-wonder-1.0' ? 16000 : 1500,
+            reasoning: { effort: model === 'muse-wonder-1.0' ? 'high' : 'low' },
             instructions: INSTRUCTIONS,
             input: [{ type: 'message', role: 'user', content }],
             text: {
@@ -518,8 +544,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             },
             deadline,
             (status, latencyMs) => {
-                options.onMetrics?.({ operation, model, status, latencyMs })
+                options.onMetrics?.({ operation: secondary ? 'second_opinion' : operation, model, status, latencyMs })
             },
+            secondary ? 1 : 3,
         )
 
         // Even a response that settles beyond the absolute deadline retains explicit body custody.
@@ -534,7 +561,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
             const raw = await readMetaResponse(response, deadline)
             options.onMetrics?.({
-                operation,
+                operation: secondary ? 'second_opinion' : operation,
                 model,
                 status: response.status,
                 latencyMs: Math.max(0, performance.now() - started),
@@ -605,6 +632,105 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         }
     }
 
+    async function checkWithModel(
+        input: CheckStepInput,
+        signal: AbortSignal,
+        model: StandardModel,
+        secondary = false,
+    ): Promise<CheckResult> {
+        return execute(secondary ? 60_000 : checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
+            const parsed = inputValue(checkInputSchema, input)
+            const step = currentStep(parsed)
+            const prepared = await prepareContext(parsed, step, deadline)
+            if (!prepared)
+                return {
+                    decision: 'cannot_verify',
+                    orientationAssessment: 'uncertain',
+                    reason: COMPACT_UNAVAILABLE,
+                    sourceRefs: [],
+                    observedRegion: null,
+                    missingEvidence: [COMPACT_UNAVAILABLE],
+                }
+            const { context, images } = prepared
+            const { checks, partsAssessment, connectionAssessment, ...value } = await dispatch(
+                'check',
+                context,
+                images,
+                providerCheckSchema,
+                deadline,
+                model,
+                secondary,
+            )
+            const sameRef = (a: SourceRef, b: SourceRef): boolean =>
+                a.pageId === b.pageId && JSON.stringify(a.region) === JSON.stringify(b.region)
+            const validChecks =
+                new Set(checks.map((check) => check.checkId)).size === checks.length &&
+                checks.every((check) => {
+                    const expected = step.visibleChecks.find((candidate) => candidate.checkId === check.checkId)
+                    return (
+                        expected !== undefined &&
+                        (check.assessment === 'unobservable' || check.sourceRefs.length > 0) &&
+                        check.sourceRefs.every((ref) =>
+                            factRefs(expected.description).some((source) => sameRef(source, ref)),
+                        )
+                    )
+                })
+            const completeChecks =
+                checks.length === step.visibleChecks.length &&
+                new Set(checks.map((check) => check.checkId)).size === checks.length &&
+                step.visibleChecks.every((expected) =>
+                    checks.some(
+                        (check) =>
+                            check.checkId === expected.checkId &&
+                            check.sourceRefs.length > 0 &&
+                            check.sourceRefs.every((ref) =>
+                                factRefs(expected.description).some((source) => sameRef(source, ref)),
+                            ),
+                    ),
+                )
+            const passEvidence =
+                completeChecks &&
+                partsAssessment === 'matches' &&
+                connectionAssessment === 'matches' &&
+                checks.every((check) => check.assessment === 'matches')
+            const mismatchEvidence =
+                value.orientationAssessment === 'reversed' ||
+                partsAssessment === 'mismatch' ||
+                connectionAssessment === 'mismatch' ||
+                checks.some((check) => check.assessment === 'mismatch')
+
+            if (
+                !validChecks ||
+                !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
+                (value.decision === 'pass' && !passEvidence) ||
+                (value.decision === 'refuse' &&
+                    (!mismatchEvidence ||
+                        !value.observedRegion ||
+                        !value.sourceRefs.some((ref) => stepRefs(step).some((expected) => sameRef(ref, expected))))) ||
+                (value.decision === 'pass' &&
+                    isPanelOrientationCheck(step, parsed.session) &&
+                    value.orientationAssessment !== 'correct') ||
+                ((value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
+                    (step.orientation.state !== 'known' ||
+                        !value.sourceRefs.some(
+                            (ref) =>
+                                step.orientation.state === 'known' &&
+                                step.orientation.sourceRefs.some(
+                                    (expected) =>
+                                        expected.pageId === ref.pageId &&
+                                        JSON.stringify(expected.region) === JSON.stringify(ref.region),
+                                ),
+                        )))
+            ) {
+                throw new MetaProviderError('invalid_output')
+            }
+
+            deadline.checkpoint()
+
+            return { ...value, model }
+        })
+    }
+
     return {
         async parseManual(input, signal): Promise<ParsedManual> {
             return execute(30_000, signal, async (deadline): Promise<ParsedManual> => {
@@ -622,8 +748,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         sourcePages: parsed.pages.map((source): ManualPage => source.page),
                     },
                     images,
-                    parsedManualSchema,
+                    providerParseSchema,
                     deadline,
+                    extractionModel,
                 )
                 const sessionCheck = manualSessionSchema.safeParse({
                     manualId: parsed.binding.manualId,
@@ -642,102 +769,14 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     throw new MetaProviderError('invalid_output')
                 }
 
-                return value
+                return { ...value, model: extractionModel }
             })
         },
 
-        async checkStep(input, signal): Promise<CheckResult> {
-            return execute(checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
-                const parsed = inputValue(checkInputSchema, input)
-                const step = currentStep(parsed)
-                const prepared = await prepareContext(parsed, step, deadline)
-                if (!prepared)
-                    return {
-                        decision: 'cannot_verify',
-                        orientationAssessment: 'uncertain',
-                        reason: COMPACT_UNAVAILABLE,
-                        sourceRefs: [],
-                        observedRegion: null,
-                        missingEvidence: [COMPACT_UNAVAILABLE],
-                    }
-                const { context, images } = prepared
-                const { checks, partsAssessment, connectionAssessment, ...value } = await dispatch(
-                    'check',
-                    context,
-                    images,
-                    providerCheckSchema,
-                    deadline,
-                )
-                const sameRef = (a: SourceRef, b: SourceRef): boolean =>
-                    a.pageId === b.pageId && JSON.stringify(a.region) === JSON.stringify(b.region)
-                const validChecks =
-                    new Set(checks.map((check) => check.checkId)).size === checks.length &&
-                    checks.every((check) => {
-                        const expected = step.visibleChecks.find((candidate) => candidate.checkId === check.checkId)
-                        return (
-                            expected !== undefined &&
-                            (check.assessment === 'unobservable' || check.sourceRefs.length > 0) &&
-                            check.sourceRefs.every((ref) =>
-                                factRefs(expected.description).some((source) => sameRef(source, ref)),
-                            )
-                        )
-                    })
-                const completeChecks =
-                    checks.length === step.visibleChecks.length &&
-                    new Set(checks.map((check) => check.checkId)).size === checks.length &&
-                    step.visibleChecks.every((expected) =>
-                        checks.some(
-                            (check) =>
-                                check.checkId === expected.checkId &&
-                                check.sourceRefs.length > 0 &&
-                                check.sourceRefs.every((ref) =>
-                                    factRefs(expected.description).some((source) => sameRef(source, ref)),
-                                ),
-                        ),
-                    )
-                const passEvidence =
-                    completeChecks &&
-                    partsAssessment === 'matches' &&
-                    connectionAssessment === 'matches' &&
-                    checks.every((check) => check.assessment === 'matches')
-                const mismatchEvidence =
-                    value.orientationAssessment === 'reversed' ||
-                    partsAssessment === 'mismatch' ||
-                    connectionAssessment === 'mismatch' ||
-                    checks.some((check) => check.assessment === 'mismatch')
-
-                if (
-                    !validChecks ||
-                    !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
-                    (value.decision === 'pass' && !passEvidence) ||
-                    (value.decision === 'refuse' &&
-                        (!mismatchEvidence ||
-                            !value.observedRegion ||
-                            !value.sourceRefs.some((ref) =>
-                                stepRefs(step).some((expected) => sameRef(ref, expected)),
-                            ))) ||
-                    (value.decision === 'pass' &&
-                        isPanelOrientationCheck(step, parsed.session) &&
-                        value.orientationAssessment !== 'correct') ||
-                    ((value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
-                        (step.orientation.state !== 'known' ||
-                            !value.sourceRefs.some(
-                                (ref) =>
-                                    step.orientation.state === 'known' &&
-                                    step.orientation.sourceRefs.some(
-                                        (expected) =>
-                                            expected.pageId === ref.pageId &&
-                                            JSON.stringify(expected.region) === JSON.stringify(ref.region),
-                                    ),
-                            )))
-                ) {
-                    throw new MetaProviderError('invalid_output')
-                }
-
-                deadline.checkpoint()
-
-                return value
-            })
+        checkStep: (input, signal) => checkWithModel(input, signal, liveModel),
+        secondOpinion: async (input, signal): Promise<CheckResult> => {
+            if (!secondaryModel) throw new MetaProviderError('unconfigured')
+            return checkWithModel(input, signal, secondaryModel, true)
         },
 
         async answerQuestion(input, signal): Promise<QuestionResult> {
@@ -764,7 +803,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     }
                 const context = { ...prepared.context, question: parsed.question, target: parsed.target }
                 const images = prepared.images
-                const value = await dispatch('question', context, images, providerQuestionSchema, deadline)
+                const value = await dispatch('question', context, images, providerQuestionSchema, deadline, liveModel)
 
                 if (
                     !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
@@ -775,7 +814,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
                 deadline.checkpoint()
 
-                return value
+                return { ...value, model: liveModel }
             })
         },
     }

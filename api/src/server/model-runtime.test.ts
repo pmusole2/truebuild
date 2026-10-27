@@ -48,3 +48,18 @@ it('defaults to meta and rejects unknown server-only Spark model IDs', () => {
     expect(createRuntimeFromEnvironment({}).mode).toBe('meta')
     expect(() => createRuntimeFromEnvironment({ MODEL_SPARK: 'untrusted-model' })).toThrow()
 })
+
+it('isolates Standard parse/secondary configuration from Spark-only live tasks', () => {
+    const runtime = createRuntimeFromEnvironment({
+        MODEL_PARSE: 'muse-wonder-1.0',
+        MODEL_SECOND_OPINION: 'muse-wonder-1.0',
+    })
+    expect(runtime.sparkModel).toBe('muse-spark-1.3')
+    expect(runtime.parseModel).toBe('muse-wonder-1.0')
+    expect(runtime.secondOpinionModel).toBe('muse-wonder-1.0')
+    expect(createRuntimeFromEnvironment({ MODEL_SECOND_OPINION: '' }).secondOpinionModel).toBeUndefined()
+    for (const field of ['MODEL_SPARK', 'MODEL_PARSE', 'MODEL_SECOND_OPINION']) {
+        expect(() => createRuntimeFromEnvironment({ [field]: 'muse-spark-1.3-contributor' })).toThrow()
+    }
+    expect(() => createRuntimeFromEnvironment({ MODEL_SPARK: 'muse-wonder-1.0' })).toThrow()
+})

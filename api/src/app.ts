@@ -12,6 +12,7 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/session', 'GET'],
     ['/api/manuals/parse', 'POST'],
     ['/api/checks', 'POST'],
+    ['/api/checks/second-opinion', 'POST'],
     ['/api/questions', 'POST'],
     ['/api/segments', 'POST'],
 ])
@@ -44,12 +45,17 @@ const routes = new Hono<ApiEnv>()
             ...context.get('runtime').sessionMetadata,
             providerMode: context.get('runtime').mode,
             sparkModel: context.get('runtime').sparkModel,
+            parseModel: context.get('runtime').parseModel,
+            secondOpinionModel: context.get('runtime').secondOpinionModel,
             samModel: context.get('runtime').samModel,
             checkContext: context.get('runtime').checkContext,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
         }),
     )
     .post('/api/manuals/parse', (context): Promise<Response> => dispatch(context, 'parse'))
+    .post('/api/checks/second-opinion', (context): Promise<Response> =>
+        context.get('runtime').model.secondOpinion(context.req.raw),
+    )
     .post('/api/checks', (context): Promise<Response> => dispatch(context, 'check'))
     .post('/api/questions', (context): Promise<Response> => dispatch(context, 'question'))
     .post('/api/segments', (context): Promise<Response> => dispatch(context, 'segment'))

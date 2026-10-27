@@ -8,7 +8,7 @@ afterEach((): void => {
 
 describe('absolute request deadline', (): void => {
     it('rejects invalid budgets', (): void => {
-        for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 30_001]) {
+        for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 60_001]) {
             expect(() => createDeadline(value)).toThrow('invalid_timeout')
         }
     })
@@ -56,4 +56,18 @@ describe('absolute request deadline', (): void => {
         expect(remove).toHaveBeenCalledOnce()
         expect(() => deadline.checkpoint()).toThrow('cancelled')
     })
+})
+
+it('supports an independent sixty-second follow-up without extending the primary deadline', () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const primary = createDeadline(8_000)
+    const followup = createDeadline(60_000)
+    now = 8_001
+    expect(() => primary.checkpoint()).toThrow('timeout')
+    expect(() => followup.checkpoint()).not.toThrow()
+    now = 60_000
+    expect(() => followup.checkpoint()).toThrow('timeout')
+    primary.dispose()
+    followup.dispose()
 })

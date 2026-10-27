@@ -394,3 +394,104 @@ it.each(['image', 'video'] as const)(
         }
     },
 )
+
+it.each(['correct', 'reversed', 'uncertain', 'failed'] as const)(
+    'runs separate %s follow-up through real Hono admission and loopback Meta transport',
+    async (scenario) => {
+        const mock = await startMetaMock({ scenario: 'uncertain', secondOpinion: { scenario } })
+        try {
+            const runtime = createRuntimeFromEnvironment(
+                {
+                    MODEL_API_KEY: '<synthetic>',
+                    API_SHARED_SECRET: 'synthetic',
+                    MODEL_SECOND_OPINION: 'muse-wonder-1.0',
+                },
+                mock.transport,
+            )
+            const app = createApp({ runtime, onDuration: () => {} })
+            const { session, bytes } = await media()
+            const metadata = {
+                mode: 'model',
+                requestId: 'secondary-mock',
+                session,
+                sourcePageIds: ['demo-page-1'],
+                binding: {
+                    kind: 'capture',
+                    manualId: session.manualId,
+                    revision: session.revision,
+                    stepId: 'step-1',
+                    captureId: 'capture-1',
+                },
+                observation: { mimeType: 'image/png', width: 20, height: 16 },
+            }
+            const send = async (
+                token?: string,
+                key = 'synthetic',
+                origin = 'http://localhost:8081',
+            ): Promise<Response> => {
+                const form = new FormData()
+                form.set('metadata', JSON.stringify({ ...metadata, ...(token ? { secondOpinionToken: token } : {}) }))
+                for (const name of ['source-0', 'observation'])
+                    form.set(name, new Blob([bytes], { type: 'image/png' }), 'test.png')
+                // Serialize the client wire body first: Node 24's lazy FormData encoder throws when
+                // cancelled before its first pull, unlike an inbound HTTP request byte stream.
+                const encoded = new Request('http://localhost/', { method: 'POST', body: form })
+                const wireBytes = await encoded.arrayBuffer()
+                return app.request(token ? '/api/checks/second-opinion' : '/api/checks', {
+                    method: 'POST',
+                    headers: { 'x-truebuild-key': key, origin, 'content-type': encoded.headers.get('content-type')! },
+                    body: wireBytes,
+                })
+            }
+            const primary = await (await send()).json()
+            expect(primary).toMatchObject({
+                status: 'ok',
+                value: {
+                    model: 'muse-spark-1.3',
+                    decision: 'cannot_verify',
+                    secondOpinion: { model: 'muse-wonder-1.0', status: 'available' },
+                },
+            })
+            expect(mock.requests.map((r) => r.operation)).toEqual(['check'])
+            const token = primary.value.secondOpinion.token
+            expect((await send(token, 'wrong')).status).toBe(401)
+            expect((await send(token, 'synthetic', 'https://bad.example')).status).toBe(403)
+            const preflight = await app.request('/api/checks/second-opinion', {
+                method: 'OPTIONS',
+                headers: {
+                    origin: 'http://localhost:8081',
+                    'access-control-request-method': 'POST',
+                    'access-control-request-headers': 'x-truebuild-key',
+                },
+            })
+            expect(preflight.status).toBe(204)
+            const response = await send(token)
+            expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:8081')
+            const secondary = await response.json()
+            expect(secondary).toMatchObject({
+                status: 'ok',
+                requestId: metadata.requestId,
+                binding: metadata.binding,
+                value: {
+                    decision: scenario === 'reversed' ? 'refuse' : 'cannot_verify',
+                    model: scenario === 'reversed' ? 'muse-wonder-1.0' : 'muse-spark-1.3',
+                    secondOpinion: {
+                        model: 'muse-wonder-1.0',
+                        status: scenario === 'failed' ? 'unavailable' : 'completed',
+                    },
+                },
+            })
+            expect(secondary.value.modelNotes.length).toBeGreaterThan(0)
+            expect((await send(token)).status).toBe(409)
+            expect(mock.requests.map((r) => r.operation)).toEqual(['check', 'second_opinion'])
+            expect(mock.wireRequests.map((r) => [r.model, r.reasoning?.effort])).toEqual([
+                ['muse-spark-1.3', 'low'],
+                ['muse-wonder-1.0', 'high'],
+            ])
+            expect(mock.failures).toEqual([])
+            expect(runtime.counter.used).toBe(2)
+        } finally {
+            await mock.close()
+        }
+    },
+)

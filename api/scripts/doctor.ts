@@ -3,7 +3,13 @@ import { settleMetaResponse } from '../src/providers/meta-transport'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
-import { sparkModel, readMetaResponse, checkContextMode } from '../src/providers/meta-provider'
+import {
+    sparkModel,
+    parseModel,
+    secondOpinionModel,
+    readMetaResponse,
+    checkContextMode,
+} from '../src/providers/meta-provider'
 import { createDeadline } from '../src/server/deadline'
 
 const models = z.object({ data: z.array(z.object({ id: z.string().min(1).max(128) })).max(10_000) })
@@ -13,7 +19,6 @@ const PRICING = {
     currency: 'USD',
     perMillionTokens: {
         'muse-spark-1.3': { input: 1.25, cachedInput: 0.15, outputIncludingReasoning: 4.25 },
-        'muse-spark-1.3-contributor': { input: 0.1, cachedInput: 0.002, outputIncludingReasoning: 0.2 },
         'muse-wonder-1.0': { input: 4, cachedInput: 0.2, outputIncludingReasoning: 20 },
     },
     samImage: 0.0025,
@@ -21,6 +26,7 @@ const PRICING = {
     samVideoMinimumFrames: 50,
     parseOutputTokenCap: 24000,
     checkOutputTokenCap: 1500,
+    wonderSecondOpinionOutputTokenCap: 16000,
     callLimitIsNotDollarBudget: true,
 }
 
@@ -38,6 +44,8 @@ export async function doctor(
     const deadline = createDeadline(15_000)
     try {
         const spark = sparkModel(environment.MODEL_SPARK)
+        const parse = parseModel(environment.MODEL_PARSE)
+        const secondary = secondOpinionModel(environment.MODEL_SECOND_OPINION)
         const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
         if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model')
         // Exactly one GET; there is deliberately no retry, inference, file or token-count operation.
@@ -59,19 +67,21 @@ export async function doctor(
             models.parse(await readMetaResponse(response, deadline)).data.map((model) => model.id),
         )
         deadline.checkpoint()
-        const valid = available.has(spark) && available.has('sam-3.1')
+        const valid = [spark, parse, ...(secondary ? [secondary] : []), 'sam-3.1'].every((model) =>
+            available.has(model),
+        )
         print(
             JSON.stringify({
                 kind: 'models',
                 spark,
+                parse,
+                secondOpinion: secondary ?? 'disabled',
                 sam: 'sam-3.1',
                 checkContext,
                 available: valid ? 'listed' : 'required_model_not_listed',
                 inferenceVerified: false,
             }),
         )
-        if (spark === 'muse-spark-1.3-contributor') print('contributor_explicit_opt_in_content_may_train_models')
-        if (spark === 'muse-wonder-1.0') print('wonder_explicit_preview_opt_in')
         return valid ? 0 : 2
     } catch {
         print('models_unverified')

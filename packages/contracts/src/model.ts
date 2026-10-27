@@ -126,6 +126,9 @@ function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
 }
 
 export const modelCheckMetadataSchema = baseCheck.superRefine(validateCheck)
+export const modelSecondOpinionMetadataSchema = z
+    .strictObject({ ...checkFields, secondOpinionToken: z.string().min(1).max(128) })
+    .superRefine(validateCheck)
 export const modelQuestionMetadataSchema = z
     .strictObject({
         ...checkFields,
@@ -167,6 +170,7 @@ export const modelSegmentMetadataSchema = z.strictObject({
 })
 
 export type ModelParseMetadata = z.infer<typeof modelParseMetadataSchema>
+export type ModelSecondOpinionMetadata = z.infer<typeof modelSecondOpinionMetadataSchema>
 export type ModelCheckMetadata = z.infer<typeof modelCheckMetadataSchema>
 export type ModelQuestionMetadata = z.infer<typeof modelQuestionMetadataSchema>
 export type ModelSegmentMetadata = z.infer<typeof modelSegmentMetadataSchema>
