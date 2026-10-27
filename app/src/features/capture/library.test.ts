@@ -54,8 +54,8 @@ describe('durable manual library', () => {
         expect([...kv.data.keys()].some((key) => key.includes('/bytes/'))).toBe(false)
     })
 
-    it.each(['digest', 'missing', 'length', 'encoding'])(
-        'quarantines %s damage without pruning saved facts or chunks',
+    it.each(['digest', 'missing', 'encoded-length', 'decoded-length', 'encoding'])(
+        'keeps %s damage read-only without pruning saved facts or chunks',
         async (damage) => {
             const kv = memory()
             const store = new LibraryStorage(kv, digest)
@@ -66,7 +66,17 @@ describe('durable manual library', () => {
             )
             const key = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
             if (damage === 'missing') kv.data.delete(key)
-            else kv.data.set(key, damage === 'digest' ? 'AQEK' : damage === 'length' ? 'AQ==' : '!!!!')
+            else
+                kv.data.set(
+                    key,
+                    damage === 'digest'
+                        ? 'AQEK'
+                        : damage === 'encoded-length'
+                          ? 'AAA'
+                          : damage === 'decoded-length'
+                            ? 'AQ=='
+                            : '!!!!',
+                )
             const before = new Map(kv.data)
             const quarantined = new LibraryStorage(kv, digest)
             const restored = await quarantined.restore()
@@ -162,6 +172,20 @@ describe('durable manual library', () => {
             expect(await store.readAsset(manual.capture.page)).toEqual(new Uint8Array([1, 4, 9]))
         },
     )
+
+    it('locks writes if a previously restored image becomes unavailable', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }])
+        await store.restore()
+        const chunk = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+        kv.data.delete(chunk)
+        const before = new Map(kv.data)
+        await expect(store.readAsset(manual.session.pages[0]!)).rejects.toThrow()
+        await expect(store.save([manual])).rejects.toThrow(/read.only/i)
+        expect(kv.data).toEqual(before)
+    })
 
     it('keeps orphan chunks read-only when a fresh instance has no manifest', async () => {
         const kv = memory()

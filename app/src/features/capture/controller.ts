@@ -22,6 +22,9 @@ import { askModelQuestion, runModelCheck } from '../assembly/model-check'
 import type { Observation } from '../assembly/observation'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
 
+const LOCAL_LIBRARY_READ_FAILURE =
+    'Local library images could not be read. Original data is retained. Retry reading the local library before making changes.'
+
 export type ScreenRoute = 'library' | 'pages' | 'overview' | 'guide' | 'camera'
 export type CameraIntent = { kind: 'page'; replaceIndex?: number } | { kind: 'check' | 'question' }
 export type CaptureView = { binding: CaptureBinding; observation: Observation; capturedAt: number; reusable: boolean }
@@ -241,7 +244,7 @@ export class CaptureController {
         try {
             const uris: Record<string, string> = {}
             for (const page of entry.session.pages) {
-                const bytes = await this.ports.storage.readAsset(page)
+                const bytes = await this.readPage(page)
                 if (token !== this.epoch) {
                     return
                 }
@@ -249,7 +252,7 @@ export class CaptureController {
             }
             this.publish({ pageUris: uris })
             if (entry.capture !== null) {
-                const bytes = await this.ports.storage.readAsset(entry.capture.page)
+                const bytes = await this.readPage(entry.capture.page)
                 if (token !== this.epoch) {
                     return
                 }
@@ -294,6 +297,14 @@ export class CaptureController {
         }
         this.invalidate(intent.kind === 'question')
         this.publish({ route: 'camera', cameraIntent: intent, notice: null })
+    }
+    private async readPage(page: ManualPage): Promise<Uint8Array<ArrayBuffer>> {
+        try {
+            return await this.ports.storage.readAsset(page)
+        } catch (error: unknown) {
+            this.publish({ storageReadOnly: true, notice: LOCAL_LIBRARY_READ_FAILURE })
+            throw error
+        }
     }
     private async persist(
         entries: readonly LibraryEntry[],
@@ -490,7 +501,7 @@ export class CaptureController {
         try {
             const images = []
             for (const page of entry.session.pages) {
-                const bytes = await awaitStopped(this.ports.storage.readAsset(page), guard.signal)
+                const bytes = await awaitStopped(this.readPage(page), guard.signal)
                 guard.checkpoint()
                 images.push({ ...page, bytes })
             }
@@ -536,9 +547,11 @@ export class CaptureController {
         } catch {
             if (token === this.epoch) {
                 this.publish({
-                    notice: guard.timedOut()
-                        ? 'Manual reading timed out. Retry sends a new request.'
-                        : 'Manual reading unavailable. Check your connection and retry.',
+                    notice: this.state.storageReadOnly
+                        ? LOCAL_LIBRARY_READ_FAILURE
+                        : guard.timedOut()
+                          ? 'Manual reading timed out. Retry sends a new request.'
+                          : 'Manual reading unavailable. Check your connection and retry.',
                 })
             }
         } finally {
@@ -682,7 +695,7 @@ export class CaptureController {
                         const page = entry.session.pages.find((p) => p.assetId === id)
                         return page === undefined
                             ? null
-                            : { assetId: id, mimeType: page.mimeType, bytes: await this.ports.storage.readAsset(page) }
+                            : { assetId: id, mimeType: page.mimeType, bytes: await this.readPage(page) }
                     },
                 })
                 guard.checkpoint()
@@ -697,11 +710,13 @@ export class CaptureController {
                 this.publish({
                     route: 'guide',
                     cameraIntent: null,
-                    notice: guard.timedOut()
-                        ? intent.kind === 'check'
-                            ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Take a new photo when ready.'
-                            : 'Camera photo preparation timed out. Take a new photo.'
-                        : 'Cannot use this camera photo. Check camera access and connection, then take a new photo.',
+                    notice: this.state.storageReadOnly
+                        ? LOCAL_LIBRARY_READ_FAILURE
+                        : guard.timedOut()
+                          ? intent.kind === 'check'
+                              ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Take a new photo for another check.'
+                              : 'Camera photo preparation timed out. Take a new photo.'
+                          : 'Cannot use this camera photo. Check camera access and connection, then take a new photo.',
                 })
             }
         } finally {
@@ -788,7 +803,7 @@ export class CaptureController {
                     const page = entry.session.pages.find((p) => p.assetId === id)
                     return page === undefined
                         ? null
-                        : { assetId: id, mimeType: page.mimeType, bytes: await this.ports.storage.readAsset(page) }
+                        : { assetId: id, mimeType: page.mimeType, bytes: await this.readPage(page) }
                 },
             })
             if (
@@ -801,7 +816,11 @@ export class CaptureController {
             }
         } catch {
             if (token === this.epoch && this.operation === operation) {
-                this.publish({ notice: 'Question unavailable. Check connection and take a new photo.' })
+                this.publish({
+                    notice: this.state.storageReadOnly
+                        ? LOCAL_LIBRARY_READ_FAILURE
+                        : 'Question unavailable. Check connection and take a new photo.',
+                })
             }
         } finally {
             if (token === this.epoch && this.operation === operation) {
@@ -823,6 +842,7 @@ export class CaptureController {
             : null
     }
     private unavailable(result: Extract<ApiResult<unknown>, { status: 'unavailable' }>): string {
+        if (this.state.storageReadOnly) return LOCAL_LIBRARY_READ_FAILURE
         return result.code === 'invalid_input'
             ? 'Cannot verify: the full reviewed plan, up to 20 ordered manual pages, and the frozen photo must fit the API context and 8 MiB image budget.'
             : `Unavailable (${result.code}). Check connection/configuration. Retry is a new request; cancelled calls are not repeated automatically.`

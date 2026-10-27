@@ -136,6 +136,33 @@ async function ready(): Promise<ReturnType<typeof setup>> {
 }
 
 describe('real manual workflow with provider-boundary fixture responses', () => {
+    it.each(['parse', 'check', 'ask'] as const)(
+        'locks the library and retains facts after a %s source read fails',
+        async (operation) => {
+            const { controller, store, calls } = await ready()
+            if (operation === 'ask') {
+                controller.camera({ kind: 'question' })
+                await controller.shutter(async () => photo)
+                controller.questionChanged('Which edge?')
+                controller.targetChanged({ kind: 'point', x: 0.5, y: 0.5 })
+            }
+            const manualId = controller.current!.session.manualId
+            const count = calls.length
+            vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new Error('Local image unavailable'))
+            if (operation === 'parse') await controller.parse()
+            else if (operation === 'check') {
+                controller.camera({ kind: 'check' })
+                await controller.shutter(async () => photo)
+            } else await controller.ask()
+            expect(controller.getSnapshot().storageReadOnly).toBe(true)
+            expect(controller.getSnapshot().notice).toMatch(/local.*library|library.*read/i)
+            expect(controller.current!.session.manualId).toBe(manualId)
+            expect(calls).toHaveLength(count)
+            await controller.createManual()
+            expect(controller.current!.session.manualId).toBe(manualId)
+        },
+    )
+
     it('starts empty, parses a unique manual binding, requires review, and invalidates it on page edits', async () => {
         const { controller, calls, store } = setup()
         controllers.push(controller)

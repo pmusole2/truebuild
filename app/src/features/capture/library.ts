@@ -152,6 +152,17 @@ export class LibraryStorage {
     }
 
     async readAsset(page: Pick<ManualPage, 'assetId' | 'contentHash'>): Promise<Uint8Array<ArrayBuffer>> {
+        try {
+            return await this.readVerifiedAsset(page)
+        } catch (error: unknown) {
+            this.writable = false
+            throw error
+        }
+    }
+
+    private async readVerifiedAsset(
+        page: Pick<ManualPage, 'assetId' | 'contentHash'>,
+    ): Promise<Uint8Array<ArrayBuffer>> {
         const asset = this.assets.find((a) => a.id === page.assetId && a.hash === page.contentHash)
         if (asset === undefined) {
             throw new DamagedLocalAssetError('Missing local image')

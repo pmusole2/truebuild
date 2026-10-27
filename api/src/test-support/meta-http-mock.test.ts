@@ -46,6 +46,7 @@ describe('documented loopback mock with real API composition', () => {
                 captureId: 'capture-test',
             }
             const client = new ModelApiClient({
+                // Hono admission runs in-process; only the documented Meta provider mock uses loopback HTTP.
                 baseUrl: 'http://127.0.0.1:3001',
                 secret: 'synthetic',
                 fetch: async (url, init): Promise<Response> => app.request(new URL(url).pathname, init),
