@@ -93,7 +93,7 @@ export async function validateAndNormalizeImages(
 ): Promise<ValidatedImage[]> {
     checkpoint(signal)
 
-    if (images.length === 0 || images.length > maxImages || maxImages > LIMITS.manualPages) {
+    if (images.length === 0 || images.length > maxImages || maxImages > LIMITS.requestImages) {
         throw new MediaValidationError('invalid_input')
     }
 

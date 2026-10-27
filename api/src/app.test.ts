@@ -28,6 +28,7 @@ describe('Hono HTTP boundary', (): void => {
                 providerMode: 'fixture',
                 sparkModel: 'muse-spark-1.3',
                 samModel: 'sam-3.1',
+                checkContext: 'full',
                 fixture: 'available',
                 live: 'unconfigured',
                 label: 'Demo data — simulated results',
@@ -153,6 +154,7 @@ describe('Hono HTTP boundary', (): void => {
             providerMode: 'fixture',
             sparkModel: 'muse-spark-1.3',
             samModel: 'sam-3.1',
+            checkContext: 'full',
         })
         expect(second).toEqual(first)
         expect((await app({ API_SHARED_SECRET: undefined }).request('/api/session')).status).toBe(401)

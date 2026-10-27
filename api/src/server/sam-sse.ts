@@ -102,7 +102,11 @@ function responseEvent(value: unknown): ResponsesEvent | null {
 }
 
 /** Owns and cancels the body, including on parser/consumer early return. */
-export async function* readSamSse(response: Response, deadline: Deadline): AsyncGenerator<ResponsesEvent> {
+export async function* readSamSse(
+    response: Response,
+    deadline: Deadline,
+    onTerminalResponse?: (value: unknown) => void,
+): AsyncGenerator<ResponsesEvent> {
     const reader = response.body?.getReader()
     let released = false
     function cancelReader(): void {
@@ -152,6 +156,12 @@ export async function* readSamSse(response: Response, deadline: Deadline): Async
                     throw new SamStreamError('invalid_output')
                 }
                 eventName = ''
+                if (
+                    record(value) &&
+                    ['response.completed', 'response.failed', 'response.incomplete'].includes(String(value.type))
+                ) {
+                    onTerminalResponse?.(value.response)
+                }
                 return responseEvent(value)
             }
             if (line.startsWith(':')) {

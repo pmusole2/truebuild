@@ -4,6 +4,7 @@ import { createDemoManual } from './index'
 import {
     modelCheckMetadataSchema,
     selectStepSourcePageIds,
+    selectCompactStepSourcePageIds,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
@@ -87,7 +88,7 @@ describe('model metadata admission', (): void => {
     })
 })
 
-it('selects ordered compact sources including part facts and refuses more than two required pages', () => {
+it('defaults to all ordered manual pages and bounds only explicit compact citation coverage', () => {
     const session = createDemoManual()
     session.pages.push(
         { ...session.pages[0]!, pageId: 'page-2', assetId: 'asset-2' },
@@ -95,7 +96,11 @@ it('selects ordered compact sources including part facts and refuses more than t
     )
     const part = session.parts[0]!
     if (part.name.state === 'known') part.name.sourceRefs.push({ pageId: 'page-2', region: null })
-    expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2'])
+    expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
+    expect(selectCompactStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2'])
     session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'page-3', region: null })
+    expect(selectCompactStepSourcePageIds(session, 'step-1')).toBeNull()
+    expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
+    session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'absent', region: null })
     expect(selectStepSourcePageIds(session, 'step-1')).toBeNull()
 })

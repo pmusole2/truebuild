@@ -1,3 +1,4 @@
+import { selectStepSourcePageIds, selectCompactStepSourcePageIds } from '@truebuild/contracts/model'
 import { createHash } from 'node:crypto'
 import {
     captureBindingSchema,
@@ -39,6 +40,14 @@ export function sparkModel(value: string | undefined): SparkModel {
     if (!parsed.success) throw new Error('invalid_model_spark')
     return parsed.data
 }
+export type CheckContextMode = 'full' | 'compact'
+export function checkContextMode(value: string | undefined): CheckContextMode {
+    const parsed = z.enum(['full', 'compact']).safeParse(value ?? 'full')
+    if (!parsed.success) throw new Error('invalid_check_context')
+    return parsed.data
+}
+const COMPACT_UNAVAILABLE =
+    'Compact context cannot cover every required citation within two manual pages. Configure full context or revise the reviewed step; no provider request was sent.'
 const MAX_RESPONSE_BYTES = 1_048_576
 
 export type MetaProviderErrorCode = 'unconfigured' | 'invalid_input' | 'timeout' | 'provider_error' | 'invalid_output'
@@ -78,6 +87,7 @@ export interface MetaProvider {
 export interface MetaProviderOptions {
     apiKey?: string
     model?: SparkModel
+    checkContext?: CheckContextMode
     onMetrics?: (metrics: ProviderMetrics) => void
     /** Trusted server configuration only; defaults to the frozen eight-second check budget. */
     checkTimeoutMs?: number
@@ -249,8 +259,8 @@ function stepContext(input: CheckStepInput, step: ManualStep): Record<string, un
         requestId: input.requestId,
         binding: input.binding,
         step,
-        plan: { steps: [step] },
-        parts,
+        plan: { steps: input.session.reviewedSteps },
+        parts: input.session.parts,
         sourcePages: input.sourceImages.map((source): ManualPage => source.page),
         imageOrder: ['source pages in sourcePages order', 'last image is the bound observation'],
     }
@@ -402,6 +412,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         throw new MetaProviderError('invalid_input')
     }
     const model = sparkModel(options.model)
+    const contextMode = checkContextMode(options.checkContext)
     const apiKey = options.apiKey
     const transport = new MetaTransport(options.fetchImpl ?? fetch)
 
@@ -562,6 +573,35 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         }
     }
 
+    async function prepareContext(
+        input: CheckStepInput,
+        step: ManualStep,
+        deadline: Deadline,
+    ): Promise<{
+        input: CheckStepInput
+        context: Record<string, unknown>
+        images: ValidatedImage[]
+    } | null> {
+        const allPages = selectStepSourcePageIds(input.session, step.stepId)
+        if (!allPages) throw new MetaProviderError('invalid_input')
+        // Validate used-part names before allowing compact refusal; all hashes/bindings were checked by currentStep.
+        stepContext(input, step)
+        const selected = contextMode === 'full' ? allPages : selectCompactStepSourcePageIds(input.session, step.stepId)
+        const images = await waitWithin(
+            validateAndNormalizeImages([...sourceObservations(input.sourceImages), input.observation], deadline.signal),
+            deadline,
+        )
+        if (!selected) return null
+        const indices = selected.map((id) => input.sourceImages.findIndex((source) => source.page.pageId === id))
+        if (indices.some((index) => index < 0)) throw new MetaProviderError('invalid_input')
+        const selectedInput = { ...input, sourceImages: indices.map((index) => input.sourceImages[index]!) }
+        return {
+            input: selectedInput,
+            context: stepContext(selectedInput, step),
+            images: [...indices.map((index) => images[index]!), images[images.length - 1]!],
+        }
+    }
+
     return {
         async parseManual(input, signal): Promise<ParsedManual> {
             return execute(30_000, signal, async (deadline): Promise<ParsedManual> => {
@@ -607,14 +647,17 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             return execute(checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
                 const parsed = inputValue(checkInputSchema, input)
                 const step = currentStep(parsed)
-                const context = stepContext(parsed, step)
-                const images = await waitWithin(
-                    validateAndNormalizeImages(
-                        [...sourceObservations(parsed.sourceImages), parsed.observation],
-                        deadline.signal,
-                    ),
-                    deadline,
-                )
+                const prepared = await prepareContext(parsed, step, deadline)
+                if (!prepared)
+                    return {
+                        decision: 'cannot_verify',
+                        orientationAssessment: 'uncertain',
+                        reason: COMPACT_UNAVAILABLE,
+                        sourceRefs: [],
+                        observedRegion: null,
+                        missingEvidence: [COMPACT_UNAVAILABLE],
+                    }
+                const { context, images } = prepared
                 const { checks, partsAssessment, connectionAssessment, ...value } = await dispatch(
                     'check',
                     context,
@@ -662,7 +705,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
                 if (
                     !validChecks ||
-                    !refsResolve(value.sourceRefs, parsed.sourceImages) ||
+                    !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
                     (value.decision === 'pass' && !passEvidence) ||
                     (value.decision === 'refuse' &&
                         (!mismatchEvidence ||
@@ -708,18 +751,20 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     throw new MetaProviderError('invalid_input')
                 }
 
-                const context = { ...stepContext(parsed, step), question: parsed.question, target: parsed.target }
-                const images = await waitWithin(
-                    validateAndNormalizeImages(
-                        [...sourceObservations(parsed.sourceImages), parsed.observation],
-                        deadline.signal,
-                    ),
-                    deadline,
-                )
+                const prepared = await prepareContext(parsed, step, deadline)
+                if (!prepared)
+                    return {
+                        answer: COMPACT_UNAVAILABLE,
+                        sourceRefs: [],
+                        observedRegion: null,
+                        missingEvidence: [COMPACT_UNAVAILABLE],
+                    }
+                const context = { ...prepared.context, question: parsed.question, target: parsed.target }
+                const images = prepared.images
                 const value = await dispatch('question', context, images, providerQuestionSchema, deadline)
 
                 if (
-                    !refsResolve(value.sourceRefs, parsed.sourceImages) ||
+                    !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
                     (value.sourceRefs.length === 0 && value.missingEvidence.length === 0)
                 ) {
                     throw new MetaProviderError('invalid_output')

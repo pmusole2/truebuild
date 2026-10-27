@@ -19,7 +19,7 @@ import {
 import { z } from 'zod'
 
 import { BudgetError } from '../server/budget'
-import { MetaTransport, type ProviderMetrics } from './meta-transport'
+import { MetaTransport, usageMetrics, type ProviderMetrics } from './meta-transport'
 import { ClipError, normalizeClip } from '../server/clip'
 import { createDeadline, RequestStoppedError, type Deadline } from '../server/deadline'
 import { MediaValidationError, validateAndNormalizeImages, type ObservationImage } from '../server/media'
@@ -200,6 +200,7 @@ async function* run(
     onMetrics?: (metrics: ProviderMetrics) => void,
 ): AsyncGenerator<SegmentEvent> {
     let response: Response | undefined
+    const started = performance.now()
     try {
         deadline.checkpoint()
         let geometry: SamGeometry
@@ -233,7 +234,6 @@ async function* run(
             model: 'sam-3.1',
             stream: true,
             store: false,
-            max_output_tokens: 1500,
             input: [
                 { type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }, mediaPart] },
             ],
@@ -274,7 +274,19 @@ async function* run(
             })
         response = await withSamDeadline(pending, deadline)
         deadline.checkpoint()
-        const source = guardSamGrammar(readSamSse(response, deadline), geometry, deadline)
+        const source = guardSamGrammar(
+            readSamSse(response, deadline, (value) =>
+                onMetrics?.({
+                    operation: 'segment',
+                    model: 'sam-3.1',
+                    status: response!.status,
+                    latencyMs: Math.max(0, performance.now() - started),
+                    ...usageMetrics(value),
+                }),
+            ),
+            geometry,
+            deadline,
+        )
         const parsed = geometry.kind === 'image' ? parseImageStream(source) : parseVideoStream(source)
         const streamId = randomUUID()
         const seen = new Set<number>()

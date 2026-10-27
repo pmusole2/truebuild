@@ -61,6 +61,7 @@ type Summary = {
     returnedSteps?: number
     sourceCount?: number
     fullManual?: boolean
+    contextMode?: 'full' | 'compact' | 'unverified'
     stableTrackIds?: boolean
     localizationProvider?: 'spark' | 'sam'
     boxIou?: number
@@ -94,8 +95,9 @@ Gate 2 defaults to Spark still grounding in /api/checks. Supply independently re
 Optional manifest localization:"sam" uses frozen image and original short H264 MP4/MOV through /api/segments; no extracted/synthesized frames.
 Track stability means equal nonempty IDs across >=2 clip snapshots, NOT verified object identity.
 Gate 3: one check request against 8000ms using independently operator-reviewed manifest.expected; no parse request.
-The manual registry supports up to 20 pages; the check submits only 1-2 selected cited pages plus observation.
-By default selectStepSourcePageIds chooses all cited current-step pages in manual order. More than 2 required pages refuses the compact path; sourcePageIds may explicitly select a complete supported subset.
+Default checks submit all ordered manual pages (up to 20) plus observation. The API defaults to MODEL_CHECK_CONTEXT=full.
+Explicit server MODEL_CHECK_CONTEXT=compact selects 1-2 pages only when every current-step citation fits. sourcePageIds may select a complete 1-2 page subset for this operator compact path; configure the server accordingly.
+Actual context and source count come from the API response headers, not an assumed cache hit or successful real 8s bound.
 A selected-page result is unverified for the full-manual gate. Gate 1 refuses >20 parse pages before network.
 Aggregate-only results append to local docs/gate-results.md. Never commit that runtime file.
 Only --review displays bounded parsed facts locally; no media, credentials, manifests or exception details are shown.
@@ -297,6 +299,19 @@ export async function runGate(
                 await response.body?.cancel()
                 throw new Error('api_unavailable')
             }
+            if (route === '/api/checks') {
+                const mode = response.headers.get('x-truebuild-check-context')
+                const count = response.headers.get('x-truebuild-source-pages')
+                const valid =
+                    (mode === 'full' || mode === 'compact') &&
+                    count !== null &&
+                    /^\d+$/.test(count) &&
+                    Number(count) > 0 &&
+                    Number(count) <= (mode === 'compact' ? 2 : LIMITS.manualPages)
+                summary.contextMode = valid ? mode : 'unverified'
+                if (valid) summary.sourceCount = Number(count)
+                summary.fullManual = valid && mode === 'full' && Number(count) === manifest.pages.length
+            }
             return await boundedText(response)
         } finally {
             summary.latenciesMs.push(Math.round(performance.now() - start))
@@ -465,7 +480,7 @@ export async function runGate(
             reviewStatus: 'reviewed',
         })
         const selected = manifest.sourcePageIds ?? selectStepSourcePageIds(session, manifest.stepId)
-        if (!selected) throw new Error('check_source_limit_2')
+        if (!selected) throw new Error('invalid_check_sources')
         summary.sourceCount = selected.length
         summary.fullManual = selected.length === sources.length
         const checkRequestId = randomUUID()
@@ -538,7 +553,9 @@ export async function runGate(
             ? 'decision_or_latency_failed'
             : summary.fullManual
               ? 'supported_full_sources_within_8s'
-              : 'selected_sources_only_full_manual_unverified'
+              : summary.contextMode === 'unverified'
+                ? 'context_scope_unverified'
+                : 'selected_sources_only_full_manual_unverified'
     } catch (error: unknown) {
         summary.status = 'unverified'
         summary.reason =

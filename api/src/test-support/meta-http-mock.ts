@@ -9,14 +9,28 @@ export const MOCK_PROVIDER_KEY = '<synthetic>'
 export type MockScenario = 'correct' | 'reversed' | 'uncertain' | 'failed' | 'incomplete' | 'zero' | 'truncated'
 const content = z.discriminatedUnion('type', [
     z.strictObject({ type: z.literal('input_text'), text: z.string() }),
-    z.strictObject({ type: z.literal('input_image'), image_url: z.string().startsWith('data:image/jpeg;base64,') }),
-    z.strictObject({ type: z.literal('input_video'), video_url: z.string().startsWith('data:video/mp4;base64,') }),
+    z
+        .strictObject({
+            type: z.literal('input_image'),
+            image_url: z.string().optional(),
+            file_id: z.string().optional(),
+            detail: z.enum(['auto', 'low', 'high']).optional(),
+        })
+        .refine((value) => Boolean(value.image_url) !== Boolean(value.file_id)),
+    z
+        .strictObject({
+            type: z.literal('input_video'),
+            video_url: z.string().optional(),
+            file_id: z.string().optional(),
+        })
+        .refine((value) => Boolean(value.video_url) !== Boolean(value.file_id)),
 ])
 const requestSchema = z.strictObject({
     model: z.enum(['muse-spark-1.3', 'muse-spark-1.3-contributor', 'muse-wonder-1.0', 'sam-3.1']),
-    store: z.literal(false),
-    stream: z.boolean(),
-    max_output_tokens: z.number().int().min(16),
+    store: z.boolean().optional(),
+    stream: z.boolean().optional(),
+    max_output_tokens: z.number().int().min(16).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
     instructions: z.string().optional(),
     reasoning: z.strictObject({ effort: z.literal('low') }).optional(),
     input: z.tuple([
@@ -56,20 +70,66 @@ function inspectSchema(value: unknown, depth = 0): void {
 function event(value: unknown): string {
     return `data: ${JSON.stringify(value)}\n\n`
 }
-export function samMockStream(scenario: MockScenario, width = 20, height = 16): string {
-    const lane = { item_id: 'mock-message', output_index: 0, content_index: 0 }
-    if (scenario === 'failed')
-        return event({ type: 'response.failed', response: { error: { message: 'private mock error' } } })
-    // Completed empty output is a documented zero-match result, not a fabricated mask.
-    const text =
-        scenario === 'zero'
-            ? ''
-            : `<0f>7<|box;x1=0;y1=0;x2=4;y2=4;w=${width};h=${height}|><|mask;x=0;y=0;data=5,5,!!!!!(QO(0lu8?|>\n`
+function responseEnvelope(
+    model: string,
+    status: 'completed' | 'failed' | 'incomplete',
+    output: unknown[],
+    usage: unknown,
+): Record<string, unknown> {
+    return {
+        id: 'resp-842549258569146',
+        object: 'response',
+        created_at: 1793059200,
+        completed_at: status === 'completed' ? 1793059201 : null,
+        status,
+        model,
+        error: status === 'failed' ? { code: 'server_error', message: 'Synthetic provider failure' } : null,
+        incomplete_details: status === 'incomplete' ? { reason: 'max_output_tokens' } : null,
+        output,
+        usage,
+        instructions: null,
+        metadata: {},
+        temperature: 1,
+        top_p: 1,
+        tools: [],
+        tool_choice: 'auto',
+        parallel_tool_calls: false,
+        store: false,
+    }
+}
+export function samMockStream(scenario: MockScenario, width = 20, height = 16, video = false): string {
+    const lane = { item_id: 'msg-842549258569147', output_index: 0, content_index: 0 }
+    const frame = (index: number): string =>
+        `<${index}f>7<|box;x1=0;y1=0;x2=4;y2=4;w=${width};h=${height}|><|mask;x=0;y=0;data=5,5,!!!!!(QO(0lu8?|>\n`
+    const lines = scenario === 'zero' || scenario === 'failed' ? [] : video ? [frame(0), frame(1)] : [frame(0)]
+    const text = lines.join('')
+    const status = scenario === 'failed' ? 'failed' : scenario === 'incomplete' ? 'incomplete' : 'completed'
+    const response = responseEnvelope(
+        'sam-3.1',
+        status,
+        [
+            {
+                id: lane.item_id,
+                type: 'message',
+                role: 'assistant',
+                status: status === 'failed' ? 'incomplete' : status,
+                content: [{ type: 'output_text', text, annotations: [] }],
+            },
+        ],
+        {
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            ...(video ? { video_frames_processed: 2 } : { images_processed: 1 }),
+        },
+    )
+    let sequence = 0
     return (
-        event({ type: 'response.output_text.done', ...lane, text }) +
-        (scenario === 'truncated'
-            ? ''
-            : event({ type: scenario === 'incomplete' ? 'response.incomplete' : 'response.completed', response: {} }))
+        lines
+            .map((delta) => event({ type: 'response.output_text.delta', ...lane, delta, sequence_number: sequence++ }))
+            .join('') +
+        event({ type: 'response.output_text.done', ...lane, text, sequence_number: sequence++ }) +
+        (scenario === 'truncated' ? '' : event({ type: `response.${status}`, response, sequence_number: sequence }))
     )
 }
 
@@ -79,10 +139,12 @@ export async function startMetaMock(
     transport: typeof fetch
     requests: { path: string; operation: string }[]
     failures: string[]
+    wireRequests: z.infer<typeof requestSchema>[]
     close(): Promise<void>
 }> {
     const requests: { path: string; operation: string }[] = []
     const failures: string[] = []
+    const wireRequests: z.infer<typeof requestSchema>[] = []
     const server = createServer(async (incoming, outgoing): Promise<void> => {
         try {
             assert.equal(incoming.headers.authorization, `Bearer ${MOCK_PROVIDER_KEY}`)
@@ -114,16 +176,16 @@ export async function startMetaMock(
                 outgoing.setHeader('content-type', 'application/json')
                 outgoing.end(
                     JSON.stringify({
-                        id: 'file-mock',
+                        id: 'file-842549258569145',
                         object: 'file',
                         bytes: file.size,
                         filename: file.name,
                         purpose: 'user_data',
-                        created_at: 1,
-                        status: 'processed',
+                        created_at: 1793059200,
+                        status: 'uploaded',
                         ...(options.fileExpiration === 'omitted'
                             ? {}
-                            : { expires_at: options.fileExpiration === 'timestamp' ? 3601 : null }),
+                            : { expires_at: options.fileExpiration === 'timestamp' ? 1793062800 : null }),
                     }),
                 )
                 return
@@ -134,6 +196,7 @@ export async function startMetaMock(
                 return
             }
             const request = requestSchema.parse(JSON.parse(bytes.toString('utf8')))
+            wireRequests.push(request)
             assert.match(incoming.headers['content-type'] ?? '', /^application\/json/u)
             const parts = request.input[0].content
             const scenario = options.scenario ?? 'uncertain'
@@ -148,10 +211,12 @@ export async function startMetaMock(
                 outgoing.setHeader('content-type', 'text/event-stream')
                 const media = parts[1]
                 const dimensions =
-                    media?.type === 'input_image'
+                    media?.type === 'input_image' && media.image_url?.startsWith('data:')
                         ? await sharp(Buffer.from(media.image_url.split(',')[1]!, 'base64')).metadata()
                         : { width: 20, height: 16 }
-                outgoing.end(samMockStream(scenario, dimensions.width, dimensions.height))
+                outgoing.end(
+                    samMockStream(scenario, dimensions.width, dimensions.height, media?.type === 'input_video'),
+                )
                 return
             }
             assert.equal(request.stream, false)
@@ -174,12 +239,12 @@ export async function startMetaMock(
             assert.equal(dynamic.operation, operation)
             if (operation !== 'parse') {
                 assert.equal(parts.at(-1)?.type, 'input_image')
-                assert(parts.filter((part) => part.type === 'input_image').length <= 3)
+                assert(parts.filter((part) => part.type === 'input_image').length <= 21)
             }
             const pages = z.array(z.object({ pageId: z.string() })).parse(stable.sourcePages)
             assert.equal(request.text.format.schema.type, 'object')
             assert(!('anyOf' in request.text.format.schema))
-            assert(pages.length >= 1 && pages.length <= (operation === 'parse' ? 20 : 2))
+            assert(pages.length >= 1 && pages.length <= 20)
             assert.equal(parts.length, pages.length + (operation === 'parse' ? 2 : 3))
             pages.forEach((_page, index) => assert.equal(parts[index + 1]?.type, 'input_image'))
             assert.equal(parts[pages.length + 1]?.type, 'input_text')
@@ -249,10 +314,11 @@ export async function startMetaMock(
             outgoing.setHeader('content-type', 'application/json')
             outgoing.end(
                 JSON.stringify({
-                    status: 'completed',
+                    ...responseEnvelope(request.model, 'completed', [], {}),
                     output: [
                         { type: 'reasoning', id: 'mock-reasoning', summary: [] },
                         {
+                            id: 'msg-842549258569147',
                             type: 'message',
                             role: 'assistant',
                             status: 'completed',
@@ -289,6 +355,7 @@ export async function startMetaMock(
         transport,
         requests,
         failures,
+        wireRequests,
         close: async (): Promise<void> => {
             server.closeAllConnections()
             await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))

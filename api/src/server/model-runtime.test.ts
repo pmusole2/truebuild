@@ -25,6 +25,7 @@ describe('provider runtime configuration', (): void => {
     it('fails closed for invalid mode, counter, or deadline configuration', (): void => {
         for (const env of [
             { PROVIDER_MODE: 'unknown' },
+            { MODEL_CHECK_CONTEXT: 'automatic' },
             { MODEL_CALL_LIMIT: '0' },
             { MODEL_CALL_LIMIT: '2.5' },
             { CHECK_TIMEOUT_MS: '0' },

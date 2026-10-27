@@ -135,7 +135,7 @@ describe('actual image normalization', (): void => {
 
         for (const images of [
             [],
-            [input, input, input, input],
+            Array.from({ length: 22 }, () => input),
             [{ ...input, bytes: new Uint8Array(4_194_305) }],
             [0, 1, 2].map(() => ({ ...input, bytes: new Uint8Array(3_000_000) })),
             [{ ...input, width: 6_001, height: 4_000 }],

@@ -308,7 +308,7 @@ describe('inactive direct Meta transport', (): void => {
             })
             const body = JSON.stringify(transport.bodies[0])
 
-            expect(body).not.toContain('step-2')
+            expect(body).toContain('step-2')
             expect(body).not.toContain('previous_response_id')
             expect(body).not.toContain('tools')
             expect(body).not.toContain('file_id')

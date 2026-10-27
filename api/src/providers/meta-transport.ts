@@ -10,17 +10,24 @@ export interface ProviderMetrics {
     cachedTokens?: number
     outputTokens?: number
     reasoningTokens?: number
+    imagesProcessed?: number
+    videoFramesProcessed?: number
 }
 
 export function usageMetrics(
     value: unknown,
-): Pick<ProviderMetrics, 'inputTokens' | 'cachedTokens' | 'outputTokens' | 'reasoningTokens'> {
+): Pick<
+    ProviderMetrics,
+    'inputTokens' | 'cachedTokens' | 'outputTokens' | 'reasoningTokens' | 'imagesProcessed' | 'videoFramesProcessed'
+> {
     const object = (v: unknown): Record<string, unknown> =>
         typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {}
     const usage = object(object(value).usage)
     const number = (v: unknown): number | undefined =>
         typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined
     return {
+        imagesProcessed: number(usage.images_processed),
+        videoFramesProcessed: number(usage.video_frames_processed),
         inputTokens: number(usage.input_tokens),
         outputTokens: number(usage.output_tokens),
         cachedTokens: number(object(usage.input_tokens_details).cached_tokens),

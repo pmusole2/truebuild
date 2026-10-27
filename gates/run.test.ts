@@ -88,6 +88,9 @@ describe('future operator gates with synthetic data only', () => {
         manifest.expected.steps[0]!.title = 'Operator reviewed wording'
         manifest.expected.steps[0]!.stepId = 'operator-step'
         manifest.stepId = 'operator-step'
+        for (let i = 1; i < 3; i++)
+            manifest.pages.push({ ...manifest.pages[0]!, pageId: `page-${i}`, assetId: `asset-${i}` })
+        manifest.expected.steps[0]!.sourceRefs.push({ pageId: 'page-2', region: null })
         const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
             expect(String(url)).toBe('http://localhost:3001/api/checks')
             expect(init?.headers).toEqual({ 'x-truebuild-key': 'synthetic-shared' })
@@ -100,15 +103,20 @@ describe('future operator gates with synthetic data only', () => {
             expect(metadata.session.reviewedSteps[0].title).toBe('Operator reviewed wording')
             expect(metadata.session.reviewedSteps[0].correction.reviewed).toBe(true)
             expect(form.has('observation')).toBe(true)
+            expect(form.has('source-2')).toBe(true)
+            expect(metadata.sourcePageIds).toEqual(['demo-page-1', 'page-1', 'page-2'])
             const source = new Uint8Array(await (form.get('source-0') as File).arrayBuffer())
             expect(metadata.session.pages[0].contentHash).toBe(createHash('sha256').update(source).digest('hex'))
-            return Response.json({
-                status: 'ok',
-                mode: 'model',
-                requestId: metadata.requestId,
-                binding: metadata.binding,
-                value: createHeroResponse('reversed'),
-            })
+            return Response.json(
+                {
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: metadata.requestId,
+                    binding: metadata.binding,
+                    value: createHeroResponse('reversed'),
+                },
+                { headers: { 'x-truebuild-check-context': 'full', 'x-truebuild-source-pages': '3' } },
+            )
         })
         const result = await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic-shared', fetchMock)
         expect(result).toMatchObject({ status: 'pass', requests: 1, fullManual: true })
@@ -134,13 +142,16 @@ describe('future operator gates with synthetic data only', () => {
                 expect(metadata.session.pages).toHaveLength(5)
                 expect((init?.body as FormData).has('source-1')).toBe(false)
                 now += slow ? 8001 : 10
-                return Response.json({
-                    status: 'ok',
-                    mode: 'model',
-                    requestId: metadata.requestId,
-                    binding: metadata.binding,
-                    value: createHeroResponse('reversed'),
-                })
+                return Response.json(
+                    {
+                        status: 'ok',
+                        mode: 'model',
+                        requestId: metadata.requestId,
+                        binding: metadata.binding,
+                        value: createHeroResponse('reversed'),
+                    },
+                    { headers: { 'x-truebuild-check-context': 'compact', 'x-truebuild-source-pages': '1' } },
+                )
             })
             expect(
                 await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock),
@@ -325,7 +336,7 @@ describe('future operator gates with synthetic data only', () => {
         },
     )
 
-    it('reports check>=3 and parse>=21 source limits without dispatch', async () => {
+    it('reports explicit compact>=3 and parse>=21 source limits without dispatch', async () => {
         const { cwd, manifest } = await setup()
         const fetchMock = vi.fn<typeof fetch>()
         manifest.pages = Array.from({ length: 3 }, (_, i) => ({
@@ -455,3 +466,39 @@ it('Gate2 requires independent box truth before any provider dispatch', async ()
     })
     expect(transport).not.toHaveBeenCalled()
 })
+
+it.each(['compact', 'unverified'] as const)(
+    'does not label full-manual acceptance when server scope is %s',
+    async (scope) => {
+        const { cwd, manifest } = await setup()
+        for (let i = 1; i < 3; i++)
+            manifest.pages.push({ ...manifest.pages[0]!, pageId: `page-${i}`, assetId: `asset-${i}` })
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+            expect(metadata.sourcePageIds).toHaveLength(3)
+            return Response.json(
+                {
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: metadata.requestId,
+                    binding: metadata.binding,
+                    value: createHeroResponse('reversed'),
+                },
+                {
+                    headers:
+                        scope === 'compact'
+                            ? { 'x-truebuild-check-context': 'compact', 'x-truebuild-source-pages': '1' }
+                            : {},
+                },
+            )
+        })
+        expect(await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).toMatchObject(
+            {
+                status: 'unverified',
+                fullManual: false,
+                contextMode: scope,
+                requests: 1,
+            },
+        )
+    },
+)

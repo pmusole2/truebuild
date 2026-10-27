@@ -11,6 +11,9 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
+// Shared client/server multipart metadata ceiling; independent of the aggregate image budget.
+export const MODEL_METADATA_MAX_BYTES = 524_288
+
 const requestId = z.string().trim().min(1).max(128)
 const imageMetadata = z
     .strictObject({
@@ -40,7 +43,7 @@ const checkFields = {
     ...common,
     binding: captureBindingSchema,
     session: manualSessionSchema,
-    sourcePageIds: z.array(requestId).min(1).max(2),
+    sourcePageIds: z.array(requestId).min(1).max(LIMITS.manualPages),
     observation: imageMetadata,
 }
 const baseCheck = z.strictObject(checkFields)
@@ -71,15 +74,30 @@ function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
     ]
 }
 
-/** Compact check/ask fallback: preserve manual page order and cover every cited current-step fact.
- * Null means the step cannot safely fit this bounded path; do not silently drop evidence.
- */
+/** Default full-manual context in manual order; unresolved current-step evidence fails closed. */
 export function selectStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
     const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
     if (!step || session.reviewStatus !== 'reviewed') return null
+    const pages = session.pages.map((page) => page.pageId)
+    const ids = new Set(pages)
+    if (
+        pages.length === 0 ||
+        pages.length > LIMITS.manualPages ||
+        ids.size !== pages.length ||
+        checkCitations(step, session).some((ref) => !ids.has(ref.pageId))
+    )
+        return null
+    return pages
+}
+
+/** Explicit compact fallback only. Never drop a cited fact to fit the two-page limit. */
+export function selectCompactStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
+    const pages = selectStepSourcePageIds(session, stepId)
+    const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
+    if (!pages || !step) return null
     const required = new Set(checkCitations(step, session).map((ref) => ref.pageId))
-    const selected = session.pages.filter((page) => required.has(page.pageId)).map((page) => page.pageId)
-    return selected.length > 0 && selected.length <= 2 && selected.length === required.size ? selected : null
+    const selected = pages.filter((id) => required.has(id))
+    return selected.length > 0 && selected.length <= 2 ? selected : null
 }
 
 function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {

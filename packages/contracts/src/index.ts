@@ -4,7 +4,7 @@ export const LIMITS = {
     manualPages: 20,
     imageBytes: 4_194_304,
     imagePixels: 24_000_000,
-    requestImages: 3,
+    requestImages: 21,
     requestBytes: 8_388_608,
 } as const
 
@@ -312,6 +312,9 @@ export const checkResultSchema = z
         }
         if (result.orientationAssessment === 'uncertain' && result.decision !== 'cannot_verify') {
             ctx.addIssue({ code: 'custom', message: 'Uncertain orientation cannot establish a decision' })
+        }
+        if (result.decision === 'refuse' && result.sourceRefs.length === 0) {
+            ctx.addIssue({ code: 'custom', message: 'Refusal requires an expected diagram citation' })
         }
         if (result.decision === 'pass' && (result.sourceRefs.length === 0 || result.missingEvidence.length !== 0)) {
             ctx.addIssue({ code: 'custom', message: 'Pass requires source evidence without missing evidence' })

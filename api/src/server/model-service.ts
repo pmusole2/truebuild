@@ -16,6 +16,7 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    selectCompactStepSourcePageIds,
     modelCheckMetadataSchema,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
@@ -29,6 +30,7 @@ import type { z } from 'zod'
 
 import {
     MetaProviderError,
+    type CheckContextMode,
     type CheckStepInput,
     type MetaProvider,
     type ParseManualInput,
@@ -286,6 +288,7 @@ export function createModelHandlers(options: {
     samProvider: SamProvider | null
     auth: SharedKeyAuth
     counter: ModelCallCounter
+    checkContext?: CheckContextMode
     checkTimeoutMs?: number
     allowedOrigins?: readonly string[]
 }): { parse: Handler; check: Handler; question: Handler; segment: Handler; options: typeof modelOptions } {
@@ -302,6 +305,7 @@ export function createModelHandlers(options: {
         prepare: (metadata: M, files: Map<string, File>, deadline: Deadline) => Promise<I>,
         dispatch: ((input: I, signal: AbortSignal) => Promise<T>) | null,
         validate: (value: T, metadata: M) => boolean,
+        scopeHeaders?: (metadata: M) => Record<string, string>,
     ): Handler {
         return async (request): Promise<Response> => {
             let execution: Execution | undefined
@@ -338,7 +342,7 @@ export function createModelHandlers(options: {
                         binding: metadata.binding,
                         value: value.data,
                     },
-                    { headers: { 'cache-control': 'no-store' } },
+                    { headers: { 'cache-control': 'no-store', ...scopeHeaders?.(metadata) } },
                 )
                 execution.check()
                 return corsResponse(request, response, allowedOrigins)
@@ -379,6 +383,14 @@ export function createModelHandlers(options: {
                 reviewStatus: 'unreviewed',
             }).success,
     )
+    const scopeHeaders = (metadata: ModelCheckMetadata): Record<string, string> => {
+        const mode = options.checkContext ?? 'full'
+        const selected =
+            mode === 'compact'
+                ? selectCompactStepSourcePageIds(metadata.session, metadata.binding.stepId)
+                : metadata.session.pages.map((page) => page.pageId)
+        return { 'x-truebuild-check-context': mode, 'x-truebuild-source-pages': String(selected?.length ?? 0) }
+    }
     const check = jsonHandler(
         modelCheckMetadataSchema,
         checkResultSchema,
@@ -386,6 +398,7 @@ export function createModelHandlers(options: {
         checkFiles,
         provider ? (input, signal): ReturnType<MetaProvider['checkStep']> => provider.checkStep(input, signal) : null,
         (value, metadata): boolean => value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
+        scopeHeaders,
     )
     const question = jsonHandler(
         modelQuestionMetadataSchema,
@@ -404,6 +417,7 @@ export function createModelHandlers(options: {
             ? (input, signal): ReturnType<MetaProvider['answerQuestion']> => provider.answerQuestion(input, signal)
             : null,
         (value, metadata): boolean => value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
+        scopeHeaders,
     )
 
     const segment: Handler = async (request): Promise<Response> => {

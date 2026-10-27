@@ -3,7 +3,7 @@ import { settleMetaResponse } from '../src/providers/meta-transport'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
-import { sparkModel, readMetaResponse } from '../src/providers/meta-provider'
+import { sparkModel, readMetaResponse, checkContextMode } from '../src/providers/meta-provider'
 import { createDeadline } from '../src/server/deadline'
 
 const models = z.object({ data: z.array(z.object({ id: z.string().min(1).max(128) })).max(10_000) })
@@ -38,6 +38,7 @@ export async function doctor(
     const deadline = createDeadline(15_000)
     try {
         const spark = sparkModel(environment.MODEL_SPARK)
+        const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
         if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model')
         // Exactly one GET; there is deliberately no retry, inference, file or token-count operation.
         response = await settleMetaResponse(
@@ -64,6 +65,7 @@ export async function doctor(
                 kind: 'models',
                 spark,
                 sam: 'sam-3.1',
+                checkContext,
                 available: valid ? 'listed' : 'required_model_not_listed',
                 inferenceVerified: false,
             }),

@@ -56,6 +56,7 @@ try {
             providerMode: 'fixture',
             sparkModel: 'muse-spark-1.3',
             samModel: 'sam-3.1',
+            checkContext: 'full',
             fixture: 'available',
             live: 'unconfigured',
             label: 'Demo data — simulated results',

@@ -26,6 +26,7 @@ function health(context: Context<ApiEnv>): Response {
         label: runtime.mode === 'fixture' ? DEMO_LABEL : 'Meta model mode',
         sparkModel: runtime.sparkModel,
         samModel: runtime.samModel,
+        checkContext: runtime.checkContext,
     })
 }
 
@@ -48,6 +49,7 @@ const routes = new Hono<ApiEnv>()
             providerMode: context.get('runtime').mode,
             sparkModel: context.get('runtime').sparkModel,
             samModel: context.get('runtime').samModel,
+            checkContext: context.get('runtime').checkContext,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
         }),
     )
