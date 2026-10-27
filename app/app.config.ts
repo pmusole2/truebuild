@@ -29,7 +29,7 @@ const config: ExpoConfig = {
                 cameraPermission: 'Photograph your manual pages and assembly steps.',
                 microphonePermission: false,
                 photosPermission:
-                    'Choose manual pages from your photo library. Pages are kept on this device until you choose to send relevant pages for extraction.',
+                    'Choose manual pages or assembly photos from your photo library. Selected images stay on this device until you choose to send them for manual extraction, a step check, or a question.',
             },
         ],
     ],
