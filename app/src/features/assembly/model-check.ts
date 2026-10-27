@@ -1,3 +1,4 @@
+import { selectedStepSourcePageIds } from './source-selection'
 import type {
     ApiResult,
     CaptureBinding,
@@ -46,7 +47,7 @@ export function citedPageIds(session: ManualSession, step: ManualStep): string[]
 }
 
 export type ModelCheckRequest = {
-    readonly client: ModelApiClient
+    readonly client: Pick<ModelApiClient, 'check' | 'questions'>
     readonly requestId: string
     readonly binding: CaptureBinding
     readonly session: ManualSession
@@ -79,7 +80,11 @@ export async function askModelQuestion(request: ModelQuestionRequest): Promise<A
         request.signal,
         MODEL_CHECK_TIMEOUT_MS,
         async (guard): Promise<ApiResult<QuestionResult>> => {
-            const pageIds = citedPageIds(request.session, request.step)
+            const pageIds = selectedStepSourcePageIds(
+                request.session,
+                request.step,
+                citedPageIds(request.session, request.step),
+            )
             guard.checkpoint()
 
             if (pageIds.length === 0 || pageIds.length > 2) {
@@ -152,7 +157,11 @@ export const runModelCheck: RunModelCheck = async (request): Promise<ApiResult<C
         request.signal,
         MODEL_CHECK_TIMEOUT_MS,
         async (guard): Promise<ApiResult<CheckResult>> => {
-            const pageIds = citedPageIds(request.session, request.step)
+            const pageIds = selectedStepSourcePageIds(
+                request.session,
+                request.step,
+                citedPageIds(request.session, request.step),
+            )
             guard.checkpoint()
 
             if (pageIds.length === 0 || pageIds.length > 2) {
