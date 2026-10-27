@@ -1,17 +1,21 @@
 import { LIMITS, type ManualPage } from '@truebuild/contracts'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
-import { readCappedResponse } from './capped-read'
 import { MediaRejectedError } from './media-errors'
 import { inspectSourceImage } from './image-header'
+import { readImage } from './read-image'
+import {
+    normalizedSize,
+    NORMALIZED_MAX_EDGE,
+    NORMALIZED_TARGET_BYTES,
+    RAW_IMAGE_MAX_BYTES,
+} from './normalization-policy'
 
-/** Fields a picker or camera result provides. `fileSize` is advisory and may be absent. */
 export type SourceImageAsset = {
     readonly uri: string
     readonly width: number
     readonly height: number
     readonly fileSize?: number
 }
-
 export type NormalizedImage = {
     readonly bytes: Uint8Array<ArrayBuffer>
     readonly mimeType: ManualPage['mimeType']
@@ -20,26 +24,54 @@ export type NormalizedImage = {
     readonly uri: string
 }
 
-const NORMALIZED_MIME_TYPE = 'image/jpeg' as const
-const JPEG_QUALITY = 0.92
-
-/**
- * Original JPEG/PNG/WebP bytes are read with a cap, header-checked, then re-rendered to a normalized JPEG (which also
- * applies EXIF orientation). Unsupported originals are rejected, never converted. Picker metadata is advisory: missing
- * or zero values mean unknown, so the byte-level checks still run.
+/** Decode through Expo's EXIF-aware loader, then resize without cropping and encode JPEG, stripping source metadata.
+ * Full-resolution phone photos may exceed upload ceilings: those ceilings apply only AFTER normalization.
+ * HEIC supported by the native loader is converted locally; only the final JPEG goes to the backend.
  */
 export async function normalizeImage(asset: SourceImageAsset): Promise<NormalizedImage> {
-    if (asset.fileSize !== undefined && asset.fileSize > LIMITS.imageBytes) {
+    if (asset.fileSize !== undefined && asset.fileSize > RAW_IMAGE_MAX_BYTES) {
         throw new MediaRejectedError('oversize')
     }
-    if (asset.width > 0 && asset.height > 0 && asset.width * asset.height > LIMITS.imagePixels) {
+    try {
+        normalizedSize(asset.width, asset.height)
+    } catch {
         throw new MediaRejectedError('pixels')
     }
-    const source = await readCappedResponse(await fetch(asset.uri), LIMITS.imageBytes)
-    inspectSourceImage(source)
-
-    const rendered = await ImageManipulator.manipulate(asset.uri).renderAsync()
-    const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: JPEG_QUALITY })
-    const bytes = await readCappedResponse(await fetch(saved.uri), LIMITS.imageBytes)
-    return { bytes, mimeType: NORMALIZED_MIME_TYPE, width: saved.width, height: saved.height, uri: saved.uri }
+    // Raw input has its own read cap. SDK 58 downsamples during EXIF-aware decode, before allocating full-resolution pixels.
+    await readImage(asset.uri, RAW_IMAGE_MAX_BYTES)
+    const context = ImageManipulator.manipulate(asset.uri, {
+        maxWidth: NORMALIZED_MAX_EDGE,
+        maxHeight: NORMALIZED_MAX_EDGE,
+    })
+    let rendered: Awaited<ReturnType<typeof context.renderAsync>> | undefined
+    try {
+        rendered = await context.renderAsync()
+        for (const quality of [0.8, 0.6, 0.4]) {
+            const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: quality })
+            let bytes: Uint8Array<ArrayBuffer>
+            try {
+                bytes = await readImage(saved.uri, LIMITS.imageBytes)
+            } catch (error: unknown) {
+                if (error instanceof MediaRejectedError && error.failure === 'oversize') {
+                    continue
+                }
+                throw error
+            }
+            const info = inspectSourceImage(bytes)
+            if (bytes.length <= NORMALIZED_TARGET_BYTES) {
+                return { bytes, mimeType: 'image/jpeg', width: info.width, height: info.height, uri: saved.uri }
+            }
+            const reduced = ImageManipulator.manipulate(saved.uri).resize({
+                width: Math.max(1, Math.round(saved.width * 0.8)),
+            })
+            const next = await reduced.renderAsync()
+            reduced.release?.()
+            rendered.release?.()
+            rendered = next
+        }
+        throw new MediaRejectedError('oversize')
+    } finally {
+        rendered?.release?.()
+        context.release?.()
+    }
 }
