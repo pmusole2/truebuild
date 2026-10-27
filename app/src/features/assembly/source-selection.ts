@@ -15,7 +15,7 @@ export function selectedStepSourcePageIds(
         return allCitedIds.length >= 1 && allCitedIds.length <= 2 ? [...allCitedIds] : []
     }
     try {
-        const result: unknown = select(session, step)
+        const result: unknown = select(session, step.stepId)
         if (
             !Array.isArray(result) ||
             result.length > 2 ||
