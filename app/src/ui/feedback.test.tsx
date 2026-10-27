@@ -61,7 +61,7 @@ describe('haptic feedback', () => {
     it('the default adapter is silent and a press still reaches the action', async () => {
         const onPress = jest.fn()
         await render(<AppButton label="Take photo" onPress={onPress} variant="accent" />)
-        fireEvent.press(screen.getByRole('button', { name: 'Take photo' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Take photo' }))
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
@@ -74,7 +74,7 @@ describe('haptic feedback', () => {
                 <AppButton label="Confirm facts" onPress={onPress} variant="primary" />
             </FeedbackProvider>,
         )
-        fireEvent.press(screen.getByRole('button', { name: 'Confirm facts' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Confirm facts' }))
         expect(trigger).toHaveBeenCalledWith('selection')
         expect(trigger).toHaveBeenCalledTimes(1)
         expect(onPress).toHaveBeenCalledTimes(1)
@@ -92,7 +92,7 @@ describe('haptic feedback', () => {
                 <AppButton label="Send question" onPress={onPress} variant="secondary" />
             </FeedbackProvider>,
         )
-        fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 })

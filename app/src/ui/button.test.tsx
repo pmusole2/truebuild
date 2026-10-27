@@ -9,7 +9,7 @@ describe('AppButton', () => {
         await render(<AppButton label="Find part in photo" hint="Searches the frozen photo" onPress={onPress} />)
         const button = screen.getByRole('button', { name: 'Find part in photo' })
         expect(button.props.accessibilityHint).toBe('Searches the frozen photo')
-        fireEvent.press(button)
+        await fireEvent.press(button)
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
@@ -18,7 +18,7 @@ describe('AppButton', () => {
         await render(<AppButton label="Confirm expected facts" disabled onPress={onPress} />)
         const button = screen.getByRole('button', { name: 'Confirm expected facts' })
         expect(button.props.accessibilityState).toMatchObject({ disabled: true })
-        fireEvent.press(button)
+        await fireEvent.press(button)
         expect(onPress).not.toHaveBeenCalled()
     })
 
@@ -28,7 +28,7 @@ describe('AppButton', () => {
         const button = screen.getByRole('button', { name: 'Reading photo' })
         expect(button.props.accessibilityState).toMatchObject({ disabled: true, busy: true })
         expect(screen.getByText('Reading photo')).toBeTruthy()
-        fireEvent.press(button)
+        await fireEvent.press(button)
         expect(onPress).not.toHaveBeenCalled()
     })
 
@@ -62,7 +62,7 @@ describe('IconButton', () => {
     it('requires its label as the accessible name because it has no visible text', async () => {
         const onPress = jest.fn()
         await render(<IconButton label="Close answer" icon="close" onPress={onPress} />)
-        fireEvent.press(screen.getByRole('button', { name: 'Close answer' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Close answer' }))
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
@@ -71,7 +71,7 @@ describe('IconButton', () => {
         await render(<IconButton label="Previous step" icon="chevronLeft" disabled onPress={onPress} />)
         const button = screen.getByRole('button', { name: 'Previous step' })
         expect(button).toHaveStyle({ width: touchTarget, minHeight: touchTarget })
-        fireEvent.press(button)
+        await fireEvent.press(button)
         expect(onPress).not.toHaveBeenCalled()
     })
 })

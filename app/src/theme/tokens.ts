@@ -110,4 +110,5 @@ export const motion = {
     quick: 150,
     standard: 240,
     sheet: 320,
+    pulse: 900,
 } as const
