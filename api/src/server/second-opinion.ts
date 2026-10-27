@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { CheckResult, StandardModel } from '@truebuild/contracts'
-import type { CheckStepInput } from '../providers/meta-provider'
+import { stepRefs, type CheckStepInput } from '../providers/meta-provider'
 
 /** Hash all admitted intent and raw bytes, retaining no manual, photo, or credential. */
 function fingerprint(input: CheckStepInput): string {
@@ -85,7 +85,9 @@ export function reconcileSecondOpinion(
     const grounded =
         secondary.sourceRefs.length > 0 &&
         secondary.sourceRefs.every((ref) => input.sourceImages.some((source) => source.page.pageId === ref.pageId)) &&
-        secondary.sourceRefs.some((ref) => step?.sourceRefs.some((expected) => sameRef(ref, expected)))
+        secondary.sourceRefs.some(
+            (ref) => step !== undefined && stepRefs(step).some((expected) => sameRef(ref, expected)),
+        )
     const refusal =
         secondary.decision === 'refuse' &&
         secondary.model === model &&

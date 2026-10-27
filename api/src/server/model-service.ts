@@ -470,7 +470,7 @@ export function createModelHandlers(options: {
         let metadata: ModelSecondOpinionMetadata | undefined
         let primary: CheckResult | null = null
         const model = options.secondOpinionModel
-        const success = (value: CheckResult): Response => {
+        const recordOutcome = (value: CheckResult): void => {
             console.info(
                 JSON.stringify({
                     event: 'second_opinion_outcome',
@@ -486,6 +486,8 @@ export function createModelHandlers(options: {
                     dispatched: execution?.context.dispatched ?? false,
                 }),
             )
+        }
+        const success = (value: CheckResult): Response => {
             return corsResponse(
                 request,
                 Response.json(
@@ -532,10 +534,16 @@ export function createModelHandlers(options: {
             active.check()
             const response = success(result)
             active.check()
+            recordOutcome(result)
             return response
         } catch (error) {
             // Once consumed, failure never retries or replaces the original uncertain verdict.
-            if (primary && model && !request.signal.aborted) return success(unavailableSecondOpinion(primary, model))
+            if (primary && model && !request.signal.aborted) {
+                const retained = unavailableSecondOpinion(primary, model)
+                const response = success(retained)
+                recordOutcome(retained)
+                return response
+            }
             const failure = errorResult(error, execution)
             return corsResponse(
                 request,

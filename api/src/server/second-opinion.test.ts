@@ -106,4 +106,26 @@ describe('bounded one-use second-opinion tickets', () => {
             secondOpinion: { status: 'completed' },
         })
     })
+    it.each(['orientation', 'visible-check'] as const)('accepts a refusal grounded only in a %s citation', (kind) => {
+        const checkInput = input()
+        const step = checkInput.session.reviewedSteps[0]!
+        const ref = { pageId: 'demo-page-1', region: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } }
+        if (kind === 'orientation' && step.orientation.state === 'known') step.orientation.sourceRefs = [ref]
+        else
+            step.visibleChecks[0]!.description = {
+                state: 'known',
+                value: 'Synthetic visible feature',
+                sourceRefs: [ref],
+            }
+        const secondary: CheckResult = {
+            decision: 'refuse',
+            orientationAssessment: 'reversed',
+            model: 'muse-wonder-1.0',
+            reason: 'Synthetic grounded mismatch',
+            sourceRefs: [ref],
+            observedRegion: ref.region,
+            missingEvidence: [],
+        }
+        expect(reconcileSecondOpinion(primary, secondary, 'muse-wonder-1.0', checkInput).decision).toBe('refuse')
+    })
 })

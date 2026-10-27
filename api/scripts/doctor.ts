@@ -26,6 +26,7 @@ const PRICING = {
     samVideoMinimumFrames: 50,
     parseOutputTokenCap: 24000,
     checkOutputTokenCap: 1500,
+    wonderSecondOpinionOutputTokenCap: 16000,
     callLimitIsNotDollarBudget: true,
 }
 

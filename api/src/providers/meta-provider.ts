@@ -161,7 +161,7 @@ function factRefs<T>(fact: Fact<T>): SourceRef[] {
     return fact.state === 'known' ? fact.sourceRefs : []
 }
 
-function stepRefs(step: ManualStep): SourceRef[] {
+export function stepRefs(step: ManualStep): SourceRef[] {
     return [
         ...step.sourceRefs,
         ...step.parts.flatMap((part): SourceRef[] => factRefs(part.quantity)),
@@ -513,7 +513,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             model,
             store: false,
             stream: false,
-            max_output_tokens: operation === 'parse' ? 24000 : 1500,
+            // High reasoning shares the output budget with the JSON; this is an app cap, not a measured need.
+            max_output_tokens: operation === 'parse' ? 24000 : secondary && model === 'muse-wonder-1.0' ? 16000 : 1500,
             reasoning: { effort: model === 'muse-wonder-1.0' ? 'high' : 'low' },
             instructions: INSTRUCTIONS,
             input: [{ type: 'message', role: 'user', content }],

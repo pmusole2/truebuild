@@ -835,6 +835,54 @@ describe('separate authenticated second opinion', () => {
             log.mockRestore()
         }
     })
+    it('logs only the retained outcome when response construction crosses the secondary deadline', async () => {
+        const state = await setup()
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(3),
+            samProvider: null,
+            secondOpinionModel: 'muse-wonder-1.0',
+            provider: {
+                ...provider(async () => uncertain),
+                secondOpinion: async () => ({
+                    ...checked,
+                    decision: 'refuse',
+                    orientationAssessment: 'reversed',
+                    observedRegion: { x: 0, y: 0, width: 1, height: 1 },
+                    model: 'muse-wonder-1.0',
+                }),
+            },
+        })
+        const primary = await (await handlers.check(request(state))).json()
+        let now = performance.now()
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const build = Response.json.bind(Response)
+        let advance = true
+        const json = vi.spyOn(Response, 'json').mockImplementation((data, init) => {
+            const response = build(data, init)
+            if (advance) {
+                advance = false
+                now += 60_001
+            }
+            return response
+        })
+        try {
+            const result = await (
+                await handlers.secondOpinion(secondaryRequest(state, primary.value.secondOpinion.token))
+            ).json()
+            expect(result.value).toMatchObject({ decision: 'cannot_verify', secondOpinion: { status: 'unavailable' } })
+            expect(log).toHaveBeenCalledTimes(1)
+            expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({
+                outcome: 'unavailable_retained',
+                resultModel: 'muse-spark-1.3',
+            })
+        } finally {
+            json.mockRestore()
+            log.mockRestore()
+            clock.mockRestore()
+        }
+    })
     it('has a separate 60s deadline and never publishes a ticket from cancelled primary completion', async () => {
         const state = await setup()
         let now = performance.now()

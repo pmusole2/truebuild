@@ -231,7 +231,10 @@ export async function startMetaMock(
             inspectSchema(request.text.format.schema)
             const operation = request.text.format.name.replace('truebuild_', '')
             assert(['parse', 'check', 'question'].includes(operation))
-            assert.equal(request.max_output_tokens, operation === 'parse' ? 24000 : 1500)
+            assert.equal(
+                request.max_output_tokens,
+                operation === 'parse' ? 24000 : request.model === 'muse-wonder-1.0' ? 16000 : 1500,
+            )
             assert.equal(parts[0]?.type, 'input_text')
             const textParts = parts.filter((part) => part.type === 'input_text')
             assert.equal(textParts.length, 2)

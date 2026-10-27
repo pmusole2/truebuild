@@ -900,6 +900,11 @@ describe('server-only task routing and provenance', () => {
                 code: 'provider_error',
             })
             expect(transport).toHaveBeenCalledTimes(1)
+            expect(JSON.parse(String(transport.mock.calls[0]![1]?.body))).toMatchObject({
+                model: 'muse-wonder-1.0',
+                reasoning: { effort: 'high' },
+                max_output_tokens: 16000,
+            })
             expect(metrics).toHaveBeenCalledWith(
                 expect.objectContaining({ operation: 'second_opinion', model: 'muse-wonder-1.0', status }),
             )
