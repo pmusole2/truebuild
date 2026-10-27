@@ -330,6 +330,42 @@ describe('no automatic fallback: a Wonder failure stays a Wonder failure', () =>
 })
 
 describe('plan quality and conclusion', () => {
+    it.each(['step', 'quality'] as const)(
+        'retains paid parse evidence after %s review is interrupted',
+        async (phase) => {
+            const { manifest, cwd } = await setup()
+            const { factory } = fakeFactory()
+            const report = await runAbGate({
+                manifest,
+                cwd,
+                apiKey: '<synthetic-key>',
+                factory,
+                reviewer: async () => {
+                    if (phase === 'step') throw new Error('synthetic closed review')
+                    return 'correct'
+                },
+                qualityReviewer: async () => {
+                    if (phase === 'quality') throw new Error('synthetic closed review')
+                    return { rating: 5, issues: [] }
+                },
+                random: () => false,
+            })
+            expect(report).toMatchObject({
+                status: 'unverified',
+                conclusion: 'unverified',
+                requests: 2,
+                requestsStatus: 'exact',
+            })
+            expect(report.models.spark).toMatchObject({
+                status: 'completed',
+                costStatus: 'priced',
+                reason: 'operator_review_incomplete',
+            })
+            expect(report.models.wonder).toMatchObject({ status: 'completed', costStatus: 'priced' })
+            expect(JSON.stringify(report)).not.toContain('synthetic closed review')
+        },
+    )
+
     it('keeps quality unverified and declares no conclusion without operator review', async () => {
         const { cwd } = await setup()
         const { factory } = fakeFactory()

@@ -55,17 +55,45 @@ after restart; take a fresh photo before checking or asking.
 - Default models: `muse-spark-1.3` for parse and check/ask, and `sam-3.1` for segmentation.
   `MODEL_SPARK` accepts only `muse-spark-1.3`; contributor IDs are rejected because submitted
   content may train Meta models. `muse-wonder-1.0` is a preview, more expensive Standard
-  model: an explicit parse-only choice, never a default, a check/ask model or a fallback.
+  model: an explicit parse or separate follow-up choice, never a default or live check/ask model.
+- `MODEL_PARSE` defaults to `muse-spark-1.3`; set `muse-wonder-1.0` explicitly to test Wonder.
+  `MODEL_SECOND_OPINION` is unset/empty by default (off). Set it explicitly to
+  `muse-wonder-1.0` or `muse-spark-1.3` to enable one follow-up after Spark returns
+  `cannot_verify`. The phone first displays Spark, then uses the same frozen context for a
+  separate request with a 60-second deadline. Cancellation retains Spark. A follow-up
+  never promotes an uncertain primary to pass; it can retain uncertainty or show a grounded
+  refusal. Failure retains Spark with a visible note and a bounded outcome log.
+  Wonder requests use high reasoning. Tickets expire after 120 seconds and are one-use;
+  a server restart invalidates them. No follow-up runs after primary pass/refuse.
 - No automatic fallback: no parse, check, ask or second opinion switches to another model
   after an error, timeout or refusal. A failed Wonder run stays a Wonder failure. Gate 1b
   reports that arm as incomplete or failed and never substitutes a Spark result for it.
 - Structured output uses Responses `text.format` with a strict, finite JSON schema.
   Images are user-role `input_image` blocks. Requests use `store:false`. Reasoning is set
   per model: Spark uses `low`; the Wonder parse uses `high`.
-- Logs contain allowlisted model/status/latency and numeric usage only, never bodies,
+- Still overlays use Spark's documented perception grounding in the same check/ask call.
+  SAM remains a backend/operator mask and optional clip path; there is no clips UI.
+- Stable instructions, the full reviewed plan/parts and every ordered manual image precede
+  the changing step/photo/question. Cache hits are measured from usage, never assumed.
+- `MODEL_CHECK_CONTEXT=full` sends up to 20 source pages plus one frozen observation.
+  Explicit server `compact` selects 1–2 pages only if every required citation fits.
+  It returns unavailable without dispatch when coverage is impossible. No automatic
+  second call is made after a timeout.
+- The server enforces an absolute check/ask deadline of at most 8 seconds. Delivered
+  verdicts and human question composition persist until their capture binding changes.
+  A question gets a new call deadline; another check requires a new photo.
+- `MODEL_CALL_LIMIT` defaults to 200 conservative admitted attempts per process, reset on
+  restart. Admission can consume a unit without provider dispatch; every retry consumes
+  another. This is a call cap, not exact billing or a monetary budget.
+- Retry only documented transient statuses 429/500/503, at most three attempts with
+  exponential jitter and `Retry-After`, within the same deadline. Ambiguous transport
+  failures are not retried. Zero rate-limit remaining reserves a conservative 60-second
+  local pause because no reset header is documented; a shorter request can time out
+  while waiting without dispatching.
+- Logs contain allowlisted model/status/latency, numeric usage and fixed outcome metadata, never bodies,
   questions, media or keys.
 
-Routes: `POST /api/manuals/parse`, `/api/checks`, `/api/questions`, `/api/segments`;
+Routes: `POST /api/manuals/parse`, `/api/checks`, `/api/checks/second-opinion`, `/api/questions`, `/api/segments`;
 `GET /api/session`, `/api/health`, `/health`. Data/session routes require `x-truebuild-key`.
 App-to-Hono model calls use multipart; Hono-to-Meta Responses calls use JSON. The app
 wire mode remains `model`. Metadata is limited to 512 KiB,
@@ -153,7 +181,7 @@ does not need `API_SHARED_SECRET`.
   a split verdict. A percent difference alone never decides it. `wonderClearlyWins` is the
   boolean form of the same result. The conclusion covers one manual in one run.
 - **Default.** Every 1b report states `defaultChange: none` and `recommendation:
-keep_spark_default`. No result changes configuration. Spark remains the parse default unless
+  keep_spark_default`. No result changes configuration. Spark remains the parse default unless
   the operator changes it explicitly after reviewing the evidence.
 - Only aggregates are appended to `docs/gate-results.md`. A refusal writes an aggregate line
   with `requests: 0`.

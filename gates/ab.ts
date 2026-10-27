@@ -362,16 +362,23 @@ export async function runAbGate(input: {
         const parsed = parsedByKey[key]
         if (arm.status !== 'completed' || !parsed) continue
         const summary = score(arm, parsed, input.manifest.expected)
-        if (input.reviewer) {
-            await reviewExtraction(parsed, input.manifest.expected, input.reviewer, summary)
-            copyReview(arm, summary)
-        }
-        if (input.qualityReviewer) {
-            const answer = await input.qualityReviewer({ expectedSteps: input.manifest.expected.steps.length })
-            arm.quality =
-                answer === 'unverifiable'
-                    ? { status: 'unverified' }
-                    : { status: 'operator_rated', rating: answer.rating, issues: answer.issues }
+        try {
+            if (input.reviewer) {
+                await reviewExtraction(parsed, input.manifest.expected, input.reviewer, summary)
+                copyReview(arm, summary)
+            }
+            if (input.qualityReviewer) {
+                const answer = await input.qualityReviewer({ expectedSteps: input.manifest.expected.steps.length })
+                arm.quality =
+                    answer === 'unverifiable'
+                        ? { status: 'unverified' }
+                        : { status: 'operator_rated', rating: answer.rating, issues: answer.issues }
+            }
+        } catch {
+            // Both paid parses have completed. Preserve their evidence when operator review cannot finish.
+            arm.reason = 'operator_review_incomplete'
+            arm.quality = { status: 'unverified' }
+            break
         }
     }
     const complete = Object.values(arms).every((arm) => arm?.status === 'completed')
