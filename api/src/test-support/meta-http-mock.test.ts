@@ -374,7 +374,7 @@ it.each(['image', 'video'] as const)(
                     status: 'completed',
                     model: 'sam-3.1',
                     error: null,
-                    usage: kind === 'video' ? { video_frames_processed: 2 } : { images_processed: 1 },
+                    usage: kind === 'video' ? { video_frames_processed: 50 } : { images_processed: 1 },
                 },
             })
             expect(mock.failures).toEqual([])

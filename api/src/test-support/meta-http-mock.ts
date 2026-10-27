@@ -14,7 +14,7 @@ const content = z.discriminatedUnion('type', [
             type: z.literal('input_image'),
             image_url: z.string().optional(),
             file_id: z.string().optional(),
-            detail: z.enum(['auto', 'low', 'high']).optional(),
+            detail: z.enum(['auto', 'low', 'high', 'original']).optional(),
         })
         .refine((value) => Boolean(value.image_url) !== Boolean(value.file_id)),
     z
@@ -120,7 +120,7 @@ export function samMockStream(scenario: MockScenario, width = 20, height = 16, v
             input_tokens: 0,
             output_tokens: 0,
             total_tokens: 0,
-            ...(video ? { video_frames_processed: 2 } : { images_processed: 1 }),
+            ...(video ? { video_frames_processed: 50 } : { images_processed: 1 }),
         },
     )
     let sequence = 0
