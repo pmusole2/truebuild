@@ -1,0 +1,184 @@
+import { Buffer } from 'node:buffer'
+import { expect, test, type Page, type Response } from '@playwright/test'
+
+// Real product path: the browser file chooser and normalizer, the app client, the Hono API and the documented Meta HTTP
+// mock. Nothing here intercepts or answers an API request; responses are read from the real network.
+const API = process.env.TRUEBUILD_E2E_API_ORIGIN ?? 'http://127.0.0.1:31071'
+const WEB = `http://localhost:${process.env.TRUEBUILD_E2E_WEB_PORT ?? '18071'}`
+const SCENARIO = process.env.TRUEBUILD_E2E_SCENARIO ?? 'reversed'
+const VERDICT: Record<string, string> = { correct: 'Pass', reversed: 'Refuse', uncertain: 'Cannot verify' }
+const DECISION: Record<string, string> = { correct: 'pass', reversed: 'refuse', uncertain: 'cannot_verify' }
+
+// Synthetic 1x1 PNG: browser decoding, normalization and storage run for real.
+const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jfasAAAAASUVORK5CYII=',
+    'base64',
+)
+
+test.beforeEach(async ({ context }) => {
+    await context.grantPermissions(['camera'], { origin: WEB })
+})
+
+async function openFreshLibrary(page: Page): Promise<void> {
+    await page.goto('/')
+    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible({ timeout: 60_000 })
+}
+
+async function addTwoPagesAndRead(page: Page): Promise<Response> {
+    await page.getByRole('button', { name: 'Add manual', exact: true }).click()
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: 'Choose pages from photos', exact: true }).click()
+    await (
+        await chooser
+    ).setFiles([
+        { name: 'page-1.png', mimeType: 'image/png', buffer: png },
+        { name: 'page-2.png', mimeType: 'image/png', buffer: png },
+    ])
+    await expect(page.getByText('Page 2', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Move page 2 up', exact: true }).click()
+    const parse = page.waitForResponse(
+        (response) => response.url() === `${API}/api/manuals/parse` && response.request().method() === 'POST',
+    )
+    await page.getByRole('button', { name: 'Read manual', exact: true }).click()
+    return parse
+}
+
+async function confirmFactsAndContinue(page: Page): Promise<void> {
+    await expect(page.getByRole('checkbox')).toBeVisible({ timeout: 120_000 })
+    await page.getByRole('checkbox').click()
+    await page.getByRole('button', { name: 'Confirm reviewed facts', exact: true }).click()
+    await expect(page.getByText('Facts confirmed by you.', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Continue assembly', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Take new photo and check', exact: true })).toBeVisible()
+}
+
+test('real path: pages are read by the API, facts are confirmed, the library restores after reload, and a check returns the scenario verdict', async ({
+    page,
+}) => {
+    await openFreshLibrary(page)
+    const parse = await addTwoPagesAndRead(page)
+    expect((await parse).status()).toBe(200)
+    await confirmFactsAndContinue(page)
+
+    await page.reload()
+    await page.getByRole('button', { name: 'Open Untitled manual', exact: true }).click()
+    await expect(page.getByText('Facts confirmed by you.', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Continue assembly', exact: true }).click()
+
+    await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+    const capture = page.getByRole('button', { name: 'Capture photo', exact: true })
+    await expect(capture).toBeEnabled({ timeout: 60_000 })
+    const check = page.waitForResponse(
+        (response) => response.url() === `${API}/api/checks` && response.request().method() === 'POST',
+    )
+    await capture.click()
+    const response = await check
+    expect(response.status()).toBe(200)
+    const body = (await response.json()) as { status: string; value: { decision: string } }
+    expect(body.status).toBe('ok')
+    expect(body.value.decision).toBe(DECISION[SCENARIO])
+    await expect(page.getByText(VERDICT[SCENARIO] ?? '', { exact: true })).toBeVisible({ timeout: 90_000 })
+})
+
+test('refusal shows the expected diagram and the frozen photo side by side, and a question is requested from the API', async ({
+    page,
+}) => {
+    test.skip(SCENARIO !== 'reversed', 'refusal layout is scenario-specific')
+    await openFreshLibrary(page)
+    await addTwoPagesAndRead(page)
+    await confirmFactsAndContinue(page)
+    await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Capture photo', exact: true })).toBeEnabled({ timeout: 60_000 })
+    await page.getByRole('button', { name: 'Capture photo', exact: true }).click()
+    await expect(page.getByText('Manual diagram', { exact: true })).toBeVisible({ timeout: 90_000 })
+    await expect(page.getByText('Your photo', { exact: true })).toBeVisible()
+    await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
+
+    await page.getByRole('radio', { name: 'Side panel', exact: true }).click()
+    await page.getByLabel('Question about frozen photo').fill('Which way should this part face?')
+    const question = page.waitForResponse(
+        (response) => response.url() === `${API}/api/questions` && response.request().method() === 'POST',
+    )
+    await page.getByRole('button', { name: 'Send question', exact: true }).click()
+    expect((await question).status()).toBe(200)
+    await expect(page.getByText('TEST MOCK ONLY: consult the cited diagram.', { exact: false })).toBeVisible({
+        timeout: 60_000,
+    })
+})
+
+test('a cancelled reading says that no late reply is shown, and the reading is not repeated automatically', async ({
+    page,
+    context,
+}) => {
+    test.skip(SCENARIO !== 'reversed', 'latency path needs one scenario only')
+    await openFreshLibrary(page)
+    await page.getByRole('button', { name: 'Add manual', exact: true }).click()
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: 'Choose pages from photos', exact: true }).click()
+    await (await chooser).setFiles([{ name: 'page-1.png', mimeType: 'image/png', buffer: png }])
+    await expect(page.getByText('Page 1', { exact: true })).toBeVisible()
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Network.enable')
+    await cdp.send('Network.emulateNetworkConditions', {
+        offline: false,
+        latency: 6000,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+    })
+    await page.getByRole('button', { name: 'Read manual', exact: true }).click()
+    await expect(page.getByText('Reading manual pages…', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(page.getByText('Cancelled. No late reply will be shown', { exact: false })).toBeVisible()
+    await cdp.send('Network.emulateNetworkConditions', {
+        offline: false,
+        latency: 0,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+    })
+    await expect(page.getByRole('checkbox')).toHaveCount(0)
+})
+
+test('camera access is requested only on demand: without permission the page explains it and returns to the library', async ({
+    page,
+    context,
+}) => {
+    await context.clearPermissions()
+    await openFreshLibrary(page)
+    await page.getByRole('button', { name: 'Add manual', exact: true }).click()
+    await page.getByRole('button', { name: 'Scan a page', exact: true }).click()
+    await expect(page.getByText('Camera permission is needed', { exact: false })).toBeVisible()
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Choose pages from photos', exact: true })).toBeVisible()
+})
+
+test('a local library that cannot be read keeps its data, says so, and offers an explicit retry', async ({ page }) => {
+    await page.addInitScript(() => {
+        const original = Storage.prototype.getItem
+        Storage.prototype.getItem = function (key: string): string | null {
+            if (String(key).startsWith('truebuild/')) {
+                throw new Error('storage unavailable (test fault injection)')
+            }
+            return original.call(this, key)
+        }
+    })
+    await page.goto('/')
+    await expect(page.getByText('Saved library unavailable', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByRole('button', { name: 'Retry local library', exact: true })).toBeVisible()
+})
+
+test('settings describe storage, what leaves the phone and camera access', async ({ page }) => {
+    await openFreshLibrary(page)
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(page.getByText('What leaves this phone', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Open device settings', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible()
+})
+
+test('keyboard focus is visible on a control on web', async ({ page }) => {
+    await openFreshLibrary(page)
+    const add = page.getByRole('button', { name: 'Add manual', exact: true })
+    await add.focus()
+    const shadow = await add.evaluate((element) => getComputedStyle(element).boxShadow)
+    expect(shadow).toContain('154, 75, 7')
+})
