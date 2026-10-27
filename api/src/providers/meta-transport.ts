@@ -2,7 +2,7 @@ import type { Deadline } from '../server/deadline'
 
 export const RETRY_STATUSES = new Set([429, 500, 503])
 export interface ProviderMetrics {
-    operation: 'parse' | 'check' | 'question' | 'segment'
+    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion'
     model: string
     status: number
     latencyMs: number
@@ -116,8 +116,9 @@ export class MetaTransport {
         init: RequestInit,
         deadline: Deadline,
         onAttempt?: (status: number, elapsed: number) => void,
+        maxAttempts: 1 | 3 = 3,
     ): Promise<Response> {
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
             await pause((this.#next.get(model) ?? 0) - performance.now(), deadline)
             deadline.checkpoint()
             const started = performance.now()
@@ -143,7 +144,7 @@ export class MetaTransport {
                 spacing = 60_000 / requestLimit
             else if (tokenLimit && remainingTokens !== undefined && remainingTokens / tokenLimit < 0.1) spacing = 500
             this.#next.set(model, Math.max(this.#next.get(model) ?? 0, performance.now() + spacing))
-            if (!RETRY_STATUSES.has(response.status) || attempt === 2) return response
+            if (!RETRY_STATUSES.has(response.status) || attempt === maxAttempts - 1) return response
             // Status-only retries own/discard the rejected body before backoff, even plain-text or empty errors.
             void response.body?.cancel().catch(() => {})
             const retry = response.headers.get('retry-after')

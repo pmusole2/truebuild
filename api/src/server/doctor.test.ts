@@ -19,13 +19,23 @@ describe('explicit read-only Meta doctor', () => {
                 expect(init?.redirect).toBe('error')
                 return Response.json({
                     object: 'list',
-                    data: [{ id: 'muse-wonder-1.0' }, ...(samPresent ? [{ id: 'sam-3.1' }] : [])],
+                    data: [
+                        { id: 'muse-spark-1.3' },
+                        { id: 'muse-wonder-1.0' },
+                        ...(samPresent ? [{ id: 'sam-3.1' }] : []),
+                    ],
                 })
             })
             const output: string[] = []
             expect(
-                await doctor({ MODEL_API_KEY: '<synthetic>', MODEL_SPARK: 'muse-wonder-1.0' }, transport, (line) =>
-                    output.push(line),
+                await doctor(
+                    {
+                        MODEL_API_KEY: '<synthetic>',
+                        MODEL_PARSE: 'muse-wonder-1.0',
+                        MODEL_SECOND_OPINION: 'muse-wonder-1.0',
+                    },
+                    transport,
+                    (line) => output.push(line),
                 ),
             ).toBe(samPresent ? 0 : 2)
             expect(transport).toHaveBeenCalledTimes(1)
@@ -39,4 +49,29 @@ describe('explicit read-only Meta doctor', () => {
         expect(transport).toHaveBeenCalledTimes(1)
         expect(output.join(' ')).not.toContain('sensitive')
     })
+})
+
+it.each(['MODEL_SPARK', 'MODEL_PARSE', 'MODEL_SECOND_OPINION'])(
+    'refuses Contributor in %s before its model-list request',
+    async (field) => {
+        const transport = vi.fn<typeof fetch>()
+        expect(
+            await doctor({ MODEL_API_KEY: '<synthetic>', [field]: 'muse-spark-1.3-contributor' }, transport, () => {}),
+        ).toBe(2)
+        expect(transport).not.toHaveBeenCalled()
+    },
+)
+it('checks optional second-opinion availability without claiming inference readiness', async () => {
+    const transport = vi.fn<typeof fetch>(async () =>
+        Response.json({ data: [{ id: 'muse-spark-1.3' }, { id: 'sam-3.1' }] }),
+    )
+    const output: string[] = []
+    expect(
+        await doctor({ MODEL_API_KEY: '<synthetic>', MODEL_SECOND_OPINION: 'muse-wonder-1.0' }, transport, (line) =>
+            output.push(line),
+        ),
+    ).toBe(2)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(output.join(' ')).toContain('required_model_not_listed')
+    expect(output.join(' ')).toContain('"inferenceVerified":false')
 })

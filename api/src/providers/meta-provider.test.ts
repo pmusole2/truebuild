@@ -176,7 +176,10 @@ describe('inactive direct Meta transport', (): void => {
         async (orientation) => {
             const value = createHeroResponse(orientation)
             await localServer(jsonResponder(responseBody(value)), async (transport) => {
-                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual(value)
+                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual({
+                    ...value,
+                    model: 'muse-spark-1.3',
+                })
                 expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
             })
         },
@@ -318,7 +321,7 @@ describe('inactive direct Meta transport', (): void => {
     it('sends one fixed Standard-model request with inline normalized media and strict schema', async (): Promise<void> => {
         await localServer(jsonResponder(responseBody(result)), async (transport): Promise<void> => {
             const input = await validInput()
-            expect(await transport.provider.checkStep(input, signal())).toEqual(result)
+            expect(await transport.provider.checkStep(input, signal())).toEqual({ ...result, model: 'muse-spark-1.3' })
             expect(transport.dispatches()).toBe(1)
             expect(transport.bodies[0]).toMatchObject({
                 model: 'muse-spark-1.3',
@@ -375,7 +378,7 @@ describe('inactive direct Meta transport', (): void => {
                     },
                     signal(),
                 ),
-            ).toEqual(parsed)
+            ).toEqual({ ...parsed, model: 'muse-spark-1.3' })
             expect(transport.dispatches()).toBe(1)
         })
     })
@@ -393,7 +396,7 @@ describe('inactive direct Meta transport', (): void => {
                     },
                     signal(),
                 ),
-            ).toEqual({ ...answer, observedRegion: null })
+            ).toEqual({ ...answer, observedRegion: null, model: 'muse-spark-1.3' })
             expect(transport.dispatches()).toBe(1)
         })
     })
@@ -667,7 +670,10 @@ describe('documented Meta conformance', () => {
         const envelope = responseBody(result)
         envelope.output = [{ type: 'reasoning', id: 'r-1', summary: [] }, ...(envelope.output as unknown[])]
         await localServer(jsonResponder(envelope), async ({ provider }) => {
-            expect(await provider.checkStep(await validInput(), signal())).toEqual(result)
+            expect(await provider.checkStep(await validInput(), signal())).toEqual({
+                ...result,
+                model: 'muse-spark-1.3',
+            })
         })
     })
 
@@ -748,7 +754,10 @@ describe('status-only bounded Meta retries', () => {
                 jsonResponder(responseBody(result))(response)
             },
             async ({ provider, dispatches }) => {
-                expect(await provider.checkStep(await validInput(), signal())).toEqual(result)
+                expect(await provider.checkStep(await validInput(), signal())).toEqual({
+                    ...result,
+                    model: 'muse-spark-1.3',
+                })
                 expect(dispatches()).toBe(2)
             },
         )
@@ -798,4 +807,102 @@ it('refuses fabricated or foreign visible-check evidence even for a refusal', as
     await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
         await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({ code: 'invalid_output' })
     })
+})
+
+describe('server-only task routing and provenance', () => {
+    it('excludes all server provenance from every strict provider DTO', () => {
+        for (const schema of Object.values(metaOutputSchemas)) {
+            const serialized = JSON.stringify(schema)
+            expect(serialized).not.toContain('modelNotes')
+            expect(serialized).not.toContain('secondOpinion')
+            expect(serialized).not.toContain('"model"')
+        }
+    })
+    it('uses explicit Wonder/high only for parse, Spark/low for live checks and asks', async () => {
+        const input = await validInput()
+        const bodies: Array<Record<string, unknown>> = []
+        const transport = vi.fn<typeof fetch>(async (_url, init) => {
+            const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+            bodies.push(body)
+            const format = (body.text as { format: { name: string } }).format.name
+            return Response.json(
+                responseBody(
+                    format === 'truebuild_parse'
+                        ? { parts: [], steps: [], unknowns: [] }
+                        : format === 'truebuild_question'
+                          ? { answer: 'Uncertain', sourceRefs: [], missingEvidence: ['Need view'] }
+                          : result,
+                ),
+            )
+        })
+        const provider = createMetaProvider({
+            apiKey: '<synthetic>',
+            parseModel: 'muse-wonder-1.0',
+            fetchImpl: transport,
+        })
+        expect(
+            await provider.parseManual(
+                {
+                    requestId: input.requestId,
+                    binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
+                    pages: input.sourceImages,
+                },
+                signal(),
+            ),
+        ).toMatchObject({ model: 'muse-wonder-1.0' })
+        expect(await provider.checkStep(input, signal())).toMatchObject({ model: 'muse-spark-1.3' })
+        expect(
+            await provider.answerQuestion(
+                { ...input, question: 'Which way?', target: { kind: 'point', x: 0.5, y: 0.5 } },
+                signal(),
+            ),
+        ).toMatchObject({ model: 'muse-spark-1.3' })
+        expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
+            ['muse-wonder-1.0', { effort: 'high' }],
+            ['muse-spark-1.3', { effort: 'low' }],
+            ['muse-spark-1.3', { effort: 'low' }],
+        ])
+    })
+    it('does not fall back from an explicit Wonder parse or trust model-authored provenance', async () => {
+        const input = await validInput()
+        const transport = vi.fn<typeof fetch>(async () =>
+            Response.json(responseBody({ parts: [], steps: [], unknowns: [], model: 'muse-spark-1.3' })),
+        )
+        const provider = createMetaProvider({
+            apiKey: '<synthetic>',
+            parseModel: 'muse-wonder-1.0',
+            fetchImpl: transport,
+        })
+        await expect(
+            provider.parseManual(
+                {
+                    requestId: input.requestId,
+                    binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
+                    pages: input.sourceImages,
+                },
+                signal(),
+            ),
+        ).rejects.toMatchObject({ code: 'invalid_output' })
+        expect(transport).toHaveBeenCalledTimes(1)
+    })
+    it.each([429, 500, 503])(
+        'makes only one secondary attempt for %i and logs its distinct operation',
+        async (status) => {
+            const transport = vi.fn<typeof fetch>(async () => new Response('synthetic error', { status }))
+            const metrics = vi.fn()
+            const provider = createMetaProvider({
+                apiKey: '<synthetic>',
+                secondOpinionModel: 'muse-wonder-1.0',
+                fetchImpl: transport,
+                onMetrics: metrics,
+            })
+            await expect(provider.secondOpinion!(await validInput(), signal())).rejects.toMatchObject({
+                code: 'provider_error',
+            })
+            expect(transport).toHaveBeenCalledTimes(1)
+            expect(metrics).toHaveBeenCalledWith(
+                expect.objectContaining({ operation: 'second_opinion', model: 'muse-wonder-1.0', status }),
+            )
+        },
+    )
 })

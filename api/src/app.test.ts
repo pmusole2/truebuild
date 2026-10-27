@@ -149,6 +149,7 @@ describe('Hono HTTP boundary', (): void => {
             model: 'unconfigured',
             providerMode: 'fixture',
             sparkModel: 'muse-spark-1.3',
+            parseModel: 'muse-spark-1.3',
             samModel: 'sam-3.1',
             checkContext: 'full',
         })
