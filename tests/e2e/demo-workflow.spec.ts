@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const API = 'http://127.0.0.1:3001'
+const API = process.env.TRUEBUILD_E2E_API_ORIGIN ?? 'http://127.0.0.1:31071'
 const KEY = 'truebuild-fixture-demo'
 
 test('parse action calls the fixture parse route and labels the result simulated', async ({ page }) => {

@@ -26,6 +26,7 @@
         "gate:1": "tsx gates/run.ts 1",
         "gate:2": "tsx gates/run.ts 2",
         "gate:3": "tsx gates/run.ts 3",
+        "doctor": "node --env-file-if-exists=.env --import tsx api/scripts/doctor.ts",
         "start:api": "node --env-file-if-exists=.env --import tsx api/src/index.ts",
         "build:api": "npm run build --workspace @truebuild/api",
         "smoke:api": "npm run smoke --workspace @truebuild/api"
