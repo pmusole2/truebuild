@@ -7,12 +7,15 @@ import type { ParsedManual, StandardModel } from '@truebuild/contracts'
 import { manifestSchema, type Manifest, type StepReviewer } from './run'
 import {
     abMain,
+    conclude,
     costUsd,
-    defaultProviderFactory,
+    parseQualityAnswer,
     runAbGate,
+    type AbArm,
     type AbMetric,
     type AbProviderFactory,
     type AbReport,
+    type QualityReviewer,
 } from './ab'
 
 const SPARK = 'muse-spark-1.3'
@@ -55,10 +58,6 @@ async function setup(
     return { cwd, manifest }
 }
 
-type FakeFactory = {
-    factory: Mock<AbProviderFactory>
-    calls: { parseModel: string; pageBytes: number[][]; pageIds: string[] }[]
-}
 type Behaviour = {
     /** Parsed result, or an error thrown by parseManual. Default: the expected plan attributed to the requested model. */
     result?: ParsedManual | Error
@@ -71,13 +70,17 @@ type Behaviour = {
     /** Omit metrics entirely. */
     noMetrics?: boolean
 }
+type FakeFactory = {
+    factory: Mock<AbProviderFactory>
+    calls: { parseModel: string; pageBytes: number[][]; pageIds: string[] }[]
+}
 function parsedFor(model: string | undefined): ParsedManual {
     return { ...structuredClone(expected), ...(model ? { model } : {}) } as ParsedManual
 }
 
 /** Records factory options, parse calls and page bytes; never reads a real .env or contacts Meta. */
 function fakeFactory(behaviours: Partial<Record<StandardModel, Behaviour>> = {}): FakeFactory {
-    const calls: { parseModel: string; pageBytes: number[][]; pageIds: string[] }[] = []
+    const calls: FakeFactory['calls'] = []
     const factory = vi.fn<AbProviderFactory>((options) => {
         const behaviour = behaviours[options.parseModel] ?? {}
         return {
@@ -118,6 +121,17 @@ async function readReport(cwd: string): Promise<string> {
 async function readLastReport(cwd: string): Promise<AbReport> {
     const [line] = (await readReport(cwd)).trim().split('\n').slice(-1)
     return JSON.parse(line!.replace(/^- \S+ /, '')) as AbReport
+}
+
+/** Step reviewer answers `correct` for the first `correctCount` calls, then `incorrect`; calls run arm by arm. */
+function stepsInOrder(correctCount: number): StepReviewer {
+    let calls = 0
+    return async () => (calls++ < correctCount ? 'correct' : 'incorrect')
+}
+/** Quality answers in the order the arms are reviewed. */
+function ratingsInOrder(...ratings: (1 | 2 | 3 | 4 | 5)[]): QualityReviewer {
+    let calls = 0
+    return async () => ({ rating: ratings[calls++]!, issues: [] })
 }
 
 describe('Standard model cost from actual usage at cited prices', () => {
@@ -162,7 +176,7 @@ describe('gate 1b consent and local readiness', () => {
         expect(report).toContain('"reason":"ab_consent_required"')
         expect(report).toContain('"reason":"critical_facts_confirmation_required"')
         expect(report).toContain('"requests":0')
-        expect(report).not.toContain('synthetic-key')
+        expect(report).not.toContain('<synthetic-key>')
     })
     it.each([
         ['PROVIDER_MODE=fixture\nMODEL_API_KEY=<synthetic-key>\n', 'meta_mode_required'],
@@ -176,13 +190,12 @@ describe('gate 1b consent and local readiness', () => {
         expect(await readReport(cwd)).toContain(`"reason":"${reason}"`)
     })
     it('passes the local key to the factory without requiring the shared secret or mutating process env', async () => {
-        const { cwd } = await setup('PROVIDER_MODE=meta\nMODEL_API_KEY=<synthetic-key>\n')
+        const { cwd } = await setup()
         const before = { ...process.env }
         const { factory } = fakeFactory()
-        await abMain(ARGV, cwd, { factory, random: () => false })
+        expect(await abMain(ARGV, cwd, { factory, random: () => false })).toBe(2)
         expect(factory).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '<synthetic-key>' }))
         expect(process.env).toEqual(before)
-        expect(await readReport(cwd)).not.toContain('shared_secret_required')
     })
     it('refuses --review without an interactive terminal before dispatch', async () => {
         const { cwd } = await setup()
@@ -230,7 +243,8 @@ describe('no automatic fallback: a Wonder failure stays a Wonder failure', () =>
         expect(report).toMatchObject({
             reason: 'arm_incomplete_no_fallback',
             automaticFallback: 'none',
-            winner: 'unverified',
+            conclusion: 'unverified',
+            wonderClearlyWins: false,
         })
     })
     it('maps a DOM TimeoutError to timeout and any unknown error text to provider_error', async () => {
@@ -240,7 +254,7 @@ describe('no automatic fallback: a Wonder failure stays a Wonder failure', () =>
             [WONDER]: { result: timeout, noMetrics: true },
             [SPARK]: { result: new Error('raw provider body with secret text'), noMetrics: true },
         })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
         expect(report.models.wonder?.reason).toBe('timeout')
         expect(report.models.spark?.reason).toBe('provider_error')
         expect(JSON.stringify(report)).not.toContain('raw provider body')
@@ -255,182 +269,312 @@ describe('no automatic fallback: a Wonder failure stays a Wonder failure', () =>
     it('marks an arm incomplete when a returned model field names another model', async () => {
         const { cwd, manifest } = await setup()
         const { factory } = fakeFactory({ [WONDER]: { result: parsedFor(SPARK) } })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
         expect(report.models.wonder).toMatchObject({ status: 'incomplete', reason: 'model_attribution_mismatch' })
         expect(report.models.spark?.status).toBe('completed')
-        expect(report.winner).toBe('unverified')
+        expect(report.conclusion).toBe('unverified')
     })
     it('accepts a result without a model field when dispatch metrics name the requested model, recording the source', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [SPARK]: { result: parsedFor(undefined) } })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
         expect(report.models.spark).toMatchObject({ status: 'completed', provenance: 'dispatch_metrics' })
     })
     it('marks a success without any dispatch metrics as unattributed rather than completed', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [SPARK]: { noMetrics: true } })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
         expect(report.models.spark).toMatchObject({ status: 'incomplete', reason: 'model_dispatch_unattributed' })
     })
-    it('refuses both arms without a Spark substitute when the parse dependency is unavailable', async () => {
-        const { cwd } = await setup()
-        const fetchMock = vi.fn<typeof fetch>()
-        vi.stubGlobal('fetch', fetchMock)
-        expect(await abMain(ARGV, cwd)).toBe(2)
-        expect(fetchMock).not.toHaveBeenCalled()
-        const report = await readReport(cwd)
-        expect(report).toContain('"reason":"provider_dependency_unavailable"')
-        expect(report).toContain('"requests":0')
-        expect(defaultProviderFactory).toBeTypeOf('function')
-    })
-    it('reports attempts from transport events and prices only the single usage event', async () => {
+    it('reports the provider retry policy and zero gate retries, counting provider attempts per arm', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [SPARK]: { attempts: 2 } })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
+        expect(report.providerRetryPolicy).toBe('provider_documented_429_500_503_max_3_attempts')
+        expect(report.gateRetryPolicy).toBe('none')
         expect(report.models.spark).toMatchObject({ attempts: 2, costStatus: 'priced', costUsd: 0.00166 })
         expect(report.requests).toBe(2 + 1)
+        expect(factory).toHaveBeenCalledTimes(2)
+    })
+    it('does not count a usage callback whose usage fields are all undefined as a second attempt', async () => {
+        const { manifest, cwd } = await setup()
+        // The real provider always spreads usageMetrics(): every key exists, values may be undefined.
+        const undefinedUsage = {
+            inputTokens: undefined,
+            cachedTokens: undefined,
+            outputTokens: undefined,
+            reasoningTokens: undefined,
+        }
+        const { factory } = fakeFactory({ [SPARK]: { usage: undefinedUsage } })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
+        expect(report.models.spark).toMatchObject({ attempts: 1, attemptsStatus: 'exact', costStatus: 'unverified' })
+        expect(report.models.spark).not.toHaveProperty('costUsd')
+        expect(report.requestsStatus).toBe('exact')
+    })
+    it('marks a failed arm attempt count as a lower bound, never an exact count', async () => {
+        const { manifest, cwd } = await setup()
+        const { factory } = fakeFactory({
+            [WONDER]: { result: new Error('timeout'), attempts: 3 },
+        })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
+        expect(report.models.wonder).toMatchObject({ attempts: 3, attemptsStatus: 'lower_bound' })
+        expect(report.requestsStatus).toBe('lower_bound')
     })
     it('leaves cost unverified when the provider returns no usage', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [WONDER]: { usage: null } })
-        const report = await runAbGate({ manifest, cwd, apiKey: 'synthetic-key', factory, random: () => false })
+        const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
         expect(report.models.wonder).toMatchObject({ costStatus: 'unverified' })
         expect(report.models.wonder).not.toHaveProperty('costUsd')
     })
 })
 
-describe('human review, winner and default', () => {
-    it('keeps quality unverified and declares no winner without operator review', async () => {
+describe('plan quality and conclusion', () => {
+    it('keeps quality unverified and declares no conclusion without operator review', async () => {
         const { cwd } = await setup()
         const { factory } = fakeFactory()
         expect(await abMain(ARGV, cwd, { factory })).toBe(2)
-        const report = await readReport(cwd)
-        expect(report).toContain('"semanticStepAccuracy":"unverified"')
-        expect(report).toContain('"winner":"unverified"')
-        expect(report).toContain('"reason":"semantic_review_unverified"')
-        expect(report).toContain('"defaultChange":"none"')
-        expect(report).not.toContain('"semanticStepAccuracy":"human_reviewed"')
+        const report = await readLastReport(cwd)
+        expect(report.models.spark).toMatchObject({
+            semanticStepAccuracy: 'unverified',
+            quality: { status: 'unverified' },
+        })
+        expect(report).toMatchObject({
+            conclusion: 'unverified',
+            wonderClearlyWins: false,
+            reason: 'semantic_review_unverified',
+            defaultChange: 'none',
+            recommendation: 'keep_spark_default',
+        })
     })
-    it('reviews a fixed set per arm; the first reviewed arm is Spark when the order is Spark-first', async () => {
+    it('needs plan-quality notes for both arms, not only step accuracy', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
-        const steps = manifest.expected.steps.length
-        let calls = 0
-        const reviewer = vi.fn<StepReviewer>(async () => (calls++ < steps ? 'correct' : 'incorrect'))
         const report = await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
             factory,
-            reviewer,
+            reviewer: stepsInOrder(manifest.expected.steps.length),
             random: () => false,
         })
-        expect(report.models.spark).toMatchObject({
-            semanticStepAccuracy: 'human_reviewed',
-            humanStepAccuracyPercent: 100,
-        })
-        expect(report.models.wonder).toMatchObject({
-            semanticStepAccuracy: 'human_reviewed',
-            humanStepAccuracyPercent: 0,
-        })
-        expect(report.status).toBe('pass')
-        expect(report.reason).toBe('ab_human_reviewed')
-        expect(report.winner).toBe(SPARK)
-        expect(report.defaultChange).toBe('none')
-        expect(report.recommendation).toBe('keep_spark_default')
+        expect(report.status).toBe('unverified')
+        expect(report.reason).toBe('plan_quality_unverified')
+        expect(report.conclusion).toBe('unverified')
     })
-    it('declares Wonder as the reviewed accuracy winner when Wonder is better, while the default is unchanged', async () => {
+    it('keeps a conclusion unverified when a quality answer is outside the vocabulary', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
-        const steps = manifest.expected.steps.length
-        let calls = 0
-        const reviewer = vi.fn<StepReviewer>(async () => (calls++ < steps ? 'correct' : 'incorrect'))
-        // random() true parses and reviews Wonder first, so its set is the all-correct one.
         const report = await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
             factory,
-            reviewer,
+            reviewer: stepsInOrder(manifest.expected.steps.length),
+            qualityReviewer: async () => 'unverifiable',
+            random: () => false,
+        })
+        expect(report.models.spark?.quality).toEqual({ status: 'unverified' })
+        expect(report.conclusion).toBe('unverified')
+    })
+    it('declares Wonder clearly wins only when step accuracy and plan-quality rating agree in its favour', async () => {
+        const { manifest, cwd } = await setup()
+        const { factory } = fakeFactory()
+        const steps = manifest.expected.steps.length
+        // random() true reviews Wonder first: all steps correct and rating 5; Spark second: incorrect and rating 2.
+        const report = await runAbGate({
+            manifest,
+            cwd,
+            apiKey: '<synthetic-key>',
+            factory,
+            reviewer: stepsInOrder(steps),
+            qualityReviewer: ratingsInOrder(5, 2),
             random: () => true,
         })
-        expect(report.winner).toBe(WONDER)
-        expect(report.defaultChange).toBe('none')
-        expect(report.recommendation).toBe('keep_spark_default')
+        expect(report).toMatchObject({
+            status: 'pass',
+            reason: 'ab_human_reviewed',
+            conclusion: 'wonderClearlyWins',
+            wonderClearlyWins: true,
+            defaultChange: 'none',
+            recommendation: 'keep_spark_default',
+        })
     })
-    it('reports equal reviewed accuracy as no measured difference', async () => {
+    it('declares Spark clearly wins without changing the default when Spark is better on both measures', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
         const report = await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
+            factory,
+            reviewer: stepsInOrder(manifest.expected.steps.length),
+            qualityReviewer: ratingsInOrder(4, 3),
+            random: () => false,
+        })
+        expect(report).toMatchObject({
+            conclusion: 'sparkClearlyWins',
+            wonderClearlyWins: false,
+            defaultChange: 'none',
+        })
+    })
+    it('treats equal step accuracy as no clear win even when ratings differ', async () => {
+        const { manifest, cwd } = await setup()
+        const { factory } = fakeFactory()
+        const report = await runAbGate({
+            manifest,
+            cwd,
+            apiKey: '<synthetic-key>',
             factory,
             reviewer: async () => 'correct',
-            random: () => false,
+            qualityReviewer: ratingsInOrder(2, 5),
+            random: () => true,
         })
-        expect(report.winner).toBe('no_measured_difference')
+        expect(report.models.wonder?.humanStepAccuracyPercent).toBe(report.models.spark?.humanStepAccuracyPercent)
+        expect(report.conclusion).toBe('no_clear_win')
+        expect(report.wonderClearlyWins).toBe(false)
     })
-    it('keeps the winner unverified when a reviewed step is unverifiable', async () => {
+    it('treats a step-accuracy lead without a quality lead as no clear win, not a quality win', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
         const report = await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
             factory,
-            reviewer: async () => 'unverifiable',
-            random: () => false,
+            reviewer: stepsInOrder(manifest.expected.steps.length),
+            qualityReviewer: ratingsInOrder(3, 3),
+            random: () => true,
         })
-        expect(report.winner).toBe('unverified')
-        expect(report.status).toBe('unverified')
-        expect(report.models.spark?.semanticStepAccuracy).toBe('unverified')
+        expect(report.conclusion).toBe('no_clear_win')
+        expect(report.wonderClearlyWins).toBe(false)
     })
-    it('keeps the outcome unverified and no winner when the Wonder arm failed, even if Spark was reviewed', async () => {
+    it('keeps the conclusion unverified and the status incomplete when the Wonder arm failed, even if Spark was rated', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [WONDER]: { result: new Error('timeout'), noMetrics: true } })
         const report = await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
             factory,
-            reviewer: async () => 'correct',
+            reviewer: stepsInOrder(manifest.expected.steps.length),
+            qualityReviewer: ratingsInOrder(4),
             random: () => false,
         })
         expect(report.models.spark?.semanticStepAccuracy).toBe('human_reviewed')
         expect(report.models.wonder?.status).toBe('failed')
-        expect(report.winner).toBe('unverified')
-        expect(report.status).toBe('unverified')
-        expect(report.reason).toBe('arm_incomplete_no_fallback')
+        expect(report).toMatchObject({
+            conclusion: 'unverified',
+            status: 'unverified',
+            reason: 'arm_incomplete_no_fallback',
+        })
     })
-    it('blinds the reviewer: review input carries no model identity', async () => {
+    it('blinds reviewers: step and quality review inputs carry no model identity', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
         const seen: string[] = []
         await runAbGate({
             manifest,
             cwd,
-            apiKey: 'synthetic-key',
+            apiKey: '<synthetic-key>',
             factory,
             reviewer: async (input) => {
                 seen.push(JSON.stringify(input))
                 return 'correct'
+            },
+            qualityReviewer: async (input) => {
+                seen.push(JSON.stringify(input))
+                return { rating: 3, issues: [] }
             },
             random: () => false,
         })
         expect(seen.length).toBeGreaterThan(0)
         expect(seen.some((text) => /muse|spark|wonder/i.test(text))).toBe(false)
     })
-    it('writes one aggregate-only line without key, page bytes or step wording', async () => {
-        const { cwd, manifest } = await setup()
+    it('persists only the fixed quality vocabulary, never operator text or model bodies', async () => {
+        const { manifest, cwd } = await setup()
+        const { factory } = fakeFactory()
+        await abMain([...ARGV, '--review'], cwd, {
+            factory,
+            interactive: true,
+            random: () => false,
+            reviewer: stepsInOrder(manifest.expected.steps.length),
+            qualityReviewer: async () => ({ rating: 4, issues: ['orientation', 'citation'] }),
+        })
+        const report = await readLastReport(cwd)
+        expect(report.models.spark?.quality).toEqual({
+            status: 'operator_rated',
+            rating: 4,
+            issues: ['orientation', 'citation'],
+        })
+        const text = await readReport(cwd)
+        expect(text).not.toContain('<synthetic-key>')
+        expect(text).not.toContain(manifest.expected.steps[0]!.title)
+        expect(text).not.toContain('image.png')
+    })
+    it('writes exactly one aggregate line for a run', async () => {
+        const { cwd } = await setup()
         const { factory } = fakeFactory()
         await abMain(ARGV, cwd, { factory })
         const report = await readReport(cwd)
         expect(report.trim().split('\n')).toHaveLength(1)
-        expect(report).not.toContain('synthetic-key')
-        expect(report).not.toContain('image.png')
-        expect(report).not.toContain(manifest.expected.steps[0]!.title)
         expect(report).toContain('"costUsd"')
         expect(report).toContain('"latencyMs"')
+    })
+})
+
+describe('conclude and quality answer parsing', () => {
+    const arm = (model: StandardModel, accuracy: number, rating: 1 | 2 | 3 | 4 | 5 | undefined): AbArm => ({
+        model,
+        status: 'completed',
+        reason: 'parse_completed',
+        attempts: 1,
+        attemptsStatus: 'exact',
+        latencyMs: 1,
+        costStatus: 'unverified',
+        semanticStepAccuracy: 'human_reviewed',
+        humanStepAccuracyPercent: accuracy,
+        quality: rating === undefined ? { status: 'unverified' } : { status: 'operator_rated', rating, issues: [] },
+    })
+    it.each([
+        ['spark ahead on both', 100, 4, 50, 2, { conclusion: 'sparkClearlyWins', wonderClearlyWins: false }],
+        ['wonder ahead on both', 50, 2, 100, 4, { conclusion: 'wonderClearlyWins', wonderClearlyWins: true }],
+        ['accuracy tie', 50, 2, 50, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['rating tie', 50, 3, 100, 3, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['split verdict', 100, 2, 50, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+    ] as const)('%s', (_label, sparkAcc, sparkRating, wonderAcc, wonderRating, expected) => {
+        expect(
+            conclude({
+                spark: arm(SPARK, sparkAcc, sparkRating),
+                wonder: arm(WONDER, wonderAcc, wonderRating),
+            }),
+        ).toEqual(expected)
+    })
+    it('is unverified when any arm lacks quality notes or the other arm is missing', () => {
+        expect(conclude({ spark: arm(SPARK, 100, undefined), wonder: arm(WONDER, 50, 2) })).toEqual({
+            conclusion: 'unverified',
+            wonderClearlyWins: false,
+        })
+        expect(conclude({ spark: arm(SPARK, 100, 3), wonder: undefined })).toEqual({
+            conclusion: 'unverified',
+            wonderClearlyWins: false,
+        })
+    })
+    it.each([
+        ['5', 'orientation,citation', { rating: 5, issues: ['orientation', 'citation'] }],
+        ['1', 'none', { rating: 1, issues: [] }],
+        ['3', '', { rating: 3, issues: [] }],
+        ['4', 'other, other', { rating: 4, issues: ['other'] }],
+    ] as const)('accepts rating %s with issues %j', (rating, issues, expected) => {
+        expect(parseQualityAnswer(rating, issues)).toEqual(expected)
+    })
+    it.each([
+        ['0', 'none'],
+        ['6', 'none'],
+        ['x', 'none'],
+        ['4', 'free text about the model answer'],
+        ['4', 'orientation,<script>'],
+    ])('leaves rating %s with issues %j unverifiable', (rating, issues) => {
+        expect(parseQualityAnswer(rating, issues)).toBe('unverifiable')
     })
 })

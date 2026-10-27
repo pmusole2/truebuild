@@ -1,9 +1,11 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { createInterface } from 'node:readline/promises'
 import { parseEnv } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import type { ManualBinding, ManualPage, ParsedManual, StandardModel } from '@truebuild/contracts'
+import { createMetaProvider } from '../api/src/providers/meta-provider'
 import {
     appendAggregate,
     loadManualSources,
@@ -18,7 +20,7 @@ import {
 
 /**
  * Gate 1b: one bounded parse per Standard model over the same real pages, in process through the provider.
- * Each arm is keyed by the parseModel it requested. Nothing here retries, falls back or substitutes a model.
+ * Each arm is keyed by the parseModel it requested. The gate never re-sends a parse and never falls back or substitutes a model; provider-internal retries are reported, not added to.
  */
 export const GATE_1B_MODELS = {
     spark: 'muse-spark-1.3',
@@ -28,6 +30,11 @@ const ARM_KEYS = { 'muse-spark-1.3': 'spark', 'muse-wonder-1.0': 'wonder' } as c
     StandardModel,
     'spark' | 'wonder'
 >
+
+/** Provider policy as implemented: documented 429/500/503 retries inside one parse call, at most 3 attempts. */
+export const PROVIDER_RETRY_POLICY = 'provider_documented_429_500_503_max_3_attempts'
+/** The gate itself never re-sends a parse. */
+export const GATE_RETRY_POLICY = 'none'
 
 /** Standard per-million-token prices cited from the Meta pricing page (docs/api-notes.md). Reasoning is inside output. */
 export const STANDARD_PRICES_USD_PER_MILLION: Record<
@@ -66,12 +73,19 @@ export type AbProviderFactory = (options: {
 }) => AbParseProvider
 
 /**
- * Production factory is intentionally not wired in this base: createMetaProvider here has no parseModel option.
- * It refuses every arm rather than falling back to a different model or the check model.
+ * Production wiring: the real provider with an explicit parseModel and no request-level model override.
+ * fetchImpl is only injected by tests (for example the documented local mock); production uses global fetch.
  */
-export const defaultProviderFactory: AbProviderFactory = () => {
-    throw new Error('provider_dependency_unavailable')
+export function createMetaAbProviderFactory(fetchImpl?: typeof fetch): AbProviderFactory {
+    return (options) =>
+        createMetaProvider({
+            apiKey: options.apiKey,
+            parseModel: options.parseModel,
+            onMetrics: options.onMetrics,
+            ...(fetchImpl ? { fetchImpl } : {}),
+        })
 }
+export const defaultProviderFactory: AbProviderFactory = createMetaAbProviderFactory()
 
 export type CostResult = { status: 'priced'; costUsd: number } | { status: 'unverified' }
 /** Priced only from actual uncached input, cached input and output counts; missing usage is unverified, never zero. */
@@ -89,11 +103,59 @@ export function costUsd(
     return { status: 'priced', costUsd: Math.round((total / 1_000_000) * 1e10) / 1e10 }
 }
 
+/** Fixed operator vocabulary: the report persists only these codes, never free text or model output. */
+export const PLAN_QUALITY_ISSUES = [
+    'orientation',
+    'connection',
+    'part_identity',
+    'citation',
+    'missing_step',
+    'extra_step',
+    'step_order',
+    'unclear_wording',
+    'other',
+] as const
+export type PlanQualityIssue = (typeof PLAN_QUALITY_ISSUES)[number]
+export type PlanQualityRating = 1 | 2 | 3 | 4 | 5
+export type PlanQuality =
+    { status: 'operator_rated'; rating: PlanQualityRating; issues: PlanQualityIssue[] } | { status: 'unverified' }
+export type QualityAnswer = { rating: PlanQualityRating; issues: PlanQualityIssue[] } | 'unverifiable'
+export type QualityReviewer = (input: { expectedSteps: number }) => Promise<QualityAnswer>
+
+/** Validates an operator's rating and issue codes; anything outside the vocabulary stays unverifiable. */
+export function parseQualityAnswer(rating: string, issues: string): QualityAnswer {
+    if (!/^[1-5]$/u.test(rating.trim())) return 'unverifiable'
+    const codes =
+        issues.trim() === '' || issues.trim().toLowerCase() === 'none'
+            ? []
+            : issues.split(',').map((code) => code.trim())
+    const allowed = new Set<string>(PLAN_QUALITY_ISSUES)
+    if (!codes.every((code) => allowed.has(code))) return 'unverifiable'
+    const unique = [...new Set(codes)] as PlanQualityIssue[]
+    return { rating: Number(rating.trim()) as PlanQualityRating, issues: unique }
+}
+
+export const terminalQualityReviewer: QualityReviewer = async () => {
+    const terminal = createInterface({ input: process.stdin, output: process.stdout })
+    try {
+        const rating = await terminal.question('Whole-plan quality 1 (poor) to 5 (excellent), or u if unverifiable: ')
+        const issues = await terminal.question(
+            `Issue codes, comma-separated from ${PLAN_QUALITY_ISSUES.join(', ')}, or none: `,
+        )
+        return parseQualityAnswer(rating, issues)
+    } finally {
+        terminal.close()
+    }
+}
+
 export type AbArm = {
     model: StandardModel
     status: 'completed' | 'failed' | 'incomplete'
     reason: string
+    /** HTTP responses observed through transport events, including the provider's own retries; the gate adds none. */
     attempts: number
+    /** exact only when the arm completed: every dispatched attempt returned a response. A failed arm may hide a rejected fetch. */
+    attemptsStatus: 'exact' | 'lower_bound'
     latencyMs: number
     inputTokens?: number
     cachedTokens?: number
@@ -111,17 +173,23 @@ export type AbArm = {
     missingSteps?: number
     extraSteps?: number
     extractionUnknowns?: number
+    quality: PlanQuality
 }
+export type Conclusion = 'wonderClearlyWins' | 'sparkClearlyWins' | 'no_clear_win' | 'unverified'
 export type AbReport = {
     gate: '1b'
     status: 'pass' | 'unverified'
     reason: string
+    conclusion: Conclusion
+    wonderClearlyWins: boolean
+    conclusionScope: 'single_manual_single_run'
     automaticFallback: 'none'
     defaultChange: 'none'
     recommendation: 'keep_spark_default'
-    winner: StandardModel | 'no_measured_difference' | 'unverified'
-    winnerScope: 'single_manual_single_run'
+    providerRetryPolicy: typeof PROVIDER_RETRY_POLICY
+    gateRetryPolicy: typeof GATE_RETRY_POLICY
     requests: number
+    requestsStatus: 'exact' | 'lower_bound'
     models: Partial<Record<'spark' | 'wonder', AbArm>>
 }
 
@@ -167,14 +235,17 @@ async function parseArm(
         failure = failureReason(error)
     }
     const latencyMs = Math.round(performance.now() - started)
-    // Transport events carry no usage; the single usage-bearing event prices the request.
-    const attempts = metrics.filter((metric) => metric.inputTokens === undefined).length
-    const usageEvents = metrics.filter((metric) => metric.inputTokens !== undefined)
+    // The provider's transport callback reports one status per HTTP response. Its usage callback spreads every usage
+    // key (values may be undefined when the response had no usage), so key ownership separates the two kinds of event.
+    const isUsageEvent = (metric: AbMetric): boolean => 'inputTokens' in metric
+    const attempts = metrics.filter((metric) => !isUsageEvent(metric)).length
+    const usageEvents = metrics.filter(isUsageEvent)
     const usage = usageEvents.length === 1 ? usageEvents[0]! : undefined
     const cost = costUsd(usage ?? {}, model)
     const base = {
         model,
         attempts,
+        attemptsStatus: 'lower_bound' as const,
         latencyMs,
         costStatus: cost.status,
         ...(cost.status === 'priced' ? { costUsd: cost.costUsd } : {}),
@@ -187,6 +258,7 @@ async function parseArm(
               }
             : {}),
         semanticStepAccuracy: 'unverified' as const,
+        quality: { status: 'unverified' as const },
     }
     // Attribution is the requested model; any other dispatch or result provenance makes the arm incomplete, never substituted.
     const dispatchMismatch = metrics.some((metric) => metric.model !== model)
@@ -197,13 +269,15 @@ async function parseArm(
     if (failure !== undefined) {
         return { arm: { ...base, status: 'failed', reason: failure } }
     }
-    if (!parsed) return { arm: { ...base, status: 'incomplete', reason: 'model_dispatch_unattributed' } }
-    if (metrics.length === 0) return { arm: { ...base, status: 'incomplete', reason: 'model_dispatch_unattributed' } }
+    if (!parsed || metrics.length === 0) {
+        return { arm: { ...base, status: 'incomplete', reason: 'model_dispatch_unattributed' } }
+    }
     return {
         arm: {
             ...base,
             status: 'completed',
             reason: 'parse_completed',
+            attemptsStatus: 'exact',
             provenance: parsed.model === model ? 'result_field' : 'dispatch_metrics',
         },
         parsed,
@@ -231,16 +305,31 @@ function copyReview(arm: AbArm, summary: Summary): void {
     arm.extractionUnknowns = summary.extractionUnknowns
 }
 
-function winnerOf(arms: Partial<Record<'spark' | 'wonder', AbArm>>): AbReport['winner'] {
+/**
+ * Conclusion needs complete, human-reviewed evidence for both arms. Step accuracy and whole-plan rating must both
+ * favour the same model; a tie or a split verdict is no clear win. Percent difference alone never decides quality.
+ */
+export function conclude(arms: Partial<Record<'spark' | 'wonder', AbArm>>): {
+    conclusion: Conclusion
+    wonderClearlyWins: boolean
+} {
     const { spark, wonder } = arms
-    if (!spark || !wonder) return 'unverified'
-    if (spark.status !== 'completed' || wonder.status !== 'completed') return 'unverified'
-    if (spark.semanticStepAccuracy !== 'human_reviewed' || wonder.semanticStepAccuracy !== 'human_reviewed')
-        return 'unverified'
-    const a = spark.humanStepAccuracyPercent ?? 0
-    const b = wonder.humanStepAccuracyPercent ?? 0
-    if (a === b) return 'no_measured_difference'
-    return a > b ? GATE_1B_MODELS.spark : GATE_1B_MODELS.wonder
+    const complete = [spark, wonder].every(
+        (arm) =>
+            arm?.status === 'completed' &&
+            arm.semanticStepAccuracy === 'human_reviewed' &&
+            arm.quality.status === 'operator_rated',
+    )
+    if (!spark || !wonder || !complete) return { conclusion: 'unverified', wonderClearlyWins: false }
+    if (spark.quality.status !== 'operator_rated' || wonder.quality.status !== 'operator_rated')
+        return { conclusion: 'unverified', wonderClearlyWins: false }
+    const accuracy = Math.sign((wonder.humanStepAccuracyPercent ?? 0) - (spark.humanStepAccuracyPercent ?? 0))
+    const rating = Math.sign(wonder.quality.rating - spark.quality.rating)
+    if (accuracy === 0 || rating === 0 || accuracy !== rating)
+        return { conclusion: 'no_clear_win', wonderClearlyWins: false }
+    return accuracy > 0
+        ? { conclusion: 'wonderClearlyWins', wonderClearlyWins: true }
+        : { conclusion: 'sparkClearlyWins', wonderClearlyWins: false }
 }
 
 export async function runAbGate(input: {
@@ -249,6 +338,7 @@ export async function runAbGate(input: {
     apiKey: string
     factory: AbProviderFactory
     reviewer?: StepReviewer
+    qualityReviewer?: QualityReviewer
     /** true starts with Wonder; injected so tests can pin the randomized order. */
     random?: () => boolean
 }): Promise<AbReport> {
@@ -276,23 +366,38 @@ export async function runAbGate(input: {
             await reviewExtraction(parsed, input.manifest.expected, input.reviewer, summary)
             copyReview(arm, summary)
         }
+        if (input.qualityReviewer) {
+            const answer = await input.qualityReviewer({ expectedSteps: input.manifest.expected.steps.length })
+            arm.quality =
+                answer === 'unverifiable'
+                    ? { status: 'unverified' }
+                    : { status: 'operator_rated', rating: answer.rating, issues: answer.issues }
+        }
     }
     const complete = Object.values(arms).every((arm) => arm?.status === 'completed')
-    const reviewed = Object.values(arms).every((arm) => arm?.semanticStepAccuracy === 'human_reviewed')
+    const stepReviewed = Object.values(arms).every((arm) => arm?.semanticStepAccuracy === 'human_reviewed')
+    const rated = Object.values(arms).every((arm) => arm?.quality.status === 'operator_rated')
+    const { conclusion, wonderClearlyWins } = conclude(arms)
     return {
         gate: '1b',
-        status: complete && reviewed ? 'pass' : 'unverified',
+        status: complete && stepReviewed && rated ? 'pass' : 'unverified',
         reason: !complete
             ? 'arm_incomplete_no_fallback'
-            : reviewed
-              ? 'ab_human_reviewed'
-              : 'semantic_review_unverified',
+            : !stepReviewed
+              ? 'semantic_review_unverified'
+              : !rated
+                ? 'plan_quality_unverified'
+                : 'ab_human_reviewed',
+        conclusion,
+        wonderClearlyWins,
+        conclusionScope: 'single_manual_single_run',
         automaticFallback: 'none',
         defaultChange: 'none',
         recommendation: 'keep_spark_default',
-        winner: winnerOf(arms),
-        winnerScope: 'single_manual_single_run',
+        providerRetryPolicy: PROVIDER_RETRY_POLICY,
+        gateRetryPolicy: GATE_RETRY_POLICY,
         requests: Object.values(arms).reduce((total, arm) => total + (arm?.attempts ?? 0), 0),
+        requestsStatus: Object.values(arms).every((arm) => arm?.attemptsStatus === 'exact') ? 'exact' : 'lower_bound',
         models: arms,
     }
 }
@@ -312,17 +417,24 @@ function refusal(reason: string): AbReport {
         gate: '1b',
         status: 'unverified',
         reason,
+        conclusion: 'unverified',
+        wonderClearlyWins: false,
+        conclusionScope: 'single_manual_single_run',
         automaticFallback: 'none',
         defaultChange: 'none',
         recommendation: 'keep_spark_default',
-        winner: 'unverified',
-        winnerScope: 'single_manual_single_run',
+        providerRetryPolicy: PROVIDER_RETRY_POLICY,
+        gateRetryPolicy: GATE_RETRY_POLICY,
         requests: 0,
+        requestsStatus: 'exact',
         models: {},
     }
 }
 
-/** Local readiness is read only after both explicit flags are present; the key is never printed or sent by this CLI. */
+/**
+ * Local readiness is read only after both explicit flags are present. The key is returned to the caller for the
+ * provider's bearer header only; it is never printed or written to the report.
+ */
 export async function loadAbKey(cwd: string): Promise<string> {
     let env: Record<string, string | undefined>
     try {
@@ -339,7 +451,13 @@ export async function loadAbKey(cwd: string): Promise<string> {
 export async function abMain(
     argv: string[],
     cwd = process.cwd(),
-    deps: { factory?: AbProviderFactory; random?: () => boolean; interactive?: boolean } = {},
+    deps: {
+        factory?: AbProviderFactory
+        random?: () => boolean
+        interactive?: boolean
+        reviewer?: StepReviewer
+        qualityReviewer?: QualityReviewer
+    } = {},
 ): Promise<number> {
     const option = (name: string): string | undefined => {
         const index = argv.indexOf(name)
@@ -351,7 +469,8 @@ export async function abMain(
         if (!argv.includes('--ab')) throw new Error('ab_consent_required')
         if (!argv.includes('--confirm-critical-facts')) throw new Error('critical_facts_confirmation_required')
         const interactive = deps.interactive ?? (Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY))
-        if (argv.includes('--review') && !interactive) throw new Error('interactive_gate1_review_required')
+        const review = argv.includes('--review')
+        if (review && !interactive) throw new Error('interactive_gate1_review_required')
         const apiKey = await loadAbKey(cwd)
         const manifestPath = option('--manifest')
         if (!manifestPath) throw new Error('manifest_required')
@@ -361,7 +480,8 @@ export async function abMain(
             cwd,
             apiKey,
             factory: deps.factory ?? defaultProviderFactory,
-            reviewer: argv.includes('--review') ? terminalReviewer : undefined,
+            reviewer: review ? (deps.reviewer ?? terminalReviewer) : undefined,
+            qualityReviewer: review ? (deps.qualityReviewer ?? terminalQualityReviewer) : undefined,
             random: deps.random,
         })
     } catch (error: unknown) {

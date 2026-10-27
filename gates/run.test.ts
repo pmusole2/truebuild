@@ -121,7 +121,7 @@ describe('future operator gates with synthetic data only', () => {
                     mode: 'model',
                     requestId: metadata.requestId,
                     binding: metadata.binding,
-                    value: createHeroResponse('reversed'),
+                    value: { ...createHeroResponse('reversed'), model: 'muse-spark-1.3' },
                 },
                 { headers: { 'x-truebuild-check-context': 'full', 'x-truebuild-source-pages': '3' } },
             )
@@ -156,7 +156,7 @@ describe('future operator gates with synthetic data only', () => {
                         mode: 'model',
                         requestId: metadata.requestId,
                         binding: metadata.binding,
-                        value: createHeroResponse('reversed'),
+                        value: { ...createHeroResponse('reversed'), model: 'muse-spark-1.3' },
                     },
                     { headers: { 'x-truebuild-check-context': 'compact', 'x-truebuild-source-pages': '1' } },
                 )
@@ -490,7 +490,7 @@ it.each(['compact', 'unverified'] as const)(
                     mode: 'model',
                     requestId: metadata.requestId,
                     binding: metadata.binding,
-                    value: createHeroResponse('reversed'),
+                    value: { ...createHeroResponse('reversed'), model: 'muse-spark-1.3' },
                 },
                 {
                     headers:
@@ -530,7 +530,7 @@ describe('gate 3 is Spark-only', () => {
             expect(fetchMock).not.toHaveBeenCalled()
         },
     )
-    it('accepts an explicit or absent Spark setting and still fails a returned non-Spark model', async () => {
+    it('accepts an explicit or absent local Spark setting and fails a returned non-Spark model', async () => {
         for (const env of ['', 'MODEL_SPARK=muse-spark-1.3\n']) {
             const { cwd } = await setup()
             await writeFile(
@@ -557,6 +557,30 @@ describe('gate 3 is Spark-only', () => {
                 requests: 1,
             },
         )
+    })
+    it('does not pass a Spark-only gate when the returned model is missing', async () => {
+        const { cwd, manifest } = await setup()
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+            return Response.json(
+                {
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: metadata.requestId,
+                    binding: metadata.binding,
+                    value: createHeroResponse('reversed'),
+                },
+                { headers: { 'x-truebuild-check-context': 'full', 'x-truebuild-source-pages': '1' } },
+            )
+        })
+        expect(await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).toMatchObject(
+            {
+                status: 'unverified',
+                reason: 'model_provenance_missing',
+                requests: 1,
+            },
+        )
+        expect(fetchMock).toHaveBeenCalledTimes(1)
     })
     it('passes a returned Spark model with full-manual scope unchanged', async () => {
         const { cwd, manifest } = await setup()

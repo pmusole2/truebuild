@@ -78,13 +78,13 @@ export type Summary = {
 export const HELP = `Future operator-only gates; no network without --dispatch and local .env.
 Usage: tsx gates/run.ts <1|2|3> --manifest <path.json> --dispatch --confirm-critical-facts [--base http://127.0.0.1:3001] [--review]
 Local cwd/.env must contain PROVIDER_MODE=meta, MODEL_API_KEY, API_SHARED_SECRET.
-The model key is only a readiness prerequisite; it is never sent by this CLI. Configure the API separately.
+Gates 1, 2 and 3 send no key: they call the API, which holds the key. Configure the API separately. Gate 1b is the exception below.
 No dotenv file is read by --help or without --dispatch. No automatic retries.
 Gate 1b: tsx gates/run.ts 1b --manifest <path.json> --dispatch --ab --confirm-critical-facts [--review]
  Parses the same manual pages once with muse-spark-1.3 and once with muse-wonder-1.0, in process through the provider with an explicit parseModel.
- Reads cwd/.env only after both --dispatch and --ab, needing PROVIDER_MODE=meta and MODEL_API_KEY. A Wonder failure stays a Wonder failure: no retry, no automatic fallback, no model substitution.
- Reports per-model usage cost at Standard prices, latency, attempts and human-reviewed step accuracy; winner stays unverified without review and the default never changes.
-Gate 3 refuses a local MODEL_SPARK other than muse-spark-1.3 before dispatch, and fails a returned model other than muse-spark-1.3.
+ Reads cwd/.env only after both --dispatch and --ab, needing PROVIDER_MODE=meta and MODEL_API_KEY. The key goes only to the provider's documented Meta Responses request, never to output. The gate never retries; the provider retries 429/500/503 within a call, max 3 attempts. A Wonder failure stays a Wonder failure: no automatic fallback, no model substitution.
+ Reports per-model usage cost at Standard prices, latency, provider attempts, human-reviewed step accuracy and operator plan-quality rating. Conclusion stays unverified without review of both arms; the default never changes.
+Gate 3 refuses a local MODEL_SPARK other than muse-spark-1.3 before dispatch. It passes only with returned model exactly muse-spark-1.3; a missing returned model is unverified and any other model fails.
 Manifest: {pages:[{path,pageId,assetId,mimeType,width,height}], expected:ParsedManual,
  observation:{path,mimeType,width,height}, expectedDecision, stepId, sourcePageIds?:[id],
  prompt?:"side panel", clip?:{path,mimeType:"video/mp4"|"video/quicktime"}}.
@@ -545,8 +545,13 @@ export async function runGate(
             !matchesBinding(checked.binding, capture)
         )
             throw new Error('invalid_check')
-        // Provenance is optional on the public contract; a present non-Spark model can never pass Gate 3.
-        if (gate === 3 && checked.value.model !== undefined && checked.value.model !== SPARK_MODEL) {
+        // Gate 3 must prove the Spark check from the returned provenance: missing is unverified, another model fails.
+        if (gate === 3 && checked.value.model === undefined) {
+            summary.status = 'unverified'
+            summary.reason = 'model_provenance_missing'
+            return summary
+        }
+        if (gate === 3 && checked.value.model !== SPARK_MODEL) {
             summary.status = 'fail'
             summary.reason = 'non_spark_model_returned'
             return summary
