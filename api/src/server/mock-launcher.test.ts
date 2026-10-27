@@ -45,7 +45,17 @@ it.each(['correct', 'reversed', 'uncertain'] as const)(
             const origin = `http://127.0.0.1:${address.port}`
             const health = await fetch(`${origin}/health`, { headers: { origin: 'http://localhost:18071' } })
             expect(health.headers.get('access-control-allow-origin')).toBe('http://localhost:18071')
-            expect(await health.json()).toMatchObject({ providerMode: 'meta', checkContext: 'full' })
+            expect(await health.json()).toEqual({
+                status: 'ok',
+                fixture: 'disabled',
+                live: 'configured',
+                label: 'Meta model mode',
+            })
+            const metadata = await fetch(`${origin}/api/session`, {
+                headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
+            })
+            expect(metadata.status).toBe(200)
+            expect(await metadata.json()).toMatchObject({ providerMode: 'meta', checkContext: 'full' })
             const bytes = new Uint8Array(
                 await sharp({ create: { width: 20, height: 16, channels: 3, background: 'red' } })
                     .png()

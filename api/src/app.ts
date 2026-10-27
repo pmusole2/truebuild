@@ -20,13 +20,9 @@ function health(context: Context<ApiEnv>): Response {
     const runtime = context.get('runtime')
     return context.json({
         status: 'ok',
-        providerMode: runtime.mode,
         fixture: runtime.mode === 'fixture' ? 'available' : 'disabled',
         live: runtime.configured ? 'configured' : 'unconfigured',
         label: runtime.mode === 'fixture' ? DEMO_LABEL : 'Meta model mode',
-        sparkModel: runtime.sparkModel,
-        samModel: runtime.samModel,
-        checkContext: runtime.checkContext,
     })
 }
 

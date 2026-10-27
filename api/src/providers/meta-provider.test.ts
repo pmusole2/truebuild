@@ -266,6 +266,44 @@ describe('inactive direct Meta transport', (): void => {
         }
     })
 
+    it.each([2, 3])(
+        'compact context normalizes only its %i required pages, or no images when unavailable',
+        async (required) => {
+            const input = await validInput()
+            const first = input.sourceImages[0]!
+            const undecodable = new Uint8Array([1, 2, 3])
+            for (let index = 1; index < 20; index++) {
+                const bytes = index < required ? first.bytes : undecodable
+                const page = {
+                    ...first.page,
+                    pageId: `page-${index}`,
+                    assetId: `asset-${index}`,
+                    contentHash: createHash('sha256').update(bytes).digest('hex'),
+                }
+                input.session.pages.push(page)
+                input.sourceImages.push({ page, bytes })
+            }
+            const step = input.session.reviewedSteps[0]!
+            step.sourceRefs.push({ pageId: 'page-1', region: null })
+            if (required === 3) {
+                step.sourceRefs.push({ pageId: 'page-2', region: null })
+                // A compact-unavailable result must not even decode the observation.
+                input.observation.bytes = undecodable
+            }
+            const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(responseBody(result)))
+            const provider = createMetaProvider({ apiKey: 'synthetic', checkContext: 'compact', fetchImpl })
+            const checked = await provider.checkStep(input, signal())
+            expect(checked.decision).toBe(required === 2 ? 'pass' : 'cannot_verify')
+            expect(fetchImpl).toHaveBeenCalledTimes(required === 2 ? 1 : 0)
+            if (required === 2) {
+                const body = JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))
+                expect(
+                    body.input[0].content.filter((part: { type: string }) => part.type === 'input_image'),
+                ).toHaveLength(3)
+            }
+        },
+    )
+
     it('fails unconfigured before any validation/media/network work', async (): Promise<void> => {
         const fetchImpl = vi.fn<typeof fetch>()
         const input = await validInput()

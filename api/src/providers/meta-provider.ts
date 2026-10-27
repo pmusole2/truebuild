@@ -47,7 +47,7 @@ export function checkContextMode(value: string | undefined): CheckContextMode {
     return parsed.data
 }
 const COMPACT_UNAVAILABLE =
-    'Compact context cannot cover every required citation within two manual pages. Configure full context or revise the reviewed step; no provider request was sent.'
+    'Compact context cannot cover every required citation within two manual pages. No model request was sent.'
 const MAX_RESPONSE_BYTES = 1_048_576
 
 export type MetaProviderErrorCode = 'unconfigured' | 'invalid_input' | 'timeout' | 'provider_error' | 'invalid_output'
@@ -587,18 +587,21 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         // Validate used-part names before allowing compact refusal; all hashes/bindings were checked by currentStep.
         stepContext(input, step)
         const selected = contextMode === 'full' ? allPages : selectCompactStepSourcePageIds(input.session, step.stepId)
-        const images = await waitWithin(
-            validateAndNormalizeImages([...sourceObservations(input.sourceImages), input.observation], deadline.signal),
-            deadline,
-        )
         if (!selected) return null
         const indices = selected.map((id) => input.sourceImages.findIndex((source) => source.page.pageId === id))
         if (indices.some((index) => index < 0)) throw new MetaProviderError('invalid_input')
         const selectedInput = { ...input, sourceImages: indices.map((index) => input.sourceImages[index]!) }
+        const images = await waitWithin(
+            validateAndNormalizeImages(
+                [...sourceObservations(selectedInput.sourceImages), input.observation],
+                deadline.signal,
+            ),
+            deadline,
+        )
         return {
             input: selectedInput,
             context: stepContext(selectedInput, step),
-            images: [...indices.map((index) => images[index]!), images[images.length - 1]!],
+            images,
         }
     }
 
@@ -754,7 +757,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 const prepared = await prepareContext(parsed, step, deadline)
                 if (!prepared)
                     return {
-                        answer: COMPACT_UNAVAILABLE,
+                        answer: 'I cannot answer from the available manual pages. This step needs additional manual context.',
                         sourceRefs: [],
                         observedRegion: null,
                         missingEvidence: [COMPACT_UNAVAILABLE],

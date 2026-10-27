@@ -25,10 +25,6 @@ describe('Hono HTTP boundary', (): void => {
             expect(response.status).toBe(200)
             expect(await response.json()).toEqual({
                 status: 'ok',
-                providerMode: 'fixture',
-                sparkModel: 'muse-spark-1.3',
-                samModel: 'sam-3.1',
-                checkContext: 'full',
                 fixture: 'available',
                 live: 'unconfigured',
                 label: 'Demo data — simulated results',
