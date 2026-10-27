@@ -1,3 +1,4 @@
+import type { StandardModel } from '@truebuild/contracts'
 import { randomUUID } from 'node:crypto'
 
 import type { ProviderMetrics } from '../providers/meta-transport'
@@ -5,6 +6,8 @@ import { createFixtureProvider } from '../providers/fixture'
 import {
     createMetaProvider,
     sparkModel,
+    parseModel,
+    secondOpinionModel,
     checkContextMode,
     type CheckContextMode,
     type SparkModel,
@@ -24,6 +27,8 @@ export interface ApiRuntime {
     mode: 'fixture' | 'meta'
     configured: boolean
     sparkModel: SparkModel
+    parseModel: StandardModel
+    secondOpinionModel?: StandardModel
     checkContext: CheckContextMode
     samModel: 'sam-3.1'
     auth: SharedKeyAuth
@@ -53,6 +58,8 @@ export function createRuntimeFromEnvironment(
         throw new Error('invalid_provider_mode')
     }
     const model = sparkModel(environment.MODEL_SPARK)
+    const parse = parseModel(environment.MODEL_PARSE)
+    const secondary = secondOpinionModel(environment.MODEL_SECOND_OPINION)
     const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
     if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
     const checkTimeoutMs = positiveInteger(environment.CHECK_TIMEOUT_MS, 8_000, 8_000)
@@ -86,6 +93,8 @@ export function createRuntimeFromEnvironment(
         fetchImpl: guardModelFetch(transport),
         checkTimeoutMs,
         model,
+        parseModel: parse,
+        secondOpinionModel: secondary,
         checkContext,
     }
     return {
@@ -93,6 +102,8 @@ export function createRuntimeFromEnvironment(
         mode,
         configured,
         sparkModel: model,
+        parseModel: parse,
+        secondOpinionModel: secondary,
         checkContext,
         samModel: 'sam-3.1',
         auth,
@@ -104,6 +115,7 @@ export function createRuntimeFromEnvironment(
             counter,
             allowedOrigins,
             checkTimeoutMs,
+            secondOpinionModel: secondary,
             checkContext,
             provider: configured ? createMetaProvider(providerOptions) : null,
             samProvider: configured ? createSamProvider(providerOptions) : null,

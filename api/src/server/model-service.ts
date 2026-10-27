@@ -1,3 +1,4 @@
+import { SecondOpinionTickets, reconcileSecondOpinion, unavailableSecondOpinion } from './second-opinion'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { RETRY_STATUSES } from '../providers/meta-transport'
@@ -11,6 +12,8 @@ import {
     questionResultSchema,
     segmentEventSchema,
     type ApiResult,
+    type CheckResult,
+    type StandardModel,
     type CaptureBinding,
     type ManualBinding,
     type SegmentEvent,
@@ -18,10 +21,12 @@ import {
 import {
     selectCompactStepSourcePageIds,
     modelCheckMetadataSchema,
+    modelSecondOpinionMetadataSchema,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
     type ModelCheckMetadata,
+    type ModelSecondOpinionMetadata,
     type ModelParseMetadata,
     type ModelQuestionMetadata,
     type ModelSegmentMetadata,
@@ -59,6 +64,7 @@ type EffectContext = {
     retry: boolean
     fingerprint?: string
     attempts: number
+    maxAttempts?: number
 }
 const effects = new AsyncLocalStorage<EffectContext>()
 
@@ -90,7 +96,9 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                 .digest('hex')
             if (
                 context.dispatched &&
-                (!context.retry || fingerprint !== context.fingerprint || context.attempts >= 3)
+                (!context.retry ||
+                    fingerprint !== context.fingerprint ||
+                    context.attempts >= (context.maxAttempts ?? 3))
             ) {
                 throw new AdmissionError('duplicate_request', 409)
             }
@@ -289,10 +297,19 @@ export function createModelHandlers(options: {
     auth: SharedKeyAuth
     counter: ModelCallCounter
     checkContext?: CheckContextMode
+    secondOpinionModel?: StandardModel
     checkTimeoutMs?: number
     allowedOrigins?: readonly string[]
-}): { parse: Handler; check: Handler; question: Handler; segment: Handler; options: typeof modelOptions } {
+}): {
+    parse: Handler
+    check: Handler
+    secondOpinion: Handler
+    question: Handler
+    segment: Handler
+    options: typeof modelOptions
+} {
     const { provider, samProvider, auth, counter, allowedOrigins } = options
+    const tickets = new SecondOpinionTickets()
     const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
     if (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
         throw new Error('invalid_timeout')
@@ -306,10 +323,12 @@ export function createModelHandlers(options: {
         dispatch: ((input: I, signal: AbortSignal) => Promise<T>) | null,
         validate: (value: T, metadata: M) => boolean,
         scopeHeaders?: (metadata: M) => Record<string, string>,
+        publish?: (value: T, input: I) => { value: T; rollback?: () => void },
     ): Handler {
         return async (request): Promise<Response> => {
             let execution: Execution | undefined
             let metadata: M | undefined
+            let rollback: (() => void) | undefined
             try {
                 execution = admit(request, auth, duration, allowedOrigins)
                 if (!dispatch) {
@@ -334,19 +353,23 @@ export function createModelHandlers(options: {
                     throw new AdmissionError('invalid_output', 502)
                 }
                 execution.check()
+                const published = publish?.(value.data, input)
+                rollback = published?.rollback
+                execution.check()
                 const response = Response.json(
                     {
                         status: 'ok',
                         mode: 'model',
                         requestId: metadata.requestId,
                         binding: metadata.binding,
-                        value: value.data,
+                        value: published?.value ?? value.data,
                     },
                     { headers: { 'cache-control': 'no-store', ...scopeHeaders?.(metadata) } },
                 )
                 execution.check()
                 return corsResponse(request, response, allowedOrigins)
             } catch (error) {
+                rollback?.()
                 const failure = errorResult(error, execution)
                 return corsResponse(
                     request,
@@ -397,8 +420,28 @@ export function createModelHandlers(options: {
         checkTimeoutMs,
         checkFiles,
         provider ? (input, signal): ReturnType<MetaProvider['checkStep']> => provider.checkStep(input, signal) : null,
-        (value, metadata): boolean => value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
+        (value, metadata): boolean =>
+            (value.model === undefined || value.model === 'muse-spark-1.3') &&
+            value.secondOpinion === undefined &&
+            value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
         scopeHeaders,
+        (value, input): { value: CheckResult; rollback?: () => void } => {
+            const model = options.secondOpinionModel
+            if (
+                !model ||
+                !provider?.secondOpinion ||
+                value.decision !== 'cannot_verify' ||
+                value.model !== 'muse-spark-1.3'
+            )
+                return { value }
+            const token = tickets.issue(input, value)
+            return token
+                ? {
+                      value: { ...value, secondOpinion: { model, status: 'available', token } },
+                      rollback: () => tickets.revoke(token),
+                  }
+                : { value: unavailableSecondOpinion(value, model) }
+        },
     )
     const question = jsonHandler(
         modelQuestionMetadataSchema,
@@ -416,9 +459,80 @@ export function createModelHandlers(options: {
         provider
             ? (input, signal): ReturnType<MetaProvider['answerQuestion']> => provider.answerQuestion(input, signal)
             : null,
-        (value, metadata): boolean => value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
+        (value, metadata): boolean =>
+            (value.model === undefined || value.model === 'muse-spark-1.3') &&
+            value.sourceRefs.every((ref) => metadata.sourcePageIds.includes(ref.pageId)),
         scopeHeaders,
     )
+
+    const secondOpinion: Handler = async (request): Promise<Response> => {
+        let execution: Execution | undefined
+        let metadata: ModelSecondOpinionMetadata | undefined
+        let primary: CheckResult | null = null
+        const model = options.secondOpinionModel
+        const success = (value: CheckResult): Response =>
+            corsResponse(
+                request,
+                Response.json(
+                    {
+                        status: 'ok',
+                        mode: 'model',
+                        requestId: metadata!.requestId,
+                        binding: metadata!.binding,
+                        value,
+                    },
+                    { headers: { 'cache-control': 'no-store', ...scopeHeaders(metadata!) } },
+                ),
+                allowedOrigins,
+            )
+        try {
+            execution = admit(request, auth, 60_000, allowedOrigins)
+            if (!model || !provider?.secondOpinion) throw new AdmissionError('unconfigured', 503)
+            const parsed = await readModelMultipart(
+                request,
+                modelSecondOpinionMetadataSchema,
+                9 * 1_024 * 1_024,
+                execution.deadline,
+            )
+            metadata = parsed.metadata
+            const input = await checkFiles(metadata, parsed.files, execution.deadline)
+            execution.check()
+            primary = tickets.consume(metadata.secondOpinionToken, input)
+            if (!primary) throw new AdmissionError('duplicate_request', 409)
+            execution.check()
+            counter.claim()
+            execution.context.counter = counter
+            execution.context.maxAttempts = 1
+            const active = execution
+            const raw = await withinModelDeadline(
+                effects.run(active.context, () => provider.secondOpinion!(input, active.deadline.signal)),
+                active.deadline,
+            )
+            active.check()
+            const value = checkResultSchema.safeParse(raw)
+            if (!value.success || value.data.model !== model || value.data.secondOpinion !== undefined)
+                throw new AdmissionError('invalid_output', 502)
+            const result = reconcileSecondOpinion(primary, value.data, model, input)
+            active.check()
+            const response = success(result)
+            active.check()
+            return response
+        } catch (error) {
+            // Once consumed, failure never retries or replaces the original uncertain verdict.
+            if (primary && model && !request.signal.aborted) return success(unavailableSecondOpinion(primary, model))
+            const failure = errorResult(error, execution)
+            return corsResponse(
+                request,
+                Response.json(fail(failure.code, metadata), {
+                    status: failure.status,
+                    headers: { 'cache-control': 'no-store' },
+                }),
+                allowedOrigins,
+            )
+        } finally {
+            execution?.dispose()
+        }
+    }
 
     const segment: Handler = async (request): Promise<Response> => {
         let execution: Execution | undefined
@@ -455,7 +569,7 @@ export function createModelHandlers(options: {
             )
         }
     }
-    return { parse, check, question, segment, options: modelOptions }
+    return { parse, check, secondOpinion, question, segment, options: modelOptions }
 }
 
 function segmentResponse(
