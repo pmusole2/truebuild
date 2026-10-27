@@ -43,15 +43,7 @@ export function Icon({
     const { colors } = useTheme()
     const dimension = iconSize[size]
     return (
-        <Svg
-            width={dimension}
-            height={dimension}
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden={true}
-            accessibilityElementsHidden={true}
-            importantForAccessibility="no"
-        >
+        <Svg width={dimension} height={dimension} viewBox="0 0 24 24" fill="none" aria-hidden={true}>
             {GLYPHS[name].map((path) => (
                 <Path
                     key={path}
