@@ -26,13 +26,13 @@ const content = z.discriminatedUnion('type', [
         .refine((value) => Boolean(value.video_url) !== Boolean(value.file_id)),
 ])
 const requestSchema = z.strictObject({
-    model: z.enum(['muse-spark-1.3', 'muse-spark-1.3-contributor', 'muse-wonder-1.0', 'sam-3.1']),
+    model: z.enum(['muse-spark-1.3', 'muse-wonder-1.0', 'sam-3.1']),
     store: z.boolean().optional(),
     stream: z.boolean().optional(),
     max_output_tokens: z.number().int().min(16).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     instructions: z.string().optional(),
-    reasoning: z.strictObject({ effort: z.literal('low') }).optional(),
+    reasoning: z.strictObject({ effort: z.enum(['low', 'high']) }).optional(),
     input: z.tuple([
         z.strictObject({ type: z.literal('message'), role: z.literal('user'), content: z.array(content).min(2) }),
     ]),
@@ -134,7 +134,11 @@ export function samMockStream(scenario: MockScenario, width = 20, height = 16, v
 }
 
 export async function startMetaMock(
-    options: { scenario?: MockScenario; fileExpiration?: 'omitted' | 'null' | 'timestamp' } = {},
+    options: {
+        scenario?: MockScenario
+        fileExpiration?: 'omitted' | 'null' | 'timestamp'
+        secondOpinion?: { scenario: 'correct' | 'reversed' | 'uncertain' | 'failed'; delayMs?: number }
+    } = {},
 ): Promise<{
     transport: typeof fetch
     requests: { path: string; operation: string }[]
@@ -142,6 +146,7 @@ export async function startMetaMock(
     wireRequests: z.infer<typeof requestSchema>[]
     close(): Promise<void>
 }> {
+    const checks = new Set<string>()
     const requests: { path: string; operation: string }[] = []
     const failures: string[] = []
     const wireRequests: z.infer<typeof requestSchema>[] = []
@@ -199,7 +204,7 @@ export async function startMetaMock(
             wireRequests.push(request)
             assert.match(incoming.headers['content-type'] ?? '', /^application\/json/u)
             const parts = request.input[0].content
-            const scenario = options.scenario ?? 'uncertain'
+            let scenario = options.scenario ?? 'uncertain'
             if (request.model === 'sam-3.1') {
                 assert.equal(request.stream, true)
                 assert.equal(parts.length, 2)
@@ -220,7 +225,7 @@ export async function startMetaMock(
                 return
             }
             assert.equal(request.stream, false)
-            assert.equal(request.reasoning?.effort, 'low')
+            assert.equal(request.reasoning?.effort, request.model === 'muse-wonder-1.0' ? 'high' : 'low')
             assert(request.instructions)
             assert(request.text)
             inspectSchema(request.text.format.schema)
@@ -234,9 +239,35 @@ export async function startMetaMock(
                 .object({ manualContext: z.record(z.string(), z.unknown()) })
                 .parse(JSON.parse(textParts[0]!.text)).manualContext
             const dynamic = z
-                .object({ operation: z.string(), step: z.record(z.string(), z.unknown()).optional() })
+                .object({
+                    operation: z.string(),
+                    requestId: z.string(),
+                    step: z.record(z.string(), z.unknown()).optional(),
+                })
                 .parse(JSON.parse(textParts[1]!.text))
             assert.equal(dynamic.operation, operation)
+            const secondary = operation === 'check' && checks.has(dynamic.requestId) && options.secondOpinion
+            if (operation === 'check') checks.add(dynamic.requestId)
+            if (secondary) {
+                scenario = secondary.scenario
+                requests.push({ path: '/v1/responses', operation: 'second_opinion' })
+                if (secondary.delayMs)
+                    await new Promise<void>((resolve) => {
+                        const done = (): void => {
+                            clearTimeout(timer)
+                            outgoing.off('close', done)
+                            resolve()
+                        }
+                        const timer = setTimeout(done, secondary.delayMs)
+                        outgoing.once('close', done)
+                    })
+                if (outgoing.destroyed) return
+                if (secondary.scenario === 'failed') {
+                    outgoing.statusCode = 503
+                    outgoing.end('synthetic_second_opinion_unavailable')
+                    return
+                }
+            }
             if (operation !== 'parse') {
                 assert.equal(parts.at(-1)?.type, 'input_image')
                 assert(parts.filter((part) => part.type === 'input_image').length <= 21)
@@ -310,7 +341,7 @@ export async function startMetaMock(
                                     ? []
                                     : ['TEST MOCK: no real visual evaluation'],
                         }
-            requests.push({ path: '/v1/responses', operation })
+            if (!secondary) requests.push({ path: '/v1/responses', operation })
             outgoing.setHeader('content-type', 'application/json')
             outgoing.end(
                 JSON.stringify({
