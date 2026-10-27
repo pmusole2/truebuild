@@ -10,60 +10,73 @@ import { Stack } from './surface'
 
 export type AskPart = { readonly id: string; readonly label: string }
 
-// `null` targets the whole step rather than one part.
-export type AskTarget = string | null
-
+/**
+ * Composer for one question about a frozen photo. A target is either a step part chosen here or a point tapped in the
+ * photo (summarised by the caller). Sending needs a target and non-empty text; the caller owns the request.
+ */
 export function AskSheet({
     question,
+    questionLabel,
     onQuestionChange,
     parts,
-    target,
-    onTargetChange,
+    selectedPartId,
+    onSelectPart,
+    targetSummary,
+    hasTarget,
+    editable = true,
     onSubmit,
     busy = false,
     disabledReason,
     answer,
 }: {
     readonly question: string
+    readonly questionLabel: string
     readonly onQuestionChange: (value: string) => void
     readonly parts: readonly AskPart[]
-    readonly target: AskTarget
-    readonly onTargetChange: (target: AskTarget) => void
+    readonly selectedPartId: string | null
+    readonly onSelectPart: (partId: string) => void
+    readonly targetSummary: string
+    // True once the user has chosen a part or tapped a point. Text alone is never enough to send.
+    readonly hasTarget: boolean
+    readonly editable?: boolean
     readonly onSubmit: () => void
     readonly busy?: boolean
-    // Why the question cannot be sent yet. It is shown as text, and the submit control is disabled while it applies.
     readonly disabledReason?: string
     readonly answer?: ReactNode
 }): ReactElement {
-    const submitDisabled = disabledReason !== undefined || question.trim().length === 0
+    const submitDisabled = busy || !hasTarget || question.trim().length === 0 || disabledReason !== undefined
     return (
         <Stack gap="md">
+            <Caption>
+                Type a question, or use your keyboard’s dictation. Questions are sent only when you press Send.
+            </Caption>
             <TextField
-                label="Question about this step"
+                label={questionLabel}
                 value={question}
                 onChangeText={onQuestionChange}
                 placeholder="Which way should this part face?"
                 hint={disabledReason}
                 multiline={true}
+                editable={editable}
             />
-            <Stack gap="xs">
-                <Caption>Ask about</Caption>
-                <View accessibilityRole="radiogroup" accessibilityLabel="Ask about" style={styles.chips}>
-                    {[
-                        { id: null, label: 'Whole step' },
-                        ...parts.map((part) => ({ id: part.id, label: part.label })),
-                    ].map((option) => (
-                        <PartChip
-                            key={option.id ?? 'whole'}
-                            label={option.label}
-                            selected={option.id === target}
-                            onPress={(): void => onTargetChange(option.id)}
-                        />
-                    ))}
-                </View>
-            </Stack>
+            {parts.length === 0 ? null : (
+                <Stack gap="xs">
+                    <Caption>Ask about a part</Caption>
+                    <View accessibilityRole="radiogroup" accessibilityLabel="Ask about a part" style={styles.chips}>
+                        {parts.map((part) => (
+                            <PartChip
+                                key={part.id}
+                                label={part.label}
+                                selected={part.id === selectedPartId}
+                                onPress={(): void => onSelectPart(part.id)}
+                            />
+                        ))}
+                    </View>
+                </Stack>
+            )}
+            <Caption>{targetSummary}</Caption>
             <AppButton
-                label="Ask question"
+                label="Send question"
                 variant="primary"
                 busy={busy}
                 disabled={submitDisabled}
@@ -95,12 +108,12 @@ function PartChip({
             {...focus.focusHandlers}
             onPress={onPress}
             style={[
-                focusRingStyle(focus.focused, colors),
                 styles.chip,
                 {
                     borderColor: colors.borderStrong,
                     backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised,
                 },
+                focusRingStyle(focus.focused, colors),
             ]}
         >
             <Caption tone={selected ? 'inverse' : 'default'}>{label}</Caption>

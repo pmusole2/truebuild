@@ -216,10 +216,13 @@ function Preview(): ReactElement {
                 />
                 <AskSheet
                     question={askText}
+                    questionLabel="Question about frozen photo"
                     onQuestionChange={setAskText}
                     parts={PART_EXAMPLES}
-                    target={askTarget}
-                    onTargetChange={setAskTarget}
+                    selectedPartId={askTarget}
+                    onSelectPart={setAskTarget}
+                    targetSummary={askTarget === null ? 'Choose a point or part.' : 'Selected part (preview only).'}
+                    hasTarget={askTarget !== null}
                     onSubmit={noopPreview}
                     disabledReason={askText.trim().length === 0 ? 'Type a question to enable the button.' : undefined}
                     answer={<Notice text="Preview only: an answer would appear here." />}

@@ -54,13 +54,14 @@ export function ComparisonFrame({
     }
     return (
         <View testID="comparison-stack" onLayout={onLayout} style={[styles.stack, sideBySide && styles.stackRow]}>
-            <Pane pane={diagram} testID="diagram" sideBySide={sideBySide} />
-            <Pane pane={photo} testID="photo" sideBySide={sideBySide} />
+            <MeasuredPane pane={diagram} testID="diagram" sideBySide={sideBySide} />
+            <MeasuredPane pane={photo} testID="photo" sideBySide={sideBySide} />
         </View>
     )
 }
 
-function Pane({
+/** One measured image pane: caption, a 220 point frame, the media contained inside it, and normalized highlights. */
+export function MeasuredPane({
     pane,
     testID,
     sideBySide,

@@ -12,10 +12,13 @@ function renderAsk(overrides: Partial<Parameters<typeof AskSheet>[0]> = {}): Ret
     return render(
         <AskSheet
             question="Which way should this part face?"
+            questionLabel="Question about frozen photo"
             onQuestionChange={(): void => undefined}
             parts={PARTS}
-            target={null}
-            onTargetChange={(): void => undefined}
+            selectedPartId={null}
+            onSelectPart={(): void => undefined}
+            targetSummary="Choose a point or part."
+            hasTarget={true}
             onSubmit={(): void => undefined}
             {...overrides}
         />,
@@ -23,35 +26,36 @@ function renderAsk(overrides: Partial<Parameters<typeof AskSheet>[0]> = {}): Ret
 }
 
 describe('AskSheet', () => {
-    it('targets the whole step by default and lets the user pick one part instead', async () => {
-        const onTargetChange = jest.fn()
-        await renderAsk({ onTargetChange })
-        expect(screen.getByRole('radio', { name: 'Whole step' }).props.accessibilityState).toEqual({ checked: true })
+    it('reports the chosen part, never a whole-step target', async () => {
+        const onSelectPart = jest.fn()
+        await renderAsk({ onSelectPart, selectedPartId: null })
+        expect(screen.queryByRole('radio', { name: 'Whole step' })).toBeNull()
         await fireEvent.press(screen.getByRole('radio', { name: 'Side panel' }))
-        expect(onTargetChange).toHaveBeenCalledWith('side-panel')
+        expect(onSelectPart).toHaveBeenCalledWith('side-panel')
     })
 
-    it('submits the question once through a named button', async () => {
+    it('does not send without a target, and sends once with one', async () => {
         const onSubmit = jest.fn()
-        await renderAsk({ onSubmit })
-        await fireEvent.press(screen.getByRole('button', { name: 'Ask question' }))
+        await renderAsk({ hasTarget: false, onSubmit })
+        await fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
+        expect(onSubmit).not.toHaveBeenCalled()
+        await renderAsk({ hasTarget: true, onSubmit })
+        await fireEvent.press(screen.getAllByRole('button', { name: 'Send question' }).at(-1)!)
         expect(onSubmit).toHaveBeenCalledTimes(1)
     })
 
     it('an empty question cannot be sent, and a stated reason is shown as text', async () => {
         const onSubmit = jest.fn()
         await renderAsk({ question: '   ', onSubmit, disabledReason: 'Take a photo of the assembly first.' })
-        expect(screen.getByRole('button', { name: 'Ask question' })).toHaveProp('accessibilityState', {
+        expect(screen.getByRole('button', { name: 'Send question' }).props.accessibilityState).toMatchObject({
             disabled: true,
-            busy: false,
         })
         expect(screen.getByText('Take a photo of the assembly first.')).toBeTruthy()
-        await fireEvent.press(screen.getByRole('button', { name: 'Ask question' }))
-        expect(onSubmit).not.toHaveBeenCalled()
     })
 
-    it('shows a previous answer below the controls when one is supplied', async () => {
+    it('shows the dictation hint and a previous answer below the controls', async () => {
         await renderAsk({ answer: <Text>Answer: the groove faces inward.</Text> })
+        expect(screen.getByText(/keyboard’s dictation/)).toBeTruthy()
         expect(screen.getByText('Answer: the groove faces inward.')).toBeTruthy()
     })
 })

@@ -25,6 +25,7 @@ const GLYPHS = {
     plus: ['M12 5.5v13', 'M5.5 12h13'],
     refresh: ['M19.2 12a7.2 7.2 0 1 1-2.1-5.1', 'M19.5 4.5v4.2h-4.2'],
     search: ['M10.8 4.8a6 6 0 1 0 0 12 6 6 0 0 0 0-12z', 'M15.3 15.3l4.3 4.3'],
+    settings: ['M4 7h9', 'M17 7h3', 'M4 17h3', 'M11 17h9', 'M13 4.5v5', 'M7 14.5v5'],
 } as const satisfies Record<string, readonly string[]>
 
 export type IconName = keyof typeof GLYPHS

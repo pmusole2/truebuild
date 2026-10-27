@@ -48,14 +48,14 @@ export function CameraChrome({
                 </View>
                 <View style={styles.bottomBar}>
                     <Body>{hint}</Body>
-                    <Shutter label={shutterLabel} onPress={onShutter} disabled={shutterDisabled || busy} />
+                    <ShutterButton label={shutterLabel} onPress={onShutter} disabled={shutterDisabled || busy} />
                 </View>
             </View>
         </ThemeProvider>
     )
 }
 
-function ViewfinderCorners(): ReactElement {
+export function ViewfinderCorners(): ReactElement {
     const { colors } = useTheme()
     return (
         <View accessibilityElementsHidden={true} importantForAccessibility="no" style={StyleSheet.absoluteFill}>
@@ -67,7 +67,7 @@ function ViewfinderCorners(): ReactElement {
     )
 }
 
-function Shutter({
+export function ShutterButton({
     label,
     onPress,
     disabled,

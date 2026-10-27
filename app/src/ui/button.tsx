@@ -27,6 +27,8 @@ export type AppButtonProps = {
     // Busy keeps the label visible, shows progress and blocks repeat presses while a request is in flight.
     readonly busy?: boolean
     readonly hint?: string
+    // Full name for assistive tech when the visible label is shortened (for example "Up" for "Move page 2 up").
+    readonly accessibilityLabel?: string
     readonly testID?: string
 }
 
@@ -37,6 +39,7 @@ export function AppButton({
     disabled = false,
     busy = false,
     hint,
+    accessibilityLabel,
     testID,
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
@@ -48,7 +51,7 @@ export function AppButton({
     return (
         <Pressable
             accessibilityRole="button"
-            accessibilityLabel={label}
+            accessibilityLabel={accessibilityLabel ?? label}
             accessibilityHint={hint}
             accessibilityState={{ disabled: inactive, busy }}
             aria-disabled={inactive}

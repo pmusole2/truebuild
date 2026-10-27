@@ -18,6 +18,9 @@ export type TextFieldProps = {
     // Secret entry (for example a shared key): masked, never autocorrected or autocapitalised.
     readonly secure?: boolean
     readonly onSubmitEditing?: () => void
+    readonly onEndEditing?: () => void
+    readonly editable?: boolean
+    readonly maxLength?: number
 }
 
 /** Labelled text input. Errors are announced and linked to the field as its accessibility hint. */
@@ -32,6 +35,9 @@ export function TextField({
     keyboardType = 'default',
     secure = false,
     onSubmitEditing,
+    onEndEditing,
+    editable = true,
+    maxLength,
 }: TextFieldProps): ReactElement {
     const { colors } = useTheme()
     const type = typeProps('body')
@@ -49,6 +55,9 @@ export function TextField({
                 placeholder={placeholder}
                 placeholderTextColor={colors.inkMuted}
                 onSubmitEditing={onSubmitEditing}
+                onEndEditing={onEndEditing}
+                editable={editable}
+                maxLength={maxLength}
                 onFocus={(): void => setFocused(true)}
                 onBlur={(): void => setFocused(false)}
                 keyboardType={keyboardType}

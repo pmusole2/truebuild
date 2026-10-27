@@ -18,9 +18,15 @@ export { Skeleton, SkeletonLines } from './skeleton'
 export { EmptyState, ErrorState, LoadingState, PermissionState, type StateAction } from './states'
 export { SegmentedControl, SettingRow, TextField, type SegmentOption, type TextFieldProps } from './fields'
 export { ThumbnailCard, ManualCard } from './cards'
-export { CameraChrome } from './camera-chrome'
+export { CameraChrome, ShutterButton, ViewfinderCorners } from './camera-chrome'
 export { BottomSheet, InstructionSheet } from './sheet'
 export { ResultSheet } from './result-sheet'
-export { AskSheet, type AskPart, type AskTarget } from './ask-sheet'
-export { ComparisonFrame, type ComparisonLayout, type ComparisonPane, type ComparisonRegion } from './comparison'
+export { AskSheet, type AskPart } from './ask-sheet'
+export {
+    ComparisonFrame,
+    MeasuredPane,
+    type ComparisonLayout,
+    type ComparisonPane,
+    type ComparisonRegion,
+} from './comparison'
 export { clampBox, regionOnFrame } from './comparison-geometry'
