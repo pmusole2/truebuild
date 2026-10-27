@@ -1,91 +1,138 @@
-import { groundedRegion } from './grounded-region'
 import { useState, type ReactElement, type ReactNode } from 'react'
-import { Button, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { Rect as SvgRect } from 'react-native-svg'
-import type { Fact, ManualSession, SourceRef } from '@truebuild/contracts'
+import { Image, Linking, Pressable, StyleSheet, View } from 'react-native'
+import type { CheckResult, Fact, ManualSession, SourceRef } from '@truebuild/contracts'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay } from '../assembly/frame-geometry'
 import { stepPartChoices } from '../assembly/question-state'
+import { AppButton, IconButton } from '../../ui/button'
+import { BottomSheet } from '../../ui/sheet'
+import { Card, Screen as ScreenShell, Stack } from '../../ui/surface'
+import { Body, Callout, Caption, Heading, Label, Title } from '../../ui/text'
+import { Icon } from '../../ui/icons'
+import { EmptyState, ErrorState, LoadingState } from '../../ui/states'
+import { Notice, StatusTag, type NoticeTone, type Verdict } from '../../ui/status'
+import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
+import { ComparisonFrame, MeasuredPane, type ComparisonPane } from '../../ui/comparison'
+import { AskSheet } from '../../ui/ask-sheet'
+import { ResultSheet } from '../../ui/result-sheet'
+import { TextField } from '../../ui/fields'
+import { Skeleton } from '../../ui/skeleton'
+import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { useTheme } from '../../theme/theme'
+import { radius, space, touchTarget } from '../../theme/tokens'
+import { groundedRegion } from './grounded-region'
 import { reviewedSession, unresolvedCriticalFacts, type CaptureController, type WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
 
 export type WorkflowScreenProps = { state: WorkflowState; controller: CaptureController }
+
+// Notices that describe a failure or an unavailable service read as errors; progress and cancellation read as information.
+const FAILURE_NOTICE = /unavailable|timed out|could not|not allowed|cannot|not confirmed|nothing was/iu
+
+export function noticeTone(text: string): NoticeTone {
+    return FAILURE_NOTICE.test(text) ? 'error' : 'info'
+}
+
+/** Shared frame: safe-area shell, our own top bar with an optional back control, and the screen title. */
 export function Screen({
     title,
     children,
     onBack,
+    trailing,
+    testID,
 }: {
     title: string
     children: ReactNode
     onBack?: () => void
+    trailing?: ReactNode
+    testID?: string
 }): ReactElement {
     return (
-        <SafeAreaView style={styles.safe}>
-            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-                {onBack === undefined ? null : <Button title="Back" onPress={onBack} />}
-                <Text accessibilityRole="header" style={styles.title}>
-                    {title}
-                </Text>
+        <ScreenShell header="hidden" testID={testID}>
+            <Stack gap="md">
+                <View style={styles.topBar}>
+                    {onBack === undefined ? null : <IconButton label="Back" icon="chevronLeft" onPress={onBack} />}
+                    <View style={styles.titleWrap}>
+                        <Title>{title}</Title>
+                    </View>
+                    {trailing ?? null}
+                </View>
                 {children}
-            </ScrollView>
-        </SafeAreaView>
+            </Stack>
+        </ScreenShell>
     )
 }
+
 export function WorkflowNotice({ state, controller }: WorkflowScreenProps): ReactElement {
     return (
         <View accessibilityLiveRegion="polite">
-            {state.notice === null ? null : <Text accessibilityRole="alert">{state.notice}</Text>}
-            {state.storageReadOnly ? (
-                <Button
-                    title={state.loading ? 'Reading local library…' : 'Retry local library'}
-                    disabled={state.loading || state.pending !== null}
-                    onPress={(): void => {
-                        void controller.restore()
-                    }}
-                />
-            ) : null}
-            {state.pending === null ? null : (
-                <>
-                    <Text>{state.pending}</Text>
-                    <Button title="Cancel" onPress={controller.cancel} />
-                </>
-            )}
+            <Stack gap="sm">
+                {state.notice === null ? null : <Notice tone={noticeTone(state.notice)} text={state.notice} />}
+                {state.storageReadOnly ? (
+                    <AppButton
+                        label={state.loading ? 'Reading local library…' : 'Retry local library'}
+                        busy={state.loading}
+                        disabled={state.loading || state.pending !== null}
+                        onPress={(): void => {
+                            void controller.restore()
+                        }}
+                    />
+                ) : null}
+                {state.pending === null ? null : (
+                    <Card>
+                        <Callout>{state.pending}</Callout>
+                        <AppButton label="Cancel" variant="quiet" onPress={controller.cancel} />
+                    </Card>
+                )}
+            </Stack>
         </View>
     )
 }
-export function LibraryScreen({ state, controller }: WorkflowScreenProps): ReactElement {
+
+export function LibraryScreen({
+    state,
+    controller,
+    onOpenSettings,
+}: WorkflowScreenProps & { onOpenSettings?: () => void }): ReactElement {
+    const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     return (
-        <Screen title="Your manuals">
+        <Screen
+            title="Your manuals"
+            testID="library-screen"
+            trailing={
+                onOpenSettings === undefined ? null : (
+                    <IconButton label="Settings" icon="settings" onPress={onOpenSettings} />
+                )
+            }
+        >
             <WorkflowNotice state={state} controller={controller} />
             {state.loading ? (
-                <Text>Restoring local library…</Text>
+                <Card>
+                    <LoadingState label="Restoring local library…" />
+                </Card>
             ) : state.entries.length === 0 ? (
-                <Text>
-                    {state.storageReadOnly
-                        ? 'Saved library unavailable. Original local data is retained.'
-                        : 'No manuals yet. Scan or choose your own manual pages to start.'}
-                </Text>
+                state.storageReadOnly ? (
+                    <ErrorState
+                        title="Saved library unavailable"
+                        body="Original local data is retained. Retry the local library above before making changes."
+                    />
+                ) : (
+                    <EmptyState title="No manuals yet." body="Scan or choose your own manual pages to start." />
+                )
             ) : null}
             {state.entries.map((entry) => (
-                <View key={entry.session.manualId} style={styles.section}>
-                    <Text style={styles.subtitle}>{entry.session.title}</Text>
-                    <Text>
-                        {entry.session.pages.length} pages · {entry.session.reviewedSteps.length} steps ·{' '}
-                        {entry.session.reviewStatus}
-                    </Text>
-                    <Text>{entry.completedStepIds.length} steps marked complete by you</Text>
-                    <Button
-                        title={`Open ${entry.session.title}`}
-                        onPress={(): void => {
-                            void controller.open(entry.session.manualId)
-                        }}
-                    />
-                </View>
+                <ManualSummary
+                    key={entry.session.manualId}
+                    entry={entry}
+                    onOpen={(): void => {
+                        void controller.open(entry.session.manualId)
+                    }}
+                />
             ))}
-            <Button
-                title="Add manual"
-                disabled={state.loading || state.pending !== null || state.storageReadOnly}
+            <AppButton
+                label="Add manual"
+                variant="accent"
+                disabled={addDisabled}
                 onPress={(): void => {
                     void controller.createManual()
                 }}
@@ -93,87 +140,135 @@ export function LibraryScreen({ state, controller }: WorkflowScreenProps): React
         </Screen>
     )
 }
+
+function ManualSummary({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
+    const confirmed = entry.session.reviewStatus === 'reviewed'
+    return (
+        <Card>
+            <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${entry.session.title}`}
+                onPress={onOpen}
+                style={styles.manualPress}
+            >
+                <Heading>{entry.session.title}</Heading>
+                <Caption>
+                    {`${entry.session.pages.length} pages · ${entry.session.reviewedSteps.length} steps · ${entry.completedStepIds.length} marked complete by you`}
+                </Caption>
+                <StatusTag
+                    label={confirmed ? 'Facts confirmed' : 'Facts not confirmed'}
+                    tone={confirmed ? 'pass' : 'caution'}
+                    icon={confirmed ? 'check' : 'help'}
+                />
+            </Pressable>
+        </Card>
+    )
+}
+
 export type PagesScreenProps = WorkflowScreenProps & {
     entry: LibraryEntry
     choosePages: (replaceIndex?: number) => void
 }
+
 export function PagesScreen({ state, controller, entry, choosePages }: PagesScreenProps): ReactElement {
     const [title, setTitle] = useState(entry.session.title)
     const busy = state.pending !== null || state.storageReadOnly
+    const full = entry.session.pages.length >= 20
     return (
-        <Screen title="Manual pages" onBack={controller.home}>
+        <Screen title="Manual pages" onBack={controller.home} testID="pages-screen">
             <WorkflowNotice state={state} controller={controller} />
-            <TextInput
-                accessibilityLabel="Manual title"
+            <TextField
+                label="Manual title"
                 value={title}
                 maxLength={200}
                 onChangeText={setTitle}
                 onEndEditing={(): void => {
                     void controller.rename(title)
                 }}
-                style={styles.input}
+                editable={!state.storageReadOnly}
             />
-            <Text>Pages stay on this device. Reading sends these pages to your configured TrueBuild API.</Text>
-            <Text>Up to 20 pages. Phone photos are resized and compressed locally before upload.</Text>
+            <Caption>
+                Pages stay on this device. Pages are sent to your TrueBuild API only when you read the manual, check a
+                step or ask a question.
+            </Caption>
+            <Caption>Up to 20 pages. Phone photos are resized and compressed locally before upload.</Caption>
+            {entry.session.pages.length === 0 ? (
+                <Card>
+                    <Body tone="muted">No pages yet. Scan a page or choose pages from photos.</Body>
+                </Card>
+            ) : null}
             {entry.session.pages.map((page, index) => (
-                <View key={page.pageId} style={styles.section}>
-                    <Text>Page {index + 1}</Text>
-                    <PageImage uri={state.pageUris[page.pageId]} label={`Manual page ${index + 1}`} />
-                    <View style={styles.row}>
-                        <Button
-                            title={`Move page ${index + 1} up`}
+                <Card key={page.pageId}>
+                    <Heading>{`Page ${index + 1}`}</Heading>
+                    <PageImage
+                        uri={state.pageUris[page.pageId]}
+                        label={`Manual page ${index + 1}`}
+                        aspectRatio={page.width / page.height}
+                    />
+                    <View style={styles.actionRow}>
+                        <AppButton
+                            label="Up"
+                            accessibilityLabel={`Move page ${index + 1} up`}
+                            variant="quiet"
                             disabled={busy || index === 0}
                             onPress={(): void => {
                                 void controller.editPage(index, 'up')
                             }}
                         />
-                        <Button
-                            title={`Move page ${index + 1} down`}
+                        <AppButton
+                            label="Down"
+                            accessibilityLabel={`Move page ${index + 1} down`}
+                            variant="quiet"
                             disabled={busy || index === entry.session.pages.length - 1}
                             onPress={(): void => {
                                 void controller.editPage(index, 'down')
                             }}
                         />
-                        <Button
-                            title={`Remove page ${index + 1}`}
+                        <AppButton
+                            label="Retake"
+                            accessibilityLabel={`Retake page ${index + 1}`}
+                            variant="quiet"
+                            disabled={busy}
+                            onPress={(): void => controller.camera({ kind: 'page', replaceIndex: index })}
+                        />
+                        <AppButton
+                            label="Replace"
+                            accessibilityLabel={`Replace page ${index + 1} from photos`}
+                            variant="quiet"
+                            disabled={busy}
+                            onPress={(): void => choosePages(index)}
+                        />
+                        <AppButton
+                            label="Remove"
+                            accessibilityLabel={`Remove page ${index + 1}`}
+                            variant="danger"
                             disabled={busy}
                             onPress={(): void => {
                                 void controller.editPage(index, 'remove')
                             }}
                         />
-                        <Button
-                            title={`Retake page ${index + 1}`}
-                            disabled={busy}
-                            onPress={(): void => controller.camera({ kind: 'page', replaceIndex: index })}
-                        />
-                        <Button
-                            title={`Replace page ${index + 1} from photos`}
-                            disabled={busy}
-                            onPress={(): void => choosePages(index)}
-                        />
                     </View>
-                </View>
+                </Card>
             ))}
-            <Button
-                title="Scan a page"
-                disabled={busy || entry.session.pages.length >= 20}
+            <AppButton
+                label="Scan a page"
+                variant="accent"
+                disabled={busy || full}
                 onPress={(): void => controller.camera({ kind: 'page' })}
             />
-            <Button
-                title="Choose pages from photos"
-                disabled={busy || entry.session.pages.length >= 20}
-                onPress={(): void => choosePages()}
-            />
-            <Button
-                title={entry.session.rawExtraction === null ? 'Read manual' : 'Read manual again'}
+            <AppButton label="Choose pages from photos" disabled={busy || full} onPress={(): void => choosePages()} />
+            <AppButton
+                label={entry.session.rawExtraction === null ? 'Read manual' : 'Read manual again'}
+                variant="primary"
+                busy={state.pending !== null && state.pending.startsWith('Reading')}
                 disabled={busy || entry.session.pages.length === 0}
                 onPress={(): void => {
                     void controller.parse()
                 }}
             />
             {entry.session.rawExtraction === null ? null : (
-                <Button
-                    title="Review extracted facts"
+                <AppButton
+                    label="Review extracted facts"
                     disabled={busy}
                     onPress={(): void => controller.navigate('overview')}
                 />
@@ -181,42 +276,59 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
         </Screen>
     )
 }
-function PageImage({ uri, label }: { uri: string | undefined; label: string }): ReactElement {
-    return uri === undefined ? (
-        <Text>Loading local page…</Text>
-    ) : (
-        <Image source={{ uri }} accessibilityLabel={label} resizeMode="contain" style={styles.thumbnail} />
-    )
-}
-function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
-    return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
-}
-export function StepFacts({ session, index }: { session: ManualSession; index: number }): ReactElement {
-    const step = session.reviewedSteps[index]
-    if (step === undefined) {
-        return <Text>No extracted steps yet.</Text>
+
+function PageImage({
+    uri,
+    label,
+    aspectRatio,
+}: {
+    uri: string | undefined
+    label: string
+    aspectRatio: number
+}): ReactElement {
+    if (uri === undefined) {
+        return (
+            <Stack gap="xs">
+                <Skeleton height={160} />
+                <Caption>Loading local page…</Caption>
+            </Stack>
+        )
     }
     return (
-        <View style={styles.section}>
-            <Text style={styles.subtitle}>
-                {step.order}. {step.title}
-            </Text>
-            {step.parts.map((part) => (
-                <Text key={part.partId}>
-                    {part.partId}: {factText(part.quantity, String)}
-                </Text>
-            ))}
-            <Text>Orientation: {factText(step.orientation, (value) => value.description)}</Text>
-            <Text>Connection: {factText(step.connection, (value) => value.description)}</Text>
-            {step.visibleChecks.map((check) => (
-                <Text key={check.checkId}>Visible check: {factText(check.description, String)}</Text>
-            ))}
-            {step.correction?.actions.map((action) => (
-                <Text key={action.actionId}>Correction: {action.instruction}</Text>
-            ))}
+        <View style={[styles.pageFrame, { aspectRatio }]}>
+            <Image source={{ uri }} accessibilityLabel={label} resizeMode="stretch" style={StyleSheet.absoluteFill} />
         </View>
     )
 }
+
+function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
+    return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
+}
+
+export function StepFacts({ session, index }: { session: ManualSession; index: number }): ReactElement {
+    const step = session.reviewedSteps[index]
+    if (step === undefined) {
+        return <Body tone="muted">No extracted steps yet.</Body>
+    }
+    return (
+        <Stack gap="xs">
+            <Heading>{`${step.order}. ${step.title}`}</Heading>
+            {step.parts.map((part) => (
+                <Body key={part.partId}>{`${part.partId}: ${factText(part.quantity, String)}`}</Body>
+            ))}
+            <Body>{`Orientation: ${factText(step.orientation, (value) => value.description)}`}</Body>
+            <Body>{`Connection: ${factText(step.connection, (value) => value.description)}`}</Body>
+            {step.visibleChecks.map((check) => (
+                <Body key={check.checkId}>{`Visible check: ${factText(check.description, String)}`}</Body>
+            ))}
+            {step.correction?.actions.map((action) => (
+                <Body key={action.actionId}>{`Correction: ${action.instruction}`}</Body>
+            ))}
+        </Stack>
+    )
+}
+
+/** Expected diagrams for cited pages. Highlights are measured against each page's own size, so letterboxing is correct. */
 export function SourceDiagrams({
     refs,
     session,
@@ -227,43 +339,44 @@ export function SourceDiagrams({
     pageUris: WorkflowState['pageUris']
 }): ReactElement {
     return (
-        <View>
+        <Stack gap="sm">
             {refs.map((ref, index) => {
-                const page = session.pages.find((page) => page.pageId === ref.pageId)
+                const page = session.pages.find((candidate) => candidate.pageId === ref.pageId)
                 if (page === undefined) {
-                    return <Text key={index}>Cited diagram unavailable.</Text>
+                    return <Caption key={index}>Cited diagram unavailable.</Caption>
                 }
-                return (
-                    <View key={`${ref.pageId}-${index}`} style={styles.section}>
-                        <Text>Expected diagram · page {session.pages.indexOf(page) + 1}</Text>
-                        <View style={{ width: '100%', maxWidth: 320, aspectRatio: page.width / page.height }}>
+                const pageNumber = session.pages.indexOf(page) + 1
+                const uri = pageUris[page.pageId]
+                const pane: ComparisonPane = {
+                    caption: `Expected diagram · page ${pageNumber}`,
+                    media:
+                        uri === undefined ? (
+                            <Caption>Loading page…</Caption>
+                        ) : (
                             <Image
-                                source={{ uri: pageUris[page.pageId] }}
-                                accessibilityLabel={`Expected diagram page ${session.pages.indexOf(page) + 1}`}
-                                resizeMode="contain"
+                                source={{ uri }}
+                                accessibilityLabel={`Expected diagram page ${pageNumber}`}
+                                resizeMode="stretch"
                                 style={StyleSheet.absoluteFill}
                             />
-                            {ref.region === null ? null : (
-                                <View
-                                    pointerEvents="none"
-                                    style={[
-                                        styles.region,
-                                        {
-                                            left: `${ref.region.x * 100}%`,
-                                            top: `${ref.region.y * 100}%`,
-                                            width: `${ref.region.width * 100}%`,
-                                            height: `${ref.region.height * 100}%`,
-                                        },
-                                    ]}
-                                />
-                            )}
-                        </View>
-                    </View>
+                        ),
+                    mediaSize: { width: page.width, height: page.height },
+                    regions:
+                        ref.region === null ? [] : [{ id: `cited-${index}`, label: 'Cited area', box: ref.region }],
+                }
+                return (
+                    <MeasuredPane
+                        key={`${ref.pageId}-${index}`}
+                        pane={pane}
+                        testID={`diagram-${index}`}
+                        sideBySide={false}
+                    />
                 )
             })}
-        </View>
+        </Stack>
     )
 }
+
 export function OverviewScreen({
     state,
     controller,
@@ -273,98 +386,204 @@ export function OverviewScreen({
     const [confirmed, setConfirmed] = useState(false)
     const canConfirm = reviewedSession(session) !== null
     const unresolved = unresolvedCriticalFacts(session)
+    const reviewed = session.reviewStatus === 'reviewed'
     return (
-        <Screen title={session.title} onBack={controller.home}>
+        <Screen title={session.title} onBack={controller.home} testID="overview-screen">
             <WorkflowNotice state={state} controller={controller} />
-            <Text>
+            <Caption>
                 Review extracted facts against your original diagrams. Unknown critical facts block verified checks.
-            </Text>
-            <View style={styles.row}>
+            </Caption>
+            <View style={styles.pageStrip}>
                 {session.pages.map((page, index) => (
-                    <PageImage key={page.pageId} uri={state.pageUris[page.pageId]} label={`Manual page ${index + 1}`} />
+                    <View key={page.pageId} style={styles.stripItem}>
+                        <PageImage
+                            uri={state.pageUris[page.pageId]}
+                            label={`Manual page ${index + 1}`}
+                            aspectRatio={page.width / page.height}
+                        />
+                    </View>
                 ))}
             </View>
-            {session.parts.map((part) => (
-                <Text key={part.partId}>
-                    Part {part.partId}: {factText(part.name, String)}
-                </Text>
-            ))}
+            {session.parts.length === 0 ? null : (
+                <Card>
+                    <Heading>Parts</Heading>
+                    {session.parts.map((part) => (
+                        <Body key={part.partId}>{`Part ${part.partId}: ${factText(part.name, String)}`}</Body>
+                    ))}
+                </Card>
+            )}
             {unresolved.map((issue) => (
-                <Text key={issue}>Unresolved critical fact: {issue}</Text>
+                <Notice key={issue} tone="error" text={`Unresolved critical fact: ${issue}`} />
             ))}
             {session.rawExtraction?.unknowns.map((unknown, index) => (
-                <Text key={index}>Extraction note: {unknown}</Text>
+                <Notice key={index} text={`Extraction note: ${unknown}`} />
             ))}
             {session.reviewedSteps.map((step, index) => (
-                <View key={step.stepId} style={styles.section}>
+                <Card key={step.stepId}>
                     <StepFacts session={session} index={index} />
                     <SourceDiagrams refs={step.sourceRefs} session={session} pageUris={state.pageUris} />
-                    {session.reviewStatus !== 'reviewed' ? null : (
-                        <Button
-                            title={`Guide step ${step.order}`}
+                    {reviewed ? (
+                        <AppButton
+                            label={`Guide step ${step.order}`}
                             onPress={(): void => {
                                 void controller.step(index)
                             }}
                         />
-                    )}
-                </View>
+                    ) : null}
+                </Card>
             ))}
-            {session.reviewStatus === 'reviewed' ? (
-                <>
-                    <Text>Facts confirmed by you.</Text>
-                    <Button title="Continue assembly" onPress={(): void => controller.navigate('guide')} />
-                </>
+            {reviewed ? (
+                <Card>
+                    <StatusTag label="Facts confirmed by you" tone="pass" icon="check" />
+                    <Callout>Facts confirmed by you.</Callout>
+                    <AppButton
+                        label="Continue assembly"
+                        variant="accent"
+                        onPress={(): void => controller.navigate('guide')}
+                    />
+                </Card>
             ) : (
-                <>
-                    <Pressable
-                        accessibilityRole="checkbox"
-                        accessibilityLabel="I checked all facts and corrections against the manual"
-                        accessibilityState={{ checked: confirmed, disabled: !canConfirm }}
+                <Card>
+                    <ConfirmRow
+                        label="I checked all facts and corrections against the manual"
+                        checked={confirmed}
                         disabled={!canConfirm}
-                        onPress={(): void => setConfirmed(!confirmed)}
-                        style={styles.section}
-                    >
-                        <Text>{confirmed ? '☑' : '☐'} I checked all facts and corrections against the manual</Text>
-                    </Pressable>
-                    {!canConfirm ? (
-                        <Text>
+                        onToggle={(): void => setConfirmed(!confirmed)}
+                    />
+                    {canConfirm ? null : (
+                        <Caption>
                             Add or retake clearer pages showing the unresolved facts, then read the manual again. No
                             unknown facts will be filled in automatically.
-                        </Text>
-                    ) : null}
-                    <Button
-                        title="Confirm reviewed facts"
+                        </Caption>
+                    )}
+                    <AppButton
+                        label="Confirm reviewed facts"
+                        variant="primary"
                         disabled={!confirmed || !canConfirm || state.pending !== null || state.storageReadOnly}
                         onPress={(): void => {
                             void controller.confirm()
                         }}
                     />
-                </>
+                </Card>
             )}
-            <Button
-                title="Edit manual pages"
+            <AppButton
+                label="Edit manual pages"
                 disabled={state.pending !== null}
                 onPress={(): void => controller.navigate('pages')}
             />
         </Screen>
     )
 }
+
+/** Explicit checkbox: a 44 point row with a visible mark, a text label and a web focus ring. */
+export function ConfirmRow({
+    label,
+    checked,
+    disabled,
+    onToggle,
+}: {
+    label: string
+    checked: boolean
+    disabled: boolean
+    onToggle: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const focus = useFocusRing()
+    return (
+        <Pressable
+            accessibilityRole="checkbox"
+            accessibilityLabel={label}
+            accessibilityState={{ checked, disabled }}
+            aria-checked={checked}
+            disabled={disabled}
+            {...focus.focusHandlers}
+            onPress={onToggle}
+            style={[
+                styles.confirmRow,
+                { borderColor: colors.border, backgroundColor: colors.surfaceRaised },
+                disabled && styles.disabled,
+                focusRingStyle(focus.focused, colors),
+            ]}
+        >
+            <View
+                style={[
+                    styles.checkBox,
+                    { borderColor: colors.borderStrong, backgroundColor: checked ? colors.fillStrong : colors.surface },
+                ]}
+            >
+                {checked ? <Icon name="check" size="sm" color={colors.fillStrongInk} /> : null}
+            </View>
+            <View style={styles.confirmText}>
+                <Body>{label}</Body>
+            </View>
+        </Pressable>
+    )
+}
+
 export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & { entry: LibraryEntry }): ReactElement {
-    const step = entry.session.reviewedSteps[entry.stepIndex]
+    const { session } = entry
+    const step = session.reviewedSteps[entry.stepIndex]
     const blocked = controller.coverageNotice()
     const highlight = groundedRegion(state.answer ?? state.check)
     const busy = state.pending !== null || state.storageReadOnly
+    const [sheetOpen, setSheetOpen] = useState(false)
+    const choices = step === undefined ? [] : stepPartChoices(session, step)
+    const completed = new Set(entry.completedStepIds)
+    const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
+        id: item.stepId,
+        title: item.title,
+        state: completed.has(item.stepId) ? 'done' : index === entry.stepIndex ? 'current' : 'upcoming',
+    }))
+    const check = state.check
+    const refusal = check !== null && check.decision === 'refuse' ? check : null
+    const target = state.target
+    const targetSummary =
+        target === null
+            ? 'Choose a point or part.'
+            : target.kind === 'part'
+              ? `Selected part: ${choices.find((choice) => choice.partId === target.partId)?.label ?? target.partId}`
+              : 'Selected point in photo.'
     return (
-        <Screen title={`Assembly · ${entry.session.title}`} onBack={(): void => controller.navigate('overview')}>
+        <Screen
+            title={`Assembly · ${session.title}`}
+            onBack={(): void => controller.navigate('overview')}
+            testID="guide-screen"
+        >
             <WorkflowNotice state={state} controller={controller} />
-            <Text>
-                Step {entry.stepIndex + 1} of {entry.session.reviewedSteps.length}
-            </Text>
-            <StepFacts session={entry.session} index={entry.stepIndex} />
-            <SourceDiagrams refs={step?.sourceRefs ?? []} session={entry.session} pageUris={state.pageUris} />
-            {blocked === null ? null : <Text>{blocked}</Text>}
+            <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
+            <ProgressBar
+                label="Steps marked complete"
+                value={entry.completedStepIds.length}
+                total={session.reviewedSteps.length}
+            />
+            <StepList steps={stepItems} />
+            {step === undefined ? null : (
+                <Card>
+                    <Heading>{`${step.order}. ${step.title}`}</Heading>
+                    <AppButton label="Show step instructions" onPress={(): void => setSheetOpen(true)} />
+                </Card>
+            )}
+            <BottomSheet
+                visible={sheetOpen}
+                title={`Step ${entry.stepIndex + 1}`}
+                onClose={(): void => setSheetOpen(false)}
+            >
+                <StepFacts session={session} index={entry.stepIndex} />
+                <SourceDiagrams refs={step?.sourceRefs ?? []} session={session} pageUris={state.pageUris} />
+            </BottomSheet>
+            {blocked === null ? null : <Notice tone="caution" text={blocked} />}
             {state.capture === null ? (
-                <Text>Take a photo of this step to check or ask about it.</Text>
+                <EmptyState
+                    title="No photo for this step yet."
+                    body="Take a photo of this step to check or ask about it."
+                />
+            ) : refusal !== null ? (
+                <RefusalComparison
+                    refusal={refusal}
+                    observation={state.capture.observation}
+                    entry={entry}
+                    pageUris={state.pageUris}
+                />
             ) : (
                 <FrozenPhoto
                     observation={state.capture.observation}
@@ -375,112 +594,89 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                     overlay={
                         highlight === null
                             ? undefined
-                            : (displayed): ReactNode => {
-                                  const rect = boxOnDisplay(highlight, displayed)
-                                  return <SvgRect {...rect} fill="none" stroke="#c34224" strokeWidth={3} />
-                              }
+                            : (displayed): ReactNode => <CheckHighlight rect={boxOnDisplay(highlight, displayed)} />
                     }
                 />
             )}
-            {state.check === null ? null : (
-                <View accessibilityLiveRegion="polite">
-                    <Text style={styles.subtitle}>
-                        {state.check.decision === 'pass'
-                            ? 'Pass'
-                            : state.check.decision === 'refuse'
-                              ? 'Refuse'
-                              : 'Cannot verify'}
-                    </Text>
-                    <Text>{state.check.reason}</Text>
-                    {state.check.missingEvidence.map((missing, index) => (
-                        <Text key={index}>{missing}</Text>
-                    ))}
-                    <SourceDiagrams refs={state.check.sourceRefs} session={entry.session} pageUris={state.pageUris} />
-                </View>
+            {check === null ? null : (
+                <ResultSheet
+                    verdict={check.decision as Verdict}
+                    reason={check.reason}
+                    missing={check.missingEvidence}
+                    citedPage={
+                        refusal === null ? (
+                            <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={state.pageUris} />
+                        ) : undefined
+                    }
+                />
             )}
-            <Button
-                title="Take new photo and check"
-                disabled={busy || blocked !== null || entry.session.reviewStatus !== 'reviewed'}
+            <AppButton
+                label="Take new photo and check"
+                variant="accent"
+                disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
                 onPress={(): void => controller.camera({ kind: 'check' })}
             />
-            <Button
-                title="Take photo to ask"
-                disabled={busy || blocked !== null || entry.session.reviewStatus !== 'reviewed'}
+            <AppButton
+                label="Take photo to ask"
+                disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
                 onPress={(): void => controller.camera({ kind: 'question' })}
             />
             {state.capture === null ? null : (
-                <View style={styles.section}>
-                    <Text>
-                        Tap a point in the frozen photo or select a step part. Type a question, or use your keyboard’s
-                        dictation. Each submitted question has its own 8-second request deadline; the frozen photo stays
-                        until you retake it or leave this step.
-                    </Text>
-                    {step === undefined
-                        ? null
-                        : stepPartChoices(entry.session, step).map((part) => (
-                              <Button
-                                  key={part.partId}
-                                  title={`Ask about ${part.label}`}
-                                  disabled={busy}
-                                  onPress={(): void => controller.targetChanged({ kind: 'part', partId: part.partId })}
-                              />
-                          ))}
-                    <Text>
-                        {state.target === null
-                            ? 'Choose a point or part.'
-                            : state.target.kind === 'part'
-                              ? `Selected part: ${state.target.partId}`
-                              : 'Selected point in photo.'}
-                    </Text>
-                    <TextInput
-                        accessibilityLabel="Question about frozen photo"
-                        multiline
-                        value={state.question}
-                        maxLength={500}
-                        onChangeText={controller.questionChanged}
-                        style={styles.input}
+                <Card>
+                    <Heading>Ask about this photo</Heading>
+                    <AskSheet
+                        question={state.question}
+                        questionLabel="Question about frozen photo"
+                        onQuestionChange={controller.questionChanged}
+                        parts={choices.map((choice) => ({ id: choice.partId, label: choice.label }))}
+                        selectedPartId={target?.kind === 'part' ? target.partId : null}
+                        onSelectPart={(partId): void => controller.targetChanged({ kind: 'part', partId })}
+                        targetSummary={targetSummary}
+                        hasTarget={target !== null}
                         editable={controller.canCompose}
-                    />
-                    <Button
-                        title="Send question"
-                        disabled={busy || state.target === null || state.question.trim().length === 0}
-                        onPress={(): void => {
+                        busy={state.pending !== null && state.pending.startsWith('Asking')}
+                        onSubmit={(): void => {
                             void controller.ask()
                         }}
+                        answer={
+                            state.answer === null ? undefined : (
+                                <ResultSheet
+                                    verdict={state.answer.missingEvidence.length === 0 ? 'pass' : 'cannot_verify'}
+                                    reason={state.answer.answer}
+                                    missing={state.answer.missingEvidence}
+                                    citedPage={
+                                        <SourceDiagrams
+                                            refs={state.answer.sourceRefs}
+                                            session={session}
+                                            pageUris={state.pageUris}
+                                        />
+                                    }
+                                />
+                            )
+                        }
                     />
-                    {state.answer === null ? null : (
-                        <>
-                            <Text>{state.answer.answer}</Text>
-                            {state.answer.missingEvidence.map((missing, index) => (
-                                <Text key={index}>{missing}</Text>
-                            ))}
-                            <SourceDiagrams
-                                refs={state.answer.sourceRefs}
-                                session={entry.session}
-                                pageUris={state.pageUris}
-                            />
-                        </>
-                    )}
-                </View>
+                </Card>
             )}
-            <Button
-                title="Mark step complete myself"
+            <AppButton
+                label="Mark step complete myself"
                 disabled={busy}
                 onPress={(): void => {
                     void controller.completeStep()
                 }}
             />
-            <View style={styles.row}>
-                <Button
-                    title="Previous step"
+            <View style={styles.actionRow}>
+                <AppButton
+                    label="Previous step"
+                    variant="quiet"
                     disabled={busy || entry.stepIndex === 0}
                     onPress={(): void => {
                         void controller.step(entry.stepIndex - 1)
                     }}
                 />
-                <Button
-                    title="Next step"
-                    disabled={busy || entry.stepIndex >= entry.session.reviewedSteps.length - 1}
+                <AppButton
+                    label="Next step"
+                    variant="quiet"
+                    disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
                     onPress={(): void => {
                         void controller.step(entry.stepIndex + 1)
                     }}
@@ -489,14 +685,165 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
         </Screen>
     )
 }
+
+/** A refusal shows the expected diagram and the frozen photo side by side, with the observed region measured on each. */
+function RefusalComparison({
+    refusal,
+    observation,
+    entry,
+    pageUris,
+}: {
+    refusal: CheckResult
+    observation: { uri: string; width: number; height: number }
+    entry: LibraryEntry
+    pageUris: WorkflowState['pageUris']
+}): ReactElement {
+    const cited = refusal.sourceRefs[0]
+    const page =
+        cited === undefined ? undefined : entry.session.pages.find((candidate) => candidate.pageId === cited.pageId)
+    const diagramUri = page === undefined ? undefined : pageUris[page.pageId]
+    const diagram: ComparisonPane = {
+        caption: 'Manual diagram',
+        media:
+            diagramUri === undefined ? (
+                <Caption>Cited diagram unavailable.</Caption>
+            ) : (
+                <Image
+                    source={{ uri: diagramUri }}
+                    accessibilityLabel="Cited manual page"
+                    resizeMode="stretch"
+                    style={StyleSheet.absoluteFill}
+                />
+            ),
+        mediaSize: page === undefined ? { width: 1, height: 1 } : { width: page.width, height: page.height },
+        regions: cited?.region ? [{ id: 'cited', label: 'Cited area', box: cited.region }] : [],
+    }
+    const photo: ComparisonPane = {
+        caption: 'Your photo',
+        media: (
+            <Image
+                source={{ uri: observation.uri }}
+                accessibilityLabel="Your photo of this step"
+                resizeMode="stretch"
+                style={StyleSheet.absoluteFill}
+            />
+        ),
+        mediaSize: { width: observation.width, height: observation.height },
+        regions: refusal.observedRegion
+            ? [{ id: 'observed', label: 'Observed part', box: refusal.observedRegion }]
+            : [],
+    }
+    return <ComparisonFrame diagram={diagram} photo={photo} />
+}
+
+function CheckHighlight({ rect }: { rect: { x: number; y: number; width: number; height: number } }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View
+            pointerEvents="none"
+            accessibilityElementsHidden={true}
+            importantForAccessibility="no"
+            style={[
+                styles.highlight,
+                { borderColor: colors.accent, left: rect.x, top: rect.y, width: rect.width, height: rect.height },
+            ]}
+        />
+    )
+}
+
+export function SettingsScreen({ state, onBack }: { state: WorkflowState; onBack: () => void }): ReactElement {
+    const count = state.entries.length
+    return (
+        <Screen title="Settings" onBack={onBack} testID="settings-screen">
+            <Card>
+                <Heading>Your manuals on this device</Heading>
+                <Body>
+                    {count === 1 ? '1 manual is stored on this device.' : `${count} manuals are stored on this device.`}
+                </Body>
+                <Caption>Stored locally. Nothing is removed unless you remove it.</Caption>
+            </Card>
+            <Card>
+                <Heading>What leaves this phone</Heading>
+                <Body>
+                    Manual pages leave this phone only when you read a manual. A frozen photo leaves only when you check
+                    a step or ask a question. Cancelled requests are not repeated automatically.
+                </Body>
+            </Card>
+            <Card>
+                <Heading>Camera and photos</Heading>
+                <Body>
+                    The camera opens only when you choose to photograph a page or a step. Photos you choose from your
+                    library stay on this device until you send them.
+                </Body>
+                <AppButton
+                    label="Open device settings"
+                    onPress={(): void => {
+                        void Linking.openSettings().catch((): void => undefined)
+                    }}
+                />
+            </Card>
+            <Caption>Settings describe this build. No preference here changes what is sent.</Caption>
+        </Screen>
+    )
+}
+
 const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: '#fff' },
-    content: { padding: 16, gap: 16 },
-    title: { fontSize: 24, fontWeight: '600' },
-    subtitle: { fontSize: 18, fontWeight: '600' },
-    section: { gap: 8, paddingVertical: 8 },
-    row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    input: { borderWidth: 1, borderColor: '#777', borderRadius: 4, padding: 12, minHeight: 48 },
-    thumbnail: { width: 120, height: 160 },
-    region: { position: 'absolute', borderWidth: 2, borderColor: '#c34224' },
+    topBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.sm,
+    },
+    titleWrap: {
+        flex: 1,
+    },
+    actionRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: space.xs,
+    },
+    pageFrame: {
+        width: '100%',
+        borderRadius: radius.md,
+        overflow: 'hidden',
+    },
+    pageStrip: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: space.xs,
+    },
+    stripItem: {
+        width: 96,
+    },
+    manualPress: {
+        gap: space.xs,
+        minHeight: touchTarget,
+    },
+    confirmRow: {
+        minHeight: touchTarget,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.sm,
+        borderWidth: 1,
+        borderRadius: radius.md,
+        padding: space.sm,
+    },
+    confirmText: {
+        flex: 1,
+    },
+    checkBox: {
+        width: 28,
+        height: 28,
+        borderWidth: 1,
+        borderRadius: radius.sm,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    disabled: {
+        opacity: 0.5,
+    },
+    highlight: {
+        position: 'absolute',
+        borderWidth: 3,
+        borderRadius: radius.sm,
+    },
 })

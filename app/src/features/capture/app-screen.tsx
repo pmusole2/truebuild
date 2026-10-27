@@ -10,7 +10,7 @@ import { normalizeImage } from '../../media/normalize-image'
 import { CameraScreen } from './camera-screen'
 import { CaptureController } from './controller'
 import { LibraryStorage, type Digest } from './library'
-import { GuideScreen, LibraryScreen, OverviewScreen, PagesScreen, Screen } from './screens'
+import { GuideScreen, LibraryScreen, OverviewScreen, PagesScreen, Screen, SettingsScreen } from './screens'
 
 export const imageDigest: Digest = async (bytes): Promise<string> => {
     const result = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, Uint8Array.from(bytes))
@@ -44,6 +44,8 @@ export function CaptureApp(): ReactElement {
 }
 export function CaptureWorkflow({ controller }: { controller: CaptureController }): ReactElement {
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+    // Settings are presentation-only state: they open over the library and change nothing that is stored or sent.
+    const [settingsOpen, setSettingsOpen] = useState(false)
     useEffect(() => {
         void controller.restore()
         return controller.dispose
@@ -78,7 +80,11 @@ export function CaptureWorkflow({ controller }: { controller: CaptureController 
             />
         )
     } else if (state.route === 'library' || entry === undefined) {
-        screen = <LibraryScreen state={state} controller={controller} />
+        screen = settingsOpen ? (
+            <SettingsScreen state={state} onBack={(): void => setSettingsOpen(false)} />
+        ) : (
+            <LibraryScreen state={state} controller={controller} onOpenSettings={(): void => setSettingsOpen(true)} />
+        )
     } else if (state.route === 'pages') {
         screen = (
             <PagesScreen
