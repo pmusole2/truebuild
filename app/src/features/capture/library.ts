@@ -89,7 +89,7 @@ function pagesOf(entry: LibraryEntry): ManualPage[] {
 
 /** Manifest-last commits keep the previous library intact on write failure. All bytes are local; no picker URI is saved.
  * Chunked values stay below Android's per-entry cursor limit. Total content and metadata are bounded independently.
- * Only this namespace is cleaned, after a successful manifest commit or validated restore.
+ * Only this namespace is cleaned, after a successful manifest commit.
  */
 export class LibraryStorage {
     private assets: StoredAsset[] = []
@@ -175,6 +175,17 @@ export class LibraryStorage {
             if (!this.restored) {
                 throw new Error('Storage unavailable')
             }
+        }
+        if (
+            entries.length > 10 ||
+            writes.length > 210 ||
+            writes.reduce((sum, write) => sum + write.bytes.length, 0) > MAX_LIBRARY_BYTES
+        ) {
+            throw new Error('Library staging limit')
+        }
+        const referencedIds = new Set(entries.flatMap(pagesOf).map((page) => page.assetId))
+        if (writes.some((write) => !referencedIds.has(write.assetId))) {
+            throw new Error('Unreferenced local image')
         }
         const assets = [...this.assets]
         const encodedWrites: { asset: StoredAsset; encoded: string }[] = []

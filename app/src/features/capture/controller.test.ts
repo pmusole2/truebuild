@@ -228,6 +228,57 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect((await store.restore()).entries[0]?.completedStepIds).toHaveLength(1)
     })
 
+    it('keeps a new question answer when target selection cancels an in-flight check', async () => {
+        let checking = false
+        let finishCheck: ((response: Response) => void) | undefined
+        const { controller } = setup(async (url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: unknown
+                pages?: { pageId: string }[]
+                sourcePageIds?: string[]
+            }
+            if (url.endsWith('/checks')) {
+                checking = true
+                return new Promise((resolve) => {
+                    finishCheck = resolve
+                })
+            }
+            return new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    value: url.endsWith('/parse')
+                        ? parsed(meta.pages![0]!.pageId)
+                        : {
+                              answer: 'New question answer.',
+                              sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
+                              missingEvidence: [],
+                          },
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            )
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(checking).toBe(true))
+        controller.questionChanged('Which way?')
+        controller.targetChanged({ kind: 'point', x: 0.5, y: 0.5 })
+        await controller.ask()
+        finishCheck?.(new Response('{}'))
+        await pending
+        expect(controller.getSnapshot().answer?.answer).toBe('New question answer.')
+        expect(controller.getSnapshot().check).toBeNull()
+    })
+
     it('expires a frozen verdict at eight seconds and requires a new photo to ask', async () => {
         const { controller } = await ready()
         vi.useFakeTimers()

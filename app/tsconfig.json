@@ -6,5 +6,6 @@
         "noEmit": true,
         "types": ["jest"]
     },
-    "include": ["app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "app.config.ts"]
+    "include": ["app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "app.config.ts"],
+    "exclude": ["src/features/capture/browser"]
 }

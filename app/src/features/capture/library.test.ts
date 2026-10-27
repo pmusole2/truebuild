@@ -74,6 +74,28 @@ describe('durable manual library', () => {
         await expect(store.save([], [{ assetId: 'large', bytes: new Uint8Array(4_194_305) }])).rejects.toThrow()
     })
 
+    it('does not remove assets or write a new manifest after a storage read failure', async () => {
+        let writes = 0
+        let removes = 0
+        const inaccessible: KeyValueStorage = {
+            getItem: async (): Promise<never> => {
+                throw new Error('Storage not accessible')
+            },
+            setItem: async (): Promise<void> => {
+                writes++
+            },
+            removeItem: async (): Promise<void> => {
+                removes++
+            },
+            getAllKeys: async (): Promise<string[]> => ['truebuild/library/bytes/previous'],
+        }
+        const store = new LibraryStorage(inaccessible, digest)
+        expect((await store.restore()).warning).not.toBeNull()
+        await expect(store.save([])).rejects.toThrow('Storage unavailable')
+        expect(writes).toBe(0)
+        expect(removes).toBe(0)
+    })
+
     it('keeps the prior manifest and assets usable when a metadata write fails', async () => {
         const kv = memory()
         const store = new LibraryStorage(kv, digest)

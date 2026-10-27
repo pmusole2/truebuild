@@ -15,7 +15,7 @@ export async function readImage(uri: string, cap: number): Promise<Uint8Array<Ar
         if (bytes.length > cap) {
             throw new MediaRejectedError('oversize')
         }
-        return Uint8Array.from(bytes)
+        return bytes
     } finally {
         handle.close()
     }

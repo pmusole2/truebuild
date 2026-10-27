@@ -120,6 +120,10 @@ export class CaptureController {
         return this.epoch
     }
     cancel = (): void => {
+        if (this.saving) {
+            this.publish({ notice: 'Finishing the local save. Please wait a moment.' })
+            return
+        }
         const route =
             this.state.route === 'camera'
                 ? this.state.cameraIntent?.kind === 'page'
@@ -158,7 +162,8 @@ export class CaptureController {
             reviewStatus: 'unreviewed',
         }
         const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
-        if (await this.persist([...this.state.entries, entry])) {
+        const token = this.epoch
+        if ((await this.persist([...this.state.entries, entry])) && token === this.epoch) {
             this.invalidate()
             this.publish({ selectedId: session.manualId, route: 'pages', notice: null, pageUris: {} })
         }
@@ -472,8 +477,8 @@ export class CaptureController {
             return
         }
         const token = this.invalidate()
-        await this.persist(this.replacement({ ...entry, stepIndex: index, capture: null }))
-        if (token === this.epoch) {
+        const saved = await this.persist(this.replacement({ ...entry, stepIndex: index, capture: null }))
+        if (saved && token === this.epoch) {
             this.publish({ route: 'guide', notice: null })
         }
     }
@@ -487,8 +492,8 @@ export class CaptureController {
             return
         }
         const next = Math.min(entry.stepIndex + 1, entry.session.reviewedSteps.length - 1)
-        this.invalidate()
-        await this.persist(
+        const token = this.invalidate()
+        const saved = await this.persist(
             this.replacement({
                 ...entry,
                 capture: null,
@@ -496,7 +501,9 @@ export class CaptureController {
                 completedStepIds: [...new Set([...entry.completedStepIds, step.stepId])],
             }),
         )
-        this.publish({ notice: 'Progress saved as your own completion. Take a new photo for the next check.' })
+        if (saved && token === this.epoch) {
+            this.publish({ notice: 'Progress saved as your own completion. Take a new photo for the next check.' })
+        }
     }
     async shutter(photo: () => Promise<SourceImageAsset>): Promise<void> {
         const intent = this.state.cameraIntent
@@ -541,7 +548,7 @@ export class CaptureController {
                 route: 'guide',
                 cameraIntent: null,
             })
-            // Retain durable photo without blocking the check's source preparation or extending its deadline.
+            // Retain the photo within the same absolute action budget; persistence never extends the check deadline.
             const saved = await awaitStopped(
                 this.persist(this.replacement({ ...entry, capture: { binding, page, capturedAt } }), [
                     { assetId: page.assetId, bytes: image.bytes },
@@ -616,14 +623,37 @@ export class CaptureController {
         const capture = this.state.capture
         return capture !== null && matchesBinding(capture.binding, binding) && this.monotonic() < capture.expiresAt
     }
-    questionChanged = (question: string): void => {
+    private cancelPendingAnswer(): void {
         this.operation?.abort()
         this.operation = null
+        this.epoch++
+        if (this.expiry !== null) {
+            clearTimeout(this.expiry)
+            this.expiry = null
+        }
+        const capture = this.state.capture
+        if (capture !== null && this.freshCapture(capture.binding)) {
+            this.armExpiry(capture.expiresAt, this.epoch)
+        } else if (capture !== null) {
+            this.publish({
+                check: null,
+                answer: null,
+                notice: 'Frozen photo expired. Take a new photo to check or ask.',
+            })
+        }
+    }
+    questionChanged = (question: string): void => {
+        if (this.saving) {
+            return
+        }
+        this.cancelPendingAnswer()
         this.publish({ question: question.slice(0, 500), answer: null, pending: null })
     }
     targetChanged = (target: QuestionTarget): void => {
-        this.operation?.abort()
-        this.operation = null
+        if (this.saving) {
+            return
+        }
+        this.cancelPendingAnswer()
         this.publish({ target, answer: null, pending: null })
     }
     async ask(): Promise<void> {
@@ -638,7 +668,8 @@ export class CaptureController {
             step === undefined ||
             target === null ||
             question.length === 0 ||
-            this.state.pending !== null
+            this.state.pending !== null ||
+            this.saving
         ) {
             return
         }
