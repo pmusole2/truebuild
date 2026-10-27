@@ -4,7 +4,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHeroManual, createHeroResponse, HERO_DIAGRAM_PNG_BASE64 } from '@truebuild/contracts/hero'
-import { manifestSchema, main, runGate, scoreExtraction, reviewDisplay, type StepReviewer } from './run'
+import {
+    loadAuthorization,
+    manifestSchema,
+    main,
+    runGate,
+    scoreExtraction,
+    reviewDisplay,
+    type StepReviewer,
+} from './run'
 
 const dirs: string[] = []
 async function setup(): Promise<{ cwd: string; manifest: ReturnType<typeof manifestSchema.parse> }> {
@@ -502,3 +510,74 @@ it.each(['compact', 'unverified'] as const)(
         )
     },
 )
+
+describe('gate 3 is Spark-only', () => {
+    it.each(['muse-wonder-1.0', 'muse-spark-1.3-contributor'])(
+        'refuses a local MODEL_SPARK=%s before any dispatch',
+        async (model) => {
+            const { cwd } = await setup()
+            await writeFile(
+                join(cwd, '.env'),
+                `PROVIDER_MODE=meta\nMODEL_API_KEY=<synthetic>\nAPI_SHARED_SECRET=synthetic\nMODEL_SPARK=${model}`,
+            )
+            const fetchMock = vi.fn<typeof fetch>()
+            vi.stubGlobal('fetch', fetchMock)
+            vi.spyOn(console, 'log').mockImplementation(() => {})
+            expect(
+                await main(['3', '--dispatch', '--confirm-critical-facts', '--manifest', 'manifest.json'], cwd),
+            ).toBe(2)
+            expect(console.log).toHaveBeenLastCalledWith(expect.stringContaining('spark_only_gate3_required'))
+            expect(fetchMock).not.toHaveBeenCalled()
+        },
+    )
+    it('accepts an explicit or absent Spark setting and still fails a returned non-Spark model', async () => {
+        for (const env of ['', 'MODEL_SPARK=muse-spark-1.3\n']) {
+            const { cwd } = await setup()
+            await writeFile(
+                join(cwd, '.env'),
+                `PROVIDER_MODE=meta\nMODEL_API_KEY=<synthetic>\nAPI_SHARED_SECRET=synthetic\n${env}`,
+            )
+            await loadAuthorization(cwd, true, 3)
+        }
+        const { cwd, manifest } = await setup()
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+            return Response.json({
+                status: 'ok',
+                mode: 'model',
+                requestId: metadata.requestId,
+                binding: metadata.binding,
+                value: { ...createHeroResponse('reversed'), model: 'muse-wonder-1.0' },
+            })
+        })
+        expect(await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).toMatchObject(
+            {
+                status: 'fail',
+                reason: 'non_spark_model_returned',
+                requests: 1,
+            },
+        )
+    })
+    it('passes a returned Spark model with full-manual scope unchanged', async () => {
+        const { cwd, manifest } = await setup()
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            const metadata = JSON.parse(String((init?.body as FormData).get('metadata')))
+            return Response.json(
+                {
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: metadata.requestId,
+                    binding: metadata.binding,
+                    value: { ...createHeroResponse('reversed'), model: 'muse-spark-1.3' },
+                },
+                { headers: { 'x-truebuild-check-context': 'full', 'x-truebuild-source-pages': '1' } },
+            )
+        })
+        expect(await runGate(3, manifest, cwd, new URL('http://localhost:3001'), 'synthetic', fetchMock)).toMatchObject(
+            {
+                status: 'pass',
+                requests: 1,
+            },
+        )
+    })
+})

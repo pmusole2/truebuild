@@ -24,6 +24,7 @@
         "test": "npm run test:unit && npm run test:ui",
         "test:e2e": "playwright test",
         "gate:1": "tsx gates/run.ts 1",
+        "gate:1b": "tsx gates/run.ts 1b",
         "gate:2": "tsx gates/run.ts 2",
         "gate:3": "tsx gates/run.ts 3",
         "doctor": "node --env-file-if-exists=.env --import tsx api/scripts/doctor.ts",

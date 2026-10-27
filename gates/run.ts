@@ -48,8 +48,8 @@ export const manifestSchema = z.strictObject({
     prompt: z.string().min(1).optional(),
     clip: z.strictObject({ path: z.string().min(1), mimeType: z.enum(['video/mp4', 'video/quicktime']) }).optional(),
 })
-type Manifest = z.infer<typeof manifestSchema>
-type Summary = {
+export type Manifest = z.infer<typeof manifestSchema>
+export type Summary = {
     gate: number
     status: 'pass' | 'fail' | 'unverified'
     reason: string
@@ -80,6 +80,11 @@ Usage: tsx gates/run.ts <1|2|3> --manifest <path.json> --dispatch --confirm-crit
 Local cwd/.env must contain PROVIDER_MODE=meta, MODEL_API_KEY, API_SHARED_SECRET.
 The model key is only a readiness prerequisite; it is never sent by this CLI. Configure the API separately.
 No dotenv file is read by --help or without --dispatch. No automatic retries.
+Gate 1b: tsx gates/run.ts 1b --manifest <path.json> --dispatch --ab --confirm-critical-facts [--review]
+ Parses the same manual pages once with muse-spark-1.3 and once with muse-wonder-1.0, in process through the provider with an explicit parseModel.
+ Reads cwd/.env only after both --dispatch and --ab, needing PROVIDER_MODE=meta and MODEL_API_KEY. A Wonder failure stays a Wonder failure: no retry, no automatic fallback, no model substitution.
+ Reports per-model usage cost at Standard prices, latency, attempts and human-reviewed step accuracy; winner stays unverified without review and the default never changes.
+Gate 3 refuses a local MODEL_SPARK other than muse-spark-1.3 before dispatch, and fails a returned model other than muse-spark-1.3.
 Manifest: {pages:[{path,pageId,assetId,mimeType,width,height}], expected:ParsedManual,
  observation:{path,mimeType,width,height}, expectedDecision, stepId, sourcePageIds?:[id],
  prompt?:"side panel", clip?:{path,mimeType:"video/mp4"|"video/quicktime"}}.
@@ -145,7 +150,7 @@ function hasUnknown(value: unknown): boolean {
     return Object.values(value).some(hasUnknown)
 }
 
-const terminalReviewer: StepReviewer = async (input) => {
+export const terminalReviewer: StepReviewer = async (input) => {
     const display = reviewDisplay(input)
     console.log(`Untrusted parsed facts for expected step order ${input.expectedOrder}: ${display.text}`)
     if (display.truncated) {
@@ -163,7 +168,7 @@ const terminalReviewer: StepReviewer = async (input) => {
     }
 }
 
-async function reviewExtraction(
+export async function reviewExtraction(
     actual: ParsedManual,
     expected: ParsedManual,
     reviewer: StepReviewer,
@@ -209,7 +214,9 @@ async function reviewExtraction(
     summary.reason = 'human_step_review'
 }
 
-export async function loadAuthorization(cwd: string, dispatch: boolean): Promise<{ secret: string }> {
+export const SPARK_MODEL = 'muse-spark-1.3'
+
+export async function loadAuthorization(cwd: string, dispatch: boolean, gate?: number): Promise<{ secret: string }> {
     if (!dispatch) throw new Error('operator_dispatch_required')
     let env: Record<string, string | undefined>
     try {
@@ -220,6 +227,9 @@ export async function loadAuthorization(cwd: string, dispatch: boolean): Promise
     if (env.PROVIDER_MODE !== 'meta') throw new Error('meta_mode_required')
     if (!env.MODEL_API_KEY?.trim()) throw new Error('local_key_required')
     if (!env.API_SHARED_SECRET?.trim()) throw new Error('shared_secret_required')
+    // Gate 3 measures the Spark check only; a configured non-Spark model is refused before any dispatch.
+    const configuredSpark = env.MODEL_SPARK?.trim() || SPARK_MODEL
+    if (gate === 3 && configuredSpark !== SPARK_MODEL) throw new Error('spark_only_gate3_required')
     return { secret: env.API_SHARED_SECRET }
 }
 
@@ -262,6 +272,35 @@ async function boundedText(response: Response): Promise<string> {
     } finally {
         await reader.cancel().catch(() => {})
     }
+}
+
+/** Reads manifest pages once; gate 1b reuses the identical bytes and hashes for both model arms. */
+export async function loadManualSources(
+    manifest: Manifest,
+    cwd: string,
+): Promise<{ data: Uint8Array<ArrayBuffer>; metadata: ManualPage }[]> {
+    return Promise.all(
+        manifest.pages.map(async (page) => {
+            const data = await bytes(cwd, page.path, LIMITS.imageBytes)
+            const metadata: ManualPage = {
+                pageId: page.pageId,
+                assetId: page.assetId,
+                mimeType: page.mimeType,
+                width: page.width,
+                height: page.height,
+                contentHash: createHash('sha256').update(data).digest('hex'),
+            }
+            return { data, metadata }
+        }),
+    )
+}
+
+/** Appends one aggregate JSON line to the ignored local results file; callers must pass only aggregates. */
+export async function appendAggregate(cwd: string, report: Record<string, unknown>): Promise<string> {
+    const line = JSON.stringify(report)
+    await mkdir(resolve(cwd, 'docs'), { recursive: true })
+    await appendFile(resolve(cwd, 'docs/gate-results.md'), `- ${new Date().toISOString()} ${line}\n`, { mode: 0o600 })
+    return line
 }
 
 export async function runGate(
@@ -402,20 +441,7 @@ export async function runGate(
             if (manifest.sourcePageIds && summary.sourceCount > 2) throw new Error('check_source_limit_2')
         }
         if (gate === 1 && manifest.pages.length > LIMITS.manualPages) throw new Error('parse_source_limit_20')
-        const sources = await Promise.all(
-            manifest.pages.map(async (page) => {
-                const data = await bytes(cwd, page.path, LIMITS.imageBytes)
-                const metadata: ManualPage = {
-                    pageId: page.pageId,
-                    assetId: page.assetId,
-                    mimeType: page.mimeType,
-                    width: page.width,
-                    height: page.height,
-                    contentHash: createHash('sha256').update(data).digest('hex'),
-                }
-                return { data, metadata }
-            }),
-        )
+        const sources = await loadManualSources(manifest, cwd)
         if (gate === 1) {
             const requestId = randomUUID()
             const parseMetadata = modelParseMetadataSchema.parse({
@@ -519,6 +545,12 @@ export async function runGate(
             !matchesBinding(checked.binding, capture)
         )
             throw new Error('invalid_check')
+        // Provenance is optional on the public contract; a present non-Spark model can never pass Gate 3.
+        if (gate === 3 && checked.value.model !== undefined && checked.value.model !== SPARK_MODEL) {
+            summary.status = 'fail'
+            summary.reason = 'non_spark_model_returned'
+            return summary
+        }
         if (gate === 2) {
             summary.localizationProvider = 'spark'
             const actual = checked.value.observedRegion
@@ -572,9 +604,13 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         console.log(HELP)
         return 0
     }
+    if (argv[0] === '1b') {
+        // Dynamic import keeps ab.ts (which reuses this module's helpers) out of the static import cycle.
+        return (await import('./ab')).abMain(argv.slice(1), cwd)
+    }
     const gate = Number(argv[0])
     if (![1, 2, 3].includes(gate)) {
-        console.log('Specify gate 1, 2, or 3; use --help.')
+        console.log('Specify gate 1, 1b, 2, or 3; use --help.')
         return 2
     }
     const option = (name: string): string | undefined => {
@@ -583,7 +619,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
     }
     let summary: Summary
     try {
-        const { secret } = await loadAuthorization(cwd, argv.includes('--dispatch'))
+        const { secret } = await loadAuthorization(cwd, argv.includes('--dispatch'), gate)
         if (!argv.includes('--confirm-critical-facts')) throw new Error('critical_facts_confirmation_required')
         if (argv.includes('--review') && (gate !== 1 || !process.stdin.isTTY || !process.stdout.isTTY))
             throw new Error('interactive_gate1_review_required')
@@ -608,6 +644,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
             'critical_facts_confirmation_required',
             'manifest_required',
             'interactive_gate1_review_required',
+            'spark_only_gate3_required',
         ]
         summary = {
             gate,
@@ -623,10 +660,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         latencyMeanMs: latency.length ? Math.round(latency.reduce((a, b) => a + b, 0) / latency.length) : null,
         latencyMaxMs: latency.length ? Math.max(...latency) : null,
     }
-    const line = JSON.stringify(report)
-    await mkdir(resolve(cwd, 'docs'), { recursive: true })
-    await appendFile(resolve(cwd, 'docs/gate-results.md'), `- ${new Date().toISOString()} ${line}\n`, { mode: 0o600 })
-    console.log(line)
+    console.log(await appendAggregate(cwd, report))
     return summary.status === 'pass' ? 0 : 2
 }
 

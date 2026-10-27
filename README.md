@@ -52,10 +52,17 @@ after restart; take a fresh photo before checking or asking.
 
 ## Provider policy and contracts
 
-- Default models: `muse-spark-1.3` and `sam-3.1`. `MODEL_SPARK` explicitly opts into
-  `muse-spark-1.3-contributor` (content may train Meta models) or preview `muse-wonder-1.0`.
+- Default models: `muse-spark-1.3` for parse and check/ask, and `sam-3.1` for segmentation.
+  `MODEL_SPARK` accepts only `muse-spark-1.3`; contributor IDs are rejected because submitted
+  content may train Meta models. `muse-wonder-1.0` is a preview, more expensive Standard
+  model: an explicit parse-only choice, never a default, a check/ask model or a fallback.
+- No automatic fallback: no parse, check, ask or second opinion switches to another model
+  after an error, timeout or refusal. A failed Wonder run stays a Wonder failure. Gate 1b
+  reports that arm as incomplete or failed and never substitutes a Spark result for it.
 - Structured output uses Responses `text.format` with a strict, finite JSON schema.
-  Images are user-role `input_image` blocks. Requests use `store:false` and low reasoning.
+  Images are user-role `input_image` blocks. Requests use `store:false`. Spark uses low
+  reasoning. The Wonder parse target is `reasoning.effort: high`; until the explicit parse
+  option is integrated, the provider still sends low for every model.
 - Still overlays use Spark's documented perception grounding in the same check/ask call.
   SAM remains a backend/operator mask and optional clip path; there is no clips UI.
 - Stable instructions, the full reviewed plan/parts and every ordered manual image precede
@@ -119,6 +126,48 @@ grades semantic extraction; structural equality alone is insufficient. Gate 2 co
 box to independent truth. Gate 3 measures one check against 8 seconds, reporting validated
 server context scope. A compact result does not qualify full-manual latency. Aggregate
 results stay local in ignored `docs/gate-results.md`. No real gate has run.
+
+Gate 3 is Spark-only. It refuses before any dispatch when the local `.env` sets
+`MODEL_SPARK` to anything other than `muse-spark-1.3`, and it fails a response whose
+returned model is another model. A response without model provenance cannot prove the
+model, so that case is reported as the existing result rather than as Spark-verified.
+
+### Gate 1b: Spark versus Wonder parse (A/B)
+
+```sh
+npm run gate:1b -- --manifest uploads/gate.json --dispatch --ab --confirm-critical-facts --review
+```
+
+Gate 1b parses the same ordered real pages once with `muse-spark-1.3` and once with
+`muse-wonder-1.0`, in process through the provider with an explicit `parseModel` for each
+arm. The arm order is randomized. Until the provider exposes the explicit `parseModel`
+option, both arms refuse with `provider_dependency_unavailable` and nothing is dispatched. It does not use the API route, a request model override or
+process-wide environment changes, and it does not need `API_SHARED_SECRET`.
+
+- Readiness is read from the local `.env` only after both `--dispatch` and `--ab`: it needs
+  `PROVIDER_MODE=meta` and `MODEL_API_KEY`. The key is never printed, logged or sent by the
+  gate. `--review` needs an interactive terminal.
+- **No automatic fallback.** Each arm is attributed to the model it requested. A Wonder
+  error, timeout or missing dispatch attribution makes that arm `failed` or `incomplete`.
+  The gate never retries it, never calls Spark in its place and never reports Spark's result
+  as Wonder's. Attribution comes from server dispatch metrics and any returned model field;
+  a mismatch marks the arm incomplete.
+- Per arm the report records status and reason, provider attempts, gate-measured latency,
+  input, cached and output tokens, and cost. Cost is priced only from actual uncached input,
+  cached input and output tokens at the cited Standard rates (reasoning is inside output);
+  missing usage is reported as unverified, never zero.
+- Semantic accuracy is unverified without `--review`, and no winner is declared without it.
+  With review, the winner is the higher reviewed step accuracy on this single manual, only
+  when both arms completed. Equal accuracy is `no_measured_difference`. Cost and latency are
+  reported beside the winner and do not decide it.
+- Every 1b run reports `automaticFallback: none`, `defaultChange: none` and
+  `recommendation: keep_spark_default`. No gate result changes configuration; Spark stays the
+  parse default unless the operator changes it explicitly after reviewing the evidence.
+- Only aggregates are appended to `docs/gate-results.md`: no key, no page bytes, no step text.
+  A refusal still writes an aggregate line with `requests: 0`.
+
+The phone's `EXPO_PUBLIC_API_SECRET` remains public app configuration, not production user
+authentication or a Meta credential. Gate 1b uses no phone header and no shared secret.
 
 ## Local library recovery
 
