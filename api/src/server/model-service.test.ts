@@ -791,27 +791,48 @@ describe('separate authenticated second opinion', () => {
     })
     it('retains the original with an unavailable note after secondary failure or budget exhaustion', async () => {
         const state = await setup()
-        for (const limit of [1, 2]) {
-            const secondOpinion = vi.fn(async (): Promise<CheckResult> => {
-                throw new Error('private upstream message')
-            })
-            const handlers = createModelHandlers({
-                ...state,
-                counter: new ModelCallCounter(limit),
-                provider: { ...provider(async () => uncertain), secondOpinion },
-                samProvider: null,
-                secondOpinionModel: 'muse-wonder-1.0',
-            })
-            const primary = await (await handlers.check(request(state))).json()
-            const response = await handlers.secondOpinion(secondaryRequest(state, primary.value.secondOpinion.token))
-            const body = await response.json()
-            expect(body).toMatchObject({
-                status: 'ok',
-                value: { decision: 'cannot_verify', model: 'muse-spark-1.3', secondOpinion: { status: 'unavailable' } },
-            })
-            expect(body.value.modelNotes.length).toBeGreaterThan(0)
-            expect(JSON.stringify(body)).not.toContain('private upstream')
-            expect(secondOpinion).toHaveBeenCalledTimes(limit - 1)
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        try {
+            for (const limit of [1, 2]) {
+                log.mockClear()
+                const secondOpinion = vi.fn(async (): Promise<CheckResult> => {
+                    throw new Error('private upstream message')
+                })
+                const handlers = createModelHandlers({
+                    ...state,
+                    counter: new ModelCallCounter(limit),
+                    provider: { ...provider(async () => uncertain), secondOpinion },
+                    samProvider: null,
+                    secondOpinionModel: 'muse-wonder-1.0',
+                })
+                const primary = await (await handlers.check(request(state))).json()
+                const response = await handlers.secondOpinion(
+                    secondaryRequest(state, primary.value.secondOpinion.token),
+                )
+                const body = await response.json()
+                expect(body).toMatchObject({
+                    status: 'ok',
+                    value: {
+                        decision: 'cannot_verify',
+                        model: 'muse-spark-1.3',
+                        secondOpinion: { status: 'unavailable' },
+                    },
+                })
+                expect(body.value.modelNotes.length).toBeGreaterThan(0)
+                expect(JSON.stringify(body)).not.toContain('private upstream')
+                expect(secondOpinion).toHaveBeenCalledTimes(limit - 1)
+                expect(log).toHaveBeenCalledTimes(1)
+                expect(JSON.parse(log.mock.calls[0]![0] as string)).toEqual({
+                    event: 'second_opinion_outcome',
+                    primaryModel: 'muse-spark-1.3',
+                    secondaryModel: 'muse-wonder-1.0',
+                    resultModel: 'muse-spark-1.3',
+                    outcome: 'unavailable_retained',
+                    dispatched: false,
+                })
+            }
+        } finally {
+            log.mockRestore()
         }
     })
     it('has a separate 60s deadline and never publishes a ticket from cancelled primary completion', async () => {

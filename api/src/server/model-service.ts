@@ -470,8 +470,23 @@ export function createModelHandlers(options: {
         let metadata: ModelSecondOpinionMetadata | undefined
         let primary: CheckResult | null = null
         const model = options.secondOpinionModel
-        const success = (value: CheckResult): Response =>
-            corsResponse(
+        const success = (value: CheckResult): Response => {
+            console.info(
+                JSON.stringify({
+                    event: 'second_opinion_outcome',
+                    primaryModel: primary!.model,
+                    secondaryModel: model,
+                    resultModel: value.model,
+                    outcome:
+                        value.secondOpinion?.status === 'unavailable'
+                            ? 'unavailable_retained'
+                            : value.decision === 'refuse'
+                              ? 'refused'
+                              : 'uncertainty_retained',
+                    dispatched: execution?.context.dispatched ?? false,
+                }),
+            )
+            return corsResponse(
                 request,
                 Response.json(
                     {
@@ -485,6 +500,7 @@ export function createModelHandlers(options: {
                 ),
                 allowedOrigins,
             )
+        }
         try {
             execution = admit(request, auth, 60_000, allowedOrigins)
             if (!model || !provider?.secondOpinion) throw new AdmissionError('unconfigured', 503)
