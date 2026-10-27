@@ -4,7 +4,16 @@ import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
-import { LibraryScreen, OverviewScreen, PagesScreen } from './screens'
+import {
+    AnswerPanel,
+    CheckPanel,
+    LibraryScreen,
+    noticeTone,
+    OverviewScreen,
+    PagesScreen,
+    SettingsScreen,
+} from './screens'
+import { PRIVACY_COPY } from './privacy-copy'
 
 function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage; kv: KeyValueStorage } {
     const data = new Map<string, string>()
@@ -44,6 +53,9 @@ function Screens({ controller }: { controller: CaptureController }): ReactElemen
         <LibraryScreen state={state} controller={controller} />
     )
 }
+// Reanimated's native runtime is not loaded under Jest; the ui stand-in records the animation intent instead.
+jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
+
 const controllers: CaptureController[] = []
 afterEach(() => {
     for (const controller of controllers.splice(0)) {
@@ -56,7 +68,8 @@ it('shows an empty real library and creates a page editor without seeding a demo
     controllers.push(controller)
     await controller.restore()
     await render(<Screens controller={controller} />)
-    expect(screen.getByText('No manuals yet. Scan or choose your own manual pages to start.')).toBeTruthy()
+    expect(screen.getByText('No manuals yet.')).toBeTruthy()
+    expect(screen.getByText('Scan or choose your own manual pages to start.')).toBeTruthy()
     expect(screen.queryByText('Use sample manual')).toBeNull()
     await fireEvent.press(screen.getByRole('button', { name: 'Add manual' }))
     expect(await screen.findByText('Manual pages')).toBeTruthy()
@@ -155,4 +168,66 @@ it('retains confirmed facts during a transient restore failure and offers an exp
     await fireEvent.press(screen.getByRole('button', { name: 'Retry local library' }))
     await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(false))
     expect(screen.getByText('Facts confirmed by you.')).toBeTruthy()
+})
+
+it.each([
+    ['Manual reading unavailable (provider_error). Check your connection.', 'error'],
+    ['Local library images could not be read. Original data is retained.', 'error'],
+    ['Cancelled. No late reply will be shown. Retry is a new request.', 'info'],
+    ['Review every fact against the page diagrams before confirming.', 'info'],
+])('notice tone reads failures as errors and progress or cancellation as information: %s', (text, tone) => {
+    expect(noticeTone(text)).toBe(tone)
+})
+
+it('shows the restoring state while the local library loads, before any manual is listed', async () => {
+    const { controller } = setup()
+    controllers.push(controller)
+    expect(controller.getSnapshot().loading).toBe(true)
+    await render(<LibraryScreen state={controller.getSnapshot()} controller={controller} />)
+    expect(screen.getByText('Restoring local library…')).toBeTruthy()
+    expect(screen.queryByText('No manuals yet.')).toBeNull()
+})
+
+it('settings explain storage, what leaves the phone and camera access, with counts from the real library', async () => {
+    const session = createDemoManual()
+    const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+    const { controller, storage } = setup(entry)
+    controllers.push(controller)
+    await storage.save([entry], [{ assetId: session.pages[0]!.assetId, bytes: new Uint8Array([1]) }])
+    await controller.restore()
+    await render(<SettingsScreen state={controller.getSnapshot()} onBack={(): void => undefined} />)
+    expect(screen.getByText('1 manual is stored on this device.')).toBeTruthy()
+    expect(screen.getByText('What leaves this phone')).toBeTruthy()
+    expect(screen.getByText(PRIVACY_COPY.check)).toBeTruthy()
+    expect(screen.getByText(PRIVACY_COPY.read)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open device settings' })).toBeTruthy()
+})
+
+it('a successful answer after a refused check never shows a Pass verdict, and the check verdict stays refused', async () => {
+    const session = createDemoManual()
+    const page = session.pages[0]!
+    await render(
+        <>
+            <CheckPanel
+                check={{
+                    decision: 'refuse',
+                    reason: 'The side panel is reversed.',
+                    sourceRefs: [{ pageId: page.pageId, region: null }],
+                    observedRegion: null,
+                    missingEvidence: [],
+                }}
+                session={session}
+                pageUris={{}}
+            />
+            <AnswerPanel
+                answer={{ answer: 'It faces inward.', sourceRefs: [], missingEvidence: [], observedRegion: null }}
+                session={session}
+                pageUris={{}}
+            />
+        </>,
+    )
+    expect(screen.getByText('Refuse', { exact: true })).toBeTruthy()
+    expect(screen.getByText('Answer', { exact: true })).toBeTruthy()
+    expect(screen.getByText('It faces inward.')).toBeTruthy()
+    expect(screen.queryByText('Pass', { exact: true })).toBeNull()
 })

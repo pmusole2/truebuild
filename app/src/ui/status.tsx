@@ -1,0 +1,108 @@
+import type { ReactElement } from 'react'
+import { StyleSheet, Text, View } from 'react-native'
+import { useTheme } from '../theme/theme'
+import { typeProps } from '../theme/typography'
+import { radius, space, type ColorToken } from '../theme/tokens'
+import { Icon, type IconName } from './icons'
+
+// Verdicts always carry an icon and a text label. Colour is never the only signal.
+export type Verdict = 'pass' | 'refuse' | 'cannot_verify'
+
+export type StatusTone = 'neutral' | 'simulated' | 'accent' | 'pass' | 'refuse' | 'caution'
+
+const TONE: Readonly<Record<StatusTone, { surface: ColorToken; border: ColorToken; text: ColorToken }>> = {
+    neutral: { surface: 'surfaceSunken', border: 'border', text: 'ink' },
+    simulated: { surface: 'fillStrong', border: 'fillStrong', text: 'fillStrongInk' },
+    accent: { surface: 'accent', border: 'accent', text: 'accentFillInk' },
+    pass: { surface: 'passSurface', border: 'pass', text: 'pass' },
+    refuse: { surface: 'refuseSurface', border: 'refuse', text: 'refuse' },
+    caution: { surface: 'cautionSurface', border: 'caution', text: 'caution' },
+}
+
+export function StatusTag({
+    label,
+    tone = 'neutral',
+    icon,
+}: {
+    readonly label: string
+    readonly tone?: StatusTone
+    readonly icon?: IconName
+}): ReactElement {
+    const { colors } = useTheme()
+    const tokens = TONE[tone]
+    const type = typeProps('label')
+    const iconColor = colors[tokens.text]
+    return (
+        <View style={[styles.tag, { backgroundColor: colors[tokens.surface], borderColor: colors[tokens.border] }]}>
+            {icon === undefined ? null : <Icon name={icon} size="sm" color={iconColor} />}
+            <Text
+                maxFontSizeMultiplier={type.maxFontSizeMultiplier}
+                style={[type.style, styles.tagText, { color: iconColor }]}
+            >
+                {label}
+            </Text>
+        </View>
+    )
+}
+
+const VERDICT: Readonly<Record<Verdict, { label: string; tone: StatusTone; icon: IconName }>> = {
+    pass: { label: 'Pass', tone: 'pass', icon: 'check' },
+    refuse: { label: 'Refuse', tone: 'refuse', icon: 'close' },
+    cannot_verify: { label: 'Cannot verify', tone: 'caution', icon: 'help' },
+}
+
+export function VerdictTag({ verdict }: { readonly verdict: Verdict }): ReactElement {
+    const { label, tone, icon } = VERDICT[verdict]
+    return <StatusTag label={label} tone={tone} icon={icon} />
+}
+
+export type NoticeTone = 'info' | 'caution' | 'error'
+
+const NOTICE_BAR: Readonly<Record<NoticeTone, ColorToken>> = {
+    info: 'ink',
+    caution: 'caution',
+    error: 'refuse',
+}
+
+/**
+ * Inline message. Errors announce as alerts; other notices are read in place so they do not interrupt the user.
+ */
+export function Notice({ text, tone = 'info' }: { readonly text: string; readonly tone?: NoticeTone }): ReactElement {
+    const { colors } = useTheme()
+    const type = typeProps('callout')
+    return (
+        <View
+            accessible={true}
+            accessibilityRole={tone === 'error' ? 'alert' : undefined}
+            style={[
+                styles.notice,
+                { backgroundColor: colors.surfaceSunken, borderLeftColor: colors[NOTICE_BAR[tone]] },
+            ]}
+        >
+            <Text maxFontSizeMultiplier={type.maxFontSizeMultiplier} style={[type.style, { color: colors.ink }]}>
+                {text}
+            </Text>
+        </View>
+    )
+}
+
+const styles = StyleSheet.create({
+    tag: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.xs,
+        borderWidth: 1,
+        borderRadius: radius.sm,
+        paddingHorizontal: space.xs,
+        paddingVertical: space.xxs,
+    },
+    tagText: {
+        flexShrink: 1,
+    },
+    notice: {
+        borderLeftWidth: 4,
+        borderRadius: radius.sm,
+        padding: space.sm,
+    },
+})

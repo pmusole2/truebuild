@@ -1,7 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Synthetic, public demo key for fixture tests only. It is not a credential: fixture mode calls no model and the same
-// value is visible in the app bundle by design. Never replace it with a real secret here.
+// Public shared key for the isolated test API and bundle only. It is not a provider credential and is never a Meta key.
 const FIXTURE_DEMO_KEY = 'truebuild-fixture-demo'
 function testPort(value: string | undefined, fallback: number): number {
     const port = value === undefined ? fallback : Number(value)
@@ -12,6 +11,11 @@ function testPort(value: string | undefined, fallback: number): number {
 }
 const API_PORT = testPort(process.env.TRUEBUILD_E2E_API_PORT, 31_071)
 const WEB_PORT = testPort(process.env.TRUEBUILD_E2E_WEB_PORT, 18_071)
+// The documented Meta HTTP mock answers with one scenario per API process: correct, reversed or uncertain.
+const SCENARIO = process.env.TRUEBUILD_E2E_SCENARIO ?? 'reversed'
+if (!['correct', 'reversed', 'uncertain'].includes(SCENARIO)) {
+    throw new Error('TRUEBUILD_E2E_SCENARIO must be correct, reversed or uncertain')
+}
 const API_ORIGIN = `http://127.0.0.1:${API_PORT}`
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`
 process.env.TRUEBUILD_E2E_API_ORIGIN = API_ORIGIN
@@ -26,16 +30,25 @@ export default defineConfig({
         baseURL: WEB_ORIGIN,
         trace: 'retain-on-failure',
     },
-    projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+    projects: [
+        {
+            name: 'chromium',
+            use: {
+                ...devices['Desktop Chrome'],
+                // Fake camera and auto-accepted prompts only; camera permission is granted per test for the web origin.
+                launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
+            },
+        },
+    ],
     webServer: [
         {
-            command: 'node --import tsx api/src/index.ts',
+            // Test-only Meta-mode API with the documented HTTP mock. An empty key is required and no .env file is loaded.
+            command: `node --import tsx api/scripts/mock-server.ts --test-only --scenario=${SCENARIO}`,
             url: `${API_ORIGIN}/api/health`,
             reuseExistingServer: false,
             timeout: 120_000,
             env: {
-                API_SHARED_SECRET: FIXTURE_DEMO_KEY,
-                PROVIDER_MODE: 'fixture',
+                MODEL_API_KEY: '',
                 PORT: String(API_PORT),
                 CORS_ORIGINS: WEB_ORIGIN,
             },
@@ -52,7 +65,7 @@ export default defineConfig({
                 EXPO_OFFLINE: '1',
                 EXPO_PUBLIC_API_BASE_URL: API_ORIGIN,
                 EXPO_PUBLIC_API_SECRET: FIXTURE_DEMO_KEY,
-                EXPO_PUBLIC_PROVIDER_MODE: 'fixture',
+                EXPO_PUBLIC_PROVIDER_MODE: 'meta',
             },
         },
     ],
