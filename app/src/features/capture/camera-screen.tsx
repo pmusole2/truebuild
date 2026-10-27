@@ -2,6 +2,7 @@ import { useRef, useState, type ReactElement } from 'react'
 import { Button, Linking, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions } from 'expo-camera'
+import { ownTemporaryImage } from '../../media/owned-temporary-images'
 import type { SourceImageAsset } from '../../media/normalize-image'
 
 export type CameraScreenProps = {
@@ -89,6 +90,7 @@ export function CameraScreen({ busy, onCancel, onCapture }: CameraScreenProps): 
                                 skipProcessing: false,
                                 exif: false,
                             })
+                            ownTemporaryImage(picture.uri)
                             return { uri: picture.uri, width: picture.width, height: picture.height }
                         })
                     }}
