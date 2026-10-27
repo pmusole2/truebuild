@@ -422,7 +422,7 @@ describe('plan quality and conclusion', () => {
         expect(report.models.spark?.quality).toEqual({ status: 'unverified' })
         expect(report.conclusion).toBe('unverified')
     })
-    it('declares Wonder clearly wins only when step accuracy and plan-quality rating agree in its favour', async () => {
+    it('declares Wonder clearly wins when the step and rating margins are met', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
         const steps = manifest.expected.steps.length
@@ -479,6 +479,26 @@ describe('plan quality and conclusion', () => {
         expect(report.conclusion).toBe('no_clear_win')
         expect(report.wonderClearlyWins).toBe(false)
     })
+    it('prints n=1, inconclusive beside raw counts when Wonder leads by only one step', async () => {
+        const { manifest, cwd } = await setup()
+        const { factory } = fakeFactory()
+        const steps = manifest.expected.steps.length
+        const print = vi.spyOn(console, 'log').mockImplementation(() => {})
+        await abMain([...ARGV, '--review'], cwd, {
+            factory,
+            interactive: true,
+            random: () => true,
+            reviewer: stepsInOrder(2 * steps - 1),
+            qualityReviewer: ratingsInOrder(4, 3),
+        })
+        const report = await readLastReport(cwd)
+        expect(report).toMatchObject({
+            conclusion: 'no_clear_win',
+            wonderClearlyWins: false,
+            comparisonSummary: `n=1, inconclusive; correct steps: Spark ${steps - 1}, Wonder ${steps}; quality ratings: Spark 3, Wonder 4`,
+        })
+        expect(print).toHaveBeenCalledWith(JSON.stringify(report))
+    })
     it('treats a step-accuracy lead without a quality lead as no clear win, not a quality win', async () => {
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory()
@@ -512,6 +532,7 @@ describe('plan quality and conclusion', () => {
             conclusion: 'unverified',
             status: 'unverified',
             reason: 'arm_incomplete_no_fallback',
+            comparisonSummary: `n=0, inconclusive; correct steps: Spark ${manifest.expected.steps.length}, Wonder unverified; quality ratings: Spark 4, Wonder unverified`,
         })
     })
     it('blinds reviewers: step and quality review inputs carry no model identity', async () => {
@@ -569,7 +590,7 @@ describe('plan quality and conclusion', () => {
 })
 
 describe('conclude and quality answer parsing', () => {
-    const arm = (model: StandardModel, accuracy: number, rating: 1 | 2 | 3 | 4 | 5 | undefined): AbArm => ({
+    const arm = (model: StandardModel, correctSteps: number, rating: 1 | 2 | 3 | 4 | 5 | undefined): AbArm => ({
         model,
         status: 'completed',
         reason: 'parse_completed',
@@ -578,15 +599,35 @@ describe('conclude and quality answer parsing', () => {
         latencyMs: 1,
         costStatus: 'unverified',
         semanticStepAccuracy: 'human_reviewed',
-        humanStepAccuracyPercent: accuracy,
+        correctSteps,
         quality: rating === undefined ? { status: 'unverified' } : { status: 'operator_rated', rating, issues: [] },
     })
     it.each([
-        ['spark ahead on both', 100, 4, 50, 2, { conclusion: 'sparkClearlyWins', wonderClearlyWins: false }],
-        ['wonder ahead on both', 50, 2, 100, 4, { conclusion: 'wonderClearlyWins', wonderClearlyWins: true }],
-        ['accuracy tie', 50, 2, 50, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
-        ['rating tie', 50, 3, 100, 3, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
-        ['split verdict', 100, 2, 50, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        [
+            'Spark margin met: two steps, one point',
+            4,
+            4,
+            2,
+            3,
+            { conclusion: 'sparkClearlyWins', wonderClearlyWins: false },
+        ],
+        [
+            'Wonder margin met: two steps, one point',
+            2,
+            3,
+            4,
+            4,
+            { conclusion: 'wonderClearlyWins', wonderClearlyWins: true },
+        ],
+        ['Wonder one step, one point', 2, 3, 3, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['Spark one step, one point', 3, 4, 2, 3, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['one rating point only', 2, 3, 2, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['one step with two rating points', 2, 2, 3, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['complete tie', 2, 3, 2, 3, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['accuracy tie', 2, 2, 2, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['rating tie', 2, 3, 4, 3, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['split verdict', 4, 2, 2, 4, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
+        ['opposite split verdict', 2, 4, 4, 2, { conclusion: 'no_clear_win', wonderClearlyWins: false }],
     ] as const)('%s', (_label, sparkAcc, sparkRating, wonderAcc, wonderRating, expected) => {
         expect(
             conclude({
@@ -596,11 +637,11 @@ describe('conclude and quality answer parsing', () => {
         ).toEqual(expected)
     })
     it('is unverified when any arm lacks quality notes or the other arm is missing', () => {
-        expect(conclude({ spark: arm(SPARK, 100, undefined), wonder: arm(WONDER, 50, 2) })).toEqual({
+        expect(conclude({ spark: arm(SPARK, 4, undefined), wonder: arm(WONDER, 2, 2) })).toEqual({
             conclusion: 'unverified',
             wonderClearlyWins: false,
         })
-        expect(conclude({ spark: arm(SPARK, 100, 3), wonder: undefined })).toEqual({
+        expect(conclude({ spark: arm(SPARK, 4, 3), wonder: undefined })).toEqual({
             conclusion: 'unverified',
             wonderClearlyWins: false,
         })

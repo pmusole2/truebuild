@@ -182,6 +182,7 @@ export type AbReport = {
     reason: string
     conclusion: Conclusion
     wonderClearlyWins: boolean
+    comparisonSummary: string
     conclusionScope: 'single_manual_single_run'
     automaticFallback: 'none'
     defaultChange: 'none'
@@ -229,7 +230,8 @@ async function parseArm(
                 binding: { kind: 'manual', manualId: randomUUID(), revision: 1 },
                 pages: input.sources,
             },
-            AbortSignal.timeout(45_000),
+            // Both arms, including Wonder, are bound by the provider's existing 30 s parse deadline.
+            new AbortController().signal,
         )
     } catch (error: unknown) {
         failure = failureReason(error)
@@ -305,10 +307,10 @@ function copyReview(arm: AbArm, summary: Summary): void {
     arm.extractionUnknowns = summary.extractionUnknowns
 }
 
-/**
- * Conclusion needs complete, human-reviewed evidence for both arms. Step accuracy and whole-plan rating must both
- * favour the same model; a tie or a split verdict is no clear win. Percent difference alone never decides quality.
- */
+const MIN_CLEAR_WIN_STEP_DIFFERENCE = 2
+const MIN_CLEAR_WIN_RATING_DIFFERENCE = 1
+
+/** Complete human review and both raw-count margins must favour the same model. */
 export function conclude(arms: Partial<Record<'spark' | 'wonder', AbArm>>): {
     conclusion: Conclusion
     wonderClearlyWins: boolean
@@ -323,13 +325,29 @@ export function conclude(arms: Partial<Record<'spark' | 'wonder', AbArm>>): {
     if (!spark || !wonder || !complete) return { conclusion: 'unverified', wonderClearlyWins: false }
     if (spark.quality.status !== 'operator_rated' || wonder.quality.status !== 'operator_rated')
         return { conclusion: 'unverified', wonderClearlyWins: false }
-    const accuracy = Math.sign((wonder.humanStepAccuracyPercent ?? 0) - (spark.humanStepAccuracyPercent ?? 0))
-    const rating = Math.sign(wonder.quality.rating - spark.quality.rating)
-    if (accuracy === 0 || rating === 0 || accuracy !== rating)
+    if (spark.correctSteps === undefined || wonder.correctSteps === undefined)
+        return { conclusion: 'unverified', wonderClearlyWins: false }
+    const steps = wonder.correctSteps - spark.correctSteps
+    const rating = wonder.quality.rating - spark.quality.rating
+    if (
+        Math.abs(steps) < MIN_CLEAR_WIN_STEP_DIFFERENCE ||
+        Math.abs(rating) < MIN_CLEAR_WIN_RATING_DIFFERENCE ||
+        Math.sign(steps) !== Math.sign(rating)
+    )
         return { conclusion: 'no_clear_win', wonderClearlyWins: false }
-    return accuracy > 0
+    return steps > 0
         ? { conclusion: 'wonderClearlyWins', wonderClearlyWins: true }
         : { conclusion: 'sparkClearlyWins', wonderClearlyWins: false }
+}
+
+function comparisonSummary(arms: AbReport['models'], conclusion: Conclusion): string {
+    const { spark, wonder } = arms
+    const n = spark?.status === 'completed' && wonder?.status === 'completed' ? 1 : 0
+    const result =
+        conclusion === 'wonderClearlyWins' || conclusion === 'sparkClearlyWins' ? 'margin met' : 'inconclusive'
+    const rating = (arm: AbArm | undefined): number | 'unverified' =>
+        arm?.quality.status === 'operator_rated' ? arm.quality.rating : 'unverified'
+    return `n=${n}, ${result}; correct steps: Spark ${spark?.correctSteps ?? 'unverified'}, Wonder ${wonder?.correctSteps ?? 'unverified'}; quality ratings: Spark ${rating(spark)}, Wonder ${rating(wonder)}`
 }
 
 export async function runAbGate(input: {
@@ -397,6 +415,7 @@ export async function runAbGate(input: {
                 : 'ab_human_reviewed',
         conclusion,
         wonderClearlyWins,
+        comparisonSummary: comparisonSummary(arms, conclusion),
         conclusionScope: 'single_manual_single_run',
         automaticFallback: 'none',
         defaultChange: 'none',
@@ -426,6 +445,7 @@ function refusal(reason: string): AbReport {
         reason,
         conclusion: 'unverified',
         wonderClearlyWins: false,
+        comparisonSummary: comparisonSummary({}, 'unverified'),
         conclusionScope: 'single_manual_single_run',
         automaticFallback: 'none',
         defaultChange: 'none',
