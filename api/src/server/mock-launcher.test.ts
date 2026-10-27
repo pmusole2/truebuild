@@ -6,9 +6,14 @@ import { createDemoManual } from '@truebuild/contracts'
 import sharp from 'sharp'
 import { expect, it } from 'vitest'
 
-it.each(['correct', 'reversed', 'uncertain'] as const)(
-    'launches guarded %s scenario with isolated CORS and shuts down',
-    async (scenario) => {
+it.each([
+    ['correct', undefined],
+    ['reversed', undefined],
+    ['uncertain', undefined],
+    ['uncertain', 'reversed'],
+] as const)(
+    'launches guarded %s scenario secondary=%s with isolated CORS and shuts down',
+    async (scenario, secondary) => {
         const reservation = createServer()
         reservation.listen(0, '127.0.0.1')
         await once(reservation, 'listening')
@@ -17,7 +22,14 @@ it.each(['correct', 'reversed', 'uncertain'] as const)(
         await new Promise<void>((resolve) => reservation.close(() => resolve()))
         const child = spawn(
             process.execPath,
-            ['--import', 'tsx', 'api/scripts/mock-server.ts', '--test-only', `--scenario=${scenario}`],
+            [
+                '--import',
+                'tsx',
+                'api/scripts/mock-server.ts',
+                '--test-only',
+                `--scenario=${scenario}`,
+                ...(secondary ? [`--second-opinion=${secondary}`, '--second-opinion-delay-ms=10'] : []),
+            ],
             {
                 env: { PATH: process.env.PATH, PORT: String(address.port), CORS_ORIGINS: 'http://localhost:18071' },
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -94,11 +106,30 @@ it.each(['correct', 'reversed', 'uncertain'] as const)(
                 body: form,
             })
             expect(response.status).toBe(200)
-            expect(await response.json()).toMatchObject({
+            const result = await response.json()
+            expect(result).toMatchObject({
                 value: {
                     decision: scenario === 'correct' ? 'pass' : scenario === 'reversed' ? 'refuse' : 'cannot_verify',
                 },
             })
+            if (secondary) {
+                expect(result.value.secondOpinion.status).toBe('available')
+                const original: unknown = JSON.parse(String(form.get('metadata')))
+                if (!original || typeof original !== 'object') throw new Error('missing_metadata')
+                form.set(
+                    'metadata',
+                    JSON.stringify({ ...original, secondOpinionToken: result.value.secondOpinion.token }),
+                )
+                const followup = await fetch(`${origin}/api/checks/second-opinion`, {
+                    method: 'POST',
+                    headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
+                    body: form,
+                })
+                expect(followup.status).toBe(200)
+                expect(await followup.json()).toMatchObject({
+                    value: { decision: 'refuse', model: 'muse-wonder-1.0', secondOpinion: { status: 'completed' } },
+                })
+            } else expect(result.value.secondOpinion).toBeUndefined()
         } finally {
             child.kill('SIGTERM')
             await closed
@@ -110,6 +141,9 @@ it.each([
     { args: [], key: undefined },
     { args: ['--test-only', '--scenario=unsupported'], key: undefined },
     { args: ['--test-only'], key: '<synthetic>' },
+    { args: ['--test-only', '--second-opinion=unsupported'], key: undefined },
+    { args: ['--test-only', '--second-opinion-delay-ms=100'], key: undefined },
+    { args: ['--test-only', '--second-opinion=correct', '--second-opinion-delay-ms=60001'], key: undefined },
 ])('refuses unsafe launcher configuration before opening a listener: %j', async ({ args, key }) => {
     const child = spawn(process.execPath, ['--import', 'tsx', 'api/scripts/mock-server.ts', ...args], {
         env: { PATH: process.env.PATH, ...(key ? { MODEL_API_KEY: key } : {}) },

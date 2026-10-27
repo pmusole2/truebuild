@@ -21,6 +21,14 @@ const gridBox = z
     .pipe(normalizedBoxSchema)
 
 const assessment = z.enum(['matches', 'mismatch', 'unobservable'])
+export const providerParseSchema = z
+    .strictObject(parsedManualSchema.shape)
+    .omit({ model: true, modelNotes: true })
+    .superRefine((value, ctx) => {
+        if (!parsedManualSchema.safeParse(value).success)
+            ctx.addIssue({ code: 'custom', message: 'Invalid extraction' })
+    })
+
 export const providerCheckSchema = z
     .strictObject({
         ...checkResultSchema.shape,
@@ -38,6 +46,7 @@ export const providerCheckSchema = z
         orientationAssessment: z.enum(['correct', 'reversed', 'uncertain']),
         observedRegion: gridBox.nullable(),
     })
+    .omit({ model: true, modelNotes: true, secondOpinion: true })
     .superRefine((value, ctx) => {
         const { partsAssessment: _parts, connectionAssessment: _connection, checks: _checks, ...publicValue } = value
         if (!checkResultSchema.safeParse(publicValue).success)
@@ -48,6 +57,7 @@ export const providerQuestionSchema = z
         ...questionResultSchema.shape,
         observedRegion: gridBox.nullable(),
     })
+    .omit({ model: true, modelNotes: true })
     .superRefine((value, ctx) => {
         if (!questionResultSchema.safeParse(value).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid question evidence' })
@@ -142,7 +152,7 @@ export function assertStrictSchema(schema: Schema): void {
 }
 
 export const metaOutputSchemas = {
-    parse: strictSchema(z.toJSONSchema(parsedManualSchema, { target: 'draft-7' })),
+    parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
     check: strictSchema(z.toJSONSchema(providerCheckSchema, { target: 'draft-7', io: 'input' })),
     question: strictSchema(z.toJSONSchema(providerQuestionSchema, { target: 'draft-7', io: 'input' })),
 }
