@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createCallGuard } from './transport'
 import {
     MODEL_CHECK_TIMEOUT_MS,
+    MODEL_SECOND_OPINION_TIMEOUT_MS,
     MODEL_PARSE_TIMEOUT_MS,
     MODEL_SEGMENT_TIMEOUT_MS,
     MODEL_METADATA_MAX_BYTES,
@@ -125,6 +126,102 @@ function snapshotEvent(binding: CaptureBinding = captureBinding): unknown {
 function completedEvent(): unknown {
     return { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: captureBinding, value: { type: 'completed' } }
 }
+
+describe('separate second opinion transport', () => {
+    const token = 'second-opinion-test-ticket'
+    const value = {
+        decision: 'cannot_verify',
+        reason: 'Orientation remains unclear.',
+        sourceRefs: [],
+        observedRegion: null,
+        missingEvidence: ['Show the groove.'],
+        model: 'muse-spark-1.3',
+        modelNotes: ['Second opinion did not resolve the missing evidence.'],
+        secondOpinion: { model: 'muse-wonder-1.0', status: 'completed' },
+    }
+    const invoke = (api: ModelApiClient, signal?: AbortSignal): Promise<ApiResult<unknown>> =>
+        api.secondOpinion(captureBinding, session, sourcePageIds, [source], observation, token, {
+            requestId: REQUEST_ID,
+            signal,
+        })
+
+    it('sends the shared multipart context and ticket once and preserves server provenance', async () => {
+        const { fetch, calls } = scripted(() => jsonResponse(200, okCheck({ value })))
+        expect(await invoke(client(fetch))).toMatchObject({ status: 'ok', value })
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.url).toBe(`${BASE_URL}/api/checks/second-opinion`)
+        const body = calls[0]!.init.body as FormData
+        expect(JSON.parse(String(body.get('metadata')))).toMatchObject({
+            mode: 'model',
+            requestId: REQUEST_ID,
+            binding: captureBinding,
+            session,
+            sourcePageIds,
+            secondOpinionToken: token,
+        })
+        expect(new Uint8Array(await (body.get('source-0') as Blob).arrayBuffer())).toEqual(source.bytes)
+        expect(new Uint8Array(await (body.get('observation') as Blob).arrayBuffer())).toEqual(observation.bytes)
+    })
+
+    it('has its own 60 second budget and accepts a reply after the primary eight seconds', async () => {
+        vi.useFakeTimers()
+        let deliver: ((response: Response) => void) | undefined
+        const fetch = vi.fn(
+            (): Promise<Response> =>
+                new Promise((resolve) => {
+                    deliver = resolve
+                }),
+        )
+        try {
+            const pending = invoke(client(fetch))
+            await vi.advanceTimersByTimeAsync(30_000)
+            expect(fetch).toHaveBeenCalledTimes(1)
+            deliver?.(jsonResponse(200, okCheck({ value })))
+            expect(await pending).toMatchObject({ status: 'ok', value })
+            expect(MODEL_SECOND_OPINION_TIMEOUT_MS).toBe(60_000)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('times out a hung second opinion once without retry', async () => {
+        vi.useFakeTimers()
+        const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
+        try {
+            const pending = invoke(client(fetch))
+            await vi.advanceTimersByTimeAsync(60_001)
+            expect(await pending).toMatchObject({ status: 'unavailable', code: 'timeout' })
+            expect(fetch).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('does not dispatch an empty ticket or an already cancelled operation', async () => {
+        const { fetch, calls } = scripted(() => jsonResponse(200, okCheck({ value })))
+        const api = client(fetch)
+        expect(
+            await api.secondOpinion(captureBinding, session, sourcePageIds, [source], observation, '', {
+                requestId: REQUEST_ID,
+            }),
+        ).toMatchObject({ status: 'unavailable', code: 'invalid_input' })
+        const abort = new AbortController()
+        abort.abort()
+        expect(await invoke(api, abort.signal)).toMatchObject({ status: 'unavailable' })
+        expect(calls).toHaveLength(0)
+    })
+
+    it.each([
+        { binding: { ...captureBinding, captureId: 'different-capture' } },
+        { requestId: 'different-request' },
+        { mode: 'fixture' },
+        { value: { ...value, sourceRefs: [{ pageId: 'unrequested-page', region: null }] } },
+    ])('rejects a reply with mismatched request context %j', async (overrides) => {
+        const { fetch, calls } = scripted(() => jsonResponse(200, okCheck({ value, ...overrides })))
+        expect(await invoke(client(fetch))).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
+        expect(calls).toHaveLength(1)
+    })
+})
 
 describe('trusted outer action checkpoint', () => {
     it('dispatches nothing when actual multipart JSON construction crosses the outer deadline before timers run', async () => {

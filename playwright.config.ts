@@ -16,6 +16,26 @@ const SCENARIO = process.env.TRUEBUILD_E2E_SCENARIO ?? 'reversed'
 if (!['correct', 'reversed', 'uncertain'].includes(SCENARIO)) {
     throw new Error('TRUEBUILD_E2E_SCENARIO must be correct, reversed or uncertain')
 }
+const SECOND_OPINION = process.env.TRUEBUILD_E2E_SECOND_OPINION
+if (SECOND_OPINION !== undefined && !['correct', 'reversed', 'uncertain', 'failed'].includes(SECOND_OPINION)) {
+    throw new Error('TRUEBUILD_E2E_SECOND_OPINION must be correct, reversed, uncertain or failed')
+}
+if (SECOND_OPINION !== undefined && SCENARIO !== 'uncertain') {
+    throw new Error('Second-opinion E2E requires TRUEBUILD_E2E_SCENARIO=uncertain')
+}
+const rawSecondDelay = process.env.TRUEBUILD_E2E_SECOND_OPINION_DELAY_MS
+if (
+    rawSecondDelay !== undefined &&
+    (!/^(0|[1-9]\d{0,4})$/.test(rawSecondDelay) || Number(rawSecondDelay) > 55_000 || SECOND_OPINION === undefined)
+) {
+    throw new Error(
+        'TRUEBUILD_E2E_SECOND_OPINION_DELAY_MS requires a second opinion and must be an integer from 0 to 55000',
+    )
+}
+const secondOpinionFlags =
+    SECOND_OPINION === undefined
+        ? ''
+        : ` --second-opinion=${SECOND_OPINION}${rawSecondDelay === undefined ? '' : ` --second-opinion-delay-ms=${Number(rawSecondDelay)}`}`
 const API_ORIGIN = `http://127.0.0.1:${API_PORT}`
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`
 process.env.TRUEBUILD_E2E_API_ORIGIN = API_ORIGIN
@@ -26,6 +46,8 @@ export default defineConfig({
     workers: 1,
     retries: 0,
     timeout: 45_000,
+    // The default run keeps all nine real-mode regressions. Opt-in follow-up runs reuse setup for one focused case.
+    ...(SECOND_OPINION === undefined ? {} : { grep: /second opinion:/ }),
     use: {
         baseURL: WEB_ORIGIN,
         trace: 'retain-on-failure',
@@ -43,7 +65,7 @@ export default defineConfig({
     webServer: [
         {
             // Test-only Meta-mode API with the documented HTTP mock. An empty key is required and no .env file is loaded.
-            command: `node --import tsx api/scripts/mock-server.ts --test-only --scenario=${SCENARIO}`,
+            command: `node --import tsx api/scripts/mock-server.ts --test-only --scenario=${SCENARIO}${secondOpinionFlags}`,
             url: `${API_ORIGIN}/api/health`,
             reuseExistingServer: false,
             timeout: 120_000,

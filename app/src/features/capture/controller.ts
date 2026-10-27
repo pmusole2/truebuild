@@ -13,12 +13,18 @@ import {
     type QuestionResult,
     type QuestionTarget,
 } from '@truebuild/contracts'
-import { MODEL_CHECK_TIMEOUT_MS, MODEL_PARSE_TIMEOUT_MS, type ModelApiClient } from '../../api/model-client'
+import {
+    MODEL_CHECK_TIMEOUT_MS,
+    MODEL_PARSE_TIMEOUT_MS,
+    MODEL_SECOND_OPINION_TIMEOUT_MS,
+    type ImageBytes,
+    type ModelApiClient,
+} from '../../api/model-client'
 import { awaitStopped, createCallGuard } from '../../api/transport'
 import type { NormalizedImage, SourceImageAsset } from '../../media/normalize-image'
 import { bytesToDataUri } from '../../media/image-source'
 import { userMessageForMediaError } from '../../media/media-errors'
-import { askModelQuestion, runModelCheck } from '../assembly/model-check'
+import { askModelQuestion, loadCitedSources, observationImage } from '../assembly/model-check'
 import type { Observation } from '../assembly/observation'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
 
@@ -46,11 +52,21 @@ export type WorkflowState = {
 }
 export type CapturePorts = {
     storage: LibraryStorage
-    client: Pick<ModelApiClient, 'parse' | 'check' | 'questions'>
+    client: Pick<ModelApiClient, 'parse' | 'check' | 'questions' | 'secondOpinion'>
     normalize: (asset: SourceImageAsset) => Promise<NormalizedImage>
     digest: Digest
     id: () => string
     now?: () => number
+}
+
+/** Owned by one capture action; never reconstructed from mutable UI state for the follow-up. */
+type FrozenCheckContext = {
+    requestId: string
+    binding: CaptureBinding
+    session: ManualSession
+    sourcePageIds: string[]
+    sources: ImageBytes[]
+    observation: ImageBytes
 }
 
 export function reviewedSession(session: ManualSession): ManualSession | null {
@@ -131,7 +147,7 @@ export class CaptureController {
     private readonly listeners = new Set<() => void>()
     private epoch = 0
     private operation: AbortController | null = null
-    private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'ask' | null = null
+    private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'secondOpinion' | 'ask' | null = null
     private readonly now: () => number
     constructor(private readonly ports: CapturePorts) {
         this.now = ports.now ?? ((): number => Date.now())
@@ -185,9 +201,23 @@ export class CaptureController {
                     ? 'pages'
                     : 'guide'
                 : this.state.route
+        const check = this.state.check
+        const offer = check?.secondOpinion
+        const cancelledCheck =
+            this.operationKind === 'secondOpinion' && check && offer?.status === 'available'
+                ? {
+                      ...check,
+                      secondOpinion: { model: offer.model, status: 'unavailable' as const },
+                      modelNotes: [
+                          ...(check.modelNotes ?? []).slice(0, 9),
+                          'Second opinion cancelled. Primary result retained.',
+                      ],
+                  }
+                : check
         this.stopOperation()
         this.publish({
             pending: null,
+            check: cancelledCheck,
             route,
             cameraIntent: null,
             notice: 'Cancelled. No late reply will be shown. Retry is a new request.',
@@ -683,26 +713,63 @@ export class CaptureController {
             if (intent.kind === 'check') {
                 this.operationKind = 'check'
                 this.publish({ pending: 'Checking frozen photo…' })
-                const result = await runModelCheck({
-                    client: this.ports.client,
-                    requestId: `check-${this.ports.id()}`,
-                    binding,
-                    session: entry.session,
-                    step,
-                    observation: image,
-                    signal: guard.signal,
-                    loadPageAsset: async (id) => {
-                        const page = entry.session.pages.find((p) => p.assetId === id)
+                const session = manualSessionSchema.parse(entry.session)
+                const sourcePageIds = selectedStepSourcePageIds(session, step)
+                const requestId = `check-${this.ports.id()}`
+                const sources = await loadCitedSources(
+                    session,
+                    sourcePageIds,
+                    async (id) => {
+                        const page = session.pages.find((p) => p.assetId === id)
                         return page === undefined
                             ? null
                             : { assetId: id, mimeType: page.mimeType, bytes: await this.readPage(page) }
                     },
-                })
+                    guard,
+                )
                 guard.checkpoint()
-                if (token === this.epoch && this.isCurrentCapture(binding)) {
+                if (sources === null || sourcePageIds.length === 0 || sourcePageIds.length > LIMITS.manualPages) {
+                    this.publish({
+                        notice: this.unavailable({
+                            status: 'unavailable',
+                            requestId,
+                            binding,
+                            code: 'invalid_input',
+                            retryable: false,
+                        }),
+                    })
+                    return
+                }
+                const context: FrozenCheckContext = {
+                    requestId,
+                    binding: { ...binding },
+                    session,
+                    sourcePageIds,
+                    sources: sources.map((source) => ({ ...source, bytes: Uint8Array.from(source.bytes) })),
+                    observation: { ...observationImage(image), bytes: Uint8Array.from(image.bytes) },
+                }
+                guard.checkpoint()
+                const result = await awaitStopped(
+                    this.ports.client.check(
+                        context.binding,
+                        session,
+                        sourcePageIds,
+                        context.sources,
+                        context.observation,
+                        { requestId, signal: guard.signal, checkpoint: guard.checkpoint },
+                    ),
+                    guard.signal,
+                )
+                guard.checkpoint()
+                if (this.ownsCaptureOperation(token, operation, context.binding)) {
                     this.publish(
                         result.status === 'ok' ? { check: result.value } : { notice: this.unavailable(result) },
                     )
+                    // The primary action is complete. A fresh guard below owns only the optional follow-up.
+                    guard.dispose()
+                    if (result.status === 'ok') {
+                        await this.followSecondOpinion(context, result.value, token, operation)
+                    }
                 }
             }
         } catch {
@@ -736,7 +803,87 @@ export class CaptureController {
     }
     private isCurrentCapture(binding: CaptureBinding): boolean {
         const capture = this.state.capture
-        return capture !== null && capture.reusable && matchesBinding(capture.binding, binding)
+        const entry = this.current
+        return (
+            capture !== null &&
+            capture.reusable &&
+            matchesBinding(capture.binding, binding) &&
+            entry?.session.manualId === binding.manualId &&
+            entry.session.revision === binding.revision &&
+            entry.session.reviewedSteps[entry.stepIndex]?.stepId === binding.stepId
+        )
+    }
+    private ownsCaptureOperation(token: number, operation: AbortController, binding: CaptureBinding): boolean {
+        return (
+            token === this.epoch &&
+            this.operation === operation &&
+            !operation.signal.aborted &&
+            this.isCurrentCapture(binding)
+        )
+    }
+    private async followSecondOpinion(
+        context: FrozenCheckContext,
+        primary: CheckResult,
+        token: number,
+        operation: AbortController,
+    ): Promise<void> {
+        const offer = primary.secondOpinion
+        if (
+            primary.decision !== 'cannot_verify' ||
+            offer?.status !== 'available' ||
+            !this.ownsCaptureOperation(token, operation, context.binding)
+        )
+            return
+
+        const guard = createCallGuard(MODEL_SECOND_OPINION_TIMEOUT_MS, operation.signal)
+        const retained = (note: string, status: 'completed' | 'unavailable' = 'unavailable'): CheckResult => ({
+            ...primary,
+            secondOpinion: { model: offer.model, status },
+            modelNotes: [...(primary.modelNotes ?? []).slice(0, 9), note],
+        })
+        this.operationKind = 'secondOpinion'
+        this.publish({ pending: `Second opinion pending (${offer.model})…` })
+        try {
+            guard.checkpoint()
+            if (!this.ownsCaptureOperation(token, operation, context.binding)) return
+            const result = await awaitStopped(
+                this.ports.client.secondOpinion(
+                    context.binding,
+                    context.session,
+                    context.sourcePageIds,
+                    context.sources,
+                    context.observation,
+                    offer.token,
+                    { requestId: context.requestId, signal: guard.signal, checkpoint: guard.checkpoint },
+                ),
+                guard.signal,
+            )
+            guard.checkpoint()
+            if (!this.ownsCaptureOperation(token, operation, context.binding)) return
+            this.publish({
+                check:
+                    result.status !== 'ok'
+                        ? retained('Second opinion unavailable. Primary result retained.')
+                        : result.value.decision === 'pass'
+                          ? retained(
+                                'Second opinion cannot promote this check to pass. Primary result retained.',
+                                'completed',
+                            )
+                          : result.value,
+            })
+        } catch {
+            if (this.ownsCaptureOperation(token, operation, context.binding)) {
+                this.publish({
+                    check: retained(
+                        guard.timedOut()
+                            ? 'Second opinion timed out after 60 seconds. Primary result retained.'
+                            : 'Second opinion unavailable. Primary result retained.',
+                    ),
+                })
+            }
+        } finally {
+            guard.dispose()
+        }
     }
     private cancelPendingAnswer(): boolean {
         if (!this.canCompose) {

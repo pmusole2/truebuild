@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDemoManual, type ApiResult, type CheckResult, type ParsedManual } from '@truebuild/contracts'
+import {
+    modelCheckMetadataSchema,
+    modelParseMetadataSchema,
+    modelSecondOpinionMetadataSchema,
+} from '@truebuild/contracts/model'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { CaptureController, reviewedSession, unresolvedCriticalFacts } from './controller'
 import { LibraryStorage, type KeyValueStorage } from './library'
@@ -134,6 +139,307 @@ async function ready(): Promise<ReturnType<typeof setup>> {
     await runtime.controller.confirm()
     return runtime
 }
+
+async function followupReady(
+    options: { decision?: CheckResult['decision']; available?: boolean; primaryDelayMs?: number } = {},
+): Promise<{
+    controller: CaptureController
+    store: LibraryStorage
+    forms: FormData[]
+    signals: AbortSignal[]
+    finish: (value?: CheckResult, status?: number) => void
+}> {
+    const forms: FormData[] = []
+    const signals: AbortSignal[] = []
+    let finish = (_value?: CheckResult, _status?: number): void => {
+        throw new Error('Secondary has not dispatched')
+    }
+    const runtime = setup(async (url, init): Promise<Response> => {
+        const form = init.body as FormData
+        const raw: unknown = JSON.parse(String(form.get('metadata')))
+        if (url.endsWith('/parse')) {
+            const meta = modelParseMetadataSchema.parse(raw)
+            return Response.json({
+                status: 'ok',
+                mode: 'model',
+                requestId: meta.requestId,
+                binding: meta.binding,
+                value: parsed(meta.pages[0]!.pageId),
+            })
+        }
+        forms.push(form)
+        signals.push(init.signal!)
+        if (url.endsWith('/second-opinion')) {
+            const meta = modelSecondOpinionMetadataSchema.parse(raw)
+            return new Promise((resolve) => {
+                finish = (value = secondaryResult(), status = 200): void =>
+                    resolve(
+                        Response.json(
+                            {
+                                status: 'ok',
+                                mode: 'model',
+                                requestId: meta.requestId,
+                                binding: meta.binding,
+                                value,
+                            },
+                            { status },
+                        ),
+                    )
+            })
+        }
+        const meta = modelCheckMetadataSchema.parse(raw)
+        const decision = options.decision ?? 'cannot_verify'
+        if (options.primaryDelayMs !== undefined) {
+            await new Promise((resolve) => setTimeout(resolve, options.primaryDelayMs))
+        }
+        return Response.json({
+            status: 'ok',
+            mode: 'model',
+            requestId: meta.requestId,
+            binding: meta.binding,
+            value: {
+                decision,
+                reason: 'Primary Spark result.',
+                sourceRefs: [{ pageId: meta.sourcePageIds[0]!, region: null }],
+                observedRegion: null,
+                missingEvidence: decision === 'cannot_verify' ? ['Groove is obscured.'] : [],
+                model: 'muse-spark-1.3',
+                ...(options.available !== false && decision === 'cannot_verify'
+                    ? {
+                          secondOpinion: { status: 'available', model: 'muse-wonder-1.0', token: 'one-use-ticket' },
+                      }
+                    : {}),
+            },
+        })
+    })
+    controllers.push(runtime.controller)
+    await runtime.controller.restore()
+    await runtime.controller.createManual()
+    await runtime.controller.importPages(async () => [photo])
+    await runtime.controller.parse()
+    await runtime.controller.confirm()
+    return { ...runtime, forms, signals, finish: (value, status): void => finish(value, status) }
+}
+
+function secondaryResult(overrides: Partial<CheckResult> = {}): CheckResult {
+    return {
+        decision: 'cannot_verify',
+        reason: 'Primary Spark result.',
+        sourceRefs: [],
+        observedRegion: null,
+        missingEvidence: ['Groove is obscured.'],
+        model: 'muse-spark-1.3',
+        modelNotes: ['Second opinion could not resolve orientation.'],
+        secondOpinion: { status: 'completed', model: 'muse-wonder-1.0' },
+        ...overrides,
+    }
+}
+
+describe('automatic separate second opinion', () => {
+    it('publishes primary before dispatch and retains it beyond eight seconds while the follow-up has its own budget', async () => {
+        const { controller, forms, finish } = await followupReady({ primaryDelayMs: 7_000 })
+        const publications: (CheckResult | null)[] = []
+        controller.subscribe(() => {
+            publications.push(controller.getSnapshot().check)
+        })
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(1))
+        await vi.advanceTimersByTimeAsync(7_000)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        expect(publications.some((check) => check?.secondOpinion?.status === 'available')).toBe(true)
+        expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        expect(controller.getSnapshot().pending).toMatch(/Second opinion pending/)
+        await vi.advanceTimersByTimeAsync(59_000)
+        expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
+        finish()
+        await pending
+        expect(controller.getSnapshot().check?.secondOpinion?.status).toBe('completed')
+        expect(controller.getSnapshot().check?.modelNotes).toContain('Second opinion could not resolve orientation.')
+        expect(controller.getSnapshot().pending).toBeNull()
+        await vi.advanceTimersByTimeAsync(61_000)
+        expect(forms).toHaveLength(2)
+        expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
+    })
+
+    it('ends a hung follow-up after its own 60 seconds without clearing primary or retrying', async () => {
+        const { controller, forms, signals } = await followupReady()
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        await vi.advanceTimersByTimeAsync(59_000)
+        expect(controller.getSnapshot().pending).toMatch(/Second opinion pending/)
+        expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        await vi.advanceTimersByTimeAsync(1_001)
+        await pending
+        expect(signals[1]!.aborted).toBe(true)
+        expect(controller.getSnapshot().pending).toBeNull()
+        expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toMatch(/timed out after 60 seconds/)
+        expect(forms).toHaveLength(2)
+    })
+
+    it.each(['cannot_verify', 'pass', 'refuse'] as const)(
+        'does not follow up %s without an available ticket',
+        async (decision) => {
+            const { controller, forms } = await followupReady({ decision, available: false })
+            controller.camera({ kind: 'check' })
+            await controller.shutter(async () => photo)
+            expect(forms).toHaveLength(1)
+            expect(controller.getSnapshot().check?.decision).toBe(decision)
+        },
+    )
+
+    it('reuses the exact primary request identity, session and bytes despite mutations of the visible capture/session', async () => {
+        const { controller, forms, finish, store } = await followupReady()
+        let readsAfterPrimary = 0
+        const read = store.readAsset.bind(store)
+        let primaryPublished = false
+        vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+            if (primaryPublished) readsAfterPrimary++
+            return read(page)
+        })
+        const oldByte = image.bytes[0]!
+        controller.subscribe(() => {
+            if (!primaryPublished && controller.getSnapshot().check !== null) {
+                primaryPublished = true
+                controller.current!.session.title = 'Changed after the primary request'
+                controller.getSnapshot().capture!.observation.bytes[0] = 99
+            }
+        })
+        try {
+            controller.camera({ kind: 'check' })
+            const pending = controller.shutter(async () => photo)
+            await vi.waitFor(() => expect(forms).toHaveLength(2))
+            const first: unknown = JSON.parse(String(forms[0]!.get('metadata')))
+            const { secondOpinionToken, ...second } = modelSecondOpinionMetadataSchema.parse(
+                JSON.parse(String(forms[1]!.get('metadata'))),
+            )
+            expect(secondOpinionToken).toBe('one-use-ticket')
+            expect(second).toEqual(first)
+            for (const field of ['source-0', 'observation']) {
+                expect(await (forms[1]!.get(field) as Blob).arrayBuffer()).toEqual(
+                    await (forms[0]!.get(field) as Blob).arrayBuffer(),
+                )
+            }
+            expect(readsAfterPrimary).toBe(0)
+            finish()
+            await pending
+        } finally {
+            image.bytes[0] = oldByte
+        }
+    })
+
+    it('retains primary on cancellation, aborts the follow-up and discards its late response', async () => {
+        const { controller, forms, signals, finish } = await followupReady()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        controller.cancel()
+        expect(signals[1]!.aborted).toBe(true)
+        expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        expect(controller.getSnapshot().check?.secondOpinion).toEqual({
+            status: 'unavailable',
+            model: 'muse-wonder-1.0',
+        })
+        expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toContain('Second opinion cancelled')
+        expect(controller.getSnapshot().pending).toBeNull()
+        finish(secondaryResult({ reason: 'Late secondary reply' }))
+        await pending
+        expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        expect(forms).toHaveLength(2)
+    })
+
+    it('does not dispatch when cancelled synchronously after publishing primary', async () => {
+        const { controller, forms } = await followupReady()
+        let cancelled = false
+        controller.subscribe(() => {
+            if (!cancelled && controller.getSnapshot().check !== null) {
+                cancelled = true
+                controller.cancel()
+            }
+        })
+        controller.camera({ kind: 'check' })
+        await controller.shutter(async () => photo)
+        expect(forms).toHaveLength(1)
+        expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
+    })
+
+    it.each(['step', 'revision', 'capture'] as const)('fences a late follow-up after changing %s', async (change) => {
+        const { controller, forms, finish } = await followupReady()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        if (change === 'revision') controller.current!.session.revision++
+        else if (change === 'step') await controller.step(1)
+        else {
+            controller.cancel()
+            controller.camera({ kind: 'question' })
+            await controller.shutter(async () => photo)
+        }
+        finish(secondaryResult({ reason: 'Stale secondary reply' }))
+        await pending
+        expect(controller.getSnapshot().check?.reason).not.toBe('Stale secondary reply')
+    })
+
+    it('never promotes a primary cannot_verify to pass', async () => {
+        const { controller, forms, finish } = await followupReady()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        finish(
+            secondaryResult({
+                decision: 'pass',
+                reason: 'Secondary claims pass.',
+                missingEvidence: [],
+                sourceRefs: [{ pageId: controller.current!.session.pages[0]!.pageId, region: null }],
+                model: 'muse-wonder-1.0',
+            }),
+        )
+        await pending
+        expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
+        expect(controller.getSnapshot().check?.model).toBe('muse-spark-1.3')
+        expect(controller.getSnapshot().check?.secondOpinion).toEqual({ status: 'completed', model: 'muse-wonder-1.0' })
+        expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toMatch(/cannot.*promote|retained/i)
+    })
+
+    it('shows a grounded secondary refusal with its actual producer and citations', async () => {
+        const { controller, forms, finish } = await followupReady()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        const refusal = secondaryResult({
+            decision: 'refuse',
+            reason: 'Panel faces outward.',
+            orientationAssessment: 'reversed',
+            model: 'muse-wonder-1.0',
+            sourceRefs: [{ pageId: controller.current!.session.pages[0]!.pageId, region: null }],
+        })
+        finish(refusal)
+        await pending
+        expect(controller.getSnapshot().check).toEqual(refusal)
+        expect(controller.getSnapshot().pending).toBeNull()
+    })
+
+    it('retains the primary and a visible note when the second request fails', async () => {
+        const { controller, forms, finish } = await followupReady()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(forms).toHaveLength(2))
+        finish(undefined, 500)
+        await pending
+        expect(controller.getSnapshot().check).toMatchObject({
+            decision: 'cannot_verify',
+            reason: 'Primary Spark result.',
+            model: 'muse-spark-1.3',
+            secondOpinion: { status: 'unavailable', model: 'muse-wonder-1.0' },
+        })
+        expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toMatch(/Second opinion unavailable/)
+        expect(forms).toHaveLength(2)
+    })
+})
 
 describe('real manual workflow with provider-boundary fixture responses', () => {
     it.each(['parse', 'check', 'ask'] as const)(

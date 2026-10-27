@@ -12,6 +12,7 @@ import {
     OverviewScreen,
     PagesScreen,
     SettingsScreen,
+    WorkflowNotice,
 } from './screens'
 import { PRIVACY_COPY } from './privacy-copy'
 
@@ -230,4 +231,88 @@ it('a successful answer after a refused check never shows a Pass verdict, and th
     expect(screen.getByText('Answer', { exact: true })).toBeTruthy()
     expect(screen.getByText('It faces inward.')).toBeTruthy()
     expect(screen.queryByText('Pass', { exact: true })).toBeNull()
+})
+
+it('shows the actual result producer, attempted second model and plain-text failure note beside the retained verdict', async () => {
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(
+        <>
+            <WorkflowNotice
+                state={{ ...controller.getSnapshot(), pending: 'Second opinion pending (muse-wonder-1.0)…' }}
+                controller={controller}
+            />
+            <CheckPanel
+                check={{
+                    decision: 'cannot_verify',
+                    reason: 'Groove is obscured.',
+                    sourceRefs: [],
+                    observedRegion: null,
+                    missingEvidence: ['A clearer angle.'],
+                    model: 'muse-spark-1.3',
+                    modelNotes: ['Second opinion unavailable. Primary result retained.'],
+                    secondOpinion: { status: 'unavailable', model: 'muse-wonder-1.0' },
+                }}
+                session={createDemoManual()}
+                pageUris={{}}
+            />
+        </>,
+    )
+    expect(screen.getByText('Model: muse-spark-1.3')).toBeTruthy()
+    expect(screen.getByText('Second opinion: muse-wonder-1.0 (unavailable)')).toBeTruthy()
+    expect(screen.getByText('Model note: Second opinion unavailable. Primary result retained.')).toBeTruthy()
+    expect(screen.getByText('Groove is obscured.')).toBeTruthy()
+    expect(screen.getByText('Second opinion pending (muse-wonder-1.0)…')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    expect(screen.queryByText('Pass', { exact: true })).toBeNull()
+})
+
+it('shows server provenance and model notes in the manual overview and neutral answer surfaces', async () => {
+    const session = createDemoManual()
+    session.rawExtraction = {
+        parts: session.parts,
+        steps: session.reviewedSteps,
+        unknowns: [],
+        model: 'muse-wonder-1.0',
+        modelNotes: ['Manual parsed with Wonder.'],
+    }
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(
+        <>
+            <OverviewScreen
+                controller={controller}
+                state={controller.getSnapshot()}
+                entry={{ session, stepIndex: 0, completedStepIds: [], capture: null }}
+            />
+            <AnswerPanel
+                answer={{
+                    answer: 'Read the marked edge.',
+                    sourceRefs: [],
+                    missingEvidence: [],
+                    model: 'muse-spark-1.3',
+                    modelNotes: ['The photo does not show the groove.'],
+                }}
+                session={session}
+                pageUris={{}}
+            />
+        </>,
+    )
+    expect(screen.getByText('Model: muse-wonder-1.0')).toBeTruthy()
+    expect(screen.getByText('Model note: Manual parsed with Wonder.')).toBeTruthy()
+    expect(screen.getByText('Model: muse-spark-1.3')).toBeTruthy()
+    expect(screen.getByText('Model note: The photo does not show the groove.')).toBeTruthy()
+    expect(screen.queryByText('Pass', { exact: true })).toBeNull()
+})
+
+it('does not invent model provenance for legacy results without model fields', async () => {
+    await render(
+        <AnswerPanel
+            answer={{ answer: 'Legacy answer.', sourceRefs: [], missingEvidence: [] }}
+            session={createDemoManual()}
+            pageUris={{}}
+        />,
+    )
+    expect(screen.queryByText(/^Model:/)).toBeNull()
+    expect(screen.queryByText(/^Model note:/)).toBeNull()
 })

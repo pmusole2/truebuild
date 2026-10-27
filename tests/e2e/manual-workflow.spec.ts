@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer'
 import { expect, test, type Page, type Response } from '@playwright/test'
+import { apiResultSchema, checkResultSchema } from '@truebuild/contracts'
 
 // Real product path: the browser file chooser and normalizer, the app client, the Hono API and the documented Meta HTTP
 // mock. Nothing here intercepts or answers an API request; responses are read from the real network.
 const API = process.env.TRUEBUILD_E2E_API_ORIGIN ?? 'http://127.0.0.1:31071'
 const WEB = `http://localhost:${process.env.TRUEBUILD_E2E_WEB_PORT ?? '18071'}`
 const SCENARIO = process.env.TRUEBUILD_E2E_SCENARIO ?? 'reversed'
+const SECOND_OPINION = process.env.TRUEBUILD_E2E_SECOND_OPINION
 const VERDICT: Record<string, string> = { correct: 'Pass', reversed: 'Refuse', uncertain: 'Cannot verify' }
 const DECISION: Record<string, string> = { correct: 'pass', reversed: 'refuse', uncertain: 'cannot_verify' }
 
@@ -221,3 +223,87 @@ test('keyboard focus is visible on a control on web', async ({ page }) => {
     const shadow = await add.evaluate((element) => getComputedStyle(element).boxShadow)
     expect(shadow).toContain('154, 75, 7')
 })
+
+if (SECOND_OPINION !== undefined) {
+    test(`second opinion: ${SECOND_OPINION} retains primary until the separate HTTP request finishes`, async ({
+        page,
+    }) => {
+        test.setTimeout(90_000)
+        await openFreshLibrary(page)
+        await addTwoPagesAndRead(page)
+        await confirmFactsAndContinue(page)
+        const paths: string[] = []
+        page.on('request', (request) => {
+            if (request.method() === 'POST' && request.url().startsWith(`${API}/api/checks`)) {
+                paths.push(new URL(request.url()).pathname)
+            }
+        })
+        await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+        const capture = page.getByRole('button', { name: 'Capture photo', exact: true })
+        await expect(capture).toBeEnabled({ timeout: 60_000 })
+        const primaryResponse = page.waitForResponse(
+            (response) => response.url() === `${API}/api/checks` && response.request().method() === 'POST',
+        )
+        let secondaryFinished = false
+        const secondaryResponse = page.waitForResponse(
+            (response) =>
+                response.url() === `${API}/api/checks/second-opinion` && response.request().method() === 'POST',
+        )
+        void secondaryResponse.then(() => {
+            secondaryFinished = true
+        })
+        await capture.click()
+        const primary = apiResultSchema(checkResultSchema).parse(await (await primaryResponse).json())
+        expect(primary).toMatchObject({
+            status: 'ok',
+            value: {
+                decision: 'cannot_verify',
+                model: 'muse-spark-1.3',
+                secondOpinion: { status: 'available', model: 'muse-wonder-1.0' },
+            },
+        })
+        if (Number(process.env.TRUEBUILD_E2E_SECOND_OPINION_DELAY_MS ?? 0) >= 9_000) {
+            await expect(page.getByText('Cannot verify', { exact: true })).toBeVisible()
+            await expect(page.getByText('Model: muse-spark-1.3', { exact: true })).toBeVisible()
+            await expect(page.getByText('Second opinion pending (muse-wonder-1.0)…', { exact: true })).toBeVisible()
+            await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+            expect(secondaryFinished).toBe(false)
+        }
+        const response = await secondaryResponse
+        expect(response.status()).toBe(200)
+        const secondary = apiResultSchema(checkResultSchema).parse(await response.json())
+        expect(secondary.requestId).toBe(primary.requestId)
+        expect(secondary.binding).toEqual(primary.binding)
+        const refused = SECOND_OPINION === 'reversed'
+        expect(secondary).toMatchObject({
+            status: 'ok',
+            value: {
+                decision: refused ? 'refuse' : 'cannot_verify',
+                model: refused ? 'muse-wonder-1.0' : 'muse-spark-1.3',
+                secondOpinion: {
+                    model: 'muse-wonder-1.0',
+                    status: SECOND_OPINION === 'failed' ? 'unavailable' : 'completed',
+                },
+            },
+        })
+        await expect(page.getByText(refused ? 'Refuse' : 'Cannot verify', { exact: true })).toBeVisible()
+        await expect(page.getByText('Pass', { exact: true })).toHaveCount(0)
+        await expect(page.getByText('Second opinion pending (muse-wonder-1.0)…', { exact: true })).toHaveCount(0)
+        if (secondary.status === 'ok') {
+            await expect(page.getByText(`Model: ${secondary.value.model}`, { exact: true })).toBeVisible()
+            for (const note of secondary.value.modelNotes ?? []) {
+                await expect(page.getByText(`Model note: ${note}`, { exact: true })).toBeVisible()
+            }
+            if (SECOND_OPINION === 'failed') {
+                expect(secondary.value.modelNotes?.length).toBeGreaterThan(0)
+                if (primary.status === 'ok') expect(secondary.value.reason).toBe(primary.value.reason)
+            }
+            if (refused) {
+                expect(secondary.value.sourceRefs.length).toBeGreaterThan(0)
+                await expect(page.getByText('Manual diagram', { exact: true })).toBeVisible()
+                await expect(page.getByText('Your photo', { exact: true })).toBeVisible()
+            }
+        }
+        expect(paths).toEqual(['/api/checks', '/api/checks/second-opinion'])
+    })
+}

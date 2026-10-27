@@ -24,6 +24,7 @@ import {
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
+    modelSecondOpinionMetadataSchema,
 } from '@truebuild/contracts/model'
 import type { z } from 'zod'
 import { streamFetch as defaultStreamFetch, type StreamFetch } from './stream-fetch'
@@ -46,6 +47,7 @@ export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 export const MODEL_PARSE_TIMEOUT_MS = 30_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000
+export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
@@ -223,6 +225,32 @@ export class ModelApiClient {
         observation: ImageBytes,
         ctx: ModelRequestContext,
     ): Promise<ApiResult<CheckResult>> {
+        return this.postCheck(binding, session, sourcePageIds, sources, observation, ctx)
+    }
+
+    /** Consumes one server ticket using the exact primary request identity and frozen context. No retry. */
+    async secondOpinion(
+        binding: CaptureBinding,
+        session: ManualSession,
+        sourcePageIds: readonly string[],
+        sources: readonly ImageBytes[],
+        observation: ImageBytes,
+        secondOpinionToken: string,
+        ctx: ModelRequestContext,
+    ): Promise<ApiResult<CheckResult>> {
+        return this.postCheck(binding, session, sourcePageIds, sources, observation, ctx, secondOpinionToken)
+    }
+
+    private async postCheck(
+        binding: CaptureBinding,
+        session: ManualSession,
+        sourcePageIds: readonly string[],
+        sources: readonly ImageBytes[],
+        observation: ImageBytes,
+        ctx: ModelRequestContext,
+        secondOpinionToken?: string,
+    ): Promise<ApiResult<CheckResult>> {
+        const secondary = secondOpinionToken !== undefined
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -230,8 +258,10 @@ export class ModelApiClient {
             session,
             sourcePageIds: [...sourcePageIds],
             observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
+            ...(secondary ? { secondOpinionToken } : {}),
         }
-        if (!modelCheckMetadataSchema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
+        const schema = secondary ? modelSecondOpinionMetadataSchema : modelCheckMetadataSchema
+        if (!schema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
             return invalidInputResult(ctx.requestId)
         }
         const files = [...sources, observation]
@@ -248,11 +278,11 @@ export class ModelApiClient {
         const allowed = new Set(sourcePageIds)
 
         return this.post({
-            path: '/api/checks',
+            path: secondary ? '/api/checks/second-opinion' : '/api/checks',
             requestId: ctx.requestId,
             binding,
             form,
-            timeoutMs: MODEL_CHECK_TIMEOUT_MS,
+            timeoutMs: secondary ? MODEL_SECOND_OPINION_TIMEOUT_MS : MODEL_CHECK_TIMEOUT_MS,
             valueSchema: checkResultSchema,
             accepts: (value: CheckResult): boolean => value.sourceRefs.every((ref) => allowed.has(ref.pageId)),
             signal: ctx.signal,
