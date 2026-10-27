@@ -1,4 +1,4 @@
-import { Platform } from 'react-native'
+import { Platform, type TextStyle } from 'react-native'
 
 // Platform-installed families only; no remote or bundled font files. Display is a serif for titles, body is the system
 // sans for reading, and labels use a mono stamp like a part tag.
@@ -53,4 +53,10 @@ export const typeScale: Readonly<Record<TypeRole, TypeStyle>> = {
         maxFontSizeMultiplier: 2,
     },
     button: { fontSize: 16, lineHeight: 20, fontWeight: '600', maxFontSizeMultiplier: 2 },
+}
+
+// maxFontSizeMultiplier is a Text prop, not a style key, so it is split out before the style reaches a Text node.
+export function typeProps(role: TypeRole): { readonly style: TextStyle; readonly maxFontSizeMultiplier: number } {
+    const { maxFontSizeMultiplier, ...style } = typeScale[role]
+    return { style, maxFontSizeMultiplier }
 }
