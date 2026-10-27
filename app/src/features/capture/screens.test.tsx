@@ -4,7 +4,16 @@ import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
-import { LibraryScreen, noticeTone, OverviewScreen, PagesScreen, SettingsScreen } from './screens'
+import {
+    AnswerPanel,
+    CheckPanel,
+    LibraryScreen,
+    noticeTone,
+    OverviewScreen,
+    PagesScreen,
+    SettingsScreen,
+} from './screens'
+import { PRIVACY_COPY } from './privacy-copy'
 
 function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage; kv: KeyValueStorage } {
     const data = new Map<string, string>()
@@ -189,6 +198,36 @@ it('settings explain storage, what leaves the phone and camera access, with coun
     await render(<SettingsScreen state={controller.getSnapshot()} onBack={(): void => undefined} />)
     expect(screen.getByText('1 manual is stored on this device.')).toBeTruthy()
     expect(screen.getByText('What leaves this phone')).toBeTruthy()
-    expect(screen.getByText(/A frozen photo leaves only when you check/)).toBeTruthy()
+    expect(screen.getByText(PRIVACY_COPY.check)).toBeTruthy()
+    expect(screen.getByText(PRIVACY_COPY.read)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Open device settings' })).toBeTruthy()
+})
+
+it('a successful answer after a refused check never shows a Pass verdict, and the check verdict stays refused', async () => {
+    const session = createDemoManual()
+    const page = session.pages[0]!
+    await render(
+        <>
+            <CheckPanel
+                check={{
+                    decision: 'refuse',
+                    reason: 'The side panel is reversed.',
+                    sourceRefs: [{ pageId: page.pageId, region: null }],
+                    observedRegion: null,
+                    missingEvidence: [],
+                }}
+                session={session}
+                pageUris={{}}
+            />
+            <AnswerPanel
+                answer={{ answer: 'It faces inward.', sourceRefs: [], missingEvidence: [], observedRegion: null }}
+                session={session}
+                pageUris={{}}
+            />
+        </>,
+    )
+    expect(screen.getByText('Refuse', { exact: true })).toBeTruthy()
+    expect(screen.getByText('Answer', { exact: true })).toBeTruthy()
+    expect(screen.getByText('It faces inward.')).toBeTruthy()
+    expect(screen.queryByText('Pass', { exact: true })).toBeNull()
 })

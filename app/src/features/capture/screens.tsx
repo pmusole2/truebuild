@@ -1,8 +1,8 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
-import { Image, Linking, Pressable, StyleSheet, View } from 'react-native'
-import type { CheckResult, Fact, ManualSession, SourceRef } from '@truebuild/contracts'
+import { Image, Linking, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import type { CheckResult, Fact, ManualSession, QuestionResult, SourceRef } from '@truebuild/contracts'
 import { FrozenPhoto } from '../assembly/frozen-photo'
-import { boxOnDisplay } from '../assembly/frame-geometry'
+import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import { stepPartChoices } from '../assembly/question-state'
 import { AppButton, IconButton } from '../../ui/button'
 import { BottomSheet } from '../../ui/sheet'
@@ -20,6 +20,7 @@ import { Skeleton } from '../../ui/skeleton'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
 import { radius, space, touchTarget } from '../../theme/tokens'
+import { PRIVACY_COPY } from './privacy-copy'
 import { groundedRegion } from './grounded-region'
 import { reviewedSession, unresolvedCriticalFacts, type CaptureController, type WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
@@ -190,10 +191,8 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
                 }}
                 editable={!state.storageReadOnly}
             />
-            <Caption>
-                Pages stay on this device. Pages are sent to your TrueBuild API only when you read the manual, check a
-                step or ask a question.
-            </Caption>
+            <Caption>{PRIVACY_COPY.stayOnDevice}</Caption>
+            <Caption>{PRIVACY_COPY.read}</Caption>
             <Caption>Up to 20 pages. Phone photos are resized and compressed locally before upload.</Caption>
             {entry.session.pages.length === 0 ? (
                 <Card>
@@ -523,13 +522,22 @@ export function ConfirmRow({
     )
 }
 
+export const PANEL_MAX_RATIO = 0.5
+
+/**
+ * Assembly guide: the frozen photo is the primary surface. A bounded bottom panel holds the verdict, the neutral answer,
+ * the question composer and the step actions. Step instructions and the full step list open in a bounded sheet.
+ */
 export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & { entry: LibraryEntry }): ReactElement {
     const { session } = entry
     const step = session.reviewedSteps[entry.stepIndex]
     const blocked = controller.coverageNotice()
     const highlight = groundedRegion(state.answer ?? state.check)
     const busy = state.pending !== null || state.storageReadOnly
-    const [sheetOpen, setSheetOpen] = useState(false)
+    const editable = controller.canCompose
+    const { colors } = useTheme()
+    const { height } = useWindowDimensions()
+    const [instructionsOpen, setInstructionsOpen] = useState(false)
     const choices = step === undefined ? [] : stepPartChoices(session, step)
     const completed = new Set(entry.completedStepIds)
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
@@ -546,160 +554,210 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
             : target.kind === 'part'
               ? `Selected part: ${choices.find((choice) => choice.partId === target.partId)?.label ?? target.partId}`
               : 'Selected point in photo.'
+    // Point selection goes through the controller, which refuses it while a check is in flight.
+    const onPoint = (point: Point): void => controller.targetChanged({ kind: 'point', ...point })
+    const pointTap = editable && state.capture !== null ? onPoint : undefined
+    const stepTitle = step === undefined ? session.title : `${step.order}. ${step.title}`
     return (
-        <Screen
-            title={`Assembly · ${session.title}`}
-            onBack={(): void => controller.navigate('overview')}
-            testID="guide-screen"
-        >
-            <WorkflowNotice state={state} controller={controller} />
-            <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
-            <ProgressBar
-                label="Steps marked complete"
-                value={entry.completedStepIds.length}
-                total={session.reviewedSteps.length}
-            />
-            <StepList steps={stepItems} />
-            {step === undefined ? null : (
-                <Card>
-                    <Heading>{`${step.order}. ${step.title}`}</Heading>
-                    <AppButton label="Show step instructions" onPress={(): void => setSheetOpen(true)} />
-                </Card>
-            )}
+        <ScreenShell header="hidden" scroll={false} testID="guide-screen">
+            <View style={styles.guide}>
+                <View style={styles.guideTop}>
+                    <IconButton label="Back" icon="chevronLeft" onPress={(): void => controller.navigate('overview')} />
+                    <View style={styles.titleWrap}>
+                        <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
+                        <Heading>{stepTitle}</Heading>
+                    </View>
+                    <IconButton label="Step instructions" icon="info" onPress={(): void => setInstructionsOpen(true)} />
+                </View>
+                <ScrollView style={styles.preview} contentContainerStyle={styles.previewContent}>
+                    {state.capture === null ? (
+                        <EmptyState
+                            title="No photo for this step yet."
+                            body="Take a photo of this step to check or ask about it."
+                        />
+                    ) : refusal !== null ? (
+                        <RefusalComparison
+                            refusal={refusal}
+                            observation={state.capture.observation}
+                            entry={entry}
+                            pageUris={state.pageUris}
+                            onTapPoint={pointTap}
+                        />
+                    ) : (
+                        <FrozenPhoto
+                            observation={state.capture.observation}
+                            caption="Frozen photo for this step. New photos clear prior results."
+                            onTapPoint={pointTap}
+                            overlay={
+                                highlight === null
+                                    ? undefined
+                                    : (displayed): ReactNode => (
+                                          <CheckHighlight rect={boxOnDisplay(highlight, displayed)} />
+                                      )
+                            }
+                        />
+                    )}
+                </ScrollView>
+                <ScrollView
+                    testID="guide-panel"
+                    style={[
+                        styles.panel,
+                        {
+                            maxHeight: height * PANEL_MAX_RATIO,
+                            backgroundColor: colors.surface,
+                            borderColor: colors.border,
+                        },
+                    ]}
+                    contentContainerStyle={styles.panelContent}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    <WorkflowNotice state={state} controller={controller} />
+                    {blocked === null ? null : <Notice tone="caution" text={blocked} />}
+                    {check === null ? null : <CheckPanel check={check} session={session} pageUris={state.pageUris} />}
+                    {state.answer === null ? null : (
+                        <AnswerPanel answer={state.answer} session={session} pageUris={state.pageUris} />
+                    )}
+                    <AppButton
+                        label="Take new photo and check"
+                        variant="accent"
+                        disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
+                        onPress={(): void => controller.camera({ kind: 'check' })}
+                    />
+                    <AppButton
+                        label="Take photo to ask"
+                        disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
+                        onPress={(): void => controller.camera({ kind: 'question' })}
+                    />
+                    {state.capture === null ? null : (
+                        <Card>
+                            <Heading>Ask about this photo</Heading>
+                            <AskSheet
+                                question={state.question}
+                                questionLabel="Question about frozen photo"
+                                onQuestionChange={controller.questionChanged}
+                                parts={choices.map((choice) => ({ id: choice.partId, label: choice.label }))}
+                                selectedPartId={target?.kind === 'part' ? target.partId : null}
+                                onSelectPart={(partId): void => controller.targetChanged({ kind: 'part', partId })}
+                                targetSummary={targetSummary}
+                                hasTarget={target !== null}
+                                editable={editable}
+                                busy={state.pending !== null && state.pending.startsWith('Asking')}
+                                onSubmit={(): void => {
+                                    void controller.ask()
+                                }}
+                            />
+                        </Card>
+                    )}
+                    <AppButton
+                        label="Mark step complete myself"
+                        disabled={busy}
+                        onPress={(): void => {
+                            void controller.completeStep()
+                        }}
+                    />
+                    <View style={styles.actionRow}>
+                        <AppButton
+                            label="Previous step"
+                            variant="quiet"
+                            disabled={busy || entry.stepIndex === 0}
+                            onPress={(): void => {
+                                void controller.step(entry.stepIndex - 1)
+                            }}
+                        />
+                        <AppButton
+                            label="Next step"
+                            variant="quiet"
+                            disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
+                            onPress={(): void => {
+                                void controller.step(entry.stepIndex + 1)
+                            }}
+                        />
+                    </View>
+                </ScrollView>
+            </View>
             <BottomSheet
-                visible={sheetOpen}
-                title={`Step ${entry.stepIndex + 1}`}
-                onClose={(): void => setSheetOpen(false)}
+                visible={instructionsOpen}
+                title={`Step ${entry.stepIndex + 1} instructions`}
+                onClose={(): void => setInstructionsOpen(false)}
             >
                 <StepFacts session={session} index={entry.stepIndex} />
                 <SourceDiagrams refs={step?.sourceRefs ?? []} session={session} pageUris={state.pageUris} />
+                <ProgressBar
+                    label="Steps marked complete"
+                    value={entry.completedStepIds.length}
+                    total={session.reviewedSteps.length}
+                />
+                <StepList steps={stepItems} />
             </BottomSheet>
-            {blocked === null ? null : <Notice tone="caution" text={blocked} />}
-            {state.capture === null ? (
-                <EmptyState
-                    title="No photo for this step yet."
-                    body="Take a photo of this step to check or ask about it."
-                />
-            ) : refusal !== null ? (
-                <RefusalComparison
-                    refusal={refusal}
-                    observation={state.capture.observation}
-                    entry={entry}
-                    pageUris={state.pageUris}
-                />
-            ) : (
-                <FrozenPhoto
-                    observation={state.capture.observation}
-                    caption="Frozen photo for this step. New photos clear prior results."
-                    onTapPoint={
-                        busy ? undefined : (point): void => controller.targetChanged({ kind: 'point', ...point })
-                    }
-                    overlay={
-                        highlight === null
-                            ? undefined
-                            : (displayed): ReactNode => <CheckHighlight rect={boxOnDisplay(highlight, displayed)} />
-                    }
-                />
-            )}
-            {check === null ? null : (
-                <ResultSheet
-                    verdict={check.decision}
-                    reason={check.reason}
-                    missing={check.missingEvidence}
-                    citedPage={
-                        refusal === null ? (
-                            <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={state.pageUris} />
-                        ) : undefined
-                    }
-                />
-            )}
-            <AppButton
-                label="Take new photo and check"
-                variant="accent"
-                disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
-                onPress={(): void => controller.camera({ kind: 'check' })}
-            />
-            <AppButton
-                label="Take photo to ask"
-                disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
-                onPress={(): void => controller.camera({ kind: 'question' })}
-            />
-            {state.capture === null ? null : (
-                <Card>
-                    <Heading>Ask about this photo</Heading>
-                    <AskSheet
-                        question={state.question}
-                        questionLabel="Question about frozen photo"
-                        onQuestionChange={controller.questionChanged}
-                        parts={choices.map((choice) => ({ id: choice.partId, label: choice.label }))}
-                        selectedPartId={target?.kind === 'part' ? target.partId : null}
-                        onSelectPart={(partId): void => controller.targetChanged({ kind: 'part', partId })}
-                        targetSummary={targetSummary}
-                        hasTarget={target !== null}
-                        editable={controller.canCompose}
-                        busy={state.pending !== null && state.pending.startsWith('Asking')}
-                        onSubmit={(): void => {
-                            void controller.ask()
-                        }}
-                        answer={
-                            state.answer === null ? undefined : (
-                                <ResultSheet
-                                    verdict={state.answer.missingEvidence.length === 0 ? 'pass' : 'cannot_verify'}
-                                    reason={state.answer.answer}
-                                    missing={state.answer.missingEvidence}
-                                    citedPage={
-                                        <SourceDiagrams
-                                            refs={state.answer.sourceRefs}
-                                            session={session}
-                                            pageUris={state.pageUris}
-                                        />
-                                    }
-                                />
-                            )
-                        }
-                    />
-                </Card>
-            )}
-            <AppButton
-                label="Mark step complete myself"
-                disabled={busy}
-                onPress={(): void => {
-                    void controller.completeStep()
-                }}
-            />
-            <View style={styles.actionRow}>
-                <AppButton
-                    label="Previous step"
-                    variant="quiet"
-                    disabled={busy || entry.stepIndex === 0}
-                    onPress={(): void => {
-                        void controller.step(entry.stepIndex - 1)
-                    }}
-                />
-                <AppButton
-                    label="Next step"
-                    variant="quiet"
-                    disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
-                    onPress={(): void => {
-                        void controller.step(entry.stepIndex + 1)
-                    }}
-                />
-            </View>
-        </Screen>
+        </ScreenShell>
     )
 }
 
-/** A refusal shows the expected diagram and the frozen photo side by side, with the observed region measured on each. */
+/** The verdict for a frozen check, exactly as the backend returned it. Refusals keep their reason and missing evidence. */
+export function CheckPanel({
+    check,
+    session,
+    pageUris,
+}: {
+    check: CheckResult
+    session: ManualSession
+    pageUris: WorkflowState['pageUris']
+}): ReactElement {
+    return (
+        <ResultSheet
+            verdict={check.decision}
+            reason={check.reason}
+            missing={check.missingEvidence}
+            citedPage={
+                check.decision === 'refuse' ? undefined : (
+                    <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={pageUris} />
+                )
+            }
+        />
+    )
+}
+
+/**
+ * A question answer. It is neutral: no pass, refuse or cannot-verify tag, because a question never verifies a step.
+ */
+export function AnswerPanel({
+    answer,
+    session,
+    pageUris,
+}: {
+    answer: QuestionResult
+    session: ManualSession
+    pageUris: WorkflowState['pageUris']
+}): ReactElement {
+    return (
+        <Card>
+            <Heading>Answer</Heading>
+            <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
+            <Body>{answer.answer}</Body>
+            {answer.missingEvidence.map((missing, index) => (
+                <Caption key={index}>{`Missing: ${missing}`}</Caption>
+            ))}
+            <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
+        </Card>
+    )
+}
+
+/**
+ * A refusal shows the expected diagram and the frozen photo side by side, with the observed region measured on each.
+ * The photo pane stays tappable, so a point can be chosen after a refusal without retaking the photo.
+ */
 function RefusalComparison({
     refusal,
     observation,
     entry,
     pageUris,
+    onTapPoint,
 }: {
     refusal: CheckResult
     observation: { uri: string; width: number; height: number }
     entry: LibraryEntry
     pageUris: WorkflowState['pageUris']
+    onTapPoint: ((point: Point) => void) | undefined
 }): ReactElement {
     const cited = refusal.sourceRefs[0]
     const page =
@@ -735,6 +793,7 @@ function RefusalComparison({
         regions: refusal.observedRegion
             ? [{ id: 'observed', label: 'Observed part', box: refusal.observedRegion }]
             : [],
+        onTapPoint,
     }
     return <ComparisonFrame diagram={diagram} photo={photo} />
 }
@@ -767,16 +826,17 @@ export function SettingsScreen({ state, onBack }: { state: WorkflowState; onBack
             </Card>
             <Card>
                 <Heading>What leaves this phone</Heading>
-                <Body>
-                    Manual pages leave this phone only when you read a manual. A frozen photo leaves only when you check
-                    a step or ask a question. Cancelled requests are not repeated automatically.
-                </Body>
+                <Body>{PRIVACY_COPY.read}</Body>
+                <Body>{PRIVACY_COPY.check}</Body>
+                <Body>{PRIVACY_COPY.ask}</Body>
+                <Caption>Each request is sent once. Cancelled requests are not repeated automatically.</Caption>
             </Card>
             <Card>
                 <Heading>Camera and photos</Heading>
+                <Body>{PRIVACY_COPY.camera}</Body>
                 <Body>
-                    The camera opens only when you choose to photograph a page or a step. Photos you choose from your
-                    library stay on this device until you send them.
+                    Photos you choose from your library stay on this device until you send them for extraction, a step
+                    check or a question.
                 </Body>
                 <AppButton
                     label="Open device settings"
@@ -791,6 +851,22 @@ export function SettingsScreen({ state, onBack }: { state: WorkflowState; onBack
 }
 
 const styles = StyleSheet.create({
+    guide: { flex: 1 },
+    guideTop: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.sm,
+        paddingHorizontal: space.md,
+        paddingTop: space.sm,
+    },
+    preview: { flex: 1 },
+    previewContent: { padding: space.md, gap: space.md },
+    panel: {
+        borderTopWidth: 1,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+    },
+    panelContent: { padding: space.md, gap: space.md },
     topBar: {
         flexDirection: 'row',
         alignItems: 'center',

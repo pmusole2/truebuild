@@ -8,9 +8,20 @@ import { ModelApiClient } from '../../api/model-client'
 import { MediaRejectedError } from '../../media/media-errors'
 import { normalizeImage } from '../../media/normalize-image'
 import { CameraScreen } from './camera-screen'
-import { CaptureController } from './controller'
-import { LibraryStorage, type Digest } from './library'
-import { GuideScreen, LibraryScreen, OverviewScreen, PagesScreen, Screen, SettingsScreen } from './screens'
+import { CaptureController, type WorkflowState } from './controller'
+import { LibraryStorage, type Digest, type LibraryEntry } from './library'
+import {
+    GuideScreen,
+    LibraryScreen,
+    OverviewScreen,
+    PagesScreen,
+    Screen,
+    SettingsScreen,
+    SourceDiagrams,
+    StepFacts,
+} from './screens'
+import { testRestoreDelayMs } from './test-controls'
+import type { AssemblyGuide } from './camera-screen'
 
 export const imageDigest: Digest = async (bytes): Promise<string> => {
     const result = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, Uint8Array.from(bytes))
@@ -42,13 +53,52 @@ export function CaptureApp(): ReactElement {
         <CaptureWorkflow controller={runtime.controller} />
     )
 }
+/** The step guide shown over the assembly camera. Manual scanning has no step guide. */
+function assemblyGuide(entry: LibraryEntry | undefined, state: WorkflowState): AssemblyGuide | undefined {
+    if (entry === undefined || state.cameraIntent === null || state.cameraIntent.kind === 'page') {
+        return undefined
+    }
+    const step = entry.session.reviewedSteps[entry.stepIndex]
+    if (step === undefined) {
+        return undefined
+    }
+    return {
+        progress: `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`,
+        title: step.title,
+        instructions: (
+            <>
+                <StepFacts session={entry.session} index={entry.stepIndex} />
+                <SourceDiagrams refs={step.sourceRefs} session={entry.session} pageUris={state.pageUris} />
+            </>
+        ),
+    }
+}
+
 export function CaptureWorkflow({ controller }: { controller: CaptureController }): ReactElement {
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
     // Settings are presentation-only state: they open over the library and change nothing that is stored or sent.
     const [settingsOpen, setSettingsOpen] = useState(false)
     useEffect(() => {
-        void controller.restore()
-        return controller.dispose
+        // Test-only delay (development builds, query parameter) keeps the initial loading state visible for evidence capture.
+        const delay = testRestoreDelayMs()
+        let cancelled = false
+        let timer: ReturnType<typeof setTimeout> | undefined
+        if (delay > 0) {
+            timer = setTimeout((): void => {
+                if (!cancelled) {
+                    void controller.restore()
+                }
+            }, delay)
+        } else {
+            void controller.restore()
+        }
+        return (): void => {
+            cancelled = true
+            if (timer !== undefined) {
+                clearTimeout(timer)
+            }
+            controller.dispose()
+        }
     }, [controller])
     const entry = controller.current
     function choosePages(replaceIndex?: number): void {
@@ -73,6 +123,8 @@ export function CaptureWorkflow({ controller }: { controller: CaptureController 
         screen = (
             <CameraScreen
                 busy={state.pending !== null}
+                intent={state.cameraIntent}
+                guide={assemblyGuide(entry, state)}
                 onCancel={controller.cancel}
                 onCapture={(take): void => {
                     void controller.shutter(take)
