@@ -80,6 +80,22 @@ describe('haptic feedback', () => {
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
+    it('a rejected asynchronous adapter never blocks the action or surfaces an error', async () => {
+        const haptics: HapticPort = {
+            trigger: async (): Promise<void> => {
+                throw new Error('engine stopped')
+            },
+        }
+        const onPress = jest.fn()
+        await render(
+            <FeedbackProvider haptics={haptics}>
+                <AppButton label="Save note" onPress={onPress} variant="secondary" />
+            </FeedbackProvider>,
+        )
+        await fireEvent.press(screen.getByRole('button', { name: 'Save note' }))
+        expect(onPress).toHaveBeenCalledTimes(1)
+    })
+
     it('a failing device adapter never blocks the action it accompanies', async () => {
         const haptics: HapticPort = {
             trigger: (): void => {

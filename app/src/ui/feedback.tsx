@@ -5,8 +5,9 @@ import { AccessibilityInfo } from 'react-native'
 // nothing vibrates until an adapter is injected at integration.
 export type HapticKind = 'selection' | 'success' | 'warning'
 
+// Adapters may complete asynchronously (device haptic engines return promises). A rejection is absorbed by useFeedback.
 export type HapticPort = {
-    readonly trigger: (kind: HapticKind) => void
+    readonly trigger: (kind: HapticKind) => void | Promise<void>
 }
 
 export const noopHaptics: HapticPort = {
@@ -71,9 +72,9 @@ export function useFeedback(): Feedback {
     const system = useSystemReduceMotion()
     return useMemo((): Feedback => {
         const haptic = (kind: HapticKind): void => {
-            // Feedback is best-effort: a failing device adapter must never block the action it accompanies.
+            // Feedback is best-effort: neither a synchronous throw nor a rejected promise may block the action it accompanies.
             try {
-                haptics.trigger(kind)
+                void Promise.resolve(haptics.trigger(kind)).catch((): void => undefined)
             } catch {
                 return
             }

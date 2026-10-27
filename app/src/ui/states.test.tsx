@@ -2,6 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals'
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import { EmptyState, ErrorState, PermissionState } from './states'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 describe('state panels', () => {
     it('an empty state offers its action without implying a result', async () => {
         const onPress = jest.fn()
