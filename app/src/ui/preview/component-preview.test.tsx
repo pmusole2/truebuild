@@ -3,6 +3,12 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { ComponentPreview } from './component-preview'
 import { PREVIEW_BANNER } from './examples'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('../test-support/reanimated-mock'))
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
+)
+
 const SECTIONS = [
     'Typography',
     'Buttons',

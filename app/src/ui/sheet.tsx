@@ -1,12 +1,23 @@
-import { useEffect, useRef, type ReactElement, type ReactNode } from 'react'
-import { Animated, Easing, Modal, Platform, StyleSheet, View } from 'react-native'
+import { useEffect, type ReactElement, type ReactNode } from 'react'
+import { KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import Animated, {
+    cancelAnimation,
+    Easing,
+    interpolate,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+} from 'react-native-reanimated'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../theme/theme'
 import { motion, radius, space } from '../theme/tokens'
-import { useFeedback } from './feedback'
 import { IconButton } from './button'
+import { useFeedback } from './feedback'
 import { Body, Title } from './text'
 
-// A bottom sheet slides up over the current screen. Under reduced motion it appears in place, with no movement.
+// Long content scrolls inside the sheet; the sheet never grows past this share of the window, so the scrim stays visible.
+export const SHEET_MAX_HEIGHT_RATIO = 0.9
+
 export function BottomSheet({
     visible,
     title,
@@ -18,26 +29,6 @@ export function BottomSheet({
     readonly onClose: () => void
     readonly children: ReactNode
 }): ReactElement {
-    const { colors } = useTheme()
-    const { reduceMotion } = useFeedback()
-    const progress = useRef(new Animated.Value(0)).current
-    useEffect(() => {
-        if (!visible) {
-            progress.setValue(0)
-            return
-        }
-        if (reduceMotion) {
-            progress.setValue(1)
-            return
-        }
-        Animated.timing(progress, {
-            toValue: 1,
-            duration: motion.sheet,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: Platform.OS !== 'web',
-        }).start()
-    }, [visible, reduceMotion, progress])
-
     return (
         <Modal
             visible={visible}
@@ -46,35 +37,82 @@ export function BottomSheet({
             onRequestClose={onClose}
             accessibilityViewIsModal={true}
         >
-            <View style={styles.backdrop}>
-                <Animated.View
-                    style={[
-                        styles.sheet,
-                        {
-                            backgroundColor: colors.surface,
-                            borderColor: colors.border,
-                            opacity: progress,
-                            transform: [
-                                {
-                                    translateY: progress.interpolate({
-                                        inputRange: [0, 1],
-                                        outputRange: [space.lg, 0],
-                                    }),
-                                },
-                            ],
-                        },
-                    ]}
-                >
-                    <View style={styles.header}>
-                        <View style={styles.titleWrap}>
-                            <Title>{title}</Title>
-                        </View>
-                        <IconButton label="Close sheet" icon="close" onPress={onClose} />
-                    </View>
+            {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}
+            <SafeAreaProvider>
+                <SheetFrame title={title} onClose={onClose}>
                     {children}
-                </Animated.View>
-            </View>
+                </SheetFrame>
+            </SafeAreaProvider>
         </Modal>
+    )
+}
+
+function SheetFrame({
+    title,
+    onClose,
+    children,
+}: {
+    readonly title: string
+    readonly onClose: () => void
+    readonly children: ReactNode
+}): ReactElement {
+    const { colors } = useTheme()
+    const { reduceMotion } = useFeedback()
+    const { height } = useWindowDimensions()
+    const insets = useSafeAreaInsets()
+    const progress = useSharedValue(0)
+
+    useEffect(() => {
+        if (reduceMotion) {
+            cancelAnimation(progress)
+            progress.value = 1
+            return undefined
+        }
+        progress.value = withTiming(1, { duration: motion.sheet, easing: Easing.out(Easing.cubic) })
+        return (): void => {
+            cancelAnimation(progress)
+        }
+    }, [progress, reduceMotion])
+
+    const entrance = useAnimatedStyle(() => ({
+        opacity: progress.value,
+        transform: [{ translateY: interpolate(progress.value, [0, 1], [space.lg, 0]) }],
+    }))
+
+    return (
+        <KeyboardAvoidingView
+            style={[styles.scrim, { backgroundColor: 'rgba(0, 0, 0, 0.35)' }]}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+            <Animated.View
+                testID="bottom-sheet"
+                style={[
+                    styles.sheet,
+                    {
+                        maxHeight: height * SHEET_MAX_HEIGHT_RATIO,
+                        paddingBottom: space.lg + insets.bottom,
+                        backgroundColor: colors.surface,
+                        borderColor: colors.border,
+                    },
+                    entrance,
+                ]}
+            >
+                <View style={styles.header}>
+                    <View style={styles.titleWrap}>
+                        <Title>{title}</Title>
+                    </View>
+                    <IconButton label="Close sheet" icon="close" onPress={onClose} />
+                </View>
+                <ScrollView
+                    testID="bottom-sheet-scroll"
+                    style={styles.scroll}
+                    contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    {children}
+                </ScrollView>
+            </Animated.View>
+        </KeyboardAvoidingView>
     )
 }
 
@@ -104,17 +142,15 @@ export function InstructionSheet({
 }
 
 const styles = StyleSheet.create({
-    backdrop: {
+    scrim: {
         flex: 1,
         justifyContent: 'flex-end',
-        backgroundColor: 'rgba(0, 0, 0, 0.35)',
     },
     sheet: {
         borderTopLeftRadius: radius.lg,
         borderTopRightRadius: radius.lg,
         borderWidth: 1,
         padding: space.md,
-        paddingBottom: space.xl,
         gap: space.md,
     },
     header: {
@@ -124,6 +160,14 @@ const styles = StyleSheet.create({
     },
     titleWrap: {
         flex: 1,
+    },
+    scroll: {
+        flexGrow: 0,
+        flexShrink: 1,
+    },
+    scrollContent: {
+        gap: space.md,
+        paddingBottom: space.xs,
     },
     steps: {
         gap: space.sm,

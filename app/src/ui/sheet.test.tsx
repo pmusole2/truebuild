@@ -1,7 +1,14 @@
 import { describe, expect, it, jest } from '@jest/globals'
-import { fireEvent, render, screen } from '@testing-library/react-native'
-import { Text } from 'react-native'
-import { BottomSheet, InstructionSheet } from './sheet'
+import { act, fireEvent, render, screen } from '@testing-library/react-native'
+import { Dimensions, StyleSheet, Text } from 'react-native'
+import { BottomSheet, InstructionSheet, SHEET_MAX_HEIGHT_RATIO } from './sheet'
+import { spies } from './test-support/reanimated-mock'
+
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
+)
 
 describe('BottomSheet', () => {
     it('shows its title as a header and its content while visible', async () => {
@@ -32,6 +39,33 @@ describe('BottomSheet', () => {
             </BottomSheet>,
         )
         expect(screen.queryByText('Hidden body')).toBeNull()
+    })
+})
+
+describe('BottomSheet bounds', () => {
+    it('never grows past 90 percent of the window and scrolls long content inside it', async () => {
+        await render(
+            <BottomSheet visible={true} title="Long result" onClose={(): void => undefined}>
+                <Text>{'Step text. '.repeat(200)}</Text>
+            </BottomSheet>,
+        )
+        const sheet = screen.getByTestId('bottom-sheet')
+        expect(StyleSheet.flatten(sheet.props.style).maxHeight).toBeCloseTo(
+            Dimensions.get('window').height * SHEET_MAX_HEIGHT_RATIO,
+            6,
+        )
+        expect(screen.getByTestId('bottom-sheet-scroll')).toBeTruthy()
+    })
+
+    it('cancels its entrance animation when the sheet unmounts', async () => {
+        spies.cancelAnimation.mockClear()
+        const rendered = await render(
+            <BottomSheet visible={true} title="Instructions" onClose={(): void => undefined}>
+                <Text>Body</Text>
+            </BottomSheet>,
+        )
+        await act(() => rendered.unmount())
+        expect(spies.cancelAnimation).toHaveBeenCalled()
     })
 })
 
