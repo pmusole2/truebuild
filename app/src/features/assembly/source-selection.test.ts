@@ -2,7 +2,7 @@ import { createDemoManual } from '@truebuild/contracts'
 import { describe, expect, it } from 'vitest'
 import { selectedStepSourcePageIds } from './source-selection'
 
-describe('temporary full-context API merge adapter', () => {
+describe('shared full-context source selector', () => {
     it('retains all twenty manual pages in manual order, including pages not cited by this step', () => {
         const session = createDemoManual()
         const first = session.pages[0]!

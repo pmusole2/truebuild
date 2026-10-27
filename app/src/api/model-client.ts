@@ -19,6 +19,7 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
@@ -41,8 +42,7 @@ import {
     type CallGuard,
 } from './transport'
 
-/** Temporary local mirror of the API track's shared export; import it directly after the API/main merge. */
-export const MODEL_METADATA_MAX_BYTES = 524_288
+export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 export const MODEL_PARSE_TIMEOUT_MS = 30_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000

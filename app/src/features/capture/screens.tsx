@@ -61,7 +61,11 @@ export function LibraryScreen({ state, controller }: WorkflowScreenProps): React
             {state.loading ? (
                 <Text>Restoring local library…</Text>
             ) : state.entries.length === 0 ? (
-                <Text>No manuals yet. Scan or choose your own manual pages to start.</Text>
+                <Text>
+                    {state.storageReadOnly
+                        ? 'Saved library unavailable. Original local data is retained.'
+                        : 'No manuals yet. Scan or choose your own manual pages to start.'}
+                </Text>
             ) : null}
             {state.entries.map((entry) => (
                 <View key={entry.session.manualId} style={styles.section}>

@@ -2,6 +2,8 @@ import type { ProviderMetrics } from '../providers/meta-transport'
 import { ModelCallCounter } from '../server/budget'
 import { createHash } from 'node:crypto'
 import { createDemoManual } from '@truebuild/contracts'
+import { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
+import { ModelApiClient } from '../../../app/src/api/model-client'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '../app'
@@ -37,28 +39,17 @@ describe('documented loopback mock with real API composition', () => {
             const app = createApp({ runtime, onDuration: () => {} })
             const { session, bytes } = await media()
             const binding = {
-                kind: 'capture',
+                kind: 'capture' as const,
                 manualId: session.manualId,
                 revision: 1,
                 stepId: 'step-1',
                 captureId: 'capture-test',
             }
-            const send = async (
-                route: string,
-                metadata: unknown,
-                names: string[],
-            ): Promise<Record<string, unknown>> => {
-                const form = new FormData()
-                form.set('metadata', JSON.stringify(metadata))
-                names.forEach((name) => form.set(name, new Blob([bytes], { type: 'image/png' }), 'image.png'))
-                const response = await app.request(route, {
-                    method: 'POST',
-                    headers: { 'x-truebuild-key': 'synthetic' },
-                    body: form,
-                })
-                expect(response.status).toBe(200)
-                return (await response.json()) as Record<string, unknown>
-            }
+            const client = new ModelApiClient({
+                baseUrl: 'http://127.0.0.1:3001',
+                secret: 'synthetic',
+                fetch: async (url, init): Promise<Response> => app.request(new URL(url).pathname, init),
+            })
             const pages = [
                 session.pages[0]!,
                 ...Array.from({ length: 19 }, (_, i) => ({
@@ -67,41 +58,60 @@ describe('documented loopback mock with real API composition', () => {
                     assetId: `asset-${i}`,
                 })),
             ]
+            const image = { bytes, mimeType: 'image/png' as const, width: 20, height: 16 }
+            const images = pages.map(() => image)
             expect(
-                await send(
-                    '/api/manuals/parse',
-                    {
-                        mode: 'model',
-                        requestId: 'parse-many',
-                        binding: { ...binding, kind: 'manual', stepId: undefined, captureId: undefined },
-                        pages,
-                    },
-                    pages.map((_, i) => `source-${i}`),
+                await client.parse(
+                    { kind: 'manual', manualId: session.manualId, revision: session.revision },
+                    pages,
+                    images,
+                    { requestId: 'parse-many' },
                 ),
             ).toMatchObject({ status: 'ok', mode: 'model' })
-            const metadata = {
+            session.pages = pages
+            // Exercise the shared 512 KiB boundary with valid context larger than the retired 64 KiB cap.
+            session.parts.push(
+                ...Array.from({ length: 250 }, (_, i) => ({
+                    partId: `extra-${i}`,
+                    name: {
+                        state: 'known' as const,
+                        value: 'x'.repeat(200),
+                        sourceRefs: [{ pageId: pages[0]!.pageId, region: null }],
+                    },
+                })),
+            )
+            const metadataBytes = Buffer.byteLength(JSON.stringify(session))
+            expect(metadataBytes).toBeGreaterThan(65_536)
+            expect(metadataBytes).toBeLessThan(MODEL_METADATA_MAX_BYTES)
+            const pageIds = pages.map((page) => page.pageId)
+            expect(
+                await client.check(binding, session, pageIds, images, image, { requestId: 'check-test' }),
+            ).toMatchObject({
+                status: 'ok',
                 mode: 'model',
-                requestId: 'check-test',
-                binding,
-                session,
-                sourcePageIds: [session.pages[0]!.pageId],
-                observation: { mimeType: 'image/png', width: 20, height: 16 },
-            }
-            expect(await send('/api/checks', metadata, ['source-0', 'observation'])).toMatchObject({
                 value: { decision: 'refuse', observedRegion: { x: 0.3, y: 0.2, width: 0.2, height: 0.65 } },
             })
             expect(
-                await send(
-                    '/api/questions',
-                    {
-                        ...metadata,
-                        requestId: 'ask-test',
-                        question: 'Which edge?',
-                        target: { kind: 'point', x: 0.5, y: 0.5 },
-                    },
-                    ['source-0', 'observation'],
+                await client.questions(
+                    binding,
+                    session,
+                    pageIds,
+                    images,
+                    image,
+                    'Which edge?',
+                    { kind: 'point', x: 0.5, y: 0.5 },
+                    { requestId: 'ask-test' },
                 ),
-            ).toMatchObject({ value: { sourceRefs: [{ pageId: session.pages[0]!.pageId, region: null }] } })
+            ).toMatchObject({
+                status: 'ok',
+                mode: 'model',
+                value: { sourceRefs: [{ pageId: pages[0]!.pageId, region: null }] },
+            })
+            expect(
+                mock.wireRequests.map(
+                    (request) => request.input[0].content.filter((part) => part.type === 'input_image').length,
+                ),
+            ).toEqual([20, 21, 21])
             expect(runtime.counter.used).toBe(3)
             expect(mock.requests.map((request) => request.operation)).toEqual(['parse', 'check', 'question'])
             expect(mock.failures).toEqual([])

@@ -54,17 +54,28 @@ describe('durable manual library', () => {
         expect([...kv.data.keys()].some((key) => key.includes('/bytes/'))).toBe(false)
     })
 
-    it('drops corrupted bytes rather than publishing a reviewed manual with unusable sources', async () => {
-        const kv = memory()
-        const store = new LibraryStorage(kv, digest)
-        const manual = await entry()
-        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }])
-        const key = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
-        kv.data.set(key, 'AQEK')
-        const restored = await new LibraryStorage(kv, digest).restore()
-        expect(restored.entries).toEqual([])
-        expect(restored.warning).toMatch(/could not be restored/)
-    })
+    it.each(['digest', 'missing', 'length', 'encoding'])(
+        'quarantines %s damage without pruning saved facts or chunks',
+        async (damage) => {
+            const kv = memory()
+            const store = new LibraryStorage(kv, digest)
+            const manual = await entry()
+            await store.save(
+                [manual],
+                [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }],
+            )
+            const key = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+            if (damage === 'missing') kv.data.delete(key)
+            else kv.data.set(key, damage === 'digest' ? 'AQEK' : damage === 'length' ? 'AQ==' : '!!!!')
+            const before = new Map(kv.data)
+            const quarantined = new LibraryStorage(kv, digest)
+            const restored = await quarantined.restore()
+            expect(restored.entries).toEqual([manual])
+            expect(restored.readOnly).toBe(true)
+            await expect(quarantined.save([])).rejects.toThrow(/read.only/i)
+            expect(kv.data).toEqual(before)
+        },
+    )
 
     it('schema-validates metadata and rejects oversized saves without overwriting the previous library', async () => {
         const kv = memory()
@@ -151,6 +162,21 @@ describe('durable manual library', () => {
             expect(await store.readAsset(manual.capture.page)).toEqual(new Uint8Array([1, 4, 9]))
         },
     )
+
+    it('keeps orphan chunks read-only when a fresh instance has no manifest', async () => {
+        const kv = memory()
+        const manual = await entry()
+        await new LibraryStorage(kv, digest).save(
+            [manual],
+            [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }],
+        )
+        kv.data.delete('truebuild/library/v1')
+        const before = new Map(kv.data)
+        const store = new LibraryStorage(kv, digest)
+        expect(await store.restore()).toMatchObject({ entries: [], readOnly: true })
+        await expect(store.save([])).rejects.toThrow(/read.only/i)
+        expect(kv.data).toEqual(before)
+    })
 
     it('keeps malformed manifest chunks untouched and refuses writes until explicit successful restore', async () => {
         const kv = memory()

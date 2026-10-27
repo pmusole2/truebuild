@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type ReactElement } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
@@ -153,6 +153,6 @@ it('retains confirmed facts during a transient restore failure and offers an exp
     expect(screen.getByRole('button', { name: 'Retry local library' })).toBeTruthy()
     kv.getItem = originalGet
     await fireEvent.press(screen.getByRole('button', { name: 'Retry local library' }))
-    expect(controller.getSnapshot().storageReadOnly).toBe(false)
+    await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(false))
     expect(screen.getByText('Facts confirmed by you.')).toBeTruthy()
 })

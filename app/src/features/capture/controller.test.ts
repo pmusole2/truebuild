@@ -489,6 +489,35 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect(calls.some((url) => url.endsWith('/api/checks'))).toBe(false)
     })
 
+    it('does not restore a loading state when a timed-out photo save finishes late', async () => {
+        const { controller, calls, store } = setup()
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        let finish: (() => void) | undefined
+        vi.spyOn(store, 'save').mockImplementationOnce(
+            () =>
+                new Promise<void>((resolve) => {
+                    finish = resolve
+                }),
+        )
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(finish).toBeDefined())
+        await vi.advanceTimersByTimeAsync(8_001)
+        await pending
+        expect(controller.getSnapshot().pending).toBeNull()
+        finish?.()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(controller.getSnapshot().pending).toBeNull()
+        expect(controller.canCompose).toBe(true)
+        expect(calls.some((url) => url.endsWith('/api/checks'))).toBe(false)
+    })
+
     it('cancels a parse that returns late, preserving the unparsed manual', async () => {
         let release: ((response: Response) => void) | undefined
         let metadata: Record<string, unknown> | undefined

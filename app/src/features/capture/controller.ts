@@ -304,6 +304,7 @@ export class CaptureController {
         }
         this.saving = true
         const token = this.epoch
+        const operation = this.operation
         const previous = this.state.pending
         this.publish({ pending: previous ?? 'Saving on this device…' })
         try {
@@ -320,7 +321,7 @@ export class CaptureController {
             return false
         } finally {
             this.saving = false
-            if (token === this.epoch) {
+            if (token === this.epoch && operation === this.operation) {
                 this.publish({ pending: previous })
             }
         }
@@ -698,7 +699,7 @@ export class CaptureController {
                     cameraIntent: null,
                     notice: guard.timedOut()
                         ? intent.kind === 'check'
-                            ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Retry explicitly when ready.'
+                            ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Take a new photo when ready.'
                             : 'Camera photo preparation timed out. Take a new photo.'
                         : 'Cannot use this camera photo. Check camera access and connection, then take a new photo.',
                 })

@@ -130,29 +130,16 @@ export class LibraryStorage {
             this.assets = manifest.assets
             // Keep all validated facts and photo references if any asset IO subsequently fails.
             this.retainedEntries = manifest.entries
-            const entries: LibraryEntry[] = []
             for (const entry of manifest.entries) {
-                try {
-                    for (const page of pagesOf(entry)) {
-                        await this.readAsset(page)
-                    }
-                    entries.push(entry)
-                } catch (error: unknown) {
-                    if (!(error instanceof DamagedLocalAssetError)) {
-                        throw error
-                    }
-                    // Only positively missing/corrupt bytes can exclude an entry, never storage exceptions.
+                for (const page of pagesOf(entry)) {
+                    await this.readAsset(page)
                 }
             }
-            this.retainedEntries = entries
             this.writable = true
             return {
-                entries,
+                entries: this.retainedEntries,
                 readOnly: false,
-                warning:
-                    entries.length === manifest.entries.length
-                        ? null
-                        : 'Some manuals could not be restored because local images are missing or damaged. Add or retake those pages.',
+                warning: null,
             }
         } catch {
             return {
