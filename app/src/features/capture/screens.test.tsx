@@ -6,7 +6,7 @@ import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
 import { LibraryScreen, OverviewScreen, PagesScreen } from './screens'
 
-function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage } {
+function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage; kv: KeyValueStorage } {
     const data = new Map<string, string>()
     const kv: KeyValueStorage = {
         getItem: async (key): Promise<string | null> => data.get(key) ?? null,
@@ -31,7 +31,7 @@ function setup(entry?: LibraryEntry): { controller: CaptureController; storage: 
     if (entry !== undefined) {
         entry.session.pages[0]!.contentHash = '0'.repeat(64)
     }
-    return { controller, storage }
+    return { controller, storage, kv }
 }
 function Screens({ controller }: { controller: CaptureController }): ReactElement {
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
@@ -91,4 +91,68 @@ it('requires an explicit fact-review checkbox before confirmation and displays u
         await controller.editPage(0, 'remove')
     })
     expect(controller.current?.session.reviewStatus).toBe('unreviewed')
+})
+
+it.each([false, true])(
+    'shows critical review requirements without blocking noncritical annotations (unresolved=%s)',
+    async (unresolved) => {
+        const session = createDemoManual()
+        session.reviewStatus = 'unreviewed'
+        for (const step of session.reviewedSteps) {
+            if (step.correction !== null) {
+                step.correction.reviewed = false
+            }
+        }
+        if (unresolved) {
+            session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is not visible.' }
+        }
+        session.rawExtraction = {
+            parts: session.parts,
+            steps: session.reviewedSteps,
+            unknowns: ['Packaging colour could not be read.'],
+        }
+        const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+        const { controller, storage } = setup(entry)
+        controllers.push(controller)
+        await storage.save([entry], [{ assetId: session.pages[0]!.assetId, bytes: new Uint8Array([1]) }])
+        await controller.restore()
+        await controller.open(session.manualId)
+        await render(<Screens controller={controller} />)
+        expect(screen.getByText('Extraction note: Packaging colour could not be read.')).toBeTruthy()
+        if (unresolved) {
+            expect(screen.getByText('Unresolved critical fact: Step 1 orientation: Arrow is not visible.')).toBeTruthy()
+            expect(screen.getByText(/Add or retake clearer pages/)).toBeTruthy()
+            expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(true)
+        } else {
+            await fireEvent.press(screen.getByRole('checkbox'))
+            expect(
+                screen.getByRole('button', { name: 'Confirm reviewed facts' }).props.accessibilityState.disabled,
+            ).toBe(false)
+        }
+    },
+)
+
+it('retains confirmed facts during a transient restore failure and offers an explicit nondestructive retry', async () => {
+    const session = createDemoManual()
+    const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+    const { controller, storage, kv } = setup(entry)
+    controllers.push(controller)
+    await storage.save([entry], [{ assetId: session.pages[0]!.assetId, bytes: new Uint8Array([1]) }])
+    await controller.restore()
+    await controller.open(session.manualId)
+    await render(<Screens controller={controller} />)
+    const originalGet = kv.getItem
+    kv.getItem = async (): Promise<never> => {
+        throw new Error('Temporary IO failure')
+    }
+    await act(async () => {
+        await controller.restore()
+    })
+    expect(controller.getSnapshot().storageReadOnly).toBe(true)
+    expect(screen.getByText('Facts confirmed by you.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry local library' })).toBeTruthy()
+    kv.getItem = originalGet
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry local library' }))
+    expect(controller.getSnapshot().storageReadOnly).toBe(false)
+    expect(screen.getByText('Facts confirmed by you.')).toBeTruthy()
 })

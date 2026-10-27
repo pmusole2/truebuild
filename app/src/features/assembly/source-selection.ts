@@ -1,24 +1,28 @@
 import type { ManualSession, ManualStep } from '@truebuild/contracts'
 import * as modelContracts from '@truebuild/contracts/model'
 
-/** Baseline compatibility while the API track is integrated. Once available, the shared selector is authoritative:
- * it chooses a bounded set covering required facts, including alternative citations. Invalid output fails closed.
- * Older contracts use the stricter all-citation set supplied by the caller. No partial context is invented.
+/** Temporary API-merge adapter. Full context is all ordered manual pages (up to 20). Compact selection is an explicit
+ * server policy, never a client retry/fallback. Replace reflection with the direct exporter after the API/main merge.
+ * Keep the helper's (session, stepId) interface; null/invalid selections fail closed without a partial-page fallback.
  */
-export function selectedStepSourcePageIds(
-    session: ManualSession,
-    step: ManualStep,
-    allCitedIds: readonly string[],
-): string[] {
+export function selectedStepSourcePageIds(session: ManualSession, step: ManualStep): string[] {
+    if (
+        session.pages.length === 0 ||
+        session.pages.length > 20 ||
+        !session.reviewedSteps.some((candidate) => candidate.stepId === step.stepId)
+    ) {
+        return []
+    }
     const select: unknown = Reflect.get(modelContracts, 'selectStepSourcePageIds')
     if (typeof select !== 'function') {
-        return allCitedIds.length >= 1 && allCitedIds.length <= 2 ? [...allCitedIds] : []
+        return session.pages.map((page) => page.pageId)
     }
     try {
         const result: unknown = select(session, step.stepId)
         if (
             !Array.isArray(result) ||
-            result.length > 2 ||
+            result.length === 0 ||
+            result.length > 20 ||
             !result.every(
                 (id: unknown): id is string =>
                     typeof id === 'string' && session.pages.some((page) => page.pageId === id),

@@ -1,3 +1,4 @@
+import { releaseTemporaryImage } from '../../media/owned-temporary-images'
 import { selectedStepSourcePageIds } from '../assembly/source-selection'
 import {
     LIMITS,
@@ -17,13 +18,13 @@ import { awaitStopped, createCallGuard } from '../../api/transport'
 import type { NormalizedImage, SourceImageAsset } from '../../media/normalize-image'
 import { bytesToDataUri } from '../../media/image-source'
 import { userMessageForMediaError } from '../../media/media-errors'
-import { askModelQuestion, citedPageIds, runModelCheck } from '../assembly/model-check'
+import { askModelQuestion, runModelCheck } from '../assembly/model-check'
 import type { Observation } from '../assembly/observation'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
 
 export type ScreenRoute = 'library' | 'pages' | 'overview' | 'guide' | 'camera'
 export type CameraIntent = { kind: 'page'; replaceIndex?: number } | { kind: 'check' | 'question' }
-export type CaptureView = { binding: CaptureBinding; observation: Observation; capturedAt: number; expiresAt: number }
+export type CaptureView = { binding: CaptureBinding; observation: Observation; capturedAt: number; reusable: boolean }
 export type WorkflowState = {
     route: ScreenRoute
     entries: readonly LibraryEntry[]
@@ -31,6 +32,7 @@ export type WorkflowState = {
     pending: string | null
     notice: string | null
     loading: boolean
+    storageReadOnly: boolean
     cameraIntent: CameraIntent | null
     capture: CaptureView | null
     check: CheckResult | null
@@ -46,7 +48,6 @@ export type CapturePorts = {
     digest: Digest
     id: () => string
     now?: () => number
-    monotonic?: () => number
 }
 
 export function reviewedSession(session: ManualSession): ManualSession | null {
@@ -59,7 +60,48 @@ export function reviewedSession(session: ManualSession): ManualSession | null {
         })),
     }
     const valid = manualSessionSchema.safeParse(candidate)
-    return valid.success && (session.rawExtraction?.unknowns.length ?? 0) === 0 ? valid.data : null
+    return valid.success ? valid.data : null
+}
+
+export function unresolvedCriticalFacts(session: ManualSession): string[] {
+    const issues: string[] = []
+    for (const part of session.parts) {
+        if (part.name.state === 'unknown') {
+            issues.push(`Part ${part.partId} name: ${part.name.reason}`)
+        }
+    }
+    if (session.reviewedSteps.length === 0) {
+        issues.push('No assembly steps could be read.')
+    }
+    for (const step of session.reviewedSteps) {
+        const label = `Step ${step.order}`
+        if (step.sourceRefs.length === 0) {
+            issues.push(`${label}: expected diagram citation is missing.`)
+        }
+        if (step.parts.length === 0) {
+            issues.push(`${label}: required parts are missing.`)
+        }
+        for (const part of step.parts) {
+            if (part.quantity.state === 'unknown') {
+                issues.push(`${label}, quantity of ${part.partId}: ${part.quantity.reason}`)
+            }
+        }
+        if (step.orientation.state === 'unknown') {
+            issues.push(`${label} orientation: ${step.orientation.reason}`)
+        }
+        if (step.connection.state === 'unknown') {
+            issues.push(`${label} connection: ${step.connection.reason}`)
+        }
+        if (step.visibleChecks.length === 0) {
+            issues.push(`${label}: visible checks are missing.`)
+        }
+        for (const check of step.visibleChecks) {
+            if (check.description.state === 'unknown') {
+                issues.push(`${label}, visible check ${check.checkId}: ${check.description.reason}`)
+            }
+        }
+    }
+    return issues
 }
 
 /** One application owner. Epoch + abort + binding checks fence every asynchronous handoff; persisted state never includes
@@ -73,6 +115,7 @@ export class CaptureController {
         pending: null,
         notice: null,
         loading: true,
+        storageReadOnly: false,
         cameraIntent: null,
         capture: null,
         check: null,
@@ -85,12 +128,10 @@ export class CaptureController {
     private readonly listeners = new Set<() => void>()
     private epoch = 0
     private operation: AbortController | null = null
-    private expiry: ReturnType<typeof setTimeout> | null = null
+    private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'ask' | null = null
     private readonly now: () => number
-    private readonly monotonic: () => number
     constructor(private readonly ports: CapturePorts) {
         this.now = ports.now ?? ((): number => Date.now())
-        this.monotonic = ports.monotonic ?? ((): number => performance.now())
     }
     getSnapshot = (): WorkflowState => this.state
     subscribe = (listener: () => void): (() => void) => {
@@ -108,16 +149,27 @@ export class CaptureController {
     get current(): LibraryEntry | undefined {
         return this.state.entries.find((e) => e.session.manualId === this.state.selectedId)
     }
-    private invalidate(): number {
+    private stopOperation(): number {
         this.epoch++
         this.operation?.abort()
         this.operation = null
-        if (this.expiry !== null) {
-            clearTimeout(this.expiry)
-            this.expiry = null
-        }
-        this.publish({ pending: null, check: null, answer: null, capture: null, target: null, question: '' })
+        this.operationKind = null
         return this.epoch
+    }
+    private invalidate(preserveQuestion = false): number {
+        const previousUri = this.state.capture?.observation.uri
+        const question = preserveQuestion ? this.state.question : ''
+        const token = this.stopOperation()
+        this.publish({ pending: null, check: null, answer: null, capture: null, target: null, question })
+        if (previousUri !== undefined) {
+            void releaseTemporaryImage(previousUri)
+        }
+        return token
+    }
+    get canCompose(): boolean {
+        return (
+            !this.saving && !this.state.storageReadOnly && (this.state.pending === null || this.operationKind === 'ask')
+        )
     }
     cancel = (): void => {
         if (this.saving) {
@@ -130,8 +182,9 @@ export class CaptureController {
                     ? 'pages'
                     : 'guide'
                 : this.state.route
-        this.invalidate()
+        this.stopOperation()
         this.publish({
+            pending: null,
             route,
             cameraIntent: null,
             notice: 'Cancelled. No late reply will be shown. Retry is a new request.',
@@ -143,11 +196,20 @@ export class CaptureController {
     }
 
     async restore(): Promise<void> {
+        if (this.saving || this.state.pending !== null) {
+            return
+        }
+        this.publish({ loading: true })
         const restored = await this.ports.storage.restore()
-        this.publish({ entries: restored.entries, notice: restored.warning, loading: false })
+        this.publish({
+            entries: restored.entries,
+            notice: restored.warning,
+            loading: false,
+            storageReadOnly: restored.readOnly,
+        })
     }
     async createManual(): Promise<void> {
-        if (this.state.pending !== null || this.saving || this.state.loading) {
+        if (this.state.pending !== null || this.saving || this.state.storageReadOnly || this.state.loading) {
             return
         }
         const session: ManualSession = {
@@ -194,8 +256,8 @@ export class CaptureController {
                 this.publish({
                     capture: {
                         binding: entry.capture.binding,
-                        capturedAt: 0,
-                        expiresAt: 0,
+                        capturedAt: entry.capture.capturedAt,
+                        reusable: false,
                         observation: {
                             ...entry.capture.page,
                             bytes,
@@ -207,7 +269,10 @@ export class CaptureController {
             }
         } catch {
             if (token === this.epoch) {
-                this.publish({ notice: 'Local images are unavailable. Scan this manual again.' })
+                this.publish({
+                    notice: 'Local images could not be read. Original facts and photo references are retained. Retry reading the library.',
+                    storageReadOnly: true,
+                })
             }
         }
     }
@@ -220,14 +285,14 @@ export class CaptureController {
         this.publish({ route, notice: null, cameraIntent: null })
     }
     camera = (intent: CameraIntent): void => {
-        if (this.state.pending !== null || this.saving) {
+        if (this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         if (intent.kind !== 'page' && this.current?.session.reviewStatus !== 'reviewed') {
             this.publish({ notice: 'Review and confirm the extracted facts first.' })
             return
         }
-        this.invalidate()
+        this.invalidate(intent.kind === 'question')
         this.publish({ route: 'camera', cameraIntent: intent, notice: null })
     }
     private async persist(
@@ -248,7 +313,8 @@ export class CaptureController {
         } catch {
             if (token === this.epoch) {
                 this.publish({
-                    notice: 'Could not save on this device. Free storage or retry. Your previous saved library is preserved.',
+                    notice: 'Could not save on this device. Original library data is retained. Retry reading the local library before making changes.',
+                    storageReadOnly: true,
                 })
             }
             return false
@@ -287,6 +353,7 @@ export class CaptureController {
             entry === undefined ||
             this.state.pending !== null ||
             this.saving ||
+            this.state.storageReadOnly ||
             title.trim().length === 0 ||
             title.length > 200
         ) {
@@ -296,7 +363,7 @@ export class CaptureController {
     }
     async editPage(index: number, action: 'remove' | 'up' | 'down'): Promise<void> {
         const entry = this.current
-        if (entry === undefined || this.state.pending !== null || this.saving) {
+        if (entry === undefined || this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         const pages = [...entry.session.pages]
@@ -317,16 +384,21 @@ export class CaptureController {
     }
     async importPages(select: () => Promise<readonly SourceImageAsset[]>, replaceIndex?: number): Promise<void> {
         const entry = this.current
-        if (entry === undefined || this.state.pending !== null || this.saving) {
+        if (entry === undefined || this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         const token = this.invalidate()
         const operation = new AbortController()
         this.operation = operation
+        this.operationKind = 'pages'
         this.publish({ route: 'pages', pending: 'Choosing manual pages…', notice: null, cameraIntent: null })
+        let assets: readonly SourceImageAsset[] = []
         try {
-            const assets = await select()
+            assets = await select()
             if (token !== this.epoch || operation.signal.aborted) {
+                for (const asset of assets) {
+                    await releaseTemporaryImage(asset.uri)
+                }
                 return
             }
             if (assets.length === 0) {
@@ -345,20 +417,24 @@ export class CaptureController {
             for (const [index, asset] of assets.entries()) {
                 this.publish({ pending: `Preparing page ${index + 1} of ${assets.length}…` })
                 const image = await this.ports.normalize(asset)
-                if (token !== this.epoch || operation.signal.aborted) {
-                    return
+                try {
+                    if (token !== this.epoch || operation.signal.aborted) {
+                        return
+                    }
+                    const page = await this.pageFor(image)
+                    if (token !== this.epoch || operation.signal.aborted) {
+                        return
+                    }
+                    if (replaceIndex === undefined) {
+                        pages.push(page)
+                    } else {
+                        pages[replaceIndex] = page
+                    }
+                    writes.push({ assetId: page.assetId, bytes: image.bytes })
+                    uris[page.pageId] = bytesToDataUri(image.bytes, image.mimeType)
+                } finally {
+                    await releaseTemporaryImage(image.uri)
                 }
-                const page = await this.pageFor(image)
-                if (token !== this.epoch || operation.signal.aborted) {
-                    return
-                }
-                if (replaceIndex === undefined) {
-                    pages.push(page)
-                } else {
-                    pages[replaceIndex] = page
-                }
-                writes.push({ assetId: page.assetId, bytes: image.bytes })
-                uris[page.pageId] = image.uri
             }
             this.publish({ pending: 'Saving manual pages…' })
             if (await this.persist(this.replacement(this.changedPages(entry, pages)), writes)) {
@@ -371,8 +447,12 @@ export class CaptureController {
                 this.publish({ notice: userMessageForMediaError(error) })
             }
         } finally {
+            for (const asset of assets) {
+                await releaseTemporaryImage(asset.uri)
+            }
             if (token === this.epoch) {
                 this.operation = null
+                this.operationKind = null
                 this.publish({ pending: null })
             }
         }
@@ -390,12 +470,20 @@ export class CaptureController {
     }
     async parse(): Promise<void> {
         const entry = this.current
-        if (entry === undefined || entry.session.pages.length === 0 || this.state.pending !== null || this.saving) {
+        if (
+            entry === undefined ||
+            entry.session.pages.length === 0 ||
+            this.state.pending !== null ||
+            this.saving ||
+            this.state.storageReadOnly
+        ) {
             return
         }
         const token = this.invalidate()
         const operation = new AbortController()
         this.operation = operation
+        this.operationKind = 'parse'
+        const revision = entry.session.revision + 1
         const guard = createCallGuard(MODEL_PARSE_TIMEOUT_MS, operation.signal)
         this.publish({ pending: 'Reading manual pages…', notice: null })
         try {
@@ -406,7 +494,7 @@ export class CaptureController {
                 images.push({ ...page, bytes })
             }
             const result = await this.ports.client.parse(
-                { kind: 'manual', manualId: entry.session.manualId, revision: entry.session.revision },
+                { kind: 'manual', manualId: entry.session.manualId, revision },
                 entry.session.pages,
                 images,
                 { requestId: `extract-${this.ports.id()}`, signal: guard.signal, checkpoint: guard.checkpoint },
@@ -429,6 +517,8 @@ export class CaptureController {
                 stepIndex: 0,
                 session: {
                     ...entry.session,
+                    revision,
+                    updatedAt: new Date(this.now()).toISOString(),
                     parts: parsed.parts,
                     rawExtraction: parsed,
                     reviewedSteps: [...parsed.steps].sort((a, b) => a.order - b.order),
@@ -454,13 +544,14 @@ export class CaptureController {
             guard.dispose()
             if (token === this.epoch) {
                 this.operation = null
+                this.operationKind = null
                 this.publish({ pending: null })
             }
         }
     }
     async confirm(): Promise<void> {
         const entry = this.current
-        if (entry === undefined || this.state.pending !== null || this.saving) {
+        if (entry === undefined || this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         const session = reviewedSession(entry.session)
@@ -473,7 +564,12 @@ export class CaptureController {
     }
     async step(index: number): Promise<void> {
         const entry = this.current
-        if (entry === undefined || this.saving || entry.session.reviewedSteps[index] === undefined) {
+        if (
+            entry === undefined ||
+            this.saving ||
+            this.state.storageReadOnly ||
+            entry.session.reviewedSteps[index] === undefined
+        ) {
             return
         }
         const token = this.invalidate()
@@ -484,7 +580,7 @@ export class CaptureController {
     }
     async completeStep(): Promise<void> {
         const entry = this.current
-        if (entry === undefined || this.state.pending !== null || this.saving) {
+        if (entry === undefined || this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         const step = entry.session.reviewedSteps[entry.stepIndex]
@@ -507,7 +603,7 @@ export class CaptureController {
     }
     async shutter(photo: () => Promise<SourceImageAsset>): Promise<void> {
         const intent = this.state.cameraIntent
-        if (intent === null || this.state.pending !== null || this.saving) {
+        if (intent === null || this.state.pending !== null || this.saving || this.state.storageReadOnly) {
             return
         }
         if (intent.kind === 'page') {
@@ -519,17 +615,28 @@ export class CaptureController {
         if (entry === undefined || step === undefined) {
             return
         }
-        const token = this.invalidate()
+        const token = this.invalidate(intent.kind === 'question')
         const operation = new AbortController()
         this.operation = operation
-        const guard = createCallGuard(MODEL_CHECK_TIMEOUT_MS, operation.signal)
+        this.operationKind = 'capture'
+        const guard = createCallGuard(
+            intent.kind === 'check' ? MODEL_CHECK_TIMEOUT_MS : MODEL_PARSE_TIMEOUT_MS,
+            operation.signal,
+        )
         const capturedAt = this.now()
-        const expiresAt = this.monotonic() + MODEL_CHECK_TIMEOUT_MS
         this.publish({ pending: 'Freezing photo…', notice: null })
+        let original: SourceImageAsset | undefined
+        let normalized: NormalizedImage | undefined
         try {
-            const asset = await awaitStopped(photo(), guard.signal)
+            const asset = await awaitStopped(photo(), guard.signal, (late): void => {
+                void releaseTemporaryImage(late.uri)
+            })
+            original = asset
             guard.checkpoint()
-            const image = await awaitStopped(this.ports.normalize(asset), guard.signal)
+            const image = await awaitStopped(this.ports.normalize(asset), guard.signal, (late): void => {
+                void releaseTemporaryImage(late.uri)
+            })
+            normalized = image
             guard.checkpoint()
             const page = await awaitStopped(this.pageFor(image), guard.signal)
             guard.checkpoint()
@@ -544,7 +651,7 @@ export class CaptureController {
                 captureId: `capture-${this.ports.id()}`,
             }
             this.publish({
-                capture: { binding, observation: image, capturedAt, expiresAt },
+                capture: { binding, observation: image, capturedAt, reusable: true },
                 route: 'guide',
                 cameraIntent: null,
             })
@@ -559,8 +666,8 @@ export class CaptureController {
             if (!saved || token !== this.epoch) {
                 return
             }
-            this.armExpiry(expiresAt, token)
             if (intent.kind === 'check') {
+                this.operationKind = 'check'
                 this.publish({ pending: 'Checking frozen photo…' })
                 const result = await runModelCheck({
                     client: this.ports.client,
@@ -578,7 +685,7 @@ export class CaptureController {
                     },
                 })
                 guard.checkpoint()
-                if (token === this.epoch && this.freshCapture(binding)) {
+                if (token === this.epoch && this.isCurrentCapture(binding)) {
                     this.publish(
                         result.status === 'ok' ? { check: result.value } : { notice: this.unavailable(result) },
                     )
@@ -590,70 +697,51 @@ export class CaptureController {
                     route: 'guide',
                     cameraIntent: null,
                     notice: guard.timedOut()
-                        ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Take a new photo.'
+                        ? intent.kind === 'check'
+                            ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Retry explicitly when ready.'
+                            : 'Camera photo preparation timed out. Take a new photo.'
                         : 'Cannot use this camera photo. Check camera access and connection, then take a new photo.',
                 })
             }
         } finally {
+            if (original !== undefined) {
+                await releaseTemporaryImage(original.uri)
+            }
+            if (normalized !== undefined && this.state.capture?.observation !== normalized) {
+                await releaseTemporaryImage(normalized.uri)
+            }
             guard.dispose()
             if (token === this.epoch) {
                 this.operation = null
+                this.operationKind = null
                 this.publish({ pending: null })
             }
         }
     }
-    private armExpiry(expiresAt: number, token: number): void {
-        this.expiry = setTimeout(
-            (): void => {
-                if (token === this.epoch) {
-                    this.operation?.abort()
-                    this.epoch++
-                    this.publish({
-                        check: null,
-                        answer: null,
-                        pending: null,
-                        notice: 'Frozen photo expired. Take a new photo to check or ask.',
-                    })
-                }
-            },
-            Math.max(0, expiresAt - this.monotonic()),
-        )
-    }
-    private freshCapture(binding: CaptureBinding): boolean {
+    private isCurrentCapture(binding: CaptureBinding): boolean {
         const capture = this.state.capture
-        return capture !== null && matchesBinding(capture.binding, binding) && this.monotonic() < capture.expiresAt
+        return capture !== null && capture.reusable && matchesBinding(capture.binding, binding)
     }
-    private cancelPendingAnswer(): void {
-        this.operation?.abort()
-        this.operation = null
-        this.epoch++
-        if (this.expiry !== null) {
-            clearTimeout(this.expiry)
-            this.expiry = null
+    private cancelPendingAnswer(): boolean {
+        if (!this.canCompose) {
+            return false
         }
-        const capture = this.state.capture
-        if (capture !== null && this.freshCapture(capture.binding)) {
-            this.armExpiry(capture.expiresAt, this.epoch)
-        } else if (capture !== null) {
-            this.publish({
-                check: null,
-                answer: null,
-                notice: 'Frozen photo expired. Take a new photo to check or ask.',
-            })
+        // Composition can cancel only the current ask. Checks require an explicit Cancel action.
+        if (this.operationKind === 'ask') {
+            this.stopOperation()
         }
+        return true
     }
     questionChanged = (question: string): void => {
-        if (this.saving) {
+        if (!this.cancelPendingAnswer()) {
             return
         }
-        this.cancelPendingAnswer()
         this.publish({ question: question.slice(0, 500), answer: null, pending: null })
     }
     targetChanged = (target: QuestionTarget): void => {
-        if (this.saving) {
+        if (!this.cancelPendingAnswer()) {
             return
         }
-        this.cancelPendingAnswer()
         this.publish({ target, answer: null, pending: null })
     }
     async ask(): Promise<void> {
@@ -669,17 +757,19 @@ export class CaptureController {
             target === null ||
             question.length === 0 ||
             this.state.pending !== null ||
-            this.saving
+            this.saving ||
+            this.state.storageReadOnly
         ) {
             return
         }
-        if (!this.freshCapture(capture.binding)) {
-            this.publish({ notice: 'Frozen photo expired. Take a new photo before asking.' })
+        if (!this.isCurrentCapture(capture.binding)) {
+            this.publish({ notice: 'Saved photo is view-only. Take a new photo before asking.' })
             return
         }
         const token = this.epoch
         const operation = new AbortController()
         this.operation = operation
+        this.operationKind = 'ask'
         const requestId = `question-${this.ports.id()}`
         this.publish({ pending: 'Asking about frozen photo…', answer: null, notice: null })
         try {
@@ -704,7 +794,7 @@ export class CaptureController {
                 token === this.epoch &&
                 this.operation === operation &&
                 !operation.signal.aborted &&
-                this.freshCapture(capture.binding)
+                this.isCurrentCapture(capture.binding)
             ) {
                 this.publish(result.status === 'ok' ? { answer: result.value } : { notice: this.unavailable(result) })
             }
@@ -715,6 +805,7 @@ export class CaptureController {
         } finally {
             if (token === this.epoch && this.operation === operation) {
                 this.operation = null
+                this.operationKind = null
                 this.publish({ pending: null })
             }
         }
@@ -725,14 +816,14 @@ export class CaptureController {
         if (entry === undefined || step === undefined) {
             return 'Review a manual step first.'
         }
-        const count = selectedStepSourcePageIds(entry.session, step, citedPageIds(entry.session, step)).length
-        return count < 1 || count > 2
-            ? 'This step needs citations from more than the supported 1–2 pages, or has no cited page. Cannot verify with partial sources. Review the manual pages.'
+        const count = selectedStepSourcePageIds(entry.session, step).length
+        return count < 1 || count > 20
+            ? 'Complete manual context is unavailable. Use up to 20 ordered manual pages and a frozen photo within the 8 MiB image budget.'
             : null
     }
     private unavailable(result: Extract<ApiResult<unknown>, { status: 'unavailable' }>): string {
         return result.code === 'invalid_input'
-            ? 'Cannot verify: selected 1–2 pages must cover every step citation and fit the app upload budget.'
+            ? 'Cannot verify: the full reviewed plan, up to 20 ordered manual pages, and the frozen photo must fit the API context and 8 MiB image budget.'
             : `Unavailable (${result.code}). Check connection/configuration. Retry is a new request; cancelled calls are not repeated automatically.`
     }
 }

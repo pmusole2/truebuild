@@ -213,12 +213,22 @@ describe('ModelApiClient request validation (zero dispatch when invalid)', () =>
         expect(calls).toHaveLength(0)
     })
 
-    it('sends nothing when the metadata JSON exceeds the 64KiB frozen limit', async () => {
+    it('sends nothing when the metadata JSON exceeds the 512KiB app/server limit', async () => {
         const { fetch, calls } = scripted(() => jsonResponse(200, okCheck()))
+        const first = session.reviewedSteps[0]!
         const oversized: ManualSession = {
             ...session,
-            title: 'x'.repeat(MODEL_METADATA_MAX_BYTES),
+            reviewedSteps: Array.from({ length: 100 }, (_, index) => ({
+                ...first,
+                stepId: index === 0 ? first.stepId : `large-step-${index}`,
+                order: index + 1,
+                visibleChecks: Array.from({ length: 10 }, (_, check) => ({
+                    checkId: `check-${check}`,
+                    description: { state: 'known' as const, value: 'x'.repeat(500), sourceRefs: first.sourceRefs },
+                })),
+            })),
         }
+        expect(new TextEncoder().encode(JSON.stringify(oversized)).length).toBeGreaterThan(MODEL_METADATA_MAX_BYTES)
 
         const result = await client(fetch).check(captureBinding, oversized, sourcePageIds, [source], observation, {
             requestId: REQUEST_ID,
@@ -226,6 +236,32 @@ describe('ModelApiClient request validation (zero dispatch when invalid)', () =>
 
         expect(result).toMatchObject({ status: 'unavailable', code: 'invalid_input' })
         expect(calls).toHaveLength(0)
+    })
+
+    it('accepts schema-valid metadata larger than the old 64KiB cap and below 512KiB', async () => {
+        const { fetch, calls } = scripted(() => jsonResponse(200, okCheck()))
+        const large: ManualSession = {
+            ...session,
+            parts: [
+                ...session.parts,
+                ...Array.from({ length: 250 }, (_, index) => ({
+                    partId: `extra-part-${index}`,
+                    name: {
+                        state: 'known' as const,
+                        value: 'x'.repeat(200),
+                        sourceRefs: [{ pageId: sourcePageIds[0]!, region: null }],
+                    },
+                })),
+            ],
+        }
+        const size = new TextEncoder().encode(JSON.stringify(large)).length
+        expect(size).toBeGreaterThan(65_536)
+        expect(size).toBeLessThan(MODEL_METADATA_MAX_BYTES)
+        const result = await client(fetch).check(captureBinding, large, sourcePageIds, [source], observation, {
+            requestId: REQUEST_ID,
+        })
+        expect(result.status).toBe('ok')
+        expect(calls).toHaveLength(1)
     })
 
     it('sends nothing when an image exceeds the per-file byte limit', async () => {

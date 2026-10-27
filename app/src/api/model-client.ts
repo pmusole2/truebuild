@@ -41,8 +41,8 @@ import {
     type CallGuard,
 } from './transport'
 
-/** Limits from the frozen wire contract. Metadata JSON is capped; source/observation files are capped by byte limits. */
-export const MODEL_METADATA_MAX_BYTES = 65_536
+/** Temporary local mirror of the API track's shared export; import it directly after the API/main merge. */
+export const MODEL_METADATA_MAX_BYTES = 524_288
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 export const MODEL_PARSE_TIMEOUT_MS = 30_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000

@@ -7,7 +7,7 @@ import type { Fact, ManualSession, SourceRef } from '@truebuild/contracts'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay } from '../assembly/frame-geometry'
 import { stepPartChoices } from '../assembly/question-state'
-import { reviewedSession, type CaptureController, type WorkflowState } from './controller'
+import { reviewedSession, unresolvedCriticalFacts, type CaptureController, type WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
 
 export type WorkflowScreenProps = { state: WorkflowState; controller: CaptureController }
@@ -36,6 +36,15 @@ export function WorkflowNotice({ state, controller }: WorkflowScreenProps): Reac
     return (
         <View accessibilityLiveRegion="polite">
             {state.notice === null ? null : <Text accessibilityRole="alert">{state.notice}</Text>}
+            {state.storageReadOnly ? (
+                <Button
+                    title={state.loading ? 'Reading local library…' : 'Retry local library'}
+                    disabled={state.loading || state.pending !== null}
+                    onPress={(): void => {
+                        void controller.restore()
+                    }}
+                />
+            ) : null}
             {state.pending === null ? null : (
                 <>
                     <Text>{state.pending}</Text>
@@ -72,7 +81,7 @@ export function LibraryScreen({ state, controller }: WorkflowScreenProps): React
             ))}
             <Button
                 title="Add manual"
-                disabled={state.loading || state.pending !== null}
+                disabled={state.loading || state.pending !== null || state.storageReadOnly}
                 onPress={(): void => {
                     void controller.createManual()
                 }}
@@ -86,7 +95,7 @@ export type PagesScreenProps = WorkflowScreenProps & {
 }
 export function PagesScreen({ state, controller, entry, choosePages }: PagesScreenProps): ReactElement {
     const [title, setTitle] = useState(entry.session.title)
-    const busy = state.pending !== null
+    const busy = state.pending !== null || state.storageReadOnly
     return (
         <Screen title="Manual pages" onBack={controller.home}>
             <WorkflowNotice state={state} controller={controller} />
@@ -259,6 +268,7 @@ export function OverviewScreen({
     const { session } = entry
     const [confirmed, setConfirmed] = useState(false)
     const canConfirm = reviewedSession(session) !== null
+    const unresolved = unresolvedCriticalFacts(session)
     return (
         <Screen title={session.title} onBack={controller.home}>
             <WorkflowNotice state={state} controller={controller} />
@@ -275,8 +285,11 @@ export function OverviewScreen({
                     Part {part.partId}: {factText(part.name, String)}
                 </Text>
             ))}
+            {unresolved.map((issue) => (
+                <Text key={issue}>Unresolved critical fact: {issue}</Text>
+            ))}
             {session.rawExtraction?.unknowns.map((unknown, index) => (
-                <Text key={index}>Unknown: {unknown}</Text>
+                <Text key={index}>Extraction note: {unknown}</Text>
             ))}
             {session.reviewedSteps.map((step, index) => (
                 <View key={step.stepId} style={styles.section}>
@@ -310,11 +323,14 @@ export function OverviewScreen({
                         <Text>{confirmed ? '☑' : '☐'} I checked all facts and corrections against the manual</Text>
                     </Pressable>
                     {!canConfirm ? (
-                        <Text>Missing critical facts. Add clearer pages and read the manual again.</Text>
+                        <Text>
+                            Add or retake clearer pages showing the unresolved facts, then read the manual again. No
+                            unknown facts will be filled in automatically.
+                        </Text>
                     ) : null}
                     <Button
                         title="Confirm reviewed facts"
-                        disabled={!confirmed || !canConfirm || state.pending !== null}
+                        disabled={!confirmed || !canConfirm || state.pending !== null || state.storageReadOnly}
                         onPress={(): void => {
                             void controller.confirm()
                         }}
@@ -333,7 +349,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
     const step = entry.session.reviewedSteps[entry.stepIndex]
     const blocked = controller.coverageNotice()
     const highlight = groundedRegion(state.answer ?? state.check)
-    const busy = state.pending !== null
+    const busy = state.pending !== null || state.storageReadOnly
     return (
         <Screen title={`Assembly · ${entry.session.title}`} onBack={(): void => controller.navigate('overview')}>
             <WorkflowNotice state={state} controller={controller} />
@@ -349,7 +365,9 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                 <FrozenPhoto
                     observation={state.capture.observation}
                     caption="Frozen photo for this step. New photos clear prior results."
-                    onTapPoint={(point): void => controller.targetChanged({ kind: 'point', ...point })}
+                    onTapPoint={
+                        busy ? undefined : (point): void => controller.targetChanged({ kind: 'point', ...point })
+                    }
                     overlay={
                         highlight === null
                             ? undefined
@@ -390,7 +408,8 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                 <View style={styles.section}>
                     <Text>
                         Tap a point in the frozen photo or select a step part. Type a question, or use your keyboard’s
-                        dictation. Photos expire after 8 seconds; retake before sending if needed.
+                        dictation. Each submitted question has its own 8-second request deadline; the frozen photo stays
+                        until you retake it or leave this step.
                     </Text>
                     {step === undefined
                         ? null
@@ -416,7 +435,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                         maxLength={500}
                         onChangeText={controller.questionChanged}
                         style={styles.input}
-                        editable={!busy}
+                        editable={controller.canCompose}
                     />
                     <Button
                         title="Send question"

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDemoManual, type ApiResult, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
-import { CaptureController, reviewedSession } from './controller'
+import { CaptureController, reviewedSession, unresolvedCriticalFacts } from './controller'
 import { LibraryStorage, type KeyValueStorage } from './library'
 
 const fixture = createDemoManual()
@@ -228,8 +228,9 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect((await store.restore()).entries[0]?.completedStepIds).toHaveLength(1)
     })
 
-    it('keeps a new question answer when target selection cancels an in-flight check', async () => {
-        let checking = false
+    it('ignores composition changes during a pending check without aborting or losing its result', async () => {
+        let checkMeta: { requestId: string; binding: unknown; sourcePageIds?: string[] } | undefined
+        let checkSignal: AbortSignal | undefined
         let finishCheck: ((response: Response) => void) | undefined
         const { controller } = setup(async (url, init): Promise<Response> => {
             const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
@@ -239,7 +240,8 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
                 sourcePageIds?: string[]
             }
             if (url.endsWith('/checks')) {
-                checking = true
+                checkMeta = meta
+                checkSignal = init.signal ?? undefined
                 return new Promise((resolve) => {
                     finishCheck = resolve
                 })
@@ -250,13 +252,7 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
                     mode: 'model',
                     requestId: meta.requestId,
                     binding: meta.binding,
-                    value: url.endsWith('/parse')
-                        ? parsed(meta.pages![0]!.pageId)
-                        : {
-                              answer: 'New question answer.',
-                              sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
-                              missingEvidence: [],
-                          },
+                    value: parsed(meta.pages![0]!.pageId),
                 }),
                 { headers: { 'Content-Type': 'application/json' } },
             )
@@ -269,31 +265,198 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         await controller.confirm()
         controller.camera({ kind: 'check' })
         const pending = controller.shutter(async () => photo)
-        await vi.waitFor(() => expect(checking).toBe(true))
-        controller.questionChanged('Which way?')
+        await vi.waitFor(() => expect(checkMeta).toBeDefined())
+        controller.questionChanged('Ignored while checking')
         controller.targetChanged({ kind: 'point', x: 0.5, y: 0.5 })
-        await controller.ask()
-        finishCheck?.(new Response('{}'))
+        expect(checkSignal?.aborted).toBe(false)
+        expect(controller.getSnapshot().pending).toBe('Checking frozen photo…')
+        expect(controller.getSnapshot().question).toBe('')
+        expect(controller.getSnapshot().target).toBeNull()
+        finishCheck?.(
+            new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: checkMeta!.requestId,
+                    binding: checkMeta!.binding,
+                    value: {
+                        decision: 'refuse',
+                        reason: 'Panel faces outward.',
+                        sourceRefs: [{ pageId: checkMeta!.sourcePageIds![0]!, region: null }],
+                        observedRegion: null,
+                        missingEvidence: [],
+                    },
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            ),
+        )
         await pending
-        expect(controller.getSnapshot().answer?.answer).toBe('New question answer.')
-        expect(controller.getSnapshot().check).toBeNull()
+        expect(controller.getSnapshot().check?.decision).toBe('refuse')
     })
 
-    it('expires a frozen verdict at eight seconds and requires a new photo to ask', async () => {
+    it('retains delivered verdicts and answers while a question is composed more than eight seconds later', async () => {
         const { controller } = await ready()
         vi.useFakeTimers()
         controller.camera({ kind: 'check' })
         await controller.shutter(async () => photo)
         expect(controller.getSnapshot().check?.decision).toBe('refuse')
-        await vi.advanceTimersByTimeAsync(8_001)
-        expect(controller.getSnapshot().check).toBeNull()
-        expect(controller.getSnapshot().answer).toBeNull()
-        expect(controller.getSnapshot().notice).toMatch(/expired/)
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(controller.getSnapshot().check?.decision).toBe('refuse')
         controller.questionChanged('Which way?')
         controller.targetChanged({ kind: 'point', x: 0.5, y: 0.5 })
         await controller.ask()
-        expect(controller.getSnapshot().notice).toMatch(/expired/)
+        expect(controller.getSnapshot().answer?.answer).toBe('Check the expected diagram.')
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(controller.getSnapshot().check?.decision).toBe('refuse')
+        expect(controller.getSnapshot().answer?.answer).toBe('Check the expected diagram.')
+    })
+
+    it('preserves a typed question across an ask-photo retake while clearing the old target and answer', async () => {
+        const { controller } = await ready()
+        controller.camera({ kind: 'question' })
+        await controller.shutter(async () => photo)
+        controller.questionChanged('Which way should the panel face?')
+        controller.targetChanged({ kind: 'point', x: 0.4, y: 0.5 })
+        await controller.ask()
+        const previous = controller.getSnapshot().capture!.binding.captureId
+        controller.camera({ kind: 'question' })
+        await controller.shutter(async () => photo)
+        expect(controller.getSnapshot().question).toBe('Which way should the panel face?')
+        expect(controller.getSnapshot().capture?.binding.captureId).not.toBe(previous)
+        expect(controller.getSnapshot().target).toBeNull()
         expect(controller.getSnapshot().answer).toBeNull()
+    })
+
+    it('allows noncritical annotations while reporting and blocking actual unresolved critical facts', () => {
+        const session = createDemoManual()
+        session.rawExtraction = { parts: session.parts, steps: [], unknowns: ['Packaging colour was not readable.'] }
+        expect(reviewedSession(session)).not.toBeNull()
+        expect(unresolvedCriticalFacts(session)).toEqual([])
+        session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is not visible.' }
+        expect(reviewedSession(session)).toBeNull()
+        expect(unresolvedCriticalFacts(session)).toContain('Step 1 orientation: Arrow is not visible.')
+    })
+
+    it('binds every successful reparse to a new revision and leaves the old revision intact on failure', async () => {
+        const bindings: number[] = []
+        let fail = false
+        const { controller } = setup(async (_url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: { revision: number }
+                pages: { pageId: string }[]
+            }
+            bindings.push(meta.binding.revision)
+            return new Response(
+                JSON.stringify(
+                    fail
+                        ? {
+                              status: 'unavailable',
+                              code: 'provider_error',
+                              retryable: true,
+                              binding: meta.binding,
+                              requestId: meta.requestId,
+                          }
+                        : {
+                              status: 'ok',
+                              mode: 'model',
+                              binding: meta.binding,
+                              requestId: meta.requestId,
+                              value: parsed(meta.pages[0]!.pageId),
+                          },
+                ),
+                { status: fail ? 503 : 200, headers: { 'Content-Type': 'application/json' } },
+            )
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        const original = controller.current!.session.revision
+        await controller.parse()
+        expect(controller.current!.session.revision).toBe(original + 1)
+        expect(bindings[0]).toBe(controller.current!.session.revision)
+        await controller.confirm()
+        await controller.parse()
+        expect(controller.current!.session.revision).toBe(original + 2)
+        expect(bindings[1]).toBe(controller.current!.session.revision)
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+        fail = true
+        await controller.parse()
+        expect(controller.current!.session.revision).toBe(original + 2)
+        expect(bindings[2]).toBe(original + 3)
+    })
+
+    it('ignores a late old ask without clearing a newer pending ask or replacing its answer', async () => {
+        const asks: {
+            meta: { requestId: string; binding: unknown; sourcePageIds: string[] }
+            resolve: (response: Response) => void
+        }[] = []
+        const { controller } = setup(async (_url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: unknown
+                pages?: { pageId: string }[]
+                sourcePageIds: string[]
+            }
+            if (meta.pages !== undefined) {
+                return new Response(
+                    JSON.stringify({
+                        status: 'ok',
+                        mode: 'model',
+                        requestId: meta.requestId,
+                        binding: meta.binding,
+                        value: parsed(meta.pages[0]!.pageId),
+                    }),
+                    { headers: { 'Content-Type': 'application/json' } },
+                )
+            }
+            return new Promise((resolve) => {
+                asks.push({ meta, resolve })
+            })
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        controller.camera({ kind: 'question' })
+        await controller.shutter(async () => photo)
+        controller.questionChanged('Old question')
+        controller.targetChanged({ kind: 'point', x: 0.1, y: 0.2 })
+        const old = controller.ask()
+        await vi.waitFor(() => expect(asks).toHaveLength(1))
+        controller.questionChanged('New question')
+        controller.camera({ kind: 'question' })
+        await controller.shutter(async () => photo)
+        expect(controller.getSnapshot().question).toBe('New question')
+        controller.targetChanged({ kind: 'point', x: 0.3, y: 0.4 })
+        const next = controller.ask()
+        await vi.waitFor(() => expect(asks).toHaveLength(2))
+        expect(asks[1]!.meta.binding).not.toEqual(asks[0]!.meta.binding)
+        const answer = (index: number, text: string): Response =>
+            new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: asks[index]!.meta.requestId,
+                    binding: asks[index]!.meta.binding,
+                    value: {
+                        answer: text,
+                        sourceRefs: [{ pageId: asks[index]!.meta.sourcePageIds[0]!, region: null }],
+                        missingEvidence: [],
+                    },
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            )
+        asks[0]!.resolve(answer(0, 'Old answer'))
+        await old
+        expect(controller.getSnapshot().pending).toBe('Asking about frozen photo…')
+        expect(controller.getSnapshot().answer).toBeNull()
+        asks[1]!.resolve(answer(1, 'New answer'))
+        await next
+        expect(controller.getSnapshot().answer?.answer).toBe('New answer')
     })
 
     it('counts normalization inside the eight-second check budget and ignores its late completion', async () => {
