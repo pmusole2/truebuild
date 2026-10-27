@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDemoManual } from './index'
 import {
     modelCheckMetadataSchema,
+    modelSecondOpinionMetadataSchema,
     selectStepSourcePageIds,
     selectCompactStepSourcePageIds,
     modelParseMetadataSchema,
@@ -103,4 +104,21 @@ it('defaults to all ordered manual pages and bounds only explicit compact citati
     expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
     session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'absent', region: null })
     expect(selectStepSourcePageIds(session, 'step-1')).toBeNull()
+})
+
+it('requires a second-opinion token and preserves strict current-step admission', () => {
+    const value = modelCheckMetadataSchema.parse(metadata())
+    expect(modelSecondOpinionMetadataSchema.safeParse(value).success).toBe(false)
+    expect(modelSecondOpinionMetadataSchema.safeParse({ ...value, secondOpinionToken: 'ticket' }).success).toBe(true)
+    expect(
+        modelSecondOpinionMetadataSchema.safeParse({ ...value, secondOpinionToken: '', model: 'muse-wonder-1.0' })
+            .success,
+    ).toBe(false)
+    expect(
+        modelSecondOpinionMetadataSchema.safeParse({
+            ...value,
+            binding: { ...value.binding, revision: 2 },
+            secondOpinionToken: 'ticket',
+        }).success,
+    ).toBe(false)
 })
