@@ -340,6 +340,11 @@ describe('automatic separate second opinion', () => {
         controller.cancel()
         expect(signals[1]!.aborted).toBe(true)
         expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
+        expect(controller.getSnapshot().check?.secondOpinion).toEqual({
+            status: 'unavailable',
+            model: 'muse-wonder-1.0',
+        })
+        expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toContain('Second opinion cancelled')
         expect(controller.getSnapshot().pending).toBeNull()
         finish(secondaryResult({ reason: 'Late secondary reply' }))
         await pending
@@ -389,12 +394,14 @@ describe('automatic separate second opinion', () => {
                 decision: 'pass',
                 reason: 'Secondary claims pass.',
                 missingEvidence: [],
+                sourceRefs: [{ pageId: controller.current!.session.pages[0]!.pageId, region: null }],
                 model: 'muse-wonder-1.0',
             }),
         )
         await pending
         expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
         expect(controller.getSnapshot().check?.model).toBe('muse-spark-1.3')
+        expect(controller.getSnapshot().check?.secondOpinion).toEqual({ status: 'completed', model: 'muse-wonder-1.0' })
         expect(controller.getSnapshot().check?.modelNotes?.join(' ')).toMatch(/cannot.*promote|retained/i)
     })
 

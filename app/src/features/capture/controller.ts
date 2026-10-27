@@ -201,9 +201,23 @@ export class CaptureController {
                     ? 'pages'
                     : 'guide'
                 : this.state.route
+        const check = this.state.check
+        const offer = check?.secondOpinion
+        const cancelledCheck =
+            this.operationKind === 'secondOpinion' && check && offer?.status === 'available'
+                ? {
+                      ...check,
+                      secondOpinion: { model: offer.model, status: 'unavailable' as const },
+                      modelNotes: [
+                          ...(check.modelNotes ?? []).slice(0, 9),
+                          'Second opinion cancelled. Primary result retained.',
+                      ],
+                  }
+                : check
         this.stopOperation()
         this.publish({
             pending: null,
+            check: cancelledCheck,
             route,
             cameraIntent: null,
             notice: 'Cancelled. No late reply will be shown. Retry is a new request.',
@@ -822,9 +836,9 @@ export class CaptureController {
             return
 
         const guard = createCallGuard(MODEL_SECOND_OPINION_TIMEOUT_MS, operation.signal)
-        const retained = (note: string): CheckResult => ({
+        const retained = (note: string, status: 'completed' | 'unavailable' = 'unavailable'): CheckResult => ({
             ...primary,
-            secondOpinion: { model: offer.model, status: 'unavailable' },
+            secondOpinion: { model: offer.model, status },
             modelNotes: [...(primary.modelNotes ?? []).slice(0, 9), note],
         })
         this.operationKind = 'secondOpinion'
@@ -851,7 +865,10 @@ export class CaptureController {
                     result.status !== 'ok'
                         ? retained('Second opinion unavailable. Primary result retained.')
                         : result.value.decision === 'pass'
-                          ? retained('Second opinion cannot promote this check to pass. Primary result retained.')
+                          ? retained(
+                                'Second opinion cannot promote this check to pass. Primary result retained.',
+                                'completed',
+                            )
                           : result.value,
             })
         } catch {
