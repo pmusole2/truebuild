@@ -6,7 +6,7 @@ const config: ExpoConfig = {
     scheme: 'truebuild',
     version: '0.1.0',
     orientation: 'portrait',
-    userInterfaceStyle: 'light',
+    userInterfaceStyle: 'automatic',
     web: {
         bundler: 'metro',
         output: 'single',
