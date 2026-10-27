@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { Image, Linking, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
-import type { CheckResult, Fact, ManualSession, QuestionResult, SourceRef } from '@truebuild/contracts'
+import type { CheckResult, Fact, ManualSession, ParsedManual, QuestionResult, SourceRef } from '@truebuild/contracts'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import { stepPartChoices } from '../assembly/question-state'
@@ -395,6 +395,7 @@ export function OverviewScreen({
             <Caption>
                 Review extracted facts against your original diagrams. Unknown critical facts block verified checks.
             </Caption>
+            {session.rawExtraction === null ? null : <ModelProvenance result={session.rawExtraction} />}
             <View style={styles.pageStrip}>
                 {session.pages.map((page, index) => (
                     <View key={page.pageId} style={styles.stripItem}>
@@ -704,16 +705,34 @@ export function CheckPanel({
     pageUris: WorkflowState['pageUris']
 }): ReactElement {
     return (
-        <ResultSheet
-            verdict={check.decision}
-            reason={check.reason}
-            missing={check.missingEvidence}
-            citedPage={
-                check.decision === 'refuse' ? undefined : (
-                    <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={pageUris} />
-                )
-            }
-        />
+        <View>
+            <ResultSheet
+                verdict={check.decision}
+                reason={check.reason}
+                missing={check.missingEvidence}
+                citedPage={
+                    check.decision === 'refuse' ? undefined : (
+                        <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={pageUris} />
+                    )
+                }
+            />
+            <ModelProvenance result={check} />
+            {check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
+                <Caption>{`Second opinion: ${check.secondOpinion.model} (${check.secondOpinion.status})`}</Caption>
+            )}
+        </View>
+    )
+}
+
+/** Server provenance only. Notes remain bounded plain text and never change a verdict or answer's meaning. */
+function ModelProvenance({ result }: { result: Pick<ParsedManual, 'model' | 'modelNotes'> }): ReactElement {
+    return (
+        <>
+            {result.model === undefined ? null : <Caption>{`Model: ${result.model}`}</Caption>}
+            {result.modelNotes?.slice(0, 10).map((note, index) => (
+                <Caption key={index}>{`Model note: ${note.slice(0, 500)}`}</Caption>
+            ))}
+        </>
     )
 }
 
@@ -734,6 +753,7 @@ export function AnswerPanel({
             <Heading>Answer</Heading>
             <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
             <Body>{answer.answer}</Body>
+            <ModelProvenance result={answer} />
             {answer.missingEvidence.map((missing, index) => (
                 <Caption key={index}>{`Missing: ${missing}`}</Caption>
             ))}
