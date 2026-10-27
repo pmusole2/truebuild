@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { createDemoManual } from './index'
 import {
     modelCheckMetadataSchema,
+    selectStepSourcePageIds,
+    selectCompactStepSourcePageIds,
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
@@ -84,4 +86,21 @@ describe('model metadata admission', (): void => {
                 .success,
         ).toBe(false)
     })
+})
+
+it('defaults to all ordered manual pages and bounds only explicit compact citation coverage', () => {
+    const session = createDemoManual()
+    session.pages.push(
+        { ...session.pages[0]!, pageId: 'page-2', assetId: 'asset-2' },
+        { ...session.pages[0]!, pageId: 'page-3', assetId: 'asset-3' },
+    )
+    const part = session.parts[0]!
+    if (part.name.state === 'known') part.name.sourceRefs.push({ pageId: 'page-2', region: null })
+    expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
+    expect(selectCompactStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2'])
+    session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'page-3', region: null })
+    expect(selectCompactStepSourcePageIds(session, 'step-1')).toBeNull()
+    expect(selectStepSourcePageIds(session, 'step-1')).toEqual(['demo-page-1', 'page-2', 'page-3'])
+    session.reviewedSteps[0]!.sourceRefs.push({ pageId: 'absent', region: null })
+    expect(selectStepSourcePageIds(session, 'step-1')).toBeNull()
 })

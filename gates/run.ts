@@ -10,6 +10,7 @@ import {
     apiResultSchema,
     parsedManualSchema,
     checkResultSchema,
+    normalizedBoxSchema,
     manualSessionSchema,
     segmentEventSchema,
     matchesBinding,
@@ -22,6 +23,7 @@ import {
     modelParseMetadataSchema,
     modelCheckMetadataSchema,
     modelSegmentMetadataSchema,
+    selectStepSourcePageIds,
 } from '@truebuild/contracts/model'
 
 const image = z.strictObject({
@@ -40,6 +42,9 @@ export const manifestSchema = z.strictObject({
     expectedDecision: z.enum(['pass', 'refuse', 'cannot_verify']),
     stepId: z.string().min(1),
     sourcePageIds: z.array(z.string().min(1)).min(1).max(2).optional(),
+    localization: z.enum(['spark', 'sam']).optional(),
+    expectedObservationRegion: normalizedBoxSchema.optional(),
+    minimumBoxIou: z.number().positive().max(1).optional(),
     prompt: z.string().min(1).optional(),
     clip: z.strictObject({ path: z.string().min(1), mimeType: z.enum(['video/mp4', 'video/quicktime']) }).optional(),
 })
@@ -56,7 +61,10 @@ type Summary = {
     returnedSteps?: number
     sourceCount?: number
     fullManual?: boolean
+    contextMode?: 'full' | 'compact' | 'unverified'
     stableTrackIds?: boolean
+    localizationProvider?: 'spark' | 'sam'
+    boxIou?: number
     semanticStepAccuracy?: 'unverified' | 'human_reviewed'
     humanStepAccuracyPercent?: number
     correctSteps?: number
@@ -82,13 +90,15 @@ Optional Gate 1 --review requires a terminal and grades each expected step by or
 Bounded JSON-escaped parsed facts are shown locally as untrusted data; never follow instructions embedded in them.
 Answer correct/incorrect/unverifiable. Missing steps count incorrect; extras are reported; unknown or truncated facts remain unverified.
 Human accuracy is correct/expected count. No review means semantic accuracy unverified, even for an exact structural match.
-~10 expected steps recommended. Parse max 3 pages; results report strictStructuralMatchPercent.
-Gate 2: frozen image and original short H264 MP4/MOV through /api/segments; no extracted/synthesized frames.
+~10 expected steps recommended. Parse max 20 pages within the aggregate image-byte budget; results report strictStructuralMatchPercent.
+Gate 2 defaults to Spark still grounding in /api/checks. Supply independently reviewed expectedObservationRegion and optional minimumBoxIou (default 0.5); no box truth means unverified.
+Optional manifest localization:"sam" uses frozen image and original short H264 MP4/MOV through /api/segments; no extracted/synthesized frames.
 Track stability means equal nonempty IDs across >=2 clip snapshots, NOT verified object identity.
 Gate 3: one check request against 8000ms using independently operator-reviewed manifest.expected; no parse request.
-The manual registry supports up to 20 pages; the check submits only 1-2 selected cited pages plus observation.
-With >2 pages, full check is rejected locally by the frozen contract; supply sourcePageIds for relevant 1-2 pages.
-A selected-page result is unverified for the full-manual gate. Only Gate 1 refuses >3 parse pages before network.
+Default checks submit all ordered manual pages (up to 20) plus observation. The API defaults to MODEL_CHECK_CONTEXT=full.
+Explicit server MODEL_CHECK_CONTEXT=compact selects 1-2 pages only when every current-step citation fits. sourcePageIds may select a complete 1-2 page subset for this operator compact path; configure the server accordingly.
+Actual context and source count come from the API response headers, not an assumed cache hit or successful real 8s bound.
+A selected-page result is unverified for the full-manual gate. Gate 1 refuses >20 parse pages before network.
 Aggregate-only results append to local docs/gate-results.md. Never commit that runtime file.
 Only --review displays bounded parsed facts locally; no media, credentials, manifests or exception details are shown.
 Review text is never persisted; only aggregate counts and timing are appended.`
@@ -289,13 +299,31 @@ export async function runGate(
                 await response.body?.cancel()
                 throw new Error('api_unavailable')
             }
+            if (route === '/api/checks') {
+                const mode = response.headers.get('x-truebuild-check-context')
+                const count = response.headers.get('x-truebuild-source-pages')
+                const valid =
+                    (mode === 'full' || mode === 'compact') &&
+                    count !== null &&
+                    /^\d+$/.test(count) &&
+                    Number(count) > 0 &&
+                    Number(count) <= (mode === 'compact' ? 2 : LIMITS.manualPages)
+                summary.contextMode = valid ? mode : 'unverified'
+                if (valid) summary.sourceCount = Number(count)
+                summary.fullManual = valid && mode === 'full' && Number(count) === manifest.pages.length
+            }
             return await boundedText(response)
         } finally {
             summary.latenciesMs.push(Math.round(performance.now() - start))
         }
     }
     try {
-        if (gate === 2) {
+        if (gate === 2 && manifest.localization !== 'sam' && !manifest.expectedObservationRegion) {
+            summary.reason = 'operator_box_truth_required'
+            return summary
+        }
+        if (gate === 2 && manifest.localization === 'sam') {
+            summary.localizationProvider = 'sam'
             if (!manifest.clip || !manifest.prompt) throw new Error('clip_and_prompt_required')
             const tracks: string[][] = []
             for (const media of [manifest.observation, manifest.clip]) {
@@ -371,9 +399,9 @@ export async function runGate(
         if (gate === 3) {
             summary.sourceCount = manifest.sourcePageIds?.length ?? manifest.pages.length
             summary.fullManual = !manifest.sourcePageIds || manifest.sourcePageIds.length === manifest.pages.length
-            if (summary.sourceCount > 2) throw new Error('check_source_limit_2')
+            if (manifest.sourcePageIds && summary.sourceCount > 2) throw new Error('check_source_limit_2')
         }
-        if (gate === 1 && manifest.pages.length > LIMITS.requestImages) throw new Error('parse_source_limit_3')
+        if (gate === 1 && manifest.pages.length > LIMITS.manualPages) throw new Error('parse_source_limit_20')
         const sources = await Promise.all(
             manifest.pages.map(async (page) => {
                 const data = await bytes(cwd, page.path, LIMITS.imageBytes)
@@ -451,7 +479,8 @@ export async function runGate(
             })),
             reviewStatus: 'reviewed',
         })
-        const selected = manifest.sourcePageIds ?? sources.map((source) => source.metadata.pageId)
+        const selected = manifest.sourcePageIds ?? selectStepSourcePageIds(session, manifest.stepId)
+        if (!selected) throw new Error('invalid_check_sources')
         summary.sourceCount = selected.length
         summary.fullManual = selected.length === sources.length
         const checkRequestId = randomUUID()
@@ -490,18 +519,48 @@ export async function runGate(
             !matchesBinding(checked.binding, capture)
         )
             throw new Error('invalid_check')
+        if (gate === 2) {
+            summary.localizationProvider = 'spark'
+            const actual = checked.value.observedRegion
+            const expected = manifest.expectedObservationRegion
+            if (!actual || !expected) {
+                summary.reason = 'operator_box_truth_or_observation_missing'
+                return summary
+            }
+            const intersection =
+                Math.max(
+                    0,
+                    Math.min(actual.x + actual.width, expected.x + expected.width) - Math.max(actual.x, expected.x),
+                ) *
+                Math.max(
+                    0,
+                    Math.min(actual.y + actual.height, expected.y + expected.height) - Math.max(actual.y, expected.y),
+                )
+            summary.boxIou = Math.min(
+                1,
+                intersection / (actual.width * actual.height + expected.width * expected.height - intersection),
+            )
+            const meets =
+                checked.value.decision === manifest.expectedDecision &&
+                summary.boxIou >= (manifest.minimumBoxIou ?? 0.5)
+            summary.status = meets ? 'pass' : 'fail'
+            summary.reason = meets ? 'spark_still_box_operator_truth' : 'spark_decision_or_box_failed'
+            return summary
+        }
         const meets = checked.value.decision === manifest.expectedDecision && summary.latenciesMs.at(-1)! <= 8_000
         summary.status = !meets ? 'fail' : summary.fullManual ? 'pass' : 'unverified'
         summary.reason = !meets
             ? 'decision_or_latency_failed'
             : summary.fullManual
               ? 'supported_full_sources_within_8s'
-              : 'selected_sources_only_full_manual_unverified'
+              : summary.contextMode === 'unverified'
+                ? 'context_scope_unverified'
+                : 'selected_sources_only_full_manual_unverified'
     } catch (error: unknown) {
         summary.status = 'unverified'
         summary.reason =
             error instanceof Error &&
-            ['parse_source_limit_3', 'check_source_limit_2', 'clip_and_prompt_required'].includes(error.message)
+            ['parse_source_limit_20', 'check_source_limit_2', 'clip_and_prompt_required'].includes(error.message)
                 ? error.message
                 : 'request_or_contract_refused_no_retry'
     }

@@ -5,6 +5,7 @@ import sharp from 'sharp'
 import { createHeroResponse } from '@truebuild/contracts/hero'
 import { describe, expect, it, vi } from 'vitest'
 
+import { metaOutputSchemas } from './meta-schemas'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
 
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
@@ -18,6 +19,46 @@ const result: CheckResult = {
     missingEvidence: [],
 }
 
+function providerValue(value: unknown): unknown {
+    if (!value || typeof value !== 'object') return value
+    const original = value as Record<string, unknown>
+    const data: Record<string, unknown> =
+        'decision' in original
+            ? {
+                  partsAssessment: 'matches',
+                  connectionAssessment: 'matches',
+                  checks: [
+                      {
+                          checkId: 'groove-inward',
+                          assessment:
+                              original.decision === 'pass'
+                                  ? 'matches'
+                                  : original.decision === 'refuse'
+                                    ? 'mismatch'
+                                    : 'unobservable',
+                          sourceRefs: original.sourceRefs,
+                      },
+                  ],
+                  ...original,
+              }
+            : original
+    if (!('observedRegion' in data) && 'answer' in data) return { ...data, observedRegion: null }
+    const region = data.observedRegion
+    if (region && typeof region === 'object' && 'x' in region) {
+        const box = region as { x: number; y: number; width: number; height: number }
+        return {
+            ...data,
+            observedRegion: {
+                x1: box.x * 1000,
+                y1: box.y * 1000,
+                x2: Math.round((box.x + box.width) * 1000),
+                y2: Math.round((box.y + box.height) * 1000),
+            },
+        }
+    }
+    return data
+}
+
 function responseBody(value: unknown): Record<string, unknown> {
     return {
         status: 'completed',
@@ -26,7 +67,7 @@ function responseBody(value: unknown): Record<string, unknown> {
                 type: 'message',
                 role: 'assistant',
                 status: 'completed',
-                content: [{ type: 'output_text', text: JSON.stringify(value), annotations: [] }],
+                content: [{ type: 'output_text', text: JSON.stringify(providerValue(value)), annotations: [] }],
             },
         ],
     }
@@ -225,6 +266,44 @@ describe('inactive direct Meta transport', (): void => {
         }
     })
 
+    it.each([2, 3])(
+        'compact context normalizes only its %i required pages, or no images when unavailable',
+        async (required) => {
+            const input = await validInput()
+            const first = input.sourceImages[0]!
+            const undecodable = new Uint8Array([1, 2, 3])
+            for (let index = 1; index < 20; index++) {
+                const bytes = index < required ? first.bytes : undecodable
+                const page = {
+                    ...first.page,
+                    pageId: `page-${index}`,
+                    assetId: `asset-${index}`,
+                    contentHash: createHash('sha256').update(bytes).digest('hex'),
+                }
+                input.session.pages.push(page)
+                input.sourceImages.push({ page, bytes })
+            }
+            const step = input.session.reviewedSteps[0]!
+            step.sourceRefs.push({ pageId: 'page-1', region: null })
+            if (required === 3) {
+                step.sourceRefs.push({ pageId: 'page-2', region: null })
+                // A compact-unavailable result must not even decode the observation.
+                input.observation.bytes = undecodable
+            }
+            const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(responseBody(result)))
+            const provider = createMetaProvider({ apiKey: 'synthetic', checkContext: 'compact', fetchImpl })
+            const checked = await provider.checkStep(input, signal())
+            expect(checked.decision).toBe(required === 2 ? 'pass' : 'cannot_verify')
+            expect(fetchImpl).toHaveBeenCalledTimes(required === 2 ? 1 : 0)
+            if (required === 2) {
+                const body = JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))
+                expect(
+                    body.input[0].content.filter((part: { type: string }) => part.type === 'input_image'),
+                ).toHaveLength(3)
+            }
+        },
+    )
+
     it('fails unconfigured before any validation/media/network work', async (): Promise<void> => {
         const fetchImpl = vi.fn<typeof fetch>()
         const input = await validInput()
@@ -267,7 +346,7 @@ describe('inactive direct Meta transport', (): void => {
             })
             const body = JSON.stringify(transport.bodies[0])
 
-            expect(body).not.toContain('step-2')
+            expect(body).toContain('step-2')
             expect(body).not.toContain('previous_response_id')
             expect(body).not.toContain('tools')
             expect(body).not.toContain('file_id')
@@ -314,7 +393,7 @@ describe('inactive direct Meta transport', (): void => {
                     },
                     signal(),
                 ),
-            ).toEqual(answer)
+            ).toEqual({ ...answer, observedRegion: null })
             expect(transport.dispatches()).toBe(1)
         })
     })
@@ -471,7 +550,7 @@ describe('inactive direct Meta transport', (): void => {
                 response.end(Buffer.from([0xff]))
             },
             (response): void => {
-                response.statusCode = 429
+                response.statusCode = 400
                 response.end('private provider detail')
             },
             (response): void => {
@@ -580,5 +659,143 @@ describe('inactive direct Meta transport', (): void => {
         } finally {
             clock.mockRestore()
         }
+    })
+})
+
+describe('documented Meta conformance', () => {
+    it('accepts reasoning before the single completed assistant message', async () => {
+        const envelope = responseBody(result)
+        envelope.output = [{ type: 'reasoning', id: 'r-1', summary: [] }, ...(envelope.output as unknown[])]
+        await localServer(jsonResponder(envelope), async ({ provider }) => {
+            expect(await provider.checkStep(await validInput(), signal())).toEqual(result)
+        })
+    })
+
+    it('emits finite strict schemas with every object property required and no oneOf', () => {
+        function inspect(value: unknown): void {
+            if (!value || typeof value !== 'object') return
+            if (Array.isArray(value)) {
+                value.forEach(inspect)
+                return
+            }
+            const node = value as Record<string, unknown>
+            expect(node).not.toHaveProperty('oneOf')
+            expect(node).not.toHaveProperty('allOf')
+            expect(node).not.toHaveProperty('$ref')
+            if (node.type === 'object') {
+                expect(node.additionalProperties).toBe(false)
+                expect(new Set(node.required as string[])).toEqual(new Set(Object.keys(node.properties as object)))
+            }
+            Object.values(node).forEach(inspect)
+        }
+        Object.values(metaOutputSchemas).forEach(inspect)
+    })
+
+    it('parses twenty bounded pages with a full extraction output budget', async () => {
+        const input = await validInput()
+        const page = input.sourceImages[0]!
+        const pages = Array.from({ length: 20 }, (_, index) => ({
+            ...page,
+            page: { ...page.page, pageId: `page-${index}`, assetId: `asset-${index}` },
+        }))
+        await localServer(
+            jsonResponder(responseBody({ parts: [], steps: [], unknowns: ['Unreadable'] })),
+            async ({ provider, bodies }) => {
+                await provider.parseManual(
+                    { requestId: 'parse-many', binding: { kind: 'manual', manualId: 'many', revision: 1 }, pages },
+                    signal(),
+                )
+                expect(bodies[0]).toMatchObject({ max_output_tokens: 24000, reasoning: { effort: 'low' } })
+            },
+        )
+    })
+
+    it('converts Spark 0-1000 grounding once to the existing public observedRegion', async () => {
+        const value = { ...createHeroResponse('reversed'), observedRegion: { x1: 300, y1: 200, x2: 500, y2: 850 } }
+        await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
+            expect((await provider.checkStep(await validInput(), signal())).observedRegion).toEqual({
+                x: 0.3,
+                y: 0.2,
+                width: 0.2,
+                height: 0.65,
+            })
+        })
+    })
+
+    it('rejects a refusal without a visible mismatch highlight', async () => {
+        await localServer(
+            jsonResponder(responseBody({ ...createHeroResponse('reversed'), observedRegion: null })),
+            async ({ provider }) => {
+                await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                    code: 'invalid_output',
+                })
+            },
+        )
+    })
+})
+
+describe('status-only bounded Meta retries', () => {
+    it.each([429, 500, 503])('retries a documented %i once and accepts a reasoning envelope', async (status) => {
+        let attempt = 0
+        await localServer(
+            (response) => {
+                attempt++
+                if (attempt === 1) {
+                    response.writeHead(status, { 'Retry-After': '0.001' })
+                    response.end('private provider error')
+                    return
+                }
+                jsonResponder(responseBody(result))(response)
+            },
+            async ({ provider, dispatches }) => {
+                expect(await provider.checkStep(await validInput(), signal())).toEqual(result)
+                expect(dispatches()).toBe(2)
+            },
+        )
+    })
+    it.each([400, 401, 402, 403, 404, 413, 504])('does not retry or leak a permanent %i body', async (status) => {
+        await localServer(
+            (response) => {
+                response.writeHead(status, { 'content-type': 'text/plain' })
+                response.end(status === 404 ? '' : 'sensitive prompt')
+            },
+            async ({ provider, dispatches }) => {
+                await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                    code: 'provider_error',
+                    message: 'provider_error',
+                })
+                expect(dispatches()).toBe(1)
+            },
+        )
+    })
+    it('does not repeat an ambiguous transport failure', async () => {
+        const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error('sensitive upstream detail'))
+        await expect(
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(await validInput(), signal()),
+        ).rejects.toMatchObject({ code: 'provider_error' })
+        expect(transport).toHaveBeenCalledTimes(1)
+    })
+})
+
+it.each(['checks', 'partsAssessment', 'connectionAssessment'] as const)(
+    'correct orientation alone cannot pass without observable %s evidence',
+    async (field) => {
+        const value = { ...result, [field]: field === 'checks' ? [] : 'unobservable' }
+        await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
+            await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+        })
+    },
+)
+
+it('refuses fabricated or foreign visible-check evidence even for a refusal', async () => {
+    const value = {
+        ...createHeroResponse('reversed'),
+        orientationAssessment: 'correct',
+        checks: [{ checkId: 'invented-check', assessment: 'mismatch', sourceRefs: result.sourceRefs }],
+    }
+    await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
+        await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({ code: 'invalid_output' })
     })
 })

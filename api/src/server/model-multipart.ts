@@ -1,3 +1,4 @@
+import { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 import { LIMITS } from '@truebuild/contracts'
 import type { z } from 'zod'
 
@@ -104,12 +105,12 @@ export async function readModelMultipart<T>(
         const files = new Map<string, File>()
         let raw: string | undefined
         for (const [name, value] of form.entries()) {
-            if (names.has(name) || names.size >= 5) {
+            if (names.has(name) || names.size >= LIMITS.requestImages + 1) {
                 throw new ModelBodyError(400)
             }
             names.add(name)
             if (name === 'metadata') {
-                if (typeof value !== 'string' || Buffer.byteLength(value) > 65_536) {
+                if (typeof value !== 'string' || Buffer.byteLength(value) > MODEL_METADATA_MAX_BYTES) {
                     throw new ModelBodyError(400)
                 }
                 raw = value

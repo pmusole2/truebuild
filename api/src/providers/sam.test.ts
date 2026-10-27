@@ -99,7 +99,6 @@ describe('inactive SAM transport over controlled local HTTP', (): void => {
             model: z.literal('sam-3.1'),
             stream: z.literal(true),
             store: z.literal(false),
-            max_output_tokens: z.literal(1500),
             input: z.tuple([
                 z.strictObject({
                     type: z.literal('message'),

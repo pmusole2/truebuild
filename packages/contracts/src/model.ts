@@ -6,9 +6,13 @@ import {
     questionTargetSchema,
     type Fact,
     type ManualStep,
+    type ManualSession,
     type SourceRef,
 } from '@truebuild/contracts'
 import { z } from 'zod'
+
+// Shared client/server multipart metadata ceiling; independent of the aggregate image budget.
+export const MODEL_METADATA_MAX_BYTES = 524_288
 
 const requestId = z.string().trim().min(1).max(128)
 const imageMetadata = z
@@ -24,7 +28,7 @@ export const modelParseMetadataSchema = z
     .strictObject({
         ...common,
         binding: manualBindingSchema,
-        pages: z.array(manualSessionSchema.shape.pages.element).min(1).max(LIMITS.requestImages),
+        pages: z.array(manualSessionSchema.shape.pages.element).min(1).max(LIMITS.manualPages),
     })
     .superRefine((value, ctx): void => {
         if (
@@ -39,7 +43,7 @@ const checkFields = {
     ...common,
     binding: captureBindingSchema,
     session: manualSessionSchema,
-    sourcePageIds: z.array(requestId).min(1).max(2),
+    sourcePageIds: z.array(requestId).min(1).max(LIMITS.manualPages),
     observation: imageMetadata,
 }
 const baseCheck = z.strictObject(checkFields)
@@ -55,6 +59,45 @@ function usedParts(step: ManualStep): Set<string> {
         ...(step.orientation.state === 'known' ? [step.orientation.value.partId] : []),
         ...(step.connection.state === 'known' ? step.connection.value.partIds : []),
     ])
+}
+
+function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
+    const parts = usedParts(step)
+    return [
+        ...step.sourceRefs,
+        ...step.parts.flatMap((part) => refs(part.quantity)),
+        ...refs(step.orientation),
+        ...refs(step.connection),
+        ...step.visibleChecks.flatMap((check) => refs(check.description)),
+        ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
+        ...session.parts.filter((part) => parts.has(part.partId)).flatMap((part) => refs(part.name)),
+    ]
+}
+
+/** Default full-manual context in manual order; unresolved current-step evidence fails closed. */
+export function selectStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
+    const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
+    if (!step || session.reviewStatus !== 'reviewed') return null
+    const pages = session.pages.map((page) => page.pageId)
+    const ids = new Set(pages)
+    if (
+        pages.length === 0 ||
+        pages.length > LIMITS.manualPages ||
+        ids.size !== pages.length ||
+        checkCitations(step, session).some((ref) => !ids.has(ref.pageId))
+    )
+        return null
+    return pages
+}
+
+/** Explicit compact fallback only. Never drop a cited fact to fit the two-page limit. */
+export function selectCompactStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
+    const pages = selectStepSourcePageIds(session, stepId)
+    const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
+    if (!pages || !step) return null
+    const required = new Set(checkCitations(step, session).map((ref) => ref.pageId))
+    const selected = pages.filter((id) => required.has(id))
+    return selected.length > 0 && selected.length <= 2 ? selected : null
 }
 
 function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
@@ -76,16 +119,7 @@ function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
     ) {
         ctx.addIssue({ code: 'custom', message: 'Invalid selected sources' })
     }
-    const parts = usedParts(step)
-    const citations = [
-        ...step.sourceRefs,
-        ...step.parts.flatMap((part) => refs(part.quantity)),
-        ...refs(step.orientation),
-        ...refs(step.connection),
-        ...step.visibleChecks.flatMap((check) => refs(check.description)),
-        ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
-        ...session.parts.filter((part) => parts.has(part.partId)).flatMap((part) => refs(part.name)),
-    ]
+    const citations = checkCitations(step, session)
     if (citations.some((citation) => !pages.has(citation.pageId))) {
         ctx.addIssue({ code: 'custom', message: 'Selected pages must cover every current-step citation' })
     }

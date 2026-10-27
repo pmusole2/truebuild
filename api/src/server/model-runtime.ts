@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto'
 
+import type { ProviderMetrics } from '../providers/meta-transport'
 import { createFixtureProvider } from '../providers/fixture'
-import { createMetaProvider } from '../providers/meta-provider'
+import {
+    createMetaProvider,
+    sparkModel,
+    checkContextMode,
+    type CheckContextMode,
+    type SparkModel,
+} from '../providers/meta-provider'
 import { createSamProvider } from '../providers/sam'
 import { SharedKeyAuth } from './auth'
 import { ModelCallCounter } from './budget'
@@ -16,6 +23,9 @@ export interface ApiRuntime {
     sessionMetadata: typeof PROCESS_METADATA
     mode: 'fixture' | 'meta'
     configured: boolean
+    sparkModel: SparkModel
+    checkContext: CheckContextMode
+    samModel: 'sam-3.1'
     auth: SharedKeyAuth
     counter: ModelCallCounter
     allowedOrigins: readonly string[]
@@ -38,10 +48,13 @@ export function createRuntimeFromEnvironment(
     environment: Readonly<Record<string, string | undefined>> = process.env,
     transport?: typeof fetch,
 ): ApiRuntime {
-    const mode = environment.PROVIDER_MODE ?? 'fixture'
+    const mode = environment.PROVIDER_MODE ?? 'meta'
     if (mode !== 'fixture' && mode !== 'meta') {
         throw new Error('invalid_provider_mode')
     }
+    const model = sparkModel(environment.MODEL_SPARK)
+    const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
+    if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
     const checkTimeoutMs = positiveInteger(environment.CHECK_TIMEOUT_MS, 8_000, 8_000)
     const counter = new ModelCallCounter(positiveInteger(environment.MODEL_CALL_LIMIT, 200))
     const auth = new SharedKeyAuth({ sharedSecret: environment.API_SHARED_SECRET })
@@ -66,11 +79,22 @@ export function createRuntimeFromEnvironment(
         apiKey = environment.MODEL_API_KEY
     }
     const configured = mode === 'meta' && Boolean(apiKey?.trim())
-    const providerOptions = { apiKey, fetchImpl: guardModelFetch(transport), checkTimeoutMs }
+    const onMetrics = (metrics: ProviderMetrics): void => console.info(JSON.stringify(metrics))
+    const providerOptions = {
+        apiKey,
+        onMetrics,
+        fetchImpl: guardModelFetch(transport),
+        checkTimeoutMs,
+        model,
+        checkContext,
+    }
     return {
         sessionMetadata: PROCESS_METADATA,
         mode,
         configured,
+        sparkModel: model,
+        checkContext,
+        samModel: 'sam-3.1',
         auth,
         counter,
         allowedOrigins,
@@ -80,6 +104,7 @@ export function createRuntimeFromEnvironment(
             counter,
             allowedOrigins,
             checkTimeoutMs,
+            checkContext,
             provider: configured ? createMetaProvider(providerOptions) : null,
             samProvider: configured ? createSamProvider(providerOptions) : null,
         }),

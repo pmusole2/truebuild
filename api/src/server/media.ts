@@ -89,10 +89,11 @@ function rejectAnimation(bytes: Uint8Array, mimeType: ObservationImage['mimeType
 export async function validateAndNormalizeImages(
     images: readonly ObservationImage[],
     signal?: AbortSignal,
+    maxImages: number = LIMITS.requestImages,
 ): Promise<ValidatedImage[]> {
     checkpoint(signal)
 
-    if (images.length === 0 || images.length > LIMITS.requestImages) {
+    if (images.length === 0 || images.length > maxImages || maxImages > LIMITS.requestImages) {
         throw new MediaValidationError('invalid_input')
     }
 

@@ -7,7 +7,7 @@ import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, type MetaProvider } from '../providers/meta-provider'
-import type { SamProvider } from '../providers/sam'
+import { createSamProvider, type SamProvider } from '../providers/sam'
 import { SharedKeyAuth } from './auth'
 import { ModelCallCounter } from './budget'
 import { createModelHandlers, guardModelFetch, modelOptions } from './model-service'
@@ -458,7 +458,23 @@ describe('protected model composition', (): void => {
                                 type: 'message',
                                 role: 'assistant',
                                 status: 'completed',
-                                content: [{ type: 'output_text', text: JSON.stringify(checked) }],
+                                content: [
+                                    {
+                                        type: 'output_text',
+                                        text: JSON.stringify({
+                                            ...checked,
+                                            partsAssessment: 'matches',
+                                            connectionAssessment: 'matches',
+                                            checks: [
+                                                {
+                                                    checkId: 'groove-inward',
+                                                    assessment: 'matches',
+                                                    sourceRefs: checked.sourceRefs,
+                                                },
+                                            ],
+                                        }),
+                                    },
+                                ],
                             },
                         ],
                     }),
@@ -554,4 +570,98 @@ describe('protected model composition', (): void => {
             ).status,
         ).toBe(401)
     })
+})
+
+describe('per-attempt accounting for documented status retries', () => {
+    it.each([1, 2])('counts every attempt and refuses exhausted retry with cap %i', async (limit) => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(limit)
+        let calls = 0
+        const actual = createMetaProvider({
+            apiKey: 'synthetic',
+            fetchImpl: guardModelFetch(async () => {
+                calls++
+                return calls === 1
+                    ? new Response('private', { status: 429 })
+                    : Response.json({
+                          status: 'completed',
+                          output: [
+                              {
+                                  type: 'message',
+                                  role: 'assistant',
+                                  status: 'completed',
+                                  content: [
+                                      {
+                                          type: 'output_text',
+                                          text: JSON.stringify({
+                                              ...checked,
+                                              orientationAssessment: 'correct',
+                                              partsAssessment: 'matches',
+                                              connectionAssessment: 'matches',
+                                              checks: [
+                                                  {
+                                                      checkId: 'groove-inward',
+                                                      assessment: 'matches',
+                                                      sourceRefs: checked.sourceRefs,
+                                                  },
+                                              ],
+                                          }),
+                                      },
+                                  ],
+                              },
+                          ],
+                      })
+            }),
+        })
+        const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
+        const response = await handlers.check(request(state))
+        expect(response.status).toBe(limit === 1 ? 429 : 200)
+        if (limit === 1) expect(await response.json()).toMatchObject({ code: 'budget_exhausted' })
+        expect(calls).toBe(limit)
+        expect(state.counter.used).toBe(limit)
+    })
+})
+
+it.each([1, 2])('counts SAM status retries against the shared attempt cap %i', async (limit) => {
+    const state = await setup()
+    state.counter = new ModelCallCounter(limit)
+    let calls = 0
+    const samProvider = createSamProvider({
+        apiKey: 'synthetic',
+        fetchImpl: guardModelFetch(async (_url, init) => {
+            expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'sam-3.1', stream: true })
+            calls++
+            if (calls === 1) return new Response('private upstream error', { status: 429 })
+            return new Response(
+                'data: {"type":"response.output_text.done","item_id":"m","output_index":0,"content_index":0,"text":""}\n\ndata: {"type":"response.completed"}\n\n',
+                { headers: { 'content-type': 'text/event-stream' } },
+            )
+        }),
+    })
+    const handlers = createModelHandlers({ ...state, provider: null, samProvider })
+    const body = new FormData()
+    body.set(
+        'metadata',
+        JSON.stringify({
+            mode: 'model',
+            requestId: 'sam-budget',
+            binding: state.metadata.binding,
+            capturedAt: '2026-01-01T00:00:00Z',
+            prompt: 'side panel',
+            media: { kind: 'image', mimeType: 'image/png', width: 20, height: 16 },
+        }),
+    )
+    body.set('media', new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'synthetic.png')
+    const response = await handlers.segment(
+        new Request('http://localhost/api/segments', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': state.key },
+            body,
+        }),
+    )
+    const wire = await response.text()
+    expect(wire).toContain(limit === 1 ? '"code":"budget_exhausted"' : '"type":"completed"')
+    expect(wire).not.toContain('private upstream')
+    expect(calls).toBe(limit)
+    expect(state.counter.used).toBe(limit)
 })

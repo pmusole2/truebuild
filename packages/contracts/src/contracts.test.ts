@@ -280,3 +280,15 @@ describe('geometry and result identity', () => {
         ).toBe(false)
     })
 })
+
+it('rejects every uncited refusal, including generic mismatches without an orientation assessment', () => {
+    expect(
+        checkResultSchema.safeParse({
+            decision: 'refuse',
+            reason: 'Observed mismatch',
+            sourceRefs: [],
+            observedRegion: null,
+            missingEvidence: [],
+        }).success,
+    ).toBe(false)
+})

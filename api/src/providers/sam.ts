@@ -18,12 +18,13 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
+import { BudgetError } from '../server/budget'
+import { MetaTransport, usageMetrics, type ProviderMetrics } from './meta-transport'
 import { ClipError, normalizeClip } from '../server/clip'
 import { createDeadline, RequestStoppedError, type Deadline } from '../server/deadline'
 import { MediaValidationError, validateAndNormalizeImages, type ObservationImage } from '../server/media'
 import { guardSamGrammar, readSamSse, SamStreamError, withSamDeadline, type SamGeometry } from '../server/sam-sse'
 
-const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const MAX_CLIP_BYTES = 20 * 1_024 * 1_024
 
 export interface SamInput {
@@ -194,10 +195,12 @@ function unavailable(error: unknown, deadline?: Deadline): SegmentEvent {
 async function* run(
     input: SamInput,
     apiKey: string,
-    fetchImpl: typeof fetch,
+    transport: MetaTransport,
     deadline: Deadline,
+    onMetrics?: (metrics: ProviderMetrics) => void,
 ): AsyncGenerator<SegmentEvent> {
     let response: Response | undefined
+    const started = performance.now()
     try {
         deadline.checkpoint()
         let geometry: SamGeometry
@@ -231,23 +234,28 @@ async function* run(
             model: 'sam-3.1',
             stream: true,
             store: false,
-            max_output_tokens: 1500,
             input: [
                 { type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }, mediaPart] },
             ],
         })
         deadline.checkpoint()
-        const pending = fetchImpl(ENDPOINT, {
-            method: 'POST',
-            headers: {
-                authorization: `Bearer ${apiKey}`,
-                'content-type': 'application/json',
-                accept: 'text/event-stream',
-            },
-            body,
-            signal: deadline.signal,
-            redirect: 'error',
-        })
+        const pending = transport
+            .send(
+                'sam-3.1',
+                {
+                    method: 'POST',
+                    headers: {
+                        authorization: `Bearer ${apiKey}`,
+                        'content-type': 'application/json',
+                        accept: 'text/event-stream',
+                    },
+                    body,
+                    signal: deadline.signal,
+                    redirect: 'error',
+                },
+                deadline,
+                (status, latencyMs) => onMetrics?.({ operation: 'segment', model: 'sam-3.1', status, latencyMs }),
+            )
             .then((settled): Response => {
                 response = settled
                 try {
@@ -259,14 +267,26 @@ async function* run(
                 return settled
             })
             .catch((error: unknown): never => {
-                if (error instanceof RequestStoppedError) {
+                if (error instanceof BudgetError || error instanceof RequestStoppedError) {
                     throw error
                 }
                 throw new SamStreamError('provider_error')
             })
         response = await withSamDeadline(pending, deadline)
         deadline.checkpoint()
-        const source = guardSamGrammar(readSamSse(response, deadline), geometry, deadline)
+        const source = guardSamGrammar(
+            readSamSse(response, deadline, (value) =>
+                onMetrics?.({
+                    operation: 'segment',
+                    model: 'sam-3.1',
+                    status: response!.status,
+                    latencyMs: Math.max(0, performance.now() - started),
+                    ...usageMetrics(value),
+                }),
+            ),
+            geometry,
+            deadline,
+        )
         const parsed = geometry.kind === 'image' ? parseImageStream(source) : parseVideoStream(source)
         const streamId = randomUUID()
         const seen = new Set<number>()
@@ -293,6 +313,7 @@ async function* run(
         deadline.checkpoint()
         yield { type: 'completed' }
     } catch (error) {
+        if (error instanceof BudgetError) throw error
         yield unavailable(error, deadline)
     } finally {
         deadline.dispose()
@@ -302,9 +323,13 @@ async function* run(
     }
 }
 
-export function createSamProvider(options: { apiKey?: string; fetchImpl?: typeof fetch }): SamProvider {
+export function createSamProvider(options: {
+    apiKey?: string
+    fetchImpl?: typeof fetch
+    onMetrics?: (metrics: ProviderMetrics) => void
+}): SamProvider {
     const apiKey = options.apiKey
-    const fetchImpl = options.fetchImpl ?? fetch
+    const transport = new MetaTransport(options.fetchImpl ?? fetch)
     return {
         segment(input: SamInput, signal: AbortSignal): AsyncIterable<SegmentEvent> {
             if (!apiKey?.trim()) {
@@ -325,7 +350,7 @@ export function createSamProvider(options: { apiKey?: string; fetchImpl?: typeof
                     yield terminal
                 })()
             }
-            const source = run(owned, apiKey, fetchImpl, deadline)
+            const source = run(owned, apiKey, transport, deadline, options.onMetrics)
             let consumed = false
             return {
                 [Symbol.asyncIterator](): AsyncIterator<SegmentEvent> {
