@@ -6,7 +6,7 @@ import { PREVIEW_BANNER } from './examples'
 jest.mock('react-native-reanimated', () => jest.requireActual('../test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',
-    () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
+    () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
 
 const SECTIONS = [

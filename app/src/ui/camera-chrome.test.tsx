@@ -5,7 +5,7 @@ import { CameraChrome } from './camera-chrome'
 
 jest.mock(
     'react-native-safe-area-context',
-    () => jest.requireActual('react-native-safe-area-context/jest/mock').default,
+    () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
 
 describe('CameraChrome', () => {
