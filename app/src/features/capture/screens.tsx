@@ -10,7 +10,7 @@ import { Card, Screen as ScreenShell, Stack } from '../../ui/surface'
 import { Body, Callout, Caption, Heading, Label, Title } from '../../ui/text'
 import { Icon } from '../../ui/icons'
 import { EmptyState, ErrorState, LoadingState } from '../../ui/states'
-import { Notice, StatusTag, type NoticeTone, type Verdict } from '../../ui/status'
+import { Notice, StatusTag, type NoticeTone } from '../../ui/status'
 import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { ComparisonFrame, MeasuredPane, type ComparisonPane } from '../../ui/comparison'
 import { AskSheet } from '../../ui/ask-sheet'
@@ -600,7 +600,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
             )}
             {check === null ? null : (
                 <ResultSheet
-                    verdict={check.decision as Verdict}
+                    verdict={check.decision}
                     reason={check.reason}
                     missing={check.missingEvidence}
                     citedPage={
