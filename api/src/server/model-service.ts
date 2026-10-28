@@ -424,7 +424,7 @@ export function createModelHandlers(options: {
     const parse = jsonHandler(
         modelParseMetadataSchema,
         parsedManualSchema,
-        60_000,
+        105_000,
         parseFiles,
         provider
             ? (input, signal): ReturnType<MetaProvider['parseManual']> => provider.parseManual(input, signal)

@@ -15,7 +15,7 @@ export interface Deadline {
 }
 
 export function createDeadline(timeoutMs: number, parentSignal?: AbortSignal): Deadline {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 105_000) {
         throw new Error('invalid_timeout')
     }
 

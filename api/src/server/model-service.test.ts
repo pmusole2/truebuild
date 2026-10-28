@@ -1259,8 +1259,8 @@ describe('one-use parse repair grant', (): void => {
     })
 })
 
-describe('parse route timing with the trusted 60 second budget', (): void => {
-    it('accepts a 35 second parse inside the route budget', async (): Promise<void> => {
+describe('parse route timing with the trusted 105 second budget', (): void => {
+    it('accepts a 100 second parse inside the route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
         const handlers = createModelHandlers({
@@ -1272,7 +1272,7 @@ describe('parse route timing with the trusted 60 second budget', (): void => {
         try {
             const pending = handlers.parse(parseRequest(state))
             await gate.entered
-            await vi.advanceTimersByTimeAsync(35_000)
+            await vi.advanceTimersByTimeAsync(100_000)
             gate.release(parsed())
             expect((await pending).status).toBe(200)
         } finally {
@@ -1280,7 +1280,7 @@ describe('parse route timing with the trusted 60 second budget', (): void => {
         }
     })
 
-    it('times out a hung parse at exactly the 60 second route budget', async (): Promise<void> => {
+    it('times out a hung parse at exactly the 105 second route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
         const handlers = createModelHandlers({
@@ -1292,7 +1292,7 @@ describe('parse route timing with the trusted 60 second budget', (): void => {
         try {
             const pending = handlers.parse(parseRequest(state))
             await gate.entered
-            await vi.advanceTimersByTimeAsync(59_999)
+            await vi.advanceTimersByTimeAsync(104_999)
             let settled = false
             void pending.then((): void => {
                 settled = true

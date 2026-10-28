@@ -403,7 +403,7 @@ describe('ModelApiClient multipart dispatch', () => {
         expect(call?.init.redirect).toBe('error')
     })
 
-    it('uses the 8s check deadline, not the 65s parse deadline', async () => {
+    it('uses the 8s check deadline, not the 110s parse deadline', async () => {
         vi.useFakeTimers()
         try {
             const pending = new Promise<Response>(() => undefined)
@@ -420,14 +420,16 @@ describe('ModelApiClient multipart dispatch', () => {
 
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
-            expect(MODEL_PARSE_TIMEOUT_MS).toBe(65_000)
+            expect(MODEL_PARSE_TIMEOUT_MS).toBe(110_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
+            // The server parse route expires at 105s; the client must outlast it so the server's timeout is reported.
+            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(105_000)
         } finally {
             vi.useRealTimers()
         }
     })
 
-    it('accepts a parse reply delivered at 50 seconds', async () => {
+    it('accepts a parse reply delivered at 105 seconds', async () => {
         vi.useFakeTimers()
         let deliver: ((response: Response) => void) | undefined
         const fetch = vi.fn(
@@ -438,7 +440,7 @@ describe('ModelApiClient multipart dispatch', () => {
         )
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(50_000)
+            await vi.advanceTimersByTimeAsync(105_000)
             expect(fetch).toHaveBeenCalledTimes(1)
             deliver?.(jsonResponse(200, okParse()))
             expect(await pending).toMatchObject({ status: 'ok', mode: 'model', requestId: REQUEST_ID })
@@ -447,12 +449,12 @@ describe('ModelApiClient multipart dispatch', () => {
         }
     })
 
-    it('times out a hung parse at 65 seconds once without retry', async () => {
+    it('times out a hung parse at 110 seconds once without retry', async () => {
         vi.useFakeTimers()
         const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(MODEL_PARSE_TIMEOUT_MS - 1)
+            await vi.advanceTimersByTimeAsync(109_999)
             let settled = false
             void pending.then(() => (settled = true))
             await Promise.resolve()

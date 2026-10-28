@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createDemoManual, type ParsedManual } from '@truebuild/contracts'
+import { createDemoManual, parsedManualSchema, type ParsedManual } from '@truebuild/contracts'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -189,8 +189,8 @@ describe('bounded parse repair', () => {
         expect(fetch).toHaveBeenCalledTimes(1)
     })
 
-    it.each(['step', 'registry part', 'required part', 'visible check'] as const)(
-        'keeps the first extraction when a lower-score repair silently omits a %s',
+    it.each(['step', 'registry part', 'required part', 'visible check', 'step order'] as const)(
+        'keeps the first extraction when a lower-score repair does not preserve %s',
         async (omission) => {
             const { input, clean } = await fixture()
             const first = missingConnection(clean)
@@ -201,7 +201,12 @@ describe('bounded parse repair', () => {
                 second.steps.splice(1)
                 second.parts.splice(1)
             } else if (omission === 'required part') second.steps[1]!.parts.shift()
-            else {
+            else if (omission === 'step order') {
+                second.steps.reverse().forEach((step, index) => {
+                    step.order = index + 1
+                })
+                expect(parsedManualSchema.safeParse(second).success).toBe(true)
+            } else {
                 first.steps[0]!.visibleChecks.push({
                     checkId: `${first.steps[0]!.visibleChecks[0]!.checkId}-unreadable`,
                     description: { state: 'unknown', reason: 'The additional visible check is unreadable.' },
@@ -297,52 +302,77 @@ describe('bounded parse repair', () => {
         ])
     })
 
-    it('aborts mid-repair without returning the first result and takes custody of a late response', async () => {
-        const { input, clean } = await fixture()
-        const parent = new AbortController()
-        let deliver: ((response: Response) => void) | undefined
-        let secondSignal: AbortSignal | undefined
-        let cancelled = false
-        const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
-            if (fetchImpl.mock.calls.length === 1) return Response.json(envelope(missingConnection(clean)))
-            secondSignal = init?.signal ?? undefined
-            return new Promise((resolve) => {
-                deliver = resolve
+    it.each(['first attempt', 'repair'] as const)(
+        'aborts mid-%s without publishing a result and takes custody of a late response',
+        async (scope) => {
+            const { input, clean } = await fixture()
+            const parent = new AbortController()
+            let deliver: ((response: Response) => void) | undefined
+            let attemptSignal: AbortSignal | undefined
+            let cancelled = false
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
+                if (scope === 'repair' && fetchImpl.mock.calls.length === 1) {
+                    return Response.json(envelope(missingConnection(clean)))
+                }
+                attemptSignal = init?.signal ?? undefined
+                return new Promise((resolve) => {
+                    deliver = resolve
+                })
             })
-        })
-        const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
-        const pending = provider.parseManual(input, parent.signal).then(
-            () => ({ status: 'unexpected success' as const }),
-            (error: unknown) => ({ status: 'rejected' as const, error }),
-        )
-        await vi.waitFor(() => expect(deliver).toBeDefined())
-        parent.abort()
-        expect(await pending).toMatchObject({ status: 'rejected', error: { code: 'provider_error' } })
-        expect(secondSignal?.aborted).toBe(true)
-        deliver!(
-            new Response(
-                new ReadableStream({
-                    start(controller): void {
-                        controller.enqueue(new TextEncoder().encode(JSON.stringify(envelope(clean))))
-                        controller.close()
-                    },
-                    cancel(): void {
-                        cancelled = true
-                    },
-                }),
-                { headers: { 'content-type': 'application/json' } },
-            ),
-        )
-        await vi.waitFor(() => expect(cancelled).toBe(true))
-        expect(fetchImpl).toHaveBeenCalledTimes(2)
-    })
+            const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
+            const pending = provider.parseManual(input, parent.signal).then(
+                () => ({ status: 'unexpected success' as const }),
+                (error: unknown) => ({ status: 'rejected' as const, error }),
+            )
+            await vi.waitFor(() => expect(deliver).toBeDefined())
+            parent.abort()
+            expect(await pending).toMatchObject({ status: 'rejected', error: { code: 'provider_error' } })
+            expect(attemptSignal?.aborted).toBe(true)
+            deliver!(
+                new Response(
+                    new ReadableStream({
+                        start(controller): void {
+                            controller.enqueue(new TextEncoder().encode(JSON.stringify(envelope(clean))))
+                            controller.close()
+                        },
+                        cancel(): void {
+                            cancelled = true
+                        },
+                    }),
+                    { headers: { 'content-type': 'application/json' } },
+                ),
+            )
+            await vi.waitFor(() => expect(cancelled).toBe(true))
+            expect(fetchImpl).toHaveBeenCalledTimes(scope === 'first attempt' ? 1 : 2)
+        },
+    )
 
-    it('accepts two 25-second attempts inside the 55-second provider deadline', async () => {
+    it('accepts a clean first attempt at 35 seconds without a repair', async () => {
         const { input, clean } = await fixture()
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += 25_000
+            monotonic += 35_000
+            return Response.json(envelope(clean))
+        })
+        try {
+            const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
+            expect(await provider.parseManual(input, new AbortController().signal)).toEqual({
+                ...clean,
+                model: 'muse-spark-1.3',
+            })
+            expect(fetchImpl).toHaveBeenCalledTimes(1)
+        } finally {
+            clock.mockRestore()
+        }
+    })
+
+    it('accepts a 40-second first attempt and one 35-second repair inside the 100-second overall deadline', async () => {
+        const { input, clean } = await fixture()
+        let monotonic = 100
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
+        const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
+            monotonic += fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
             return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean))
         })
         try {
@@ -352,7 +382,7 @@ describe('bounded parse repair', () => {
                 model: 'muse-spark-1.3',
             })
             expect(fetchImpl).toHaveBeenCalledTimes(2)
-            expect(monotonic).toBe(50_100)
+            expect(monotonic).toBe(75_100)
         } finally {
             clock.mockRestore()
         }
@@ -364,7 +394,7 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += fetchImpl.mock.calls.length === 1 ? 5_000 : 30_001
+            monotonic += fetchImpl.mock.calls.length === 1 ? 5_000 : 40_000
             return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? first : clean))
         })
         try {
@@ -384,11 +414,16 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += scope === 'first attempt' ? 30_001 : fetchImpl.mock.calls.length === 1 ? 25_000 : 30_001
+            monotonic += scope === 'first attempt' ? 45_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
             return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean))
         })
+        const runParseRepair: NonNullable<MetaProviderOptions['runParseRepair']> = async (work) => {
+            // Include admission/pacing time in the absolute overall budget, outside either attempt's budget.
+            monotonic += 25_000
+            return work()
+        }
         try {
-            const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
+            const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl, runParseRepair })
             await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
                 code: 'timeout',
             })

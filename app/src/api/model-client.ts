@@ -45,8 +45,8 @@ import {
 
 export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
-// Above the 60s server parse route deadline, so the server's own timeout is the one reported.
-export const MODEL_PARSE_TIMEOUT_MS = 65_000
+// Five-second transport margin over the 105s server route; the controller also budgets local page reads.
+export const MODEL_PARSE_TIMEOUT_MS = 110_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000

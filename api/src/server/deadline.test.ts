@@ -8,9 +8,15 @@ afterEach((): void => {
 
 describe('absolute request deadline', (): void => {
     it('rejects invalid budgets', (): void => {
-        for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 60_001]) {
+        for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 105_001]) {
             expect(() => createDeadline(value)).toThrow('invalid_timeout')
         }
+    })
+
+    it('accepts the 105 second ceiling exactly', (): void => {
+        const deadline = createDeadline(105_000)
+        expect(deadline.signal.aborted).toBe(false)
+        deadline.dispose()
     })
 
     it('stops a pre-aborted parent before work and retains cancellation', (): void => {

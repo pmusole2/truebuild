@@ -781,7 +781,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
     return {
         async parseManual(input, signal): Promise<ParsedManual> {
-            return execute(55_000, signal, async (deadline): Promise<ParsedManual> => {
+            return execute(100_000, signal, async (deadline): Promise<ParsedManual> => {
                 const parsed = inputValue(parseInputSchema, input)
                 validateSources(parsed.pages)
                 const images = await waitWithin(
@@ -794,32 +794,36 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     sourcePages: parsed.pages.map((source): ManualPage => source.page),
                 }
                 const attempt = (repair?: ParseRepair): Promise<ParsedManual> =>
-                    execute(30_000, deadline.signal, async (attemptDeadline): Promise<ParsedManual> => {
-                        const value = await dispatch(
-                            'parse',
-                            context,
-                            images,
-                            providerParseSchema,
-                            attemptDeadline,
-                            extractionModel,
-                            false,
-                            repair,
-                        )
-                        const sessionCheck = manualSessionSchema.safeParse({
-                            manualId: parsed.binding.manualId,
-                            revision: parsed.binding.revision,
-                            title: 'Provider extraction',
-                            updatedAt: '2026-01-01T00:00:00.000Z',
-                            pages: parsed.pages.map((source): ManualPage => source.page),
-                            parts: [],
-                            rawExtraction: value,
-                            reviewedSteps: [],
-                            reviewStatus: 'unreviewed',
-                        })
-                        attemptDeadline.checkpoint()
-                        if (!sessionCheck.success) throw new MetaProviderError('invalid_output')
-                        return value
-                    })
+                    execute(
+                        repair ? 40_000 : 45_000,
+                        deadline.signal,
+                        async (attemptDeadline): Promise<ParsedManual> => {
+                            const value = await dispatch(
+                                'parse',
+                                context,
+                                images,
+                                providerParseSchema,
+                                attemptDeadline,
+                                extractionModel,
+                                false,
+                                repair,
+                            )
+                            const sessionCheck = manualSessionSchema.safeParse({
+                                manualId: parsed.binding.manualId,
+                                revision: parsed.binding.revision,
+                                title: 'Provider extraction',
+                                updatedAt: '2026-01-01T00:00:00.000Z',
+                                pages: parsed.pages.map((source): ManualPage => source.page),
+                                parts: [],
+                                rawExtraction: value,
+                                reviewedSteps: [],
+                                reviewStatus: 'unreviewed',
+                            })
+                            attemptDeadline.checkpoint()
+                            if (!sessionCheck.success) throw new MetaProviderError('invalid_output')
+                            return value
+                        },
+                    )
                 const first = await attempt()
                 const issues = unresolvedCriticalFacts({ parts: first.parts, reviewedSteps: first.steps })
                 if (issues.length > 0) {
