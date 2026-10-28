@@ -30,6 +30,8 @@ export interface ApiRuntime {
     parseModel: StandardModel
     secondOpinionModel?: StandardModel
     checkContext: CheckContextMode
+    /** Default off; only the explicit value MODEL_LAYOUT=1 enables layout resolution. */
+    layout: boolean
     samModel: 'sam-3.1'
     auth: SharedKeyAuth
     counter: ModelCallCounter
@@ -49,6 +51,16 @@ function positiveInteger(value: string | undefined, fallback: number, maximum = 
     return number
 }
 
+function layoutFlag(value: string | undefined): boolean {
+    if (value === undefined || value === '' || value === '0') {
+        return false
+    }
+    if (value === '1') {
+        return true
+    }
+    throw new Error('invalid_model_layout')
+}
+
 export function createRuntimeFromEnvironment(
     environment: Readonly<Record<string, string | undefined>> = process.env,
     transport?: typeof fetch,
@@ -61,6 +73,7 @@ export function createRuntimeFromEnvironment(
     const parse = parseModel(environment.MODEL_PARSE)
     const secondary = secondOpinionModel(environment.MODEL_SECOND_OPINION)
     const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
+    const layout = layoutFlag(environment.MODEL_LAYOUT)
     if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
     const checkTimeoutMs = positiveInteger(environment.CHECK_TIMEOUT_MS, 8_000, 8_000)
     const counter = new ModelCallCounter(positiveInteger(environment.MODEL_CALL_LIMIT, 200))
@@ -105,6 +118,7 @@ export function createRuntimeFromEnvironment(
         parseModel: parse,
         secondOpinionModel: secondary,
         checkContext,
+        layout,
         samModel: 'sam-3.1',
         auth,
         counter,
@@ -117,6 +131,7 @@ export function createRuntimeFromEnvironment(
             checkTimeoutMs,
             secondOpinionModel: secondary,
             checkContext,
+            layout,
             provider: configured
                 ? createMetaProvider({ ...providerOptions, runParseRepair: runModelParseRepair })
                 : null,

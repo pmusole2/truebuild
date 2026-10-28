@@ -52,6 +52,7 @@ import {
     readModelMultipart,
     withinModelDeadline,
 } from './model-multipart'
+import { withResolvedLayout } from './layout'
 
 type Identity = { requestId: string; binding: ManualBinding | CaptureBinding }
 type FailureCode = Extract<ApiResult<never>, { status: 'unavailable' }>['code']
@@ -331,6 +332,8 @@ export function createModelHandlers(options: {
     counter: ModelCallCounter
     checkContext?: CheckContextMode
     secondOpinionModel?: StandardModel
+    /** MODEL_LAYOUT=1: resolve the proposal carried by the same check/ask response. Default off. */
+    layout?: boolean
     checkTimeoutMs?: number
     allowedOrigins?: readonly string[]
 }): {
@@ -343,6 +346,7 @@ export function createModelHandlers(options: {
 } {
     const { provider, samProvider, auth, counter, allowedOrigins } = options
     const tickets = new SecondOpinionTickets()
+    const layout = options.layout === true
     const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
     if (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > 8_000) {
         throw new Error('invalid_timeout')
@@ -458,7 +462,10 @@ export function createModelHandlers(options: {
         checkResultSchema,
         checkTimeoutMs,
         checkFiles,
-        provider ? (input, signal): ReturnType<MetaProvider['checkStep']> => provider.checkStep(input, signal) : null,
+        provider
+            ? async (input, signal): ReturnType<MetaProvider['checkStep']> =>
+                  withResolvedLayout(await provider.checkStep(input, signal), input, layout)
+            : null,
         (value, metadata): boolean =>
             (value.model === undefined || value.model === 'muse-spark-1.3') &&
             value.secondOpinion === undefined &&
@@ -496,7 +503,8 @@ export function createModelHandlers(options: {
             target: metadata.target,
         }),
         provider
-            ? (input, signal): ReturnType<MetaProvider['answerQuestion']> => provider.answerQuestion(input, signal)
+            ? async (input, signal): ReturnType<MetaProvider['answerQuestion']> =>
+                  withResolvedLayout(await provider.answerQuestion(input, signal), input, layout)
             : null,
         (value, metadata): boolean =>
             (value.model === undefined || value.model === 'muse-spark-1.3') &&
@@ -562,7 +570,9 @@ export function createModelHandlers(options: {
             execution.context.maxAttempts = 1
             const active = execution
             const raw = await withinModelDeadline(
-                effects.run(active.context, () => provider.secondOpinion!(input, active.deadline.signal)),
+                effects.run(active.context, async () =>
+                    withResolvedLayout(await provider.secondOpinion!(input, active.deadline.signal), input, layout),
+                ),
                 active.deadline,
             )
             active.check()

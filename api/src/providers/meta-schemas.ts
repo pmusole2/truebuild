@@ -2,6 +2,7 @@ import {
     checkResultSchema,
     normalizedBoxSchema,
     parsedManualSchema,
+    proposedLayoutSchema,
     questionResultSchema,
     sourceRefSchema,
 } from '@truebuild/contracts'
@@ -20,6 +21,16 @@ const gridBox = z
     })
     .pipe(normalizedBoxSchema)
 
+// The model may propose a display layout of ids/indexes only. A malformed proposal is dropped at this field alone
+// (the verdict and every other strict field still validate); the service resolves or replaces it from step data.
+const layoutProposal = proposedLayoutSchema
+    .nullable()
+    .transform((layout) => layout ?? undefined)
+    .catch(undefined)
+    .describe(
+        'Optional ordered display layout: ids and indexes of the current step only, never text. Null when unsure.',
+    )
+
 const assessment = z.enum(['matches', 'mismatch', 'unobservable'])
 export const providerParseSchema = z
     .strictObject(parsedManualSchema.shape)
@@ -32,6 +43,7 @@ export const providerParseSchema = z
 export const providerCheckSchema = z
     .strictObject({
         ...checkResultSchema.shape,
+        layout: layoutProposal,
         partsAssessment: assessment,
         connectionAssessment: assessment,
         checks: z
@@ -48,17 +60,24 @@ export const providerCheckSchema = z
     })
     .omit({ model: true, modelNotes: true, secondOpinion: true })
     .superRefine((value, ctx) => {
-        const { partsAssessment: _parts, connectionAssessment: _connection, checks: _checks, ...publicValue } = value
+        const {
+            partsAssessment: _parts,
+            connectionAssessment: _connection,
+            checks: _checks,
+            layout: _layout,
+            ...publicValue
+        } = value
         if (!checkResultSchema.safeParse(publicValue).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid check evidence' })
     })
 export const providerQuestionSchema = z
     .strictObject({
         ...questionResultSchema.shape,
+        layout: layoutProposal,
         observedRegion: gridBox.nullable(),
     })
     .omit({ model: true, modelNotes: true })
-    .superRefine((value, ctx) => {
+    .superRefine(({ layout: _layout, ...value }, ctx) => {
         if (!questionResultSchema.safeParse(value).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid question evidence' })
     })
@@ -153,6 +172,23 @@ export function assertStrictSchema(schema: Schema): void {
 
 export const metaOutputSchemas = {
     parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
+    // Preserve the existing request schema until the frozen provider can select layouts per runtime flag.
+    check: strictSchema(
+        z.toJSONSchema(z.strictObject(providerCheckSchema.shape).omit({ layout: true }), {
+            target: 'draft-7',
+            io: 'input',
+        }),
+    ),
+    question: strictSchema(
+        z.toJSONSchema(z.strictObject(providerQuestionSchema.shape).omit({ layout: true }), {
+            target: 'draft-7',
+            io: 'input',
+        }),
+    ),
+}
+
+/** Prepared schema variants; wiring their selection awaits the separate provider change. No extra call is made. */
+export const metaLayoutOutputSchemas = {
     check: strictSchema(z.toJSONSchema(providerCheckSchema, { target: 'draft-7', io: 'input' })),
     question: strictSchema(z.toJSONSchema(providerQuestionSchema, { target: 'draft-7', io: 'input' })),
 }

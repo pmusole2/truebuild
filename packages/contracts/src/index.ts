@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { layoutSchema } from './layout'
+
 export const LIMITS = {
     manualPages: 20,
     imageBytes: 4_194_304,
@@ -314,6 +316,7 @@ export const checkResultSchema = z
         sourceRefs: sourceRefsSchema,
         observedRegion: normalizedBoxSchema.nullable(),
         missingEvidence: z.array(descriptionSchema).max(100),
+        layout: layoutSchema.optional(),
     })
     .superRefine((result, ctx) => {
         if (
@@ -355,6 +358,7 @@ export const questionResultSchema = z.strictObject({
     answer: z.string().trim().min(1).max(2_000),
     sourceRefs: sourceRefsSchema,
     missingEvidence: z.array(descriptionSchema).max(100),
+    layout: layoutSchema.optional(),
 })
 
 export type QuestionTarget = z.infer<typeof questionTargetSchema>
@@ -453,3 +457,4 @@ export function isCurrentResult<T>(result: ApiResult<T>, currentBinding: ManualB
 }
 
 export { createDemoManual } from './demo'
+export * from './layout'
