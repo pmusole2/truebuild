@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useState, type ReactElement, type ReactNode } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import type { CheckResult, QuestionResult } from '@truebuild/contracts'
 import { API_BASE_URL, developmentHost } from '../../config'
@@ -28,13 +28,17 @@ export function HowItWorks(): ReactElement {
 }
 
 /**
- * The discreet judge entry: the one place where how a result was produced may show. It needs More and one more tap,
- * is never in the bottom bar, and is the only place model names and notes render.
+ * The discreet judge entry: the one place where how a result was produced may show, and where the judge and demo
+ * controls live. It needs More and one more tap, is never in the bottom bar, and is the only place model names and
+ * notes render.
  */
 export function AboutThisCheck({
     result,
+    children,
 }: {
     result?: Pick<CheckResult | QuestionResult, 'model' | 'modelNotes'> & Partial<Pick<CheckResult, 'secondOpinion'>>
+    // Judge and demo controls. They render only once the entry is open, so no technical control shows before it.
+    children?: ReactNode
 }): ReactElement {
     const { colors } = useTheme()
     const [open, setOpen] = useState(false)
@@ -60,6 +64,7 @@ export function AboutThisCheck({
                     {result?.secondOpinion === undefined || result.secondOpinion.status === 'available' ? null : (
                         <Caption>{`Second opinion: ${result.secondOpinion.model} (${result.secondOpinion.status})`}</Caption>
                     )}
+                    {children}
                     {__DEV__ ? (
                         <View testID="development-api-host">
                             <Caption>{`Meta · ${developmentHost(API_BASE_URL)}`}</Caption>

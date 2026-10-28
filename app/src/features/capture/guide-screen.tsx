@@ -4,7 +4,7 @@ import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import type { Observation } from '../assembly/observation'
 import { stepPartChoices } from '../assembly/question-state'
-import { AppButton, IconButton } from '../../ui/button'
+import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
 import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
@@ -30,7 +30,7 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { DemoControls } from './demo-controls'
 import { AboutThisCheck } from './more-sections'
-import { guideSentence, partsLine, plainPending } from './plain-copy'
+import { guideSentence, isProgressNotice, partsLine, plainPending } from './plain-copy'
 import { PRIVACY_COPY } from './privacy-copy'
 import { EvidencePair } from './evidence-pair'
 import { SourceDiagrams } from './step-facts'
@@ -79,7 +79,26 @@ export function GuideScreen({
     // Only the current step's own part names can label a located region; anything else is dropped, never guessed.
     const guidance = partGuidance(answer ?? check, new Map(choices.map((c) => [c.partId, c.label])))
     const guideNotes = guidanceNotes(guidance)
-    const sentence = guideSentence({ state, step, blocked })
+    // The last step is marked but others are not (steps were skipped or browsed past): say so and offer the first open one.
+    const firstOpen = session.reviewedSteps.findIndex((item) => !entry.completedStepIds.includes(item.stepId))
+    const unfinished =
+        last &&
+        !blocked &&
+        capture === null &&
+        !hasResult &&
+        step !== undefined &&
+        entry.completedStepIds.includes(step.stepId) &&
+        firstOpen >= 0
+            ? firstOpen
+            : null
+    const sentence = guideSentence({
+        state,
+        step,
+        blocked,
+        unfinished: unfinished === null ? undefined : unfinished + 1,
+    })
+    // Marking a step done already moved the header on; its notice would only be a second sentence under the first.
+    const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
     // Only a pass's own returned region pulses; an answer's region is outlined statically.
     const pulseKey =
         answer === null && check !== null && capture !== null ? passPulseKey(check, capture.binding.captureId) : null
@@ -180,21 +199,32 @@ export function GuideScreen({
                   label: last ? 'Finish' : 'Next step',
                   testID: 'guide-primary',
                   disabled: busy,
+                  // Tapping after a pass is the person's own confirmation that this step is done: it records that
+                  // (the same completion as marking a step done) and moves on. Swiping and browsing never record it.
                   onPress: (): void => {
                       if (last) {
                           void nav.finish()
                       } else {
-                          void controller.step(entry.stepIndex + 1)
+                          void controller.completeStep()
                       }
                   },
               }
-            : {
-                  label: check !== null ? 'Take another photo' : 'Take photo',
-                  testID: 'guide-primary',
-                  icon: 'camera',
-                  disabled: cameraBlocked,
-                  onPress: (): void => controller.camera({ kind: 'check' }),
-              }
+            : unfinished !== null
+              ? {
+                    label: `Go to step ${unfinished + 1}`,
+                    testID: 'guide-primary',
+                    disabled: busy,
+                    onPress: (): void => {
+                        void controller.step(unfinished)
+                    },
+                }
+              : {
+                    label: check !== null ? 'Take another photo' : 'Take photo',
+                    testID: 'guide-primary',
+                    icon: 'camera',
+                    disabled: cameraBlocked,
+                    onPress: (): void => controller.camera({ kind: 'check' }),
+                }
 
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
         id: item.stepId,
@@ -251,37 +281,14 @@ export function GuideScreen({
                     title={session.title}
                     subtitle={`Step ${entry.stepIndex + 1} of ${stepCount}`}
                     more={more}
-                    ask
                 />
             ) : null}
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
                 <View testID="guide-hero-frame" style={styles.hero} {...swipe.panHandlers}>
                     <View style={blocked ? styles.dimmed : undefined}>{heroImage}</View>
-                    <View style={[styles.chevron, styles.chevronLeft]} pointerEvents="box-none">
-                        <IconButton
-                            label="Earlier step"
-                            icon="chevronLeft"
-                            variant="secondary"
-                            disabled={busy || entry.stepIndex === 0}
-                            onPress={(): void => {
-                                void controller.step(entry.stepIndex - 1)
-                            }}
-                        />
-                    </View>
-                    <View style={[styles.chevron, styles.chevronRight]} pointerEvents="box-none">
-                        <IconButton
-                            label="Later step"
-                            icon="chevronRight"
-                            variant="secondary"
-                            disabled={busy || last}
-                            onPress={(): void => {
-                                void controller.step(entry.stepIndex + 1)
-                            }}
-                        />
-                    </View>
                 </View>
                 <TextRegion testID="guide-panel">
-                    <PlainNotice state={state} controller={controller} />
+                    <PlainNotice state={quietState} controller={controller} />
                     {sentenceNode}
                     {parts === null ? null : <Body tone="muted">{parts}</Body>}
                 </TextRegion>
@@ -292,10 +299,11 @@ export function GuideScreen({
                 title={more.mode === 'ask' ? 'Ask about this step' : 'More about this step'}
                 onClose={more.hide}
                 detents={more.mode === 'ask' ? ['tall', 'full'] : ['peek', 'tall', 'full']}
-                initialDetent={more.mode === 'ask' ? 'tall' : 'tall'}
+                initialDetent="tall"
             >
                 <GuideMore
-                    mode={more.mode}
+                    mode={more.mode === 'ask' ? 'ask' : 'details'}
+                    onAsk={(): void => more.show('ask')}
                     state={state}
                     controller={controller}
                     nav={nav}
@@ -322,6 +330,7 @@ export function GuideScreen({
 
 function GuideMore({
     mode,
+    onAsk,
     state,
     controller,
     nav,
@@ -342,6 +351,7 @@ function GuideMore({
     askBlocked,
 }: {
     mode: 'details' | 'ask'
+    onAsk: () => void
     state: WorkflowScreenProps['state']
     controller: WorkflowScreenProps['controller']
     nav: ScreenNav
@@ -455,6 +465,7 @@ function GuideMore({
                     <AppButton label="Cancel" variant="quiet" onPress={controller.cancel} />
                 </Card>
             )}
+            <AppButton label="Ask about this step" icon="help" variant="secondary" testID="more-ask" onPress={onAsk} />
             {answer === null ? null : (
                 <AnswerPanel
                     answer={answer}
@@ -488,7 +499,6 @@ function GuideMore({
                 <StepDetails session={session} index={entry.stepIndex} showHeading={false} />
                 <SourceDiagrams refs={instructionRefs} session={session} pageUris={state.pageUris} fit="page" />
             </View>
-            {ask}
             <Stack gap="sm">
                 <Heading>All steps</Heading>
                 <ProgressBar
@@ -532,21 +542,22 @@ function GuideMore({
                     }}
                 />
             </Stack>
-            <DemoControls
-                session={session}
-                stepIndex={entry.stepIndex}
-                completedStepIds={entry.completedStepIds}
-                locked={busy || session.reviewStatus !== 'reviewed'}
-                onSelectStep={(index): void => {
-                    void controller.step(index)
-                }}
-            />
             <Stack gap="xs">
                 <Heading>About photos</Heading>
                 <Caption>{PRIVACY_COPY.check}</Caption>
                 <Caption>{PRIVACY_COPY.ask}</Caption>
                 <AppButton label="All builds" variant="quiet" onPress={nav.allBuilds} />
-                <AboutThisCheck result={answer ?? check ?? undefined} />
+                <AboutThisCheck result={answer ?? check ?? undefined}>
+                    <DemoControls
+                        session={session}
+                        stepIndex={entry.stepIndex}
+                        completedStepIds={entry.completedStepIds}
+                        locked={busy || session.reviewStatus !== 'reviewed'}
+                        onSelectStep={(index): void => {
+                            void controller.step(index)
+                        }}
+                    />
+                </AboutThisCheck>
             </Stack>
         </Stack>
     )
@@ -556,9 +567,6 @@ const styles = StyleSheet.create({
     flex: { flex: 1 },
     hero: { paddingHorizontal: space.md, paddingTop: space.xs },
     dimmed: { opacity: 0.45 },
-    chevron: { position: 'absolute', top: 0, bottom: 0, justifyContent: 'center' },
-    chevronLeft: { left: space.md + space.xs },
-    chevronRight: { right: space.md + space.xs },
     fullStep: { gap: space.xs },
     row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     cell: { flexGrow: 1, flexBasis: 0, minWidth: 150 },

@@ -13,6 +13,40 @@ export function firstSentences(text: string, count: number): string {
     return parts.slice(0, count).join(' ')
 }
 
+// Wording the default surface never shows (design spec 8.1). Model-written sentences are plain-worded with exactly
+// these swaps and nothing else changes; the meaning is the model's own. The full original wording stays in the
+// judge entry's model notes.
+const WORD_RULES: readonly (readonly [RegExp, string])[] = [
+    [/\b(?:cannot|can(?:'|\u2019)?t|unable to) verify\b/giu, "can't tell"],
+    [/\bunresolved\b/giu, 'unclear'],
+    [/\bfrozen photo\b/giu, 'your photo'],
+    [/\b(?:cited|source) pages?\b/giu, 'manual pages'],
+    [/\bsourceRefs\b/gu, 'pictures'],
+    [/\bquantity basis\b/giu, 'count'],
+    [/\bcarried over\b/giu, 'kept'],
+    [/\bpart ids?\b/giu, 'part'],
+    [/\b(?:reviewed|extracted|step) facts\b/giu, 'details'],
+    [/\bgrounded\b/giu, 'based on the picture'],
+    [/\bsynthetic\b|\bsimulated\b|\bdemo data\b/giu, 'sample'],
+]
+
+/** Model- or manual-written text with the words the default surface never shows swapped for plain ones. */
+export function plainWords(text: string): string {
+    return WORD_RULES.reduce(
+        (current, [pattern, replacement]) =>
+            // A swap at the start of a sentence keeps its capital letter.
+            current.replace(pattern, (match) =>
+                /^\p{Lu}/u.test(match) ? `${replacement.charAt(0).toUpperCase()}${replacement.slice(1)}` : replacement,
+            ),
+        text,
+    )
+}
+
+/** Progress notices the header already says (Step N of M). The default Guide never repeats them as a second sentence. */
+export function isProgressNotice(notice: string): boolean {
+    return /^Progress saved as your own completion|^Step facts saved/u.test(notice)
+}
+
 /** What a request in flight is doing, in words a person would use. Null when nothing is in flight. */
 export function plainPending(pending: string | null): string | null {
     if (pending === null) {
@@ -111,7 +145,8 @@ export function partsLine(session: ManualSession, step: ManualStep): string | nu
 }
 
 export type GuideSentence = {
-    readonly kind: 'ready' | 'checking' | 'pass' | 'refuse' | 'cannot' | 'answer' | 'blocked' | 'reference'
+    readonly kind:
+        'ready' | 'checking' | 'pass' | 'refuse' | 'cannot' | 'answer' | 'blocked' | 'reference' | 'unfinished'
     readonly text: string
 }
 
@@ -120,17 +155,19 @@ export function guideSentence(args: {
     readonly state: Pick<WorkflowState, 'check' | 'answer' | 'pending' | 'capture' | 'storageReadOnly'>
     readonly step: ManualStep | undefined
     readonly blocked: boolean
+    // The 1-based position of the first step not yet marked done, when the last step is marked and the person is back on it with nothing to check.
+    readonly unfinished?: number | undefined
 }): GuideSentence {
-    const { state, step, blocked } = args
+    const { state, step, blocked, unfinished } = args
     if (state.pending !== null && state.pending.startsWith('Asking')) {
         return { kind: 'checking', text: 'Asking…' }
     }
     if (state.answer !== null) {
-        return { kind: 'answer', text: firstSentences(state.answer.answer, 2) }
+        return { kind: 'answer', text: firstSentences(plainWords(state.answer.answer), 2) }
     }
     const check: CheckResult | null = state.check
     if (check !== null) {
-        const reason = firstSentences(check.reason, 1)
+        const reason = firstSentences(plainWords(check.reason), 1)
         if (check.decision === 'pass') {
             return { kind: 'pass', text: `Looks right. ${reason}`.trim() }
         }
@@ -144,6 +181,9 @@ export function guideSentence(args: {
     }
     if (blocked) {
         return { kind: 'blocked', text: 'Answer the quick questions first so we can check your work.' }
+    }
+    if (unfinished !== undefined) {
+        return { kind: 'unfinished', text: `Step ${unfinished} is not marked done yet.` }
     }
     if (state.capture !== null) {
         return { kind: 'reference', text: 'Your last photo. Take a new one to check this step.' }

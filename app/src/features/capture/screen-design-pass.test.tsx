@@ -9,6 +9,7 @@ import {
 import { lightColors } from '../../theme/tokens'
 import { GuideScreen } from './guide-screen'
 import { LibraryScreen } from './library-screen'
+import { plainWords } from './plain-copy'
 import { OverviewScreen } from './review-screen'
 
 // Synthetic fixtures only. Native text size is mocked through the window-dimensions hook: CSS 2x screenshots do not
@@ -55,7 +56,7 @@ describe('the verdict is one sentence under the photo, and the evidence is its o
     it('keeps the answer as the existing response text on the default surface and its card in More', async () => {
         await guide('guide-answer')
         const answer = workflowPreviewFixture('guide-answer').state.answer!
-        expect(screen.getByText(answer.answer)).toBeTruthy()
+        expect(screen.getByText(plainWords(answer.answer))).toBeTruthy()
         expect(screen.queryByText('Answer')).toBeNull()
         await openMore()
         expect(within(screen.getByTestId('more-sheet')).getByText('Answer')).toBeTruthy()
@@ -64,7 +65,7 @@ describe('the verdict is one sentence under the photo, and the evidence is its o
     it('starts a refusal with "Not yet." and keeps the comparison before the explanation in More', async () => {
         const tree = await guide('guide-refuse')
         const check = workflowPreviewFixture('guide-refuse').state.check!
-        expect(screen.getByText(`Not yet. ${check.reason}`)).toBeTruthy()
+        expect(screen.getByText(`Not yet. ${plainWords(check.reason)}`)).toBeTruthy()
         expect(tree).not.toContain('Manual diagram')
         await openMore()
         const more = JSON.stringify(screen.toJSON())
@@ -97,9 +98,11 @@ describe('guide bottom bar', () => {
     it('keeps every More control at least 44 points tall', async () => {
         await guide('guide-photo')
         await openMore()
-        for (const name of ['Previous step', 'Next step', 'Mark step complete myself', 'Take photo to ask']) {
+        for (const name of ['Ask about this step', 'Previous step', 'Next step', 'Mark step complete myself']) {
             expect(flat(screen.getByRole('button', { name })).minHeight).toBeGreaterThanOrEqual(44)
         }
+        await fireEvent.press(screen.getByRole('button', { name: 'Ask about this step' }))
+        expect(flat(screen.getByRole('button', { name: 'Take photo to ask' })).minHeight).toBeGreaterThanOrEqual(44)
     })
 })
 
@@ -108,6 +111,10 @@ describe('demo controls', () => {
         await guide('guide-photo')
         expect(screen.queryByText('USER CONFIRMATION')).toBeNull()
         await openMore()
+        // The controls wait behind the discreet judge entry; nothing technical shows before it is opened.
+        expect(screen.queryByText('USER CONFIRMATION')).toBeNull()
+        expect(screen.queryByTestId('demo-divider', hidden)).toBeNull()
+        await fireEvent.press(screen.getByTestId('judge-entry'))
         expect(screen.getAllByTestId('demo-divider', hidden)).toHaveLength(2)
         for (const label of ['USER CONFIRMATION', "Judge's choice", 'Earlier progress']) {
             expect(screen.getByText(label)).toBeTruthy()

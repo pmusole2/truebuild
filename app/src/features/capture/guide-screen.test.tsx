@@ -7,6 +7,7 @@ import { spies as animationSpies } from '../../ui/test-support/reanimated-mock'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
 import { GuideScreen } from './guide-screen'
+import { plainWords } from './plain-copy'
 import type { WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
 import type { WorkflowController } from './workflow-types'
@@ -55,6 +56,10 @@ async function setup(
         controller?: Partial<WorkflowController>
         reviewStatus?: 'unreviewed'
         more?: boolean
+        // Open More on the question composer, through its early row.
+        ask?: boolean
+        // Open the discreet judge entry in More, where the judge and demo controls live.
+        judge?: boolean
     } = {},
 ): Promise<Spies> {
     const fixture = workflowPreviewFixture(id)
@@ -81,12 +86,19 @@ async function setup(
     await render(<GuideScreen state={state} controller={controller} entry={entry} />)
     if (options.more === true) {
         await openMore()
+        if (options.ask === true) {
+            await fireEvent.press(screen.getByRole('button', { name: 'Ask about this step' }))
+        }
+        if (options.judge === true) {
+            await fireEvent.press(screen.getByTestId('judge-entry'))
+        }
     }
     return spies
 }
 
 const PRIMARY = 'Take photo'
-const MORE_ACTIONS = ['Take photo to ask', 'Previous step', 'Next step', 'Mark step complete myself'] as const
+// Asking is an early row in More that switches the same sheet to the composer, where Take photo to ask lives.
+const MORE_ACTIONS = ['Ask about this step', 'Previous step', 'Next step', 'Mark step complete myself'] as const
 // RNTL treats everything behind an open modal sheet as hidden, so the default surface is read with this option.
 const behind = { includeHiddenElements: true } as const
 const disabled = (name: string): unknown =>
@@ -97,12 +109,64 @@ it('calls each public controller action exactly once with its original arguments
     const spies = await setup('guide-photo', { entry: { stepIndex: 1 } })
     await fireEvent.press(screen.getByRole('button', { name: PRIMARY }))
     await openMore()
-    for (const name of ['Previous step', 'Next step', 'Mark step complete myself', 'Take photo to ask']) {
+    for (const name of ['Previous step', 'Next step', 'Mark step complete myself', 'Ask about this step']) {
         await fireEvent.press(screen.getByRole('button', { name }))
     }
+    await fireEvent.press(screen.getByRole('button', { name: 'Take photo to ask' }))
     expect(spies.camera.mock.calls).toEqual([[{ kind: 'check' }], [{ kind: 'question' }]])
     expect(spies.step.mock.calls).toEqual([[0], [2]])
     expect(spies.completeStep).toHaveBeenCalledTimes(1)
+})
+
+describe('the primary after a pass is the person’s own completion', () => {
+    it('Next step records the step as done and moves on, instead of only browsing', async () => {
+        const spies = await setup('guide-pass', { entry: { stepIndex: 0 } })
+        await fireEvent.press(screen.getByRole('button', { name: 'Next step' }))
+        expect(spies.completeStep).toHaveBeenCalledTimes(1)
+        expect(spies.step).not.toHaveBeenCalled()
+    })
+
+    it('Finish on the last step records it through the same completion', async () => {
+        const spies = await setup('guide-pass', { entry: { stepIndex: STEP_COUNT - 1 } })
+        await fireEvent.press(screen.getByRole('button', { name: 'Finish' }))
+        expect(spies.completeStep).toHaveBeenCalledTimes(1)
+        expect(spies.step).not.toHaveBeenCalled()
+    })
+
+    it('browsing from More never records a completion', async () => {
+        const spies = await setup('guide-pass', { entry: { stepIndex: 1 }, more: true })
+        await fireEvent.press(screen.getByRole('button', { name: 'Previous step' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Next step' }))
+        expect(spies.step.mock.calls).toEqual([[0], [2]])
+        expect(spies.completeStep).not.toHaveBeenCalled()
+    })
+
+    it('does not repeat the saved-progress notice as a second sentence under the instruction', async () => {
+        await setup('guide-photo', {
+            state: { notice: 'Progress saved as your own completion. Take a new photo for the next check.' },
+        })
+        expect(screen.queryByText('Marked as done. Take a new photo for the next step.')).toBeNull()
+    })
+
+    it('after Finish leaves earlier steps open, offers the first open step instead of another Take photo', async () => {
+        const spies = await setup('guide-empty', {
+            entry: { stepIndex: STEP_COUNT - 1, completedStepIds: ['synthetic-step-3'] },
+        })
+        expect(screen.getByText('Step 1 is not marked done yet.')).toBeTruthy()
+        expect(screen.queryByRole('button', { name: 'Take photo' })).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'Go to step 1' }))
+        expect(spies.step.mock.calls).toEqual([[0]])
+        expect(spies.completeStep).not.toHaveBeenCalled()
+    })
+
+    it('keeps Take photo when every earlier step is marked too', async () => {
+        const ids = workflowPreviewFixture('guide-empty').entry.session.reviewedSteps.map((step) => step.stepId)
+        await setup('guide-empty', {
+            entry: { stepIndex: STEP_COUNT - 1, completedStepIds: [...ids, 'synthetic-step-3'] },
+        })
+        expect(screen.queryByText(/is not marked done yet/u)).toBeNull()
+        expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy()
+    })
 })
 
 describe('action availability', () => {
@@ -110,18 +174,28 @@ describe('action availability', () => {
     // When coverage or the unanswered questions block the step, the primary becomes the way forward (answer the
     // questions or add clearer photos) and stays pressable; only the camera actions are held back.
     it.each([
-        ['a request is pending', { state: { pending: 'Checking the frozen photo…' } }, [true, true, true, true, true]],
-        ['storage is read-only', { state: { storageReadOnly: true } }, [true, true, true, true, true]],
+        [
+            'a request is pending',
+            { state: { pending: 'Checking the frozen photo…' } },
+            [true, false, true, true, true, true],
+        ],
+        ['storage is read-only', { state: { storageReadOnly: true } }, [true, false, true, true, true, true]],
         [
             'coverage blocks the step',
             { controller: { coverageNotice: (): string => 'Pages are not covered.' } },
-            [false, true, false, false, false],
+            [false, false, false, false, false, true],
         ],
-        ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }, [false, true, false, false, false]],
-        ['the guide is idle', {}, [false, false, false, false, false]],
+        [
+            'the manual is unreviewed',
+            { reviewStatus: 'unreviewed' as const },
+            [false, false, false, false, false, true],
+        ],
+        ['the guide is idle', {}, [false, false, false, false, false, false]],
     ] as const)('when %s', async (_name, options, expected) => {
         await setup('guide-photo', { ...options, entry: { stepIndex: 1 }, more: true })
-        expect([primaryDisabled(), ...MORE_ACTIONS.map(disabled)]).toEqual(expected)
+        const available = [primaryDisabled(), ...MORE_ACTIONS.map(disabled)]
+        await fireEvent.press(screen.getByRole('button', { name: 'Ask about this step' }))
+        expect([...available, disabled('Take photo to ask')]).toEqual(expected)
     })
 
     it.each([
@@ -130,16 +204,18 @@ describe('action availability', () => {
     ] as const)('stops navigation on the %s', async (_name, position, [previous, next]) => {
         await setup('guide-photo', { entry: { stepIndex: position === 'first' ? 0 : STEP_COUNT - 1 }, more: true })
         expect([disabled('Previous step'), disabled('Next step')]).toEqual([previous, next])
-        // The small chevrons on the picture follow the same limits.
-        expect([disabled('Earlier step'), disabled('Later step')]).toEqual([previous, next])
+        // No arrows sit on the picture: stepping is a swipe on it, or in More.
+        expect(screen.queryByRole('button', { name: 'Earlier step', ...behind })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Later step', ...behind })).toBeNull()
     })
 
     it('does not call the controller when a disabled action is pressed', async () => {
         const spies = await setup('guide-photo', { state: { pending: 'Checking the frozen photo…' }, more: true })
         await fireEvent.press(screen.getByTestId('guide-primary', behind))
-        for (const name of MORE_ACTIONS) {
+        for (const name of ['Previous step', 'Next step', 'Mark step complete myself', 'Ask about this step']) {
             await fireEvent.press(screen.getByRole('button', { name }))
         }
+        await fireEvent.press(screen.getByRole('button', { name: 'Take photo to ask' }))
         expect(spies.camera).not.toHaveBeenCalled()
         expect(spies.step).not.toHaveBeenCalled()
         expect(spies.completeStep).not.toHaveBeenCalled()
@@ -263,7 +339,9 @@ describe('results', () => {
     it('says the verdict in one sentence on the hero, with the full reason in More', async () => {
         await setup('guide-pass')
         const check = workflowPreviewFixture('guide-pass').state.check!
-        expect(screen.getByText(`Looks right. ${check.reason}`)).toBeTruthy()
+        // The default surface says the model's reason in plain words: "Synthetic" is not shown there.
+        expect(screen.getByText(`Looks right. ${plainWords(check.reason)}`)).toBeTruthy()
+        expect(screen.queryByText(/Synthetic result/u)).toBeNull()
         // The verdict tag, missing-evidence list and provenance are not on the default surface.
         expect(screen.queryByText('Looks right')).toBeNull()
         await openMore()
@@ -334,7 +412,7 @@ describe('results', () => {
     it('shows an answer on the hero as the existing response text, never as a check', async () => {
         await setup('guide-answer')
         const answer = workflowPreviewFixture('guide-answer').state.answer!
-        expect(screen.getByText(answer.answer)).toBeTruthy()
+        expect(screen.getByText(plainWords(answer.answer))).toBeTruthy()
         expect(screen.queryByText(/^Looks right\./u)).toBeNull()
     })
 
@@ -351,7 +429,11 @@ describe('results', () => {
 
 describe('question composer', () => {
     it('stays blocked without a target and chooses a step part through the controller', async () => {
-        const spies = await setup('guide-photo', { state: { question: 'Which way?', target: null }, more: true })
+        const spies = await setup('guide-photo', {
+            state: { question: 'Which way?', target: null },
+            more: true,
+            ask: true,
+        })
         expect(disabled('Send question')).toBe(true)
         expect(screen.getByText('Choose a point or part.')).toBeTruthy()
         const part = workflowPreviewFixture('guide-photo').entry.session.reviewedSteps[0]!.parts[0]!.partId
@@ -360,17 +442,23 @@ describe('question composer', () => {
         expect(spies.targetChanged.mock.calls[0]![0]).toEqual({ kind: 'part', partId: part })
     })
 
-    it('opens straight on the question from the header Ask icon', async () => {
+    it('has no Ask icon in the header and opens the question from its early row in More', async () => {
         await setup('guide-photo')
-        await fireEvent.press(screen.getByRole('button', { name: 'Ask' }))
+        expect(screen.queryByRole('button', { name: 'Ask' })).toBeNull()
+        await openMore()
+        const bodyBefore = more()
+            .getAllByRole('button')
+            .map((button) => button.props.accessibilityLabel as string)
+        // Ask comes before every other action in the sheet.
+        expect(bodyBefore.indexOf('Ask about this step')).toBeLessThan(bodyBefore.indexOf('Previous step'))
+        await fireEvent.press(more().getByRole('button', { name: 'Ask about this step' }))
         expect(screen.getAllByText('Ask about this step').length).toBeGreaterThan(0)
         expect(screen.getByLabelText('Question about your photo')).toBeTruthy()
         expect(screen.queryByText('All steps')).toBeNull()
     })
 
     it('asks for a photo first when there is none', async () => {
-        const spies = await setup('guide-empty')
-        await fireEvent.press(screen.getByRole('button', { name: 'Ask' }))
+        const spies = await setup('guide-empty', { more: true, ask: true })
         expect(screen.getByText('Take a photo first, then ask about it.')).toBeTruthy()
         await fireEvent.press(screen.getByRole('button', { name: 'Take photo to ask' }))
         expect(spies.camera.mock.calls).toEqual([[{ kind: 'question' }]])
@@ -380,14 +468,14 @@ describe('question composer', () => {
         ['text and a part target', 'Which way?', { kind: 'part' as const, partId: 'side-panel' }, false],
         ['a target but blank text', '   ', { kind: 'part' as const, partId: 'side-panel' }, true],
     ])('gates Send with %s', async (_name, question, target, expectedDisabled) => {
-        const spies = await setup('guide-photo', { state: { question, target }, more: true })
+        const spies = await setup('guide-photo', { state: { question, target }, more: true, ask: true })
         expect(disabled('Send question')).toBe(expectedDisabled)
         await fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
         expect(spies.ask).toHaveBeenCalledTimes(expectedDisabled ? 0 : 1)
     })
 
     it('stays blocked when the controller cannot compose', async () => {
-        await setup('guide-answer', { controller: { canCompose: false }, more: true })
+        await setup('guide-answer', { controller: { canCompose: false }, more: true, ask: true })
         expect(disabled('Send question')).toBe(true)
     })
 })
@@ -583,7 +671,7 @@ describe('step layout and demo controls', () => {
     })
 
     it('chooses a known-orientation step through the existing controller', async () => {
-        const spies = await setup('guide-photo', { more: true, entry: { stepIndex: 1 } })
+        const spies = await setup('guide-photo', { more: true, judge: true, entry: { stepIndex: 1 } })
         await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
         expect(spies.step.mock.calls).toEqual([[2]])
         expect(screen.getByRole('button', { name: /^Current · Step 2:/u }).props.accessibilityState.disabled).toBe(true)
@@ -594,13 +682,13 @@ describe('step layout and demo controls', () => {
         ['storage is read-only', { state: { storageReadOnly: true } }],
         ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }],
     ])('does not choose a step when %s', async (_name, options) => {
-        const spies = await setup('guide-photo', { more: true, ...options, entry: { stepIndex: 1 } })
+        const spies = await setup('guide-photo', { more: true, judge: true, ...options, entry: { stepIndex: 1 } })
         await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
         expect(spies.step).not.toHaveBeenCalled()
     })
 
     it('recaps only the saved completions under Earlier progress', async () => {
-        await setup('guide-empty', { more: true, entry: { completedStepIds: ['step-2'] } })
+        await setup('guide-empty', { more: true, judge: true, entry: { completedStepIds: ['step-2'] } })
         expect(screen.getByText('Earlier progress')).toBeTruthy()
         expect(screen.getByText('Marked complete: 2. Seat the divider in the groove')).toBeTruthy()
         expect(screen.queryByText('Marked complete: 1. Stand the side panel upright')).toBeNull()
@@ -617,6 +705,7 @@ describe('step layout and demo controls', () => {
         )
         const { rerender } = await render(view(0))
         await openMore()
+        await fireEvent.press(screen.getByTestId('judge-entry'))
         await fireEvent.press(screen.getByRole('button', { name: 'Mark one Side panel located' }))
         expect(screen.getByText('All counted parts located by you')).toBeTruthy()
         await rerender(view(1))

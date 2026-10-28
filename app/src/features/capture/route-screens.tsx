@@ -255,7 +255,7 @@ export function GuideRoute(): ReactElement {
             <Stack.Screen
                 options={{
                     headerTitle: (): ReactElement => <HeaderTitle title={title} subtitle={subtitle} />,
-                    headerRight: (): ReactElement => <HeaderButtons more={more} ask />,
+                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
             {status === 'ready' && entry !== undefined ? (

@@ -4,8 +4,8 @@ import { IconButton } from '../../ui/button'
 import { Caption, Heading } from '../../ui/text'
 import { space } from '../../theme/tokens'
 
-/** What the More sheet is showing. `ask` opens straight on the question composer. */
-export type MoreMode = 'details' | 'ask'
+/** What the More sheet is showing. `ask` opens on the question composer, `fix` on the one-fact editor. */
+export type MoreMode = 'details' | 'ask' | 'fix'
 
 export type MoreControl = {
     readonly open: boolean
@@ -28,13 +28,10 @@ export type ChromeProps = {
     readonly more?: MoreControl
 }
 
-/** The trailing header controls: one quiet Ask icon where asking makes sense, and More (the single details entry). */
-export function HeaderButtons({ more, ask = false }: { more: MoreControl; ask?: boolean }): ReactElement {
+/** The one trailing header control: More, the single entry to details, asking and every other secondary action. */
+export function HeaderButtons({ more }: { more: MoreControl }): ReactElement {
     return (
         <View style={styles.buttons}>
-            {ask ? (
-                <IconButton label="Ask" icon="help" onPress={(): void => more.show('ask')} testID="header-ask" />
-            ) : null}
             <IconButton label="More" icon="more" onPress={(): void => more.show()} testID="header-more" />
         </View>
     )
@@ -59,19 +56,17 @@ export function InlineHeader({
     title,
     subtitle,
     more,
-    ask = false,
 }: {
     title: string
     subtitle?: string
     more: MoreControl
-    ask?: boolean
 }): ReactElement {
     return (
         <View style={styles.inline} testID="inline-header">
             <View style={styles.titles}>
                 <HeaderTitle title={title} subtitle={subtitle} />
             </View>
-            <HeaderButtons more={more} ask={ask} />
+            <HeaderButtons more={more} />
         </View>
     )
 }
