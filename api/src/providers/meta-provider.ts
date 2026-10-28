@@ -40,6 +40,7 @@ import {
 } from '../server/media'
 import {
     completedResponseSchema,
+    metaLayoutOutputSchemas,
     metaOutputSchemas,
     providerCheckSchema,
     providerQuestionSchema,
@@ -133,6 +134,10 @@ export interface MetaProviderOptions {
     parseModel?: StandardModel
     secondOpinionModel?: StandardModel
     checkContext?: CheckContextMode
+    /** MODEL_LAYOUT=1: the same single check/ask request also asks for a layout and grounded part regions. */
+    layout?: boolean
+    /** MODEL_LAYOUT_WONDER=1 (with layout): a Wonder second opinion may author them too. Never the default. */
+    layoutWonder?: boolean
     onMetrics?: (metrics: ProviderMetrics) => void
     /** Trusted admission grants and accounts for at most one parse repair; never supplied by a request. */
     runParseRepair?: <T>(work: () => Promise<T>) => Promise<T>
@@ -479,6 +484,10 @@ const PARSE_INSTRUCTIONS = INSTRUCTION_LINES.flatMap((line): string[] =>
     line.startsWith('Parse carried quantities') ? [line, CARRIED_OVER_REQUIRED] : [line],
 ).join(' ')
 
+/** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
+const LAYOUT_INSTRUCTIONS =
+    'Layout (compact budget, shares the output cap with your reasoning, so keep it minimal): layout is null or {components}, an ordered choice of at most 3 components of existing current-step items to show: part_grid {partIds}, orientation {partId}, connection {partIds}, visible_checks {checkIds}, source_diagram {sourceRefIndexes: indexes into the current step sourceRefs}, recovery {actionIds: reviewed correction action ids, only after a refuse}. At most 3 ids or indexes per component, each id at most 48 characters, each type at most once, whole layout JSON at most 600 UTF-8 bytes; an id longer than 48 characters cannot be used, and an over-budget layout is discarded. Use only IDs and indexes present in the supplied current step. Never write text, warnings, safety statements, styles, markup, URLs or code; use null when unsure. Regions: nextPartRegion is null or {partId, region} locating the real next part of the current step in the final observation; targetRegion is null or {partId, region} locating where that same part goes, so when both are present they must carry the same partId. partId must be a current-step part ID of at most 48 characters; region is {x1,y1,x2,y2} with every value inside the 0-1000 grid of the final observation (no value below 0 or above 1000), each region JSON at most 192 UTF-8 bytes. Use null whenever the part or destination is not clearly visible; never invent or guess geometry. A layout or region never changes the decision.'
+
 /** Language is validated against parseLanguageSchema before it reaches this per-request instruction. */
 function parseLanguageInstructions(language: string): string {
     return `Selected parse language: ${language}. Read only blocks written in that language; ignore facts in other languages; never mix or translate them. This language filter applies to printed text only. Language-neutral diagrams remain valid grounding; describe their supported facts in the selected language. If the selected language does not state a textual fact, keep the fact unknown instead of borrowing it from another language. Page images and citations are unchanged: cite supplied page IDs only.`
@@ -514,6 +523,19 @@ function retainsParseCoverage(first: ParsedManual, second: ParsedManual): boolea
     )
 }
 
+type Guidance = Pick<CheckResult, 'layout' | 'nextPartRegion' | 'targetRegion'>
+
+/** Only present proposals, and only when the request asked for them; absence stays absent (never null or invented). */
+function guidance(proposed: Guidance, requested: boolean): Guidance {
+    if (!requested) return {}
+
+    return {
+        ...(proposed.layout === undefined ? {} : { layout: proposed.layout }),
+        ...(proposed.nextPartRegion === undefined ? {} : { nextPartRegion: proposed.nextPartRegion }),
+        ...(proposed.targetRegion === undefined ? {} : { targetRegion: proposed.targetRegion }),
+    }
+}
+
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
 export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
@@ -526,6 +548,12 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     const contextMode = checkContextMode(options.checkContext)
     const apiKey = options.apiKey
     const transport = new MetaTransport(options.fetchImpl ?? fetch)
+    const layoutEnabled = options.layout === true
+
+    /** Primary Spark follows MODEL_LAYOUT; a Wonder second opinion needs the separate Wonder flag as well. */
+    function layoutFor(model: StandardModel, secondary: boolean): boolean {
+        return layoutEnabled && (!secondary || (options.layoutWonder === true && model === 'muse-wonder-1.0'))
+    }
 
     async function execute<T>(
         timeoutMs: number,
@@ -580,11 +608,17 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         model: StandardModel,
         secondary = false,
         parseRepair?: ParseRepair,
+        withLayout = false,
     ): Promise<T> {
         deadline.checkpoint()
         const { requestId, binding, step, question, target, ...stable } = context
         const language = operation === 'parse' && typeof stable.language === 'string' ? stable.language : undefined
-        const operationInstructions = operation === 'parse' ? PARSE_INSTRUCTIONS : INSTRUCTIONS
+        const operationInstructions =
+            operation === 'parse'
+                ? PARSE_INSTRUCTIONS
+                : withLayout
+                  ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
+                  : INSTRUCTIONS
         const baseInstructions =
             language === undefined
                 ? operationInstructions
@@ -620,7 +654,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 format: {
                     type: 'json_schema',
                     name: `truebuild_${operation}`,
-                    schema: metaOutputSchemas[operation],
+                    schema:
+                        withLayout && operation !== 'parse'
+                            ? metaLayoutOutputSchemas[operation]
+                            : metaOutputSchemas[operation],
                     strict: true,
                 },
             },
@@ -737,6 +774,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         model: StandardModel,
         secondary = false,
     ): Promise<CheckResult> {
+        const withLayout = layoutFor(model, secondary)
+
         return execute(secondary ? 60_000 : checkTimeoutMs, signal, async (deadline): Promise<CheckResult> => {
             const parsed = inputValue(checkInputSchema, input)
             const step = currentStep(parsed)
@@ -751,15 +790,18 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     missingEvidence: [COMPACT_UNAVAILABLE],
                 }
             const { context, images } = prepared
-            const { checks, partsAssessment, connectionAssessment, ...value } = await dispatch(
-                'check',
-                context,
-                images,
-                providerCheckSchema,
-                deadline,
-                model,
-                secondary,
-            )
+            const { checks, partsAssessment, connectionAssessment, layout, nextPartRegion, targetRegion, ...value } =
+                await dispatch(
+                    'check',
+                    context,
+                    images,
+                    providerCheckSchema,
+                    deadline,
+                    model,
+                    secondary,
+                    undefined,
+                    withLayout,
+                )
             const sameRef = (a: SourceRef, b: SourceRef): boolean =>
                 a.pageId === b.pageId && JSON.stringify(a.region) === JSON.stringify(b.region)
             const validChecks =
@@ -826,7 +868,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
             deadline.checkpoint()
 
-            return { ...value, model }
+            return { ...value, ...guidance({ layout, nextPartRegion, targetRegion }, withLayout), model }
         })
     }
 
@@ -950,7 +992,17 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     }
                 const context = { ...prepared.context, question: parsed.question, target: parsed.target }
                 const images = prepared.images
-                const value = await dispatch('question', context, images, providerQuestionSchema, deadline, liveModel)
+                const { layout, nextPartRegion, targetRegion, ...value } = await dispatch(
+                    'question',
+                    context,
+                    images,
+                    providerQuestionSchema,
+                    deadline,
+                    liveModel,
+                    false,
+                    undefined,
+                    layoutFor(liveModel, false),
+                )
 
                 if (
                     !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
@@ -961,7 +1013,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
                 deadline.checkpoint()
 
-                return { ...value, model: liveModel }
+                return {
+                    ...value,
+                    ...guidance({ layout, nextPartRegion, targetRegion }, layoutFor(liveModel, false)),
+                    model: liveModel,
+                }
             })
         },
     }

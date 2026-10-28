@@ -32,6 +32,8 @@ export interface ApiRuntime {
     checkContext: CheckContextMode
     /** Default off; only the explicit value MODEL_LAYOUT=1 enables layout resolution. */
     layout: boolean
+    /** Default off; MODEL_LAYOUT_WONDER=1 (with MODEL_LAYOUT=1) lets a Wonder second opinion author the layout too. */
+    layoutWonder: boolean
     samModel: 'sam-3.1'
     auth: SharedKeyAuth
     counter: ModelCallCounter
@@ -51,14 +53,14 @@ function positiveInteger(value: string | undefined, fallback: number, maximum = 
     return number
 }
 
-function layoutFlag(value: string | undefined): boolean {
+function layoutFlag(value: string | undefined, error = 'invalid_model_layout'): boolean {
     if (value === undefined || value === '' || value === '0') {
         return false
     }
     if (value === '1') {
         return true
     }
-    throw new Error('invalid_model_layout')
+    throw new Error(error)
 }
 
 export function createRuntimeFromEnvironment(
@@ -74,6 +76,8 @@ export function createRuntimeFromEnvironment(
     const secondary = secondOpinionModel(environment.MODEL_SECOND_OPINION)
     const checkContext = checkContextMode(environment.MODEL_CHECK_CONTEXT)
     const layout = layoutFlag(environment.MODEL_LAYOUT)
+    const layoutWonder = layoutFlag(environment.MODEL_LAYOUT_WONDER, 'invalid_model_layout_wonder')
+    if (layoutWonder && !layout) throw new Error('invalid_model_layout_wonder')
     if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
     const checkTimeoutMs = positiveInteger(environment.CHECK_TIMEOUT_MS, 8_000, 8_000)
     const counter = new ModelCallCounter(positiveInteger(environment.MODEL_CALL_LIMIT, 200))
@@ -109,6 +113,8 @@ export function createRuntimeFromEnvironment(
         parseModel: parse,
         secondOpinionModel: secondary,
         checkContext,
+        layout,
+        layoutWonder,
     }
     return {
         sessionMetadata: PROCESS_METADATA,
@@ -119,6 +125,7 @@ export function createRuntimeFromEnvironment(
         secondOpinionModel: secondary,
         checkContext,
         layout,
+        layoutWonder,
         samModel: 'sam-3.1',
         auth,
         counter,

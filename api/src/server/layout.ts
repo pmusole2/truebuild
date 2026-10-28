@@ -1,12 +1,14 @@
 import {
     LAYOUT_LIMITS,
     layoutSchema,
+    partRegionSchema,
     proposedLayoutSchema,
     type CheckResult,
     type Layout,
     type LayoutComponent,
     type ManualSession,
     type ManualStep,
+    type PartRegion,
 } from '@truebuild/contracts'
 
 export interface LayoutContext {
@@ -86,6 +88,27 @@ export function resolveLayout(proposal: unknown, context: LayoutContext): Layout
     return { source: 'model', components: parsed.data.components }
 }
 
+/** Every part the current step really involves: its required parts, its orientation part and its connection parts. */
+function stepPartIds(step: ManualStep): Set<string> {
+    return new Set([
+        ...step.parts.map((part) => part.partId),
+        ...(step.orientation.state === 'known' ? [step.orientation.value.partId] : []),
+        ...(step.connection.state === 'known' ? step.connection.value.partIds : []),
+    ])
+}
+
+/** A region is kept only whole: a valid normalized box AND the identity of a real part of this step. Never invented. */
+function resolveRegion(region: unknown, partIds: ReadonlySet<string>): PartRegion | undefined {
+    const parsed = partRegionSchema.safeParse(region)
+
+    return parsed.success && partIds.has(parsed.data.partId) ? parsed.data : undefined
+}
+
+interface RegionFields {
+    nextPartRegion?: PartRegion
+    targetRegion?: PartRegion
+}
+
 interface LayoutInput {
     session: ManualSession
     binding: { stepId: string }
@@ -93,20 +116,30 @@ interface LayoutInput {
 }
 
 /**
- * Service-boundary step: with the flag off every proposal is discarded (response unchanged); with it on the layout is
- * resolved against the bound step, replacing any proposal. The verdict and other fields are never read or modified.
+ * Service-boundary step: with the flag off every proposal and region is discarded (response unchanged); with it on the
+ * layout is resolved against the bound step, replacing any proposal, and each region survives only for a real part of
+ * that step. The verdict and other fields are never read or modified.
  */
-export function withResolvedLayout<T extends { layout?: Layout; decision?: CheckResult['decision'] }>(
+export function withResolvedLayout<T extends RegionFields & { layout?: Layout; decision?: CheckResult['decision'] }>(
     result: T,
     input: LayoutInput,
     enabled: boolean,
 ): T {
-    const { layout, ...rest } = result
+    const { layout, nextPartRegion, targetRegion, ...rest } = result
     const step = input.session.reviewedSteps.find((candidate) => candidate.stepId === input.binding.stepId)
     if (!enabled || !step) return rest as T
+    const partIds = stepPartIds(step)
+    const next = resolveRegion(nextPartRegion, partIds)
+    const rawTarget = resolveRegion(targetRegion, partIds)
+    // Both regions are valid on their own, but a target for a different part than the located next part would pair them
+    // falsely (an arrow from one part to another's destination). Keep the independently located next part, omit target.
+    const target =
+        next !== undefined && rawTarget !== undefined && next.partId !== rawTarget.partId ? undefined : rawTarget
 
     return {
         ...rest,
+        ...(next === undefined ? {} : { nextPartRegion: next }),
+        ...(target === undefined ? {} : { targetRegion: target }),
         layout: resolveLayout(layout, {
             step,
             decision: result.decision,

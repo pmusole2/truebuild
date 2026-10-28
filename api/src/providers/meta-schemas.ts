@@ -2,6 +2,7 @@ import {
     checkResultSchema,
     normalizedBoxSchema,
     parsedManualSchema,
+    partRegionSchema,
     proposedLayoutSchema,
     questionResultSchema,
     sourceRefSchema,
@@ -21,14 +22,107 @@ const gridBox = z
     })
     .pipe(normalizedBoxSchema)
 
-// The model may propose a display layout of ids/indexes only. A malformed proposal is dropped at this field alone
-// (the verdict and every other strict field still validate); the service resolves or replaces it from step data.
-const layoutProposal = proposedLayoutSchema
+/**
+ * Provider-only proposal budget under MODEL_LAYOUT=1 (the public layout contract is unchanged and larger).
+ * The proposal shares the unchanged 1500-token check/ask cap with reasoning, so every field is bounded in count, id
+ * length and serialized UTF-8 bytes (JSON.stringify of the field as the model sent it). Bytes are the measurement;
+ * no model-token figure is claimed. Anything over a bound is dropped at its own field, never truncated or repaired.
+ */
+export const PROPOSAL_BUDGET = {
+    components: 3,
+    references: 3,
+    idCharacters: 48,
+    layoutBytes: 600,
+    regionBytes: 192,
+} as const
+/** Largest accepted addition to the check/ask output: one layout plus both regions (field names excluded). */
+export const PROPOSAL_MAX_BYTES = PROPOSAL_BUDGET.layoutBytes + 2 * PROPOSAL_BUDGET.regionBytes
+
+const utf8Bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8')
+
+const compactId = z.string().trim().min(1).max(PROPOSAL_BUDGET.idCharacters)
+const compactIds = z.array(compactId).min(1).max(PROPOSAL_BUDGET.references)
+
+// Same closed component set as the public layout, with the small provider bounds. The public schema is not widened.
+const compactLayout = z
+    .strictObject({
+        components: z
+            .array(
+                z.discriminatedUnion('type', [
+                    z.strictObject({ type: z.literal('part_grid'), partIds: compactIds }),
+                    z.strictObject({ type: z.literal('orientation'), partId: compactId }),
+                    z.strictObject({ type: z.literal('connection'), partIds: compactIds }),
+                    z.strictObject({ type: z.literal('visible_checks'), checkIds: compactIds }),
+                    z.strictObject({
+                        type: z.literal('source_diagram'),
+                        sourceRefIndexes: z
+                            .array(z.number().int().min(0).max(99))
+                            .min(1)
+                            .max(PROPOSAL_BUDGET.references),
+                    }),
+                    z.strictObject({ type: z.literal('recovery'), actionIds: compactIds }),
+                ]),
+            )
+            .min(1)
+            .max(PROPOSAL_BUDGET.components),
+    })
+    .superRefine((layout, ctx) => {
+        if (utf8Bytes(layout) > PROPOSAL_BUDGET.layoutBytes)
+            ctx.addIssue({ code: 'custom', message: 'Layout proposal exceeds its byte budget' })
+    })
+    // The public contract still decides shape (no repeats) so a proposal can never be wider than the public layout.
+    .pipe(proposedLayoutSchema)
+
+// The model may propose a display layout of ids/indexes only. A malformed or over-budget proposal is dropped at this
+// field alone (the verdict and every other strict field still validate); the service resolves or replaces it.
+const layoutProposal = compactLayout
     .nullable()
     .transform((layout) => layout ?? undefined)
     .catch(undefined)
     .describe(
-        'Optional ordered display layout: ids and indexes of the current step only, never text. Null when unsure.',
+        `Optional ordered display layout: at most ${PROPOSAL_BUDGET.components} components of at most ${PROPOSAL_BUDGET.references} ids/indexes each, ids of the current step only, never text. The serialized JSON must be at most ${PROPOSAL_BUDGET.layoutBytes} UTF-8 bytes or it is dropped. Null when unsure.`,
+    )
+
+// New regions use a STRICT grid conversion: every raw coordinate must lie inside 0..1000 as returned, and the
+// normalized box is exactly raw/1000 (no clamping, no tolerance, no invented geometry). The tolerant gridBox above is
+// kept only for the existing observedRegion semantics.
+const strictGridCoordinate = z.number().finite().min(0).max(1000)
+const strictCorners = z.strictObject({
+    x1: strictGridCoordinate,
+    y1: strictGridCoordinate,
+    x2: strictGridCoordinate,
+    y2: strictGridCoordinate,
+})
+const strictGridBox = strictCorners
+    .transform((box) => ({
+        x: box.x1 / 1000,
+        y: box.y1 / 1000,
+        width: (box.x2 - box.x1) / 1000,
+        height: (box.y2 - box.y1) / 1000,
+    }))
+    .pipe(normalizedBoxSchema)
+
+// Optional grounded regions of a real current-step part. Only the field is dropped when it is malformed (inverted,
+// zero-area, any coordinate outside 0..1000, extra keys, over its byte budget); the service then checks the identity.
+const gridPartRegion = z
+    .strictObject({ partId: compactId, region: strictCorners })
+    .superRefine((value, ctx) => {
+        if (utf8Bytes(value) > PROPOSAL_BUDGET.regionBytes)
+            ctx.addIssue({ code: 'custom', message: 'Region proposal exceeds its byte budget' })
+    })
+    .transform((value, ctx) => {
+        const region = strictGridBox.safeParse(value.region)
+        if (!region.success) {
+            ctx.addIssue({ code: 'custom', message: 'Invalid region' })
+            return z.NEVER
+        }
+        return { partId: partRegionSchema.shape.partId.parse(value.partId), region: region.data }
+    })
+    .nullable()
+    .transform((region) => region ?? undefined)
+    .catch(undefined)
+    .describe(
+        `Optional {partId, region} of one current-step part; partId at most ${PROPOSAL_BUDGET.idCharacters} characters, region corners inside 0-1000, serialized JSON at most ${PROPOSAL_BUDGET.regionBytes} UTF-8 bytes or it is dropped. Null when unsure.`,
     )
 
 const assessment = z.enum(['matches', 'mismatch', 'unobservable'])
@@ -44,6 +138,8 @@ export const providerCheckSchema = z
     .strictObject({
         ...checkResultSchema.shape,
         layout: layoutProposal,
+        nextPartRegion: gridPartRegion,
+        targetRegion: gridPartRegion,
         partsAssessment: assessment,
         connectionAssessment: assessment,
         checks: z
@@ -65,6 +161,8 @@ export const providerCheckSchema = z
             connectionAssessment: _connection,
             checks: _checks,
             layout: _layout,
+            nextPartRegion: _next,
+            targetRegion: _target,
             ...publicValue
         } = value
         if (!checkResultSchema.safeParse(publicValue).success)
@@ -74,10 +172,12 @@ export const providerQuestionSchema = z
     .strictObject({
         ...questionResultSchema.shape,
         layout: layoutProposal,
+        nextPartRegion: gridPartRegion,
+        targetRegion: gridPartRegion,
         observedRegion: gridBox.nullable(),
     })
     .omit({ model: true, modelNotes: true })
-    .superRefine(({ layout: _layout, ...value }, ctx) => {
+    .superRefine(({ layout: _layout, nextPartRegion: _next, targetRegion: _target, ...value }, ctx) => {
         if (!questionResultSchema.safeParse(value).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid question evidence' })
     })
@@ -172,22 +272,30 @@ export function assertStrictSchema(schema: Schema): void {
 
 export const metaOutputSchemas = {
     parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
-    // Preserve the existing request schema until the frozen provider can select layouts per runtime flag.
+    // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.
     check: strictSchema(
-        z.toJSONSchema(z.strictObject(providerCheckSchema.shape).omit({ layout: true }), {
-            target: 'draft-7',
-            io: 'input',
-        }),
+        z.toJSONSchema(
+            z.strictObject(providerCheckSchema.shape).omit({ layout: true, nextPartRegion: true, targetRegion: true }),
+            {
+                target: 'draft-7',
+                io: 'input',
+            },
+        ),
     ),
     question: strictSchema(
-        z.toJSONSchema(z.strictObject(providerQuestionSchema.shape).omit({ layout: true }), {
-            target: 'draft-7',
-            io: 'input',
-        }),
+        z.toJSONSchema(
+            z
+                .strictObject(providerQuestionSchema.shape)
+                .omit({ layout: true, nextPartRegion: true, targetRegion: true }),
+            {
+                target: 'draft-7',
+                io: 'input',
+            },
+        ),
     ),
 }
 
-/** Prepared schema variants; wiring their selection awaits the separate provider change. No extra call is made. */
+/** Variants selected by the provider only for MODEL_LAYOUT=1: same single call, adds nullable layout and regions. */
 export const metaLayoutOutputSchemas = {
     check: strictSchema(z.toJSONSchema(providerCheckSchema, { target: 'draft-7', io: 'input' })),
     question: strictSchema(z.toJSONSchema(providerQuestionSchema, { target: 'draft-7', io: 'input' })),

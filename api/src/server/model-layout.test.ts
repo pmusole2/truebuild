@@ -229,6 +229,22 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
         expect(() => createRuntimeFromEnvironment({ MODEL_LAYOUT: value })).toThrow('invalid_model_layout')
     })
 
+    it.each([undefined, '', '0'])('keeps the separate Wonder layout flag off for %j', (value): void => {
+        expect(createRuntimeFromEnvironment({ MODEL_LAYOUT: '1', MODEL_LAYOUT_WONDER: value }).layoutWonder).toBe(false)
+        expect(createRuntimeFromEnvironment({ MODEL_LAYOUT_WONDER: value }).layoutWonder).toBe(false)
+    })
+
+    it('turns the Wonder layout flag on only for 1 and only with MODEL_LAYOUT=1', (): void => {
+        expect(createRuntimeFromEnvironment({ MODEL_LAYOUT: '1', MODEL_LAYOUT_WONDER: '1' }).layoutWonder).toBe(true)
+        expect(() => createRuntimeFromEnvironment({ MODEL_LAYOUT_WONDER: '1' })).toThrow('invalid_model_layout_wonder')
+    })
+
+    it.each(['true', 'yes', '2', ' 1', 'TRUE'])('rejects invalid Wonder layout value %j', (value): void => {
+        expect(() => createRuntimeFromEnvironment({ MODEL_LAYOUT: '1', MODEL_LAYOUT_WONDER: value })).toThrow(
+            'invalid_model_layout_wonder',
+        )
+    })
+
     it.each([
         ['unset', undefined, false],
         ['1', '1', true],
@@ -276,8 +292,17 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
             else expect(value).not.toHaveProperty('layout')
             expect(outbound).toHaveBeenCalledTimes(1)
             const sent = JSON.parse(String(outbound.mock.calls[0]?.[1]?.body))
-            expect(sent.text.format.schema.properties).not.toHaveProperty('layout')
-            expect(sent.text.format.schema.required).not.toContain('layout')
+            // Flag off keeps the legacy wire schema; flag on asks for layout and regions in this same request.
+            for (const key of ['layout', 'nextPartRegion', 'targetRegion']) {
+                if (shown) {
+                    expect(sent.text.format.schema.properties).toHaveProperty(key)
+                    expect(sent.text.format.schema.required).toContain(key)
+                } else {
+                    expect(sent.text.format.schema.properties).not.toHaveProperty(key)
+                    expect(sent.text.format.schema.required).not.toContain(key)
+                }
+            }
+            expect(sent.max_output_tokens).toBe(1500)
             expect(runtime.counter.used).toBe(1)
         },
     )

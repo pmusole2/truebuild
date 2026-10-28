@@ -1,6 +1,7 @@
 import { createDemoManual, layoutSchema, type ManualStep } from '@truebuild/contracts'
 import { describe, expect, it } from 'vitest'
 
+import { stepFixtures } from '../test-support/step-fixtures'
 import { fallbackLayout, resolveLayout, withResolvedLayout, type LayoutContext } from './layout'
 
 // Synthetic demo manual and hand-written proposals: unit data only, not recorded or live model output.
@@ -144,5 +145,120 @@ describe('applying the flag at the result boundary', (): void => {
 
     it('leaves the result without a layout when the bound step is not in the session', (): void => {
         expect(withResolvedLayout(verdict, { ...input, binding: { stepId: 'step-9' } }, true)).toEqual(verdict)
+    })
+})
+
+describe.each(stepFixtures())('next-part and target regions on the $name manual', (fixture): void => {
+    const input = {
+        session: fixture.session,
+        binding: { stepId: fixture.stepId },
+        sourceImages: fixture.session.pages.map((page) => ({ page })),
+    }
+    const verdict = { decision: 'cannot_verify' as const, reason: 'Synthetic', sourceRefs: [], missingEvidence: [] }
+    const box = { x: 0.1, y: 0.2, width: 0.3, height: 0.2 }
+    const next = { partId: fixture.partId, region: box }
+    const target = { partId: fixture.partId, region: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 } }
+
+    it('keeps valid regions of real current-step parts untouched when enabled', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, true)
+        expect(applied).toMatchObject({ ...verdict, nextPartRegion: next, targetRegion: target })
+    })
+
+    it('keeps absence absent: nothing is synthesized from step data', (): void => {
+        const applied = withResolvedLayout(verdict, input, true)
+        expect(applied).not.toHaveProperty('nextPartRegion')
+        expect(applied).not.toHaveProperty('targetRegion')
+    })
+
+    it.each([
+        ['an unknown part id', (): unknown => ({ partId: 'invented-part', region: box })],
+        ['a manual part outside the current step', (): unknown => ({ partId: fixture.otherPartId, region: box })],
+        [
+            'an out-of-bounds box',
+            (): unknown => ({ partId: fixture.partId, region: { x: 0.9, y: 0.1, width: 0.5, height: 0.2 } }),
+        ],
+        [
+            'a zero-area box',
+            (): unknown => ({ partId: fixture.partId, region: { x: 0.2, y: 0.2, width: 0, height: 0.2 } }),
+        ],
+        ['an extra key', (): unknown => ({ ...next, label: 'x' })],
+    ])('drops a region with %s and preserves the verdict and the valid sibling', (_label, bad): void => {
+        const applied = withResolvedLayout(
+            { ...verdict, nextPartRegion: bad(), targetRegion: target } as never,
+            input,
+            true,
+        )
+        expect(applied).not.toHaveProperty('nextPartRegion')
+        expect(applied).toMatchObject({ ...verdict, targetRegion: target })
+    })
+
+    it('removes both regions when the flag is off, matching the pre-change response exactly', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, false)
+        expect(applied).toEqual(verdict)
+    })
+
+    it('removes regions when the bound step is not in the session', (): void => {
+        const applied = withResolvedLayout(
+            { ...verdict, nextPartRegion: next },
+            { ...input, binding: { stepId: 'missing-step' } },
+            true,
+        )
+        expect(applied).toEqual(verdict)
+    })
+})
+
+// Two DIFFERENT parts that both really belong to the same step: each region is valid alone, only the pairing is false.
+describe.each([
+    {
+        name: 'divider shelf step-2',
+        fixture: stepFixtures()[0]!,
+        stepId: 'step-2',
+        first: 'side-panel',
+        second: 'divider',
+    },
+    {
+        name: 'treadmill monitor arm arm-step-2',
+        fixture: stepFixtures()[1]!,
+        stepId: 'arm-step-2',
+        first: 'monitor-arm',
+        second: 'post-bracket',
+    },
+])('next-part and target for different real parts of one step: $name', ({ fixture, stepId, first, second }): void => {
+    const input = {
+        session: fixture.session,
+        binding: { stepId },
+        sourceImages: fixture.session.pages.map((page) => ({ page })),
+    }
+    const verdict = { decision: 'cannot_verify' as const, reason: 'Synthetic', sourceRefs: [], missingEvidence: [] }
+    const next = { partId: first, region: { x: 0.1, y: 0.2, width: 0.3, height: 0.2 } }
+    const target = { partId: second, region: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 } }
+
+    it('uses two real current-step part ids', (): void => {
+        const step = fixture.session.reviewedSteps.find((candidate) => candidate.stepId === stepId)!
+        const real = step.parts.map((part) => part.partId)
+        expect(real).toEqual(expect.arrayContaining([first, second]))
+        expect(first).not.toBe(second)
+    })
+
+    it('omits the disagreeing target and keeps the independently valid next part', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, true)
+        expect(applied).toMatchObject({ ...verdict, nextPartRegion: next })
+        expect(applied).not.toHaveProperty('targetRegion')
+    })
+
+    it('keeps either region alone and a same-part pair untouched', (): void => {
+        expect(withResolvedLayout({ ...verdict, targetRegion: target }, input, true)).toMatchObject({
+            targetRegion: target,
+        })
+        expect(withResolvedLayout({ ...verdict, nextPartRegion: next }, input, true)).toMatchObject({
+            nextPartRegion: next,
+        })
+        const same = { ...target, partId: first }
+        expect(withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: same }, input, true)).toMatchObject(
+            {
+                nextPartRegion: next,
+                targetRegion: same,
+            },
+        )
     })
 })

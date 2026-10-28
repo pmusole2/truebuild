@@ -31,6 +31,14 @@ export const normalizedBoxSchema = z
 
 export type NormalizedBox = z.infer<typeof normalizedBoxSchema>
 
+/**
+ * A grounded region on the exact observation photo for one real part of the current step. The box is public
+ * normalized 0..1 (top-left origin, fully inside the image). Absence is meaningful: nothing is ever synthesized.
+ */
+export const partRegionSchema = z.strictObject({ partId: idSchema, region: normalizedBoxSchema })
+
+export type PartRegion = z.infer<typeof partRegionSchema>
+
 export const sourceRefSchema = z.strictObject({
     pageId: idSchema,
     region: normalizedBoxSchema.nullable(),
@@ -478,6 +486,10 @@ export const checkResultSchema = z
         observedRegion: normalizedBoxSchema.nullable(),
         missingEvidence: z.array(descriptionSchema).max(100),
         layout: layoutSchema.optional(),
+        /** Where the real next part of the current step is in the observation photo. */
+        nextPartRegion: partRegionSchema.optional(),
+        /** Where `partId` is meant to go in the observation photo. */
+        targetRegion: partRegionSchema.optional(),
     })
     .superRefine((result, ctx) => {
         if (
@@ -520,6 +532,8 @@ export const questionResultSchema = z.strictObject({
     sourceRefs: sourceRefsSchema,
     missingEvidence: z.array(descriptionSchema).max(100),
     layout: layoutSchema.optional(),
+    nextPartRegion: partRegionSchema.optional(),
+    targetRegion: partRegionSchema.optional(),
 })
 
 export type QuestionTarget = z.infer<typeof questionTargetSchema>
