@@ -34,7 +34,7 @@ describe('StepList', () => {
         expect(screen.getByLabelText('Step 2, Current: Seat the divider in the groove')).toBeTruthy()
         expect(screen.getByLabelText('Step 3, Not started: Fit the shelf pins')).toBeTruthy()
         expect(screen.getByLabelText('Step 4, Blocked: Attach the back')).toBeTruthy()
-        expect(screen.getByText('2')).toHaveProp('maxFontSizeMultiplier', 3)
+        expect(screen.getByText('2')).toHaveProp('maxFontSizeMultiplier', 0)
     })
 
     it('marks only the current step as selected', async () => {
