@@ -1,6 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals'
 import { fireEvent, render, screen } from '@testing-library/react-native'
-import { Text } from 'react-native'
+import { StyleSheet, Text } from 'react-native'
 import { CameraChrome } from './camera-chrome'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
@@ -87,5 +87,23 @@ describe('CameraChrome', () => {
         )
         expect(screen.getByText('Frame the step')).toBeTruthy()
         expect(screen.getByText('Viewfinder')).toBeTruthy()
+    })
+
+    it('backs the shutter ring with a dark halo so it stays visible on a bright scene', async () => {
+        await render(
+            <CameraChrome
+                hint="Show the part."
+                shutterLabel="Take photo"
+                onShutter={(): void => undefined}
+                onClose={(): void => undefined}
+            >
+                <Text>Viewfinder</Text>
+            </CameraChrome>,
+        )
+        const ring = StyleSheet.flatten(screen.getByTestId('camera-shutter').props.style)
+        expect(ring.backgroundColor).toMatch(/^rgba\(15, 17, 19,/u)
+        expect(StyleSheet.flatten(screen.getByTestId('camera-shutter').parent?.props.style).backgroundColor).toMatch(
+            /^rgba\(15, 17, 19,/u,
+        )
     })
 })

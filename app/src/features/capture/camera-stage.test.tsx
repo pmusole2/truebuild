@@ -126,8 +126,8 @@ it('names a check camera correctly even when no step guide is available', async 
             onRetry={noop}
         />,
     )
-    expect(screen.getByText('Show the step you just built.')).toBeTruthy()
-    expect(screen.queryByText('Fill the frame with one page.')).toBeNull()
+    expect(screen.getByText('Show the part.')).toBeTruthy()
+    expect(screen.queryByText('Show a page.')).toBeNull()
 })
 
 it('does not reopen an instructions sheet after a camera error and retry', async () => {
@@ -158,13 +158,13 @@ it('does not reopen an instructions sheet after a camera error and retry', async
 })
 
 it.each([
-    ['page', { kind: 'page' as const }, undefined, 'Fill the frame with one page.', 'Page photo'],
-    ['question', { kind: 'question' as const }, undefined, 'Show the part you are asking about.', 'Ask photo'],
+    ['page', { kind: 'page' as const }, undefined, 'Show a page.', 'Page photo'],
+    ['question', { kind: 'question' as const }, undefined, 'Show the part.', 'Ask photo'],
     [
-        'check with a cue',
+        'check',
         { kind: 'check' as const },
-        { progress: 'Step 2 of 8', title: 'Divider', cue: 'The groove is on the long side.', instructions: null },
-        'The groove is on the long side.',
+        { progress: 'Step 2 of 8', title: 'Divider', instructions: null },
+        'Show the part.',
         'Step 2 of 8',
     ],
 ])('shows one line to aim by and a step pill for a %s photo', async (_name, intent, guide, cue, pill) => {
@@ -200,7 +200,7 @@ it('closes with the floating close control and names loading, permission and err
     const { rerender } = await render(view({ status: 'checking-access' }))
     expect(screen.getByText('Getting the camera ready.')).toBeTruthy()
     await rerender(view({ status: 'permission', canAskAgain: true, error: false }))
-    expect(screen.getByText('We need the camera to take photos of your manual and your work.')).toBeTruthy()
+    expect(screen.getByText('We need the camera for photos of your manual and work.')).toBeTruthy()
     expect(screen.getByTestId('camera-permission')).toBeTruthy()
     await rerender(view({ status: 'error' }))
     expect(screen.getByText('The camera is not working. Close other apps and try again.')).toBeTruthy()
@@ -219,7 +219,6 @@ describe('camera at accessibility text sizes', () => {
             guide={{
                 progress: 'Step 1 of 2',
                 title: 'Side panel',
-                cue: 'The inward-facing groove is visible.',
                 instructions: <Text>Groove faces inward.</Text>,
             }}
             presentation={presentation}
@@ -241,13 +240,11 @@ describe('camera at accessibility text sizes', () => {
         async (fontScale) => {
             mockWindow.fontScale = fontScale
             await render(stage(preview))
-            expect(screen.getByText('Your step.')).toBeTruthy()
-            expect(screen.getByTestId('camera-cue')).toHaveProp(
-                'accessibilityLabel',
-                'The inward-facing groove is visible.',
-            )
+            // The same short generic instruction as at the normal size, never specific to one manual's step.
+            expect(screen.getByText('Show the part.')).toBeTruthy()
+            expect(screen.getByTestId('camera-cue')).toHaveProp('accessibilityLabel', 'Show the part.')
             // Never cut off with an ellipsis: the cue wraps instead.
-            expect(screen.getByText('Your step.').props.numberOfLines).toBeUndefined()
+            expect(screen.getByText('Show the part.').props.numberOfLines).toBeUndefined()
             expect(screen.getByText('1/2')).toBeTruthy()
             expect(screen.getByLabelText('Step 1 of 2')).toBeTruthy()
             expect(screen.queryByText('Step 1 of 2')).toBeNull()
@@ -255,8 +252,8 @@ describe('camera at accessibility text sizes', () => {
     )
 
     it.each([
-        ['page', { kind: 'page' as const }, 'One page.', 'Page'],
-        ['question', { kind: 'question' as const }, 'The part.', '1/2 · Ask'],
+        ['page', { kind: 'page' as const }, 'Show a page.', 'Page'],
+        ['question', { kind: 'question' as const }, 'Show the part.', '1/2 · Ask'],
     ])('keeps a short generic cue and pill for a %s photo', async (_name, intent, cue, pill) => {
         mockWindow.fontScale = 3.12
         await render(stage(preview, { intent }))

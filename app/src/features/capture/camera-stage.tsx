@@ -19,8 +19,6 @@ export type AssemblyGuide = {
     // "Step 2 of 8"
     readonly progress: string
     readonly title: string
-    // The one line to show the camera, in the step's own words.
-    readonly cue?: string
     // A small picture of the step; tapping it opens the full step.
     readonly thumbnail?: ReactNode
     readonly instructions: ReactNode
@@ -37,21 +35,15 @@ function compactProgress(progress: string): string | null {
 }
 
 /**
- * The single line shown at the bottom of the preview. Never more than one idea. At accessibility text sizes a short,
- * generic and still truthful cue replaces the step's own words, so the line fits without being cut off; the full cue
- * stays as the accessible name.
+ * The single line shown at the bottom of the preview: one short, generic instruction at every text size, so it fits
+ * without being cut off. It never names a part or fact of the manual; the full step is one tap away in the picture's
+ * details.
  */
-export function cameraCue(intent: CameraIntent | null, guide?: AssemblyGuide, compact = false): string {
+export function cameraCue(intent: CameraIntent | null): string {
     if (intent === null) {
-        return compact ? 'Fill frame.' : 'Fill the frame.'
+        return 'Fill the frame.'
     }
-    if (intent.kind === 'page') {
-        return compact ? 'One page.' : 'Fill the frame with one page.'
-    }
-    if (intent.kind === 'question') {
-        return compact ? 'The part.' : 'Show the part you are asking about.'
-    }
-    return compact ? 'Your step.' : (guide?.cue ?? 'Show the step you just built.')
+    return intent.kind === 'page' ? 'Show a page.' : 'Show the part.'
 }
 
 /** What the pill at the top says: the step, or what the photo is for. Compact form: "2/8", "Page", "Ask". */
@@ -111,7 +103,7 @@ export function CameraStage({
                   testID: 'camera-permission',
                   body: (
                       <>
-                          <Instruction>We need the camera to take photos of your manual and your work.</Instruction>
+                          <Instruction>We need the camera for photos of your manual and work.</Instruction>
                           {presentation.canAskAgain ? null : (
                               <Body tone="muted">Turn on Camera for TrueBuild in Settings.</Body>
                           )}
@@ -213,11 +205,9 @@ export function CameraStage({
                                     style={styles.cue}
                                     testID="camera-cue"
                                     accessible={true}
-                                    accessibilityLabel={cameraCue(intent, guide)}
+                                    accessibilityLabel={cameraCue(intent)}
                                 >
-                                    <Callout numberOfLines={large ? undefined : 1}>
-                                        {cameraCue(intent, guide, large)}
-                                    </Callout>
+                                    <Callout numberOfLines={large ? undefined : 1}>{cameraCue(intent)}</Callout>
                                 </View>
                                 {presentation.shutter}
                             </View>

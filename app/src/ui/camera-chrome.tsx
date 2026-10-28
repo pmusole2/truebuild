@@ -108,35 +108,38 @@ export function ShutterButton({
     const focus = useFocusRing()
     const press = usePressMotion(disabled, !disabled ? 1 : busy ? BUSY_OPACITY : WAITING_OPACITY)
     return (
-        <MotionPressable
-            testID="camera-shutter"
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            accessibilityState={{ disabled, busy }}
-            aria-disabled={disabled}
-            disabled={disabled}
-            {...focus.focusHandlers}
-            onPressIn={press.onPressIn}
-            onPressOut={press.onPressOut}
-            onPress={(): void => {
-                haptic('selection')
-                onPress()
-            }}
-            style={[
-                focusRingStyle(focus.focused, colors),
-                styles.shutterRing,
-                { borderColor: colors.ink },
-                press.style,
-            ]}
-        >
-            <View style={[styles.shutterCore, { backgroundColor: colors.ink }]}>
-                {busy ? <ActivityIndicator testID="shutter-busy" color={colors.inkInverse} size="large" /> : null}
-            </View>
-        </MotionPressable>
+        <View style={styles.shutterHalo}>
+            <MotionPressable
+                testID="camera-shutter"
+                accessibilityRole="button"
+                accessibilityLabel={label}
+                accessibilityState={{ disabled, busy }}
+                aria-disabled={disabled}
+                disabled={disabled}
+                {...focus.focusHandlers}
+                onPressIn={press.onPressIn}
+                onPressOut={press.onPressOut}
+                onPress={(): void => {
+                    haptic('selection')
+                    onPress()
+                }}
+                style={[
+                    focusRingStyle(focus.focused, colors),
+                    styles.shutterRing,
+                    { borderColor: colors.ink },
+                    press.style,
+                ]}
+            >
+                <View style={[styles.shutterCore, { backgroundColor: colors.ink }]}>
+                    {busy ? <ActivityIndicator testID="shutter-busy" color={colors.inkInverse} size="large" /> : null}
+                </View>
+            </MotionPressable>
+        </View>
     )
 }
 
 const CORNER = 28
+const SHUTTER_BACKING = 'rgba(15, 17, 19, 0.55)'
 
 const styles = StyleSheet.create({
     root: {
@@ -222,7 +225,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: space.sm,
     },
+    // A dark backing under and inside the white ring, so the shutter stays distinct on a bright scene.
+    shutterHalo: { padding: 3, borderRadius: radius.pill, backgroundColor: SHUTTER_BACKING },
     shutterRing: {
+        backgroundColor: SHUTTER_BACKING,
         width: shutterSize,
         height: shutterSize,
         borderRadius: radius.pill,

@@ -83,8 +83,8 @@ it('keeps settings inspection inert, including the device settings action', asyn
 
 it('wires the camera preview guide exactly as the app does: one cue over the viewfinder, every fact in More', async () => {
     await render(<WorkflowPreview initialCase="camera-check" />)
-    // One line to aim by: the first visible check, in the step's own words. Nothing else sits over the viewfinder.
-    const cue = within(screen.getByTestId('camera-cue')).getByText('The inward-facing groove is visible.')
+    // One short generic instruction to aim by. Nothing else sits over the viewfinder.
+    const cue = within(screen.getByTestId('camera-cue')).getByText('Show the part.')
     expect(cue.props.numberOfLines).toBe(1)
     expect(screen.queryByTestId('assembly-panel')).toBeNull()
     expect(screen.queryByText(/^Frame the current assembly step/)).toBeNull()
@@ -99,7 +99,7 @@ it('wires the camera preview guide exactly as the app does: one cue over the vie
     expect(screen.getByText(/^Which way it faces: Groove faces inward toward the divider\./u)).toBeTruthy()
     expect(screen.getByText('1. Look for: The inward-facing groove is visible.')).toBeTruthy()
     expect(screen.getByText('How it joins: Keep the panel free before seating the divider.')).toBeTruthy()
-    expect(screen.getByText('Expected diagram · page 1')).toBeTruthy()
+    expect(screen.getByText('Picture from your manual · Page 1')).toBeTruthy()
 })
 
 describe('native chrome for hidden-controls captures', () => {

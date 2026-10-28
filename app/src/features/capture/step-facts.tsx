@@ -22,23 +22,6 @@ import { ManualImage } from './page-media'
 export { factText } from './fact-text'
 
 /**
- * What to show the camera: one line, in the step's own words. The first known visible check leads because it is what the
- * photo is judged against; a known orientation stands in when the step has no known check. Unknown facts are not turned
- * into a cue. Null means the camera falls back to a generic line; every fact stays in More.
- */
-export function stepCue(session: ManualSession, index: number): string | undefined {
-    const step = session.reviewedSteps[index]
-    if (step === undefined) {
-        return undefined
-    }
-    const check = step.visibleChecks[0]
-    if (check?.description.state === 'known') {
-        return check.description.value
-    }
-    return step.orientation.state === 'known' ? step.orientation.value.description : undefined
-}
-
-/**
  * The step guide shown over the assembly camera. One builder serves the production camera route and the inert visual
  * preview, so the preview cannot drift from what the app wires: only a one-line cue and a small picture sit over the
  * viewfinder, and every fact and cited diagram stays in More.
@@ -55,7 +38,6 @@ export function stepAssemblyGuide(
     return {
         progress: `Step ${index + 1} of ${session.reviewedSteps.length}`,
         title: step.title,
-        cue: stepCue(session, index),
         thumbnail: (
             <StepPicture
                 reference={step.sourceRefs[0]}
@@ -133,7 +115,7 @@ export function ModelProvenance({ result }: { result: Pick<ParsedManual, 'model'
     )
 }
 
-/** One expected diagram for a cited page, measured against the page's own size so letterboxing is correct. */
+/** One manual picture for a cited page, measured against the page's own size so letterboxing is correct. */
 export function SourceDiagram({
     reference,
     index,
@@ -157,12 +139,12 @@ export function SourceDiagram({
     const pageNumber = session.pages.indexOf(page) + 1
     const uri = pageUris[page.pageId]
     const pane: ComparisonPane = {
-        caption: `Expected diagram · page ${pageNumber}`,
+        caption: `Picture from your manual · Page ${pageNumber}`,
         media:
             uri === undefined ? (
                 <Caption>Loading page…</Caption>
             ) : (
-                <ManualImage uri={uri} label={`Expected diagram page ${pageNumber}`} />
+                <ManualImage uri={uri} label={`Picture from your manual, page ${pageNumber}`} />
             ),
         mediaSize: { width: page.width, height: page.height },
         regions:
@@ -172,7 +154,7 @@ export function SourceDiagram({
 }
 
 /**
- * Expected diagrams for cited pages. `skip` leaves out the first pages when the guide has already drawn them beside the
+ * Manual pictures for cited pages. `skip` leaves out the first pages when the guide has already drawn them beside the
  * photo; the remaining panes keep the index they have in the full list.
  */
 export function SourceDiagrams({
