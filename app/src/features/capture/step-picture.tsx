@@ -5,6 +5,8 @@ import { Skeleton } from '../../ui/skeleton'
 import { Caption } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
 import { radius } from '../../theme/tokens'
+import type { Rect } from '../assembly/frame-geometry'
+import { heroImageRect } from '../assembly/hero-geometry'
 import { ManualImage } from './page-media'
 import type { WorkflowState } from './controller'
 
@@ -41,9 +43,15 @@ export function placeCrop(
     return { left: frame.width / 2 - centreX, top: frame.height / 2 - centreY, width, height }
 }
 
+function placeRect(rect: Rect): { left: number; top: number; width: number; height: number } {
+    return { left: rect.x, top: rect.y, width: rect.width, height: rect.height }
+}
+
 /**
- * The manual's own picture for a step, cropped to the cited area, filling a frame of `height` points. This is the hero
- * before any photo has been taken. A page that has not loaded yet shows a skeleton, never a blank box.
+ * The manual's own picture for a step, filling a frame of `height` points. As a thumbnail it is cropped to the cited
+ * area and fitted whole. As a hero (`cover`) the page itself fills the frame, centred on the cited area, unless that
+ * would cut the cited area, in which case the whole page is contained. A page that has not loaded yet shows a
+ * skeleton, never a blank box.
  */
 export function StepPicture({
     reference,
@@ -52,6 +60,7 @@ export function StepPicture({
     height,
     testID = 'guide-hero',
     flush = false,
+    cover = false,
 }: {
     reference: SourceRef | undefined
     session: ManualSession
@@ -60,6 +69,7 @@ export function StepPicture({
     testID?: string
     // Edge to edge: no rounded corners, for a hero that runs the full width of the screen.
     flush?: boolean
+    cover?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const [width, setWidth] = useState(0)
@@ -68,10 +78,13 @@ export function StepPicture({
         (reference === undefined ? session.pages[0] : undefined)
     const uri = page === undefined ? undefined : pageUris[page.pageId]
     const onLayout = (event: LayoutChangeEvent): void => setWidth(event.nativeEvent.layout.width)
+    const region = reference?.region ?? null
     const placed =
         page === undefined || width === 0
             ? null
-            : placeCrop({ width, height }, page, cropFor(reference?.region ?? null))
+            : cover
+              ? placeRect(heroImageRect({ width, height }, page, region === null ? [] : [region]))
+              : placeCrop({ width, height }, page, cropFor(region))
     return (
         <View
             testID={testID}

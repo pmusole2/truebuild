@@ -7,7 +7,9 @@ import { PaneNotes, type PaneNote } from '../../ui/pane-notes'
 import { Caption } from '../../ui/text'
 import { useLargeText } from '../../ui/large-text'
 import { bytesToDataUri } from '../../media/image-source'
+import type { NormalizedBox } from '@truebuild/contracts'
 import { containRect, normalizedPointFromTap, type Point, type Rect } from './frame-geometry'
+import { heroImageRect } from './hero-geometry'
 import type { Observation } from './observation'
 
 export const MAX_PHOTO_HEIGHT = 360
@@ -76,6 +78,9 @@ type FrozenPhotoProps = {
     readonly notes?: readonly PaneNote[]
     // Hero mode: the photo fills a frame of exactly this height, its names sit on the image, and no caption is drawn.
     readonly fillHeight?: number
+    // Hero mode only: boxes the picture must keep in view (observed, next and target). The hero fills its frame with the
+    // photo, centred on these, unless that would cut one; then the whole photo is contained.
+    readonly heroRegions?: readonly NormalizedBox[]
     // A single validated name on the hero. The full explanatory notes remain in More, outside hero mode.
     readonly heroLabel?: string
     // Edge to edge: square corners, for a hero that runs the full width of the screen.
@@ -90,6 +95,7 @@ export function FrozenPhoto({
     overlay,
     notes,
     fillHeight,
+    heroRegions,
     heroLabel,
     flush = false,
 }: FrozenPhotoProps): ReactElement {
@@ -105,7 +111,9 @@ export function FrozenPhoto({
               ? fillHeight
               : Math.min((width * imageSize.height) / imageSize.width, MAX_PHOTO_HEIGHT)
     const box = { width, height: boxHeight }
-    const displayed = containRect(box, imageSize)
+    // A tappable photo keeps the contain geometry the tap maps with; the hero is never tappable.
+    const cover = fillHeight !== undefined && onTapPoint === undefined
+    const displayed = cover ? heroImageRect(box, imageSize, heroRegions) : containRect(box, imageSize)
 
     function onLayout(event: LayoutChangeEvent): void {
         setWidth(event.nativeEvent.layout.width)
@@ -123,8 +131,21 @@ export function FrozenPhoto({
         }
     }
 
-    const photo = (
+    // The pixels and every overlay use `displayed`, so they always land on the same place.
+    const photo = cover ? (
         <Image
+            testID="frozen-photo-image"
+            accessibilityIgnoresInvertColors
+            source={{ uri: dataUri }}
+            resizeMode="stretch"
+            style={[
+                styles.placed,
+                { left: displayed.x, top: displayed.y, width: displayed.width, height: displayed.height },
+            ]}
+        />
+    ) : (
+        <Image
+            testID="frozen-photo-image"
             accessibilityIgnoresInvertColors
             source={{ uri: dataUri }}
             resizeMode="contain"
@@ -150,7 +171,7 @@ export function FrozenPhoto({
                         ) : (
                             <Pressable
                                 accessibilityRole="imagebutton"
-                                accessibilityLabel="Frozen photo of your assembly. Tap a spot to ask about it."
+                                accessibilityLabel="Your photo for this step. Tap a spot to ask about it."
                                 onPress={(event) => onPress(event)}
                             >
                                 {photo}
@@ -195,6 +216,7 @@ const styles = StyleSheet.create({
     image: {
         alignSelf: 'center',
     },
+    placed: { position: 'absolute' },
     labels: {
         position: 'absolute',
         left: space.xs,

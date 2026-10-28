@@ -48,6 +48,7 @@ export function DoneScreen({
                     pageUris={state.pageUris}
                     height={heroHeight}
                     testID="done-hero"
+                    cover
                 />
             </View>
             <TextRegion>
