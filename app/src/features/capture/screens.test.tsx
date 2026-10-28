@@ -57,13 +57,8 @@ function Screens({ controller }: { controller: CaptureController }): ReactElemen
     return state.route === 'pages' && entry !== undefined ? (
         <PagesScreen state={state} controller={controller} entry={entry} choosePages={(): void => undefined} />
     ) : state.route === 'overview' && entry !== undefined ? (
-        // Matches the Quick check route: a new manual or revision remounts the screen and resets its local drafts.
-        <OverviewScreen
-            key={`${entry.session.manualId}:${entry.session.revision}`}
-            state={state}
-            controller={controller}
-            entry={entry}
-        />
+        // Matches the Quick check route: a new manual remounts the screen; an accepted revision keeps the question count.
+        <OverviewScreen key={entry.session.manualId} state={state} controller={controller} entry={entry} />
     ) : state.route === 'guide' && entry !== undefined ? (
         <GuideScreen state={state} controller={controller} entry={entry} />
     ) : (
@@ -88,6 +83,10 @@ const QUESTION = 'What the picture shows'
 const CHECKS = 'What you should see, one per line'
 const openMore = async (): Promise<void> => {
     await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+}
+// The default Quick check card holds only the picture, one question and Let me fix it. The editor is in More.
+const openFix = async (): Promise<void> => {
+    await fireEvent.press(screen.getByRole('button', { name: 'Let me fix it' }))
 }
 
 /** Unreviewed demo manual with every correction still awaiting review. */
@@ -163,9 +162,16 @@ it('asks one honest question at a time: orientation first, then visible checks, 
     expect(screen.getByText('Question 1 of 2', hidden)).toBeTruthy()
     expect(screen.getByText('Which way should the part face in step 1?')).toBeTruthy()
     expect(screen.getByText('The manual says: Arrow is not visible.')).toBeTruthy()
-    expect(screen.getByText('Part: Side panel')).toBeTruthy()
-    // No guessed answer is offered: there is nothing to say Yes to, only Save and Skip.
+    // No guessed answer is offered: there is nothing to say Yes to. The default card has no form, picker or text box.
     expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'No' })).toBeNull()
+    expect(screen.queryByText('Part: Side panel')).toBeNull()
+    expect(screen.queryByLabelText(QUESTION)).toBeNull()
+    expect(screen.queryByLabelText(CHECKS)).toBeNull()
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+    await openFix()
+    expect(screen.getByText('Part: Side panel')).toBeTruthy()
     expect(screen.queryByLabelText(CHECKS)).toBeNull()
 
     await fireEvent.changeText(screen.getByLabelText(QUESTION), '  Groove faces inward toward the divider.  ')
@@ -176,10 +182,14 @@ it('asks one honest question at a time: orientation first, then visible checks, 
         value: { partId: 'side-panel', description: 'Groove faces inward toward the divider.' },
         sourceRefs: orientationCited,
     })
-    // The next question is the missing visible checks; confirmation is still closed.
+    // The next question is the missing visible checks; confirmation is still closed, and the count carries on:
+    // accepting a revision does not turn question 2 of 2 into question 1 of 1.
     expect(await screen.findByText('What should you see when step 2 is done?')).toBeTruthy()
+    expect(screen.getByText('Question 2 of 2', hidden)).toBeTruthy()
+    expect(screen.queryByText('Question 1 of 1', hidden)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start building' })).toBeNull()
 
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(CHECKS), 'The groove is visible.\n\n  Divider edge is seated.  \n')
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(controller.current?.session.revision).toBe(3))
@@ -200,6 +210,7 @@ it('asks one honest question at a time: orientation first, then visible checks, 
 it('keeps typed drafts out of the facts', async () => {
     const { controller } = await renderManual(partlyResolvedManual())
     const before = structuredClone(controller.current?.session)
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(QUESTION), 'Groove faces inward.')
     expect(controller.current?.session).toEqual(before)
     expect(screen.queryByRole('button', { name: 'Start building' })).toBeNull()
@@ -214,6 +225,7 @@ it('requires an explicit part choice when several parts could carry the orientat
     }
     session.reviewedSteps[1]!.orientation = { state: 'unknown', reason: 'Divider direction is hidden.' }
     const { controller } = await renderManual(session)
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(QUESTION), 'Divider sits square to the panel.')
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByText('Choose the part first.')).toBeTruthy()
@@ -241,6 +253,7 @@ it.each([
     }
     const { controller } = await renderManual(session)
     const before = structuredClone(controller.current?.session)
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(label), draft)
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     expect(screen.getByText(message)).toBeTruthy()
@@ -260,6 +273,19 @@ it('skipping keeps the gate closed and can be taken back', async () => {
     expect(screen.getByText('Which way should the part face in step 1?')).toBeTruthy()
 })
 
+it('Cancel closes the editor, discards the draft and accepts nothing', async () => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    const before = structuredClone(controller.current?.session)
+    await openFix()
+    await fireEvent.changeText(screen.getByLabelText(QUESTION), 'Groove faces inward.')
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByLabelText(QUESTION)).toBeNull()
+    expect(controller.current?.session).toEqual(before)
+    expect(screen.getByText('Question 1 of 2', hidden)).toBeTruthy()
+    await openFix()
+    expect(screen.getByLabelText(QUESTION).props.value).toBe('')
+})
+
 it('a rejected accept keeps the draft for correction and shows the controller notice in plain words', async () => {
     const session = partlyResolvedManual()
     session.reviewedSteps[0]!.orientation = {
@@ -269,6 +295,7 @@ it('a rejected accept keeps the draft for correction and shows the controller no
     }
     const { controller } = await renderManual(session)
     const tooLong = 'x'.repeat(501)
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(CHECKS), tooLong)
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(controller.getSnapshot().notice).not.toBeNull())
@@ -284,6 +311,7 @@ it('a failed save shows a plain notice, promotes no fact and keeps the draft', a
     kv.setItem = async (): Promise<never> => {
         throw new Error('Disk full')
     }
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(QUESTION), 'Groove faces inward.')
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
@@ -309,13 +337,13 @@ it('a revision change discards unaccepted drafts from the previous revision', as
     controllers.push(controller)
     const view = (revision: number): ReactElement => (
         <OverviewScreen
-            key={`${session.manualId}:${revision}`}
             state={controller.getSnapshot()}
             controller={controller}
             entry={{ ...entry, session: { ...session, revision } }}
         />
     )
     const { rerender } = await render(view(1))
+    await openFix()
     await fireEvent.changeText(screen.getByLabelText(QUESTION), 'Groove is visible.')
     await rerender(view(2))
     expect(screen.getByLabelText(QUESTION).props.value).toBe('')

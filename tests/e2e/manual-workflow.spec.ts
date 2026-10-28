@@ -115,6 +115,8 @@ test('refusal shows the expected diagram and your photo side by side in More, an
 
     // A point chosen on the refused photo itself, without retaking it, is a valid question target.
     await page.getByRole('button', { name: 'Your photo: tap a point to ask about it', exact: true }).click()
+    // Asking is an early row in the same More sheet; the chosen point is kept when it switches to the question.
+    await page.getByRole('button', { name: 'Ask about this step', exact: true }).click()
     await expect(page.getByText('Selected point in photo.', { exact: true })).toBeVisible()
     await page.getByLabel('Question about your photo').fill('Which way should this part face?')
     const question = page.waitForResponse(
@@ -166,6 +168,10 @@ test('an unknown critical fact is asked as one honest question and blocks starti
     })
     await expect(page.getByText('The manual says: Arrow is not visible in the photo.', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start building', exact: true })).toHaveCount(0)
+    // The default card is the picture, the question and Let me fix it: no form until that is tapped.
+    await expect(page.getByRole('button', { name: 'Let me fix it', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Let me fix it', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeVisible()
 })
 

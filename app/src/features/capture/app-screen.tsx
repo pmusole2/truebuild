@@ -71,14 +71,7 @@ function PreviewSurface({ choosePages }: { choosePages: (replaceIndex?: number) 
         )
     }
     if (state.route === 'overview') {
-        return (
-            <OverviewScreen
-                key={`${entry.session.manualId}-${entry.session.revision}`}
-                state={state}
-                controller={controller}
-                entry={entry}
-            />
-        )
+        return <OverviewScreen key={entry.session.manualId} state={state} controller={controller} entry={entry} />
     }
     return entry.completedStepIds.length > 0 && entry.completedStepIds.length === entry.session.reviewedSteps.length ? (
         <DoneScreen state={state} controller={controller} entry={entry} />

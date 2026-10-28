@@ -1,5 +1,5 @@
-import { useState, type ReactElement } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native'
+import { useCallback, useMemo, useState, type ReactElement } from 'react'
+import { Pressable, StyleSheet, View } from 'react-native'
 import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -15,25 +15,84 @@ import { reviewedSession, unresolvedCriticalFacts } from './controller'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
+import { firstSentences, isProgressNotice, plainWords } from './plain-copy'
 import { editableQuestions, otherBlockers, type Question } from './quick-check-model'
-import { PlainNotice, ScreenBody, TextRegion, useHeroHeight, useKeyboardVisible } from './screen-layout'
+import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { StepDetails } from './step-details'
 import { StepPicture } from './step-picture'
 import type { WorkflowScreenProps } from './workflow-types'
 
-type QuickCheckProps = WorkflowScreenProps & ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav }
-
 /** Internal issue wording turned into a plain line for More. Part ids and field names never show. */
 function plainIssue(issue: string): string {
     return issue.replace(/^Part \S+ name: /u, 'A part name is unclear: ').replace(/, quantity of \S+:/u, ', how many:')
 }
 
+export type QuickProgress = {
+    readonly questions: readonly Question[]
+    readonly current: Question | undefined
+    // The current question's place among all the questions this read started with; 0 when none is showing.
+    readonly position: number
+    readonly total: number
+    readonly skipped: readonly string[]
+    readonly skip: (id: string) => void
+    readonly unskip: () => void
+    // "Question 2 of 5", for the fixed header; undefined when no question is on screen.
+    readonly label: string | undefined
+}
+
+/**
+ * Where the person is in the questions. It is held above the screen so that accepting a fact (which makes a new
+ * revision of the manual) keeps the count: after question 1 of 2 comes question 2 of 2. A different manual or a new read
+ * of different pages starts the count again.
+ */
+export function useQuickProgress(session: ManualSession | undefined): QuickProgress {
+    const questions = useMemo(() => (session === undefined ? [] : editableQuestions(session)), [session])
+    const key =
+        session === undefined
+            ? ''
+            : `${session.manualId}:${session.pages.map((page) => page.pageId).join(',')}:${session.rawExtraction === null ? 'unread' : 'read'}`
+    const [progress, setProgress] = useState<{ key: string; total: number; skipped: readonly string[] }>({
+        key,
+        total: questions.length,
+        skipped: [],
+    })
+    let live = progress
+    if (progress.key !== key) {
+        live = { key, total: questions.length, skipped: [] }
+        setProgress(live)
+    }
+    const total = Math.max(live.total, questions.length)
+    const asking = questions.filter((question) => !live.skipped.includes(question.id))
+    const current = asking[0]
+    const position = current === undefined ? 0 : total - questions.length + questions.indexOf(current) + 1
+    const skip = useCallback(
+        (id: string): void => setProgress((now) => ({ ...now, skipped: [...now.skipped, id] })),
+        [],
+    )
+    const unskip = useCallback((): void => setProgress((now) => ({ ...now, skipped: [] })), [])
+    const showing = current !== undefined && current.step.sourceRefs.length > 0
+    return {
+        questions,
+        current,
+        position,
+        total,
+        skipped: live.skipped,
+        skip,
+        unskip,
+        label: showing ? `Question ${position} of ${total}` : undefined,
+    }
+}
+
+type QuickCheckProps = WorkflowScreenProps &
+    ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav; readonly progress?: QuickProgress }
+
 /**
  * Quick check: one honest question at a time. Only what the existing gate lets a person fill in is asked (a missing
  * orientation or missing visible checks, each from the step's cited page); anything else needs clearer pages. Nothing
- * is guessed, and the whole manual is confirmed only by the explicit Start building tap once the questions are done.
+ * is guessed, so with no value from the manual the card shows its picture, the question and Let me fix it. The editor
+ * opens in the More sheet. The whole manual is confirmed only by the explicit Start building tap after the questions.
  */
 export function OverviewScreen({
     state,
@@ -42,23 +101,21 @@ export function OverviewScreen({
     nav: navProp,
     chrome = 'inline',
     more: moreProp,
+    progress: progressProp,
 }: QuickCheckProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
-    const keyboard = useKeyboardVisible()
-    const heroHeight = useHeroHeight(keyboard)
-    const questions = editableQuestions(session)
-    const [skipped, setSkipped] = useState<readonly string[]>([])
-    const [total] = useState(questions.length)
-    const asking = questions.filter((question) => !skipped.includes(question.id))
-    const current = asking[0]
+    const heroHeight = useHeroHeight()
+    const ownProgress = useQuickProgress(session)
+    const { questions, current, position, total, skipped } = progressProp ?? ownProgress
+    const skip = progressProp?.skip ?? ownProgress.skip
+    const unskip = progressProp?.unskip ?? ownProgress.unskip
     const blockers = otherBlockers(session)
     const reviewed = session.reviewStatus === 'reviewed'
     const canConfirm = reviewedSession(session) !== null
     const busy = state.pending !== null || state.storageReadOnly
-    const position = current === undefined ? 0 : total - questions.length + questions.indexOf(current) + 1
     // Nothing has been read yet: no extraction and no steps. (A session that already carries steps is shown as it is.)
     const noRead = session.rawExtraction === null && session.reviewedSteps.length === 0
     const unreadable = current !== undefined && current.step.sourceRefs.length === 0
@@ -77,8 +134,7 @@ export function OverviewScreen({
     } else if (questions.length > 0 || blockers.length > 0 || current !== undefined) {
         sentence = 'One thing still needs a clearer photo before we can check your work.'
         primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
-        secondary =
-            skipped.length > 0 ? { label: 'Answer skipped questions', onPress: (): void => setSkipped([]) } : undefined
+        secondary = skipped.length > 0 ? { label: 'Answer skipped questions', onPress: unskip } : undefined
     } else if (canConfirm || reviewed) {
         sentence = 'Thanks. Your steps are ready.'
         primary = {
@@ -95,30 +151,52 @@ export function OverviewScreen({
         primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
     }
 
+    const asking = current !== undefined && !unreadable
+    // The header count already shows progress; "Saved. Thanks." would be a second sentence under the question.
+    const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
     return (
         <ScreenBody testID="overview-screen">
             <View testID="quick-check-screen" style={styles.flex}>
                 {chrome === 'inline' ? (
                     <InlineHeader
                         title="Quick check"
-                        subtitle={current === undefined || unreadable ? undefined : `Question ${position} of ${total}`}
+                        subtitle={asking ? `Question ${position} of ${total}` : undefined}
                         more={more}
                     />
                 ) : null}
-                {current !== undefined && !unreadable ? (
-                    <QuestionCard
-                        key={`${session.manualId}:${session.revision}:${current.id}`}
-                        question={current}
-                        session={session}
-                        state={state}
-                        controller={controller}
-                        position={position}
-                        total={total}
-                        sentence={sentence}
-                        heroHeight={heroHeight}
-                        busy={busy}
-                        onSkip={(): void => setSkipped([...skipped, current.id])}
-                    />
+                {asking ? (
+                    <>
+                        <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
+                        <View style={styles.hero}>
+                            <StepPicture
+                                reference={current.step.sourceRefs[0]}
+                                session={session}
+                                pageUris={state.pageUris}
+                                height={heroHeight}
+                            />
+                        </View>
+                        <TextRegion>
+                            <PlainNotice state={quietState} controller={controller} />
+                            <Instruction>{sentence}</Instruction>
+                            {current.reason === null ? null : (
+                                <Caption>{`The manual says: ${firstSentences(plainWords(current.reason), 1)}`}</Caption>
+                            )}
+                        </TextRegion>
+                        <FixedBottomBar
+                            primary={{
+                                label: 'Let me fix it',
+                                testID: 'quick-check-fix',
+                                disabled: busy,
+                                onPress: (): void => more.show('fix'),
+                            }}
+                            secondary={{
+                                label: 'Skip for now',
+                                testID: 'quick-check-skip',
+                                disabled: busy,
+                                onPress: (): void => skip(current.id),
+                            }}
+                        />
+                    </>
                 ) : (
                     <>
                         <View style={styles.hero}>
@@ -130,7 +208,7 @@ export function OverviewScreen({
                             />
                         </View>
                         <TextRegion>
-                            <PlainNotice state={state} controller={controller} />
+                            <PlainNotice state={quietState} controller={controller} />
                             <Instruction>{sentence}</Instruction>
                         </TextRegion>
                         <FixedBottomBar primary={primary} secondary={secondary} />
@@ -142,35 +220,34 @@ export function OverviewScreen({
                 onClose={more.hide}
                 session={session}
                 state={state}
+                controller={controller}
                 nav={nav}
                 issues={unresolvedCriticalFacts(session)}
+                editing={more.mode === 'fix' && asking ? current : undefined}
+                busy={busy}
             />
         </ScreenBody>
     )
 }
 
-function QuestionCard({
+/**
+ * The one scoped editor, opened by Let me fix it. Its draft lives only while the sheet is open: Cancel and closing
+ * discard it, a refused save keeps it, and only Save writes (through the unchanged `acceptStepFacts`).
+ */
+function FixEditor({
     question,
     session,
     state,
     controller,
-    position,
-    total,
-    sentence,
-    heroHeight,
     busy,
-    onSkip,
+    onDone,
 }: {
     question: Question
     session: ManualSession
     state: WorkflowScreenProps['state']
     controller: WorkflowScreenProps['controller']
-    position: number
-    total: number
-    sentence: string
-    heroHeight: number
     busy: boolean
-    onSkip: () => void
+    onDone: () => void
 }): ReactElement {
     const { step } = question
     const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
@@ -181,6 +258,13 @@ function QuestionCard({
     const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
     const [text, setText] = useState('')
     const [error, setError] = useState<string | undefined>(undefined)
+    const accept = async (
+        resolution: Parameters<WorkflowScreenProps['controller']['acceptStepFacts']>[2],
+    ): Promise<void> => {
+        if (await controller.acceptStepFacts(binding, step.stepId, resolution)) {
+            onDone()
+        }
+    }
     const save = async (): Promise<void> => {
         if (question.kind === 'orientation') {
             const description = text.trim()
@@ -193,7 +277,7 @@ function QuestionCard({
                 return
             }
             setError(undefined)
-            await controller.acceptStepFacts(binding, step.stepId, { orientation: { partId, description } })
+            await accept({ orientation: { partId, description } })
             return
         }
         const visibleChecks = text
@@ -205,55 +289,43 @@ function QuestionCard({
             return
         }
         setError(undefined)
-        await controller.acceptStepFacts(binding, step.stepId, { visibleChecks })
+        await accept({ visibleChecks })
     }
     return (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-            <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
-            <View style={styles.hero}>
-                <StepPicture
-                    reference={step.sourceRefs[0]}
-                    session={session}
-                    pageUris={state.pageUris}
-                    height={heroHeight}
-                />
-            </View>
-            <TextRegion>
-                <PlainNotice state={state} controller={controller} />
-                <Instruction>{sentence}</Instruction>
-                {question.reason === null ? null : <Caption>{`The manual says: ${question.reason}`}</Caption>}
-                {question.kind === 'orientation' && parts.length > 1 ? (
-                    <SegmentedControl label="Which part" options={parts} value={partId ?? ''} onChange={setPartId} />
-                ) : null}
-                {question.kind === 'orientation' && parts.length === 1 ? (
-                    <Caption>{`Part: ${parts[0]!.label}`}</Caption>
-                ) : null}
-                <TextField
-                    label={
-                        question.kind === 'orientation' ? 'What the picture shows' : 'What you should see, one per line'
-                    }
-                    value={text}
-                    onChangeText={setText}
-                    multiline={question.kind === 'checks'}
-                    placeholder={
-                        question.kind === 'orientation' ? 'e.g. the groove faces inward' : 'One thing per line'
-                    }
-                    error={error}
-                    editable={!busy}
-                />
-            </TextRegion>
-            <FixedBottomBar
-                primary={{
-                    label: 'Save',
-                    testID: 'quick-check-save',
-                    disabled: busy || (question.kind === 'orientation' && parts.length === 0),
-                    onPress: (): void => {
-                        void save()
-                    },
-                }}
-                secondary={{ label: 'Skip for now', testID: 'quick-check-skip', onPress: onSkip, disabled: busy }}
+        <View testID="quick-check-editor" style={styles.editor}>
+            <PlainNotice state={state} controller={controller} />
+            <Body>
+                {question.kind === 'orientation'
+                    ? `Which way should the part face in step ${step.order}?`
+                    : `What should you see when step ${step.order} is done?`}
+            </Body>
+            {question.reason === null ? null : <Caption>{`The manual says: ${plainWords(question.reason)}`}</Caption>}
+            {question.kind === 'orientation' && parts.length > 1 ? (
+                <SegmentedControl label="Which part" options={parts} value={partId ?? ''} onChange={setPartId} />
+            ) : null}
+            {question.kind === 'orientation' && parts.length === 1 ? (
+                <Caption>{`Part: ${parts[0]!.label}`}</Caption>
+            ) : null}
+            <TextField
+                label={question.kind === 'orientation' ? 'What the picture shows' : 'What you should see, one per line'}
+                value={text}
+                onChangeText={setText}
+                multiline={question.kind === 'checks'}
+                placeholder={question.kind === 'orientation' ? 'e.g. the groove faces inward' : 'One thing per line'}
+                error={error}
+                editable={!busy}
             />
-        </KeyboardAvoidingView>
+            <AppButton
+                label="Save"
+                testID="quick-check-save"
+                variant="accent"
+                disabled={busy || (question.kind === 'orientation' && parts.length === 0)}
+                onPress={(): void => {
+                    void save()
+                }}
+            />
+            <AppButton label="Cancel" testID="quick-check-cancel" variant="quiet" onPress={onDone} />
+        </View>
     )
 }
 
@@ -262,15 +334,21 @@ function QuickCheckMore({
     onClose,
     session,
     state,
+    controller,
     nav,
     issues,
+    editing,
+    busy,
 }: {
     visible: boolean
     onClose: () => void
     session: ManualSession
     state: WorkflowScreenProps['state']
+    controller: WorkflowScreenProps['controller']
     nav: ScreenNav
     issues: readonly string[]
+    editing: Question | undefined
+    busy: boolean
 }): ReactElement {
     const [openPage, setOpenPage] = useState<number | null>(null)
     const enlarged = openPage === null ? undefined : session.pages[openPage]
@@ -282,11 +360,27 @@ function QuickCheckMore({
     return (
         <MoreSheet
             visible={visible}
-            title={enlarged === undefined ? 'What we read' : `Page ${(openPage ?? 0) + 1}`}
+            title={
+                editing !== undefined
+                    ? 'Let me fix it'
+                    : enlarged === undefined
+                      ? 'What we read'
+                      : `Page ${(openPage ?? 0) + 1}`
+            }
             onClose={close}
             detents={['tall', 'full']}
         >
-            {enlarged !== undefined ? (
+            {editing !== undefined ? (
+                <FixEditor
+                    key={`${session.manualId}:${session.revision}:${editing.id}`}
+                    question={editing}
+                    session={session}
+                    state={state}
+                    controller={controller}
+                    busy={busy}
+                    onDone={close}
+                />
+            ) : enlarged !== undefined ? (
                 <Stack gap="sm">
                     <PageImage
                         uri={state.pageUris[enlarged.pageId]}
@@ -387,6 +481,7 @@ function PageStripItem({
 const styles = StyleSheet.create({
     flex: { flex: 1 },
     hero: { paddingHorizontal: space.md, paddingTop: space.sm },
+    editor: { gap: space.md },
     strip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     stripItem: { width: 96, minHeight: touchTarget },
 })

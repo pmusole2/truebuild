@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Platform } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
-import { Redirect, Stack, useLocalSearchParams, usePreventRemove } from 'expo-router'
+import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
 import { useSharedValue } from 'react-native-reanimated'
 import { MediaRejectedError } from '../../media/media-errors'
+import { FixedBottomBar } from '../../ui/bottom-bar'
 import { SkeletonCard } from '../../ui/skeleton'
+import { Instruction } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
 import { CameraScreen, type AssemblyGuide } from './camera-screen'
 import type { WorkflowState } from './controller'
@@ -15,41 +17,109 @@ import { LibraryScreen, PinnedTitle } from './library-screen'
 import { useWorkflowActions } from './native-routes'
 import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
-import { OverviewScreen } from './review-screen'
+import { OverviewScreen, useQuickProgress } from './review-screen'
 import { HeaderButtons, HeaderTitle, useMoreState } from './screen-header'
-import { ScreenBody } from './screen-layout'
+import { ScreenBody, TextRegion } from './screen-layout'
+import { stopFor, type Stop } from './plain-copy'
 import { stepAssemblyGuide } from './step-facts'
 import { useWorkflow } from './workflow-provider'
 
-type Stop = 'pages' | 'overview' | 'guide' | 'done'
+export type RouteStatus = 'loading' | 'ready' | 'missing' | 'failed'
 
-/**
- * Entering a manual's URL directly (a reload on web, a deep link) loads that manual once the library has restored.
- * Navigating inside the app never reopens it: the manual is already selected, so nothing is cleared.
- */
-export function useManualRoute(manualId: string, stop: Stop): 'loading' | 'ready' | 'missing' {
-    const { controller, state, entry } = useWorkflow()
-    const attempted = useRef(false)
-    const known = state.entries.some((candidate) => candidate.session.manualId === manualId)
-    useEffect(() => {
-        if (state.loading || attempted.current) {
-            return
-        }
-        attempted.current = true
-        if (known && state.selectedId !== manualId) {
-            void controller.open(manualId, stop === 'done' ? 'guide' : stop)
-        }
-    }, [controller, known, manualId, state.loading, state.selectedId, stop])
-    if (state.loading) {
-        return 'loading'
-    }
-    if (!known) {
-        return 'missing'
-    }
-    return entry?.session.manualId === manualId ? 'ready' : 'loading'
+export type ManualRoute = {
+    readonly status: RouteStatus
+    // Where to send the person instead of this screen: Home for a missing build, or the stop the build has really reached.
+    readonly redirect: string | null
+    readonly retry: () => void
 }
 
-function Waiting(): ReactElement {
+/** The screen a manual's URL may show. A build never shows a stop beyond the one it has reached. */
+function guardedStop(wanted: Stop, entry: LibraryEntry): Stop {
+    if (wanted === 'pages' || wanted === 'overview') {
+        return wanted
+    }
+    const reached = stopFor(entry)
+    return reached === 'done' ? wanted : reached
+}
+
+function hrefForStop(stop: Stop, manualId: string): string {
+    const id = encodeURIComponent(manualId)
+    return stop === 'pages'
+        ? '/add'
+        : stop === 'overview'
+          ? `/check/${id}`
+          : stop === 'guide'
+            ? `/guide/${id}`
+            : `/done/${id}`
+}
+
+/**
+ * Resolves the manual in a route's URL once the library has restored. Only the focused screen asks: a screen buried
+ * under another manual's route never reopens its own, and a plain pop back to the manual already selected calls
+ * nothing, so its photo, result and draft stay. Coming back to a screen whose manual was replaced by an explicit switch
+ * opens that manual once, with its saved step. If that does not stick, the screen offers one Try again.
+ */
+export function useManualRoute(manualId: string, stop: Stop): ManualRoute {
+    const { controller, state, entry } = useWorkflow()
+    const focused = useIsFocused()
+    const known = state.entries.find((candidate) => candidate.session.manualId === manualId)
+    const selected = entry?.session.manualId === manualId
+    const [retries, setRetries] = useState(0)
+    const [failed, setFailed] = useState<string | null>(null)
+    const key = `${manualId}:${retries}`
+    const tried = useRef<string | null>(null)
+    // True once this screen has seen its manual selected while focused. If the selection then goes (Back to Home clears
+    // it before the router has left), the screen is being left, not resumed, so it must not open the manual again.
+    const seen = useRef<string | null>(null)
+    useEffect(() => {
+        if (!focused) {
+            tried.current = null
+            seen.current = null
+            return
+        }
+        if (selected) {
+            tried.current = null
+            seen.current = manualId
+            return
+        }
+        if (seen.current === manualId || state.loading || known === undefined || tried.current === key) {
+            return
+        }
+        tried.current = key
+        void controller.open(manualId, stop === 'done' ? 'guide' : stop).then(() => {
+            if (tried.current === key && controller.getSnapshot().selectedId !== manualId) {
+                setFailed(key)
+            }
+        })
+    }, [controller, focused, key, known, manualId, selected, state.loading, stop])
+    const retry = useCallback((): void => {
+        setFailed(null)
+        setRetries((count) => count + 1)
+    }, [])
+    if (state.loading) {
+        return { status: 'loading', redirect: null, retry }
+    }
+    if (known === undefined) {
+        return { status: 'missing', redirect: focused ? '/' : null, retry }
+    }
+    if (!selected) {
+        return { status: failed === key ? 'failed' : 'loading', redirect: null, retry }
+    }
+    const reached = guardedStop(stop, known)
+    return { status: 'ready', redirect: focused && reached !== stop ? hrefForStop(reached, manualId) : null, retry }
+}
+
+function Waiting({ route }: { route?: ManualRoute }): ReactElement {
+    if (route?.status === 'failed') {
+        return (
+            <ScreenBody testID="route-failed">
+                <TextRegion>
+                    <Instruction>We could not open this build.</Instruction>
+                </TextRegion>
+                <FixedBottomBar primary={{ label: 'Try again', testID: 'retry-route', onPress: route.retry }} />
+            </ScreenBody>
+        )
+    }
     return (
         <ScreenBody>
             <SkeletonCard />
@@ -171,7 +241,8 @@ export function AddRoute(): ReactElement {
 
 export function ReadingRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
-    const status = useManualRoute(manualId, 'pages')
+    const route = useManualRoute(manualId, 'pages')
+    const { status } = route
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const [confirming, setConfirming] = useState(false)
@@ -180,8 +251,8 @@ export function ReadingRoute(): ReactElement {
     usePreventRemove(reading, () => setConfirming(true))
     // The prevention lifts on the render after the cancel, so the step back waits for it.
     const readingNav = useMemo(() => ({ ...nav, back: (): void => void setTimeout(nav.back, 0) }), [nav])
-    if (status === 'missing') {
-        return <Redirect href="/" />
+    if (route.redirect !== null) {
+        return <Redirect href={route.redirect as never} />
     }
     return (
         <>
@@ -198,7 +269,7 @@ export function ReadingRoute(): ReactElement {
                     onConfirmingChange={setConfirming}
                 />
             ) : (
-                <Waiting />
+                <Waiting route={route} />
             )}
         </>
     )
@@ -206,33 +277,36 @@ export function ReadingRoute(): ReactElement {
 
 export function CheckRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
-    const status = useManualRoute(manualId, 'overview')
+    const route = useManualRoute(manualId, 'overview')
+    const { status } = route
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
-    if (status === 'missing') {
-        return <Redirect href="/" />
+    // The question count lives here, above the screen, so accepting a fact (a new revision) never restarts it.
+    const progress = useQuickProgress(entry?.session)
+    if (route.redirect !== null) {
+        return <Redirect href={route.redirect as never} />
     }
     return (
         <>
             <Stack.Screen
                 options={{
-                    headerTitle: (): ReactElement => <HeaderTitle title="Quick check" />,
+                    headerTitle: (): ReactElement => <HeaderTitle title="Quick check" subtitle={progress.label} />,
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
             {status === 'ready' && entry !== undefined ? (
                 <OverviewScreen
-                    key={`${entry.session.manualId}-${entry.session.revision}`}
                     state={state}
                     controller={controller}
                     entry={entry}
                     nav={nav}
                     chrome="native"
                     more={more}
+                    progress={progress}
                 />
             ) : (
-                <Waiting />
+                <Waiting route={route} />
             )}
         </>
     )
@@ -240,12 +314,13 @@ export function CheckRoute(): ReactElement {
 
 export function GuideRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
-    const status = useManualRoute(manualId, 'guide')
+    const route = useManualRoute(manualId, 'guide')
+    const { status } = route
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
-    if (status === 'missing') {
-        return <Redirect href="/" />
+    if (route.redirect !== null) {
+        return <Redirect href={route.redirect as never} />
     }
     const title = entry?.session.title ?? 'Guide'
     const subtitle =
@@ -268,7 +343,7 @@ export function GuideRoute(): ReactElement {
                     more={more}
                 />
             ) : (
-                <Waiting />
+                <Waiting route={route} />
             )}
         </>
     )
@@ -276,12 +351,14 @@ export function GuideRoute(): ReactElement {
 
 export function DoneRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
-    const status = useManualRoute(manualId, 'done')
+    const route = useManualRoute(manualId, 'done')
+    const { status } = route
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
-    if (status === 'missing') {
-        return <Redirect href="/" />
+    // A Done URL shows Done only for a build whose every step is marked; otherwise it goes to the stop the build is at.
+    if (route.redirect !== null) {
+        return <Redirect href={route.redirect as never} />
     }
     return (
         <>
@@ -296,7 +373,7 @@ export function DoneRoute(): ReactElement {
             {status === 'ready' && entry !== undefined ? (
                 <DoneScreen state={state} controller={controller} entry={entry} nav={nav} chrome="native" more={more} />
             ) : (
-                <Waiting />
+                <Waiting route={route} />
             )}
         </>
     )

@@ -172,11 +172,15 @@ describe('home', () => {
 })
 
 describe('quick check', () => {
-    it('asks one question at a time with a single Save primary, never a confirmation checkbox', async () => {
+    it('asks one question with a single Let me fix it primary and a quiet Skip, never a form or a checkbox', async () => {
         const { state, entry } = workflowPreviewFixture('review-unresolved')
         await render(<OverviewScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />)
-        expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Let me fix it' })).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Skip for now' })).toBeTruthy()
+        // No field, part picker, reason wall or Save until Let me fix it is tapped.
+        expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+        expect(screen.queryByRole('radio')).toBeNull()
+        expect(screen.queryByLabelText(/^What /u)).toBeNull()
         expect(screen.queryByRole('checkbox')).toBeNull()
         expect(screen.queryByText('Confirm reviewed facts')).toBeNull()
         expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(2)
