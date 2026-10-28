@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
 import type { CheckResult, ManualSession, QuestionResult } from '@truebuild/contracts'
 import { boxOnDisplay, type Point, type Rect } from '../assembly/frame-geometry'
@@ -21,15 +21,22 @@ export function CheckPanel({
     session,
     pageUris,
     showSource = true,
+    provenance = true,
+    reveal = true,
 }: {
     check: CheckResult
     session: ManualSession
     pageUris: WorkflowState['pageUris']
     // The guide shows the cited diagram as its own evidence block beside the photo, so the verdict card stays short.
     showSource?: boolean
+    // Model names and notes render only where asked: the guide keeps them behind its About this check entry.
+    provenance?: boolean
+    // The default surface already announced the result; a second reveal in More would repeat the haptic.
+    reveal?: boolean
 }): ReactElement {
+    const Reveal = reveal ? ResultReveal : Passthrough
     return (
-        <ResultReveal
+        <Reveal
             identity={`check:${check.decision}:${check.reason}`}
             feedback={check.decision === 'pass' ? 'success' : 'warning'}
         >
@@ -43,12 +50,16 @@ export function CheckPanel({
                     )
                 }
             />
-            <ModelProvenance result={check} />
-            {check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
+            {provenance ? <ModelProvenance result={check} /> : null}
+            {!provenance || check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
                 <Caption>{`Second opinion: ${check.secondOpinion.model} (${check.secondOpinion.status})`}</Caption>
             )}
-        </ResultReveal>
+        </Reveal>
     )
+}
+
+function Passthrough({ children }: { identity: string; feedback: string; children: ReactNode }): ReactElement {
+    return <>{children}</>
 }
 
 /**
@@ -60,21 +71,26 @@ export function AnswerPanel({
     session,
     pageUris,
     showSource = true,
+    provenance = true,
+    reveal = true,
 }: {
     answer: QuestionResult
     session: ManualSession
     pageUris: WorkflowState['pageUris']
     showSource?: boolean
+    provenance?: boolean
+    reveal?: boolean
 }): ReactElement {
+    const Reveal = reveal ? ResultReveal : Passthrough
     return (
-        <ResultReveal identity={`answer:${answer.answer}`} feedback="selection">
+        <Reveal identity={`answer:${answer.answer}`} feedback="selection">
             <View accessibilityLiveRegion="polite">
                 {/* Hero card like a verdict, but neutral: no verdict colour or tag. */}
                 <Card tone="result">
                     <Heading>Answer</Heading>
                     <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
                     <Body>{answer.answer}</Body>
-                    <ModelProvenance result={answer} />
+                    {provenance ? <ModelProvenance result={answer} /> : null}
                     {answer.missingEvidence.map((missing, index) => (
                         <Caption key={index}>{`Missing: ${missing}`}</Caption>
                     ))}
@@ -83,7 +99,7 @@ export function AnswerPanel({
                     ) : null}
                 </Card>
             </View>
-        </ResultReveal>
+        </Reveal>
     )
 }
 

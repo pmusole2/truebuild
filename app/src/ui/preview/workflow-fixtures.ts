@@ -27,6 +27,7 @@ export const WORKFLOW_PREVIEW_CASES = [
     { id: 'review-ready', label: 'Review · ready', group: 'Review' },
     { id: 'review-reviewed', label: 'Review · confirmed', group: 'Review' },
     { id: 'guide-empty', label: 'Guide · no photo', group: 'Guide' },
+    { id: 'done-finished', label: 'Done · finished', group: 'Done' },
     { id: 'guide-photo', label: 'Guide · frozen photo', group: 'Guide' },
     { id: 'guide-pass', label: 'Guide · pass', group: 'Guide' },
     { id: 'guide-refuse', label: 'Guide · refuse', group: 'Guide' },
@@ -171,7 +172,10 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
         }
     }
 
-    if (state.route === 'guide' && id !== 'guide-empty') {
+    if (id === 'done-finished') {
+        entry.completedStepIds = session.reviewedSteps.map((step) => step.stepId)
+    }
+    if (state.route === 'guide' && id !== 'guide-empty' && id !== 'done-finished') {
         state.capture = {
             binding: {
                 kind: 'capture',

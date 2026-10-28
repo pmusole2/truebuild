@@ -34,7 +34,7 @@ export function StatusTag({
     const type = typeProps('label')
     const iconColor = colors[tokens.text]
     return (
-        <View style={[styles.tag, { backgroundColor: colors[tokens.surface], borderColor: colors[tokens.border] }]}>
+        <View style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
             {icon === undefined ? null : <Icon name={icon} size="sm" color={iconColor} />}
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
@@ -47,9 +47,9 @@ export function StatusTag({
 }
 
 const VERDICT: Readonly<Record<Verdict, { label: string; tone: StatusTone; icon: IconName }>> = {
-    pass: { label: 'Pass', tone: 'pass', icon: 'check' },
-    refuse: { label: 'Refuse', tone: 'refuse', icon: 'close' },
-    cannot_verify: { label: 'Cannot verify', tone: 'caution', icon: 'help' },
+    pass: { label: 'Looks right', tone: 'pass', icon: 'check' },
+    refuse: { label: 'Not yet', tone: 'refuse', icon: 'close' },
+    cannot_verify: { label: 'Can’t tell', tone: 'caution', icon: 'help' },
 }
 
 export function VerdictTag({ verdict }: { readonly verdict: Verdict }): ReactElement {
@@ -59,7 +59,7 @@ export function VerdictTag({ verdict }: { readonly verdict: Verdict }): ReactEle
 
 export type NoticeTone = 'info' | 'caution' | 'error'
 
-const NOTICE_BAR: Readonly<Record<NoticeTone, ColorToken>> = {
+const NOTICE_INK: Readonly<Record<NoticeTone, ColorToken>> = {
     info: 'ink',
     caution: 'caution',
     error: 'refuse',
@@ -75,15 +75,9 @@ export function Notice({ text, tone = 'info' }: { readonly text: string; readonl
         <View
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
-            style={[styles.notice, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}
+            style={[styles.notice, { backgroundColor: colors.surfaceRaised }]}
         >
-            <View
-                testID="notice-bar"
-                accessibilityElementsHidden={true}
-                importantForAccessibility="no"
-                style={[styles.noticeBar, { backgroundColor: colors[NOTICE_BAR[tone]] }]}
-            />
-            <Icon name={tone === 'info' ? 'info' : 'alert'} size="sm" color={colors[NOTICE_BAR[tone]]} />
+            <Icon name={tone === 'info' ? 'info' : 'alert'} size="sm" color={colors[NOTICE_INK[tone]]} />
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
                 style={[type.style, styles.noticeText, { color: colors.ink }]}
@@ -94,15 +88,12 @@ export function Notice({ text, tone = 'info' }: { readonly text: string; readonl
     )
 }
 
-const NOTICE_BAR_WIDTH = 3
-
 const styles = StyleSheet.create({
     tag: {
         alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
         gap: space.xs,
-        borderWidth: 1,
         borderRadius: radius.pill,
         minHeight: 28,
         paddingHorizontal: space.sm,
@@ -115,12 +106,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: space.xs,
-        borderWidth: 1,
         borderRadius: radius.md,
+        borderCurve: 'continuous',
         padding: space.sm,
-        paddingLeft: space.sm + NOTICE_BAR_WIDTH,
-        overflow: 'hidden',
     },
-    noticeBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: NOTICE_BAR_WIDTH },
     noticeText: { flex: 1 },
 })

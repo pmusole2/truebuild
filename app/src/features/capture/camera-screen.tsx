@@ -7,7 +7,7 @@ import { ShutterButton } from '../../ui/camera-chrome'
 import type { CameraIntent } from './controller'
 import { CameraStage, type AssemblyGuide, type CameraPresentation } from './camera-stage'
 
-export { cameraCaption, PANEL_MAX_RATIO, type AssemblyGuide } from './camera-stage'
+export { cameraCue, cameraPill, type AssemblyGuide } from './camera-stage'
 
 export type CameraScreenProps = {
     busy: boolean
@@ -26,7 +26,7 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
     const [attempt, setAttempt] = useState(0)
     const shutter = (
         <ShutterButton
-            label={busy ? 'Preparing photo…' : 'Capture photo'}
+            label={busy ? 'Preparing photo…' : 'Take photo'}
             onPress={(): void => {
                 const view = camera.current
                 if (view === null) {

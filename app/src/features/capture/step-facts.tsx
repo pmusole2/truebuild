@@ -15,11 +15,12 @@ import { space } from '../../theme/tokens'
 import { stepPartChoices } from '../assembly/question-state'
 import type { AssemblyGuide } from './camera-stage'
 import type { WorkflowState } from './controller'
+import { factText } from './fact-text'
+import { StepDetails } from './step-details'
+import { StepPicture } from './step-picture'
 import { ManualImage } from './page-media'
 
-export function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
-    return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
-}
+export { factText } from './fact-text'
 
 export function StepFacts({
     session,
@@ -70,30 +71,26 @@ export function StepFacts({
 }
 
 /**
- * What to look for while the camera is open: one cue, in the step's own words. The first visible check leads because it
- * is what the photo is judged against; the orientation stands in when the step has no known check. Unknown facts keep
- * their stated reason, the line is bounded to two lines, and every fact stays in the full instructions.
+ * What to show the camera: one line, in the step's own words. The first known visible check leads because it is what the
+ * photo is judged against; a known orientation stands in when the step has no known check. Unknown facts are not turned
+ * into a cue. Null means the camera falls back to a generic line; every fact stays in More.
  */
-export function StepGlance({ session, index }: { session: ManualSession; index: number }): ReactElement | null {
+export function stepCue(session: ManualSession, index: number): string | undefined {
     const step = session.reviewedSteps[index]
     if (step === undefined) {
-        return null
+        return undefined
     }
-    const required = stepEvidenceRequirements(step)
-    const firstCheck = step.visibleChecks[0]
-    const orientation =
-        required.orientation || step.orientation.state === 'known'
-            ? `Orientation: ${factText(step.orientation, (value) => value.description)}`
-            : undefined
-    const check = firstCheck === undefined ? undefined : `Visible check: ${factText(firstCheck.description, String)}`
-    const cue = firstCheck?.description.state === 'known' ? check : (orientation ?? check)
-    return cue === undefined ? null : <Callout numberOfLines={2}>{cue}</Callout>
+    const check = step.visibleChecks[0]
+    if (check?.description.state === 'known') {
+        return check.description.value
+    }
+    return step.orientation.state === 'known' ? step.orientation.value.description : undefined
 }
 
 /**
  * The step guide shown over the assembly camera. One builder serves the production camera route and the inert visual
- * preview, so the preview cannot drift from what the app wires: only the cue to look for sits over the viewfinder, and
- * every fact and cited diagram stays in the sheet.
+ * preview, so the preview cannot drift from what the app wires: only a one-line cue and a small picture sit over the
+ * viewfinder, and every fact and cited diagram stays in More.
  */
 export function stepAssemblyGuide(
     session: ManualSession,
@@ -107,10 +104,19 @@ export function stepAssemblyGuide(
     return {
         progress: `Step ${index + 1} of ${session.reviewedSteps.length}`,
         title: step.title,
-        summary: <StepGlance session={session} index={index} />,
+        cue: stepCue(session, index),
+        thumbnail: (
+            <StepPicture
+                reference={step.sourceRefs[0]}
+                session={session}
+                pageUris={pageUris}
+                height={56}
+                testID="camera-step-picture"
+            />
+        ),
         instructions: (
             <>
-                <StepFacts session={session} index={index} />
+                <StepDetails session={session} index={index} />
                 <SourceDiagrams refs={step.sourceRefs} session={session} pageUris={pageUris} fit="page" />
             </>
         ),

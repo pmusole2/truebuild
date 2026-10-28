@@ -10,7 +10,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
     }
     return (
         <>
-            <Stack.Screen options={{ title: 'Synthetic workflow review' }} />
+            <Stack.Screen options={{ title: 'Synthetic workflow review', headerShown: false }} />
             <WorkflowPreview
                 key={`${params.fixture ?? 'home-empty'}:${params.scheme ?? 'light'}`}
                 initialCase={workflowPreviewCase(params.fixture)}

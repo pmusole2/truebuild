@@ -1,233 +1,343 @@
-import { useState, type ReactElement } from 'react'
-import { MAX_PARSE_PAGES, PARSE_SPLIT_MESSAGE, parseLanguageSchema } from '@truebuild/contracts/model'
-import { Pressable, StyleSheet, View } from 'react-native'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { AppButton } from '../../ui/button'
-import { ActionGroup, Card, Stack } from '../../ui/surface'
-import { Caption, Heading } from '../../ui/text'
-import { EmptyState } from '../../ui/states'
-import { StatusTag } from '../../ui/status'
-import { TextField } from '../../ui/fields'
+import { FixedBottomBar } from '../../ui/bottom-bar'
+import { MoreSheet } from '../../ui/sheet'
+import { Card, Stack } from '../../ui/surface'
+import { Body, Caption, Heading, Instruction } from '../../ui/text'
+import { SegmentedControl, TextField } from '../../ui/fields'
 import { SkeletonCard } from '../../ui/skeleton'
 import { Icon } from '../../ui/icons'
-import { BottomSheet } from '../../ui/sheet'
+import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
-import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { PRIVACY_COPY } from './privacy-copy'
+import { setReadingLanguage } from './reading-language'
 import type { LibraryEntry } from './library'
 import { PageImage } from './page-media'
-import { Screen, WorkflowNotice } from './screen-chrome'
+import { PlainNotice, ScreenBody } from './screen-layout'
+import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import type { WorkflowScreenProps } from './workflow-types'
 
 const MAX_PAGES = 20
 
-export type PagesScreenProps = WorkflowScreenProps & {
-    entry: LibraryEntry
-    choosePages: (replaceIndex?: number) => void
-}
+// Common reading languages by name; the codes are the ones the reader already accepts.
+const LANGUAGES = [
+    { value: 'en', label: 'English' },
+    { value: 'es', label: 'Spanish' },
+    { value: 'fr', label: 'French' },
+    { value: 'de', label: 'German' },
+    { value: 'pt-BR', label: 'Portuguese' },
+] as const
 
-export function PagesScreen({ state, controller, entry, choosePages }: PagesScreenProps): ReactElement {
-    const { colors } = useTheme()
+export type PagesScreenProps = WorkflowScreenProps &
+    ChromeProps & {
+        entry: LibraryEntry
+        choosePages: (replaceIndex?: number) => void
+    }
+
+type Sheet = { kind: 'page'; pageId: string } | { kind: 'add' } | { kind: 'settings' }
+
+/** Add manual: photograph every page, then read. One primary, one quiet secondary; page tools live in More. */
+export function PagesScreen({
+    state,
+    controller,
+    entry,
+    choosePages,
+    chrome = 'inline',
+    more: moreProp,
+}: PagesScreenProps): ReactElement {
+    const internalMore = useMoreState()
+    const more = moreProp ?? internalMore
     const [title, setTitle] = useState(entry.session.title)
     const [language, setLanguage] = useState('en')
-    const languageValid = parseLanguageSchema.safeParse(language).success
-    const [previewId, setPreviewId] = useState<string | null>(null)
+    const [sheet, setSheet] = useState<Sheet>({ kind: 'settings' })
     const { pages } = entry.session
     const busy = state.pending !== null || state.storageReadOnly
     const full = pages.length >= MAX_PAGES
-    const reading = state.pending !== null && state.pending.startsWith('Reading')
-    const previewPage = pages.find((page) => page.pageId === previewId)
+    const saving = state.pending !== null && !state.pending.startsWith('Reading')
+    const previewPage = sheet.kind === 'page' ? pages.find((page) => page.pageId === sheet.pageId) : undefined
+    const previewIndex = previewPage === undefined ? -1 : pages.indexOf(previewPage)
+    // The header's More button opens the general sheet; a tapped page or "Add a page" asks for its own.
+    const requested = useRef(false)
+    useEffect(() => {
+        if (more.open && !requested.current) {
+            setSheet({ kind: 'settings' })
+        }
+        requested.current = false
+    }, [more.open])
+    const open = (next: Sheet): void => {
+        requested.current = true
+        setSheet(next)
+        more.show()
+    }
+    const close = (): void => more.hide()
+    const takePhoto = (): void => {
+        close()
+        controller.camera({ kind: 'page' })
+    }
+    const choose = (): void => {
+        close()
+        choosePages()
+    }
+    const primary =
+        pages.length === 0
+            ? {
+                  label: 'Take photo',
+                  icon: 'camera' as const,
+                  testID: 'take-page-photo',
+                  onPress: takePhoto,
+                  disabled: busy || full,
+              }
+            : {
+                  label: entry.session.rawExtraction === null ? 'Read my manual' : 'Read my manual again',
+                  testID: 'read-manual',
+                  busy: state.pending !== null && state.pending.startsWith('Reading'),
+                  disabled: busy,
+                  onPress: (): void => {
+                      void controller.parse(language)
+                  },
+              }
+    const secondary =
+        pages.length === 0
+            ? {
+                  label: 'Choose from photos',
+                  accessibilityLabel: 'Choose pages from photos',
+                  testID: 'choose-pages',
+                  onPress: choose,
+                  disabled: busy || full,
+              }
+            : {
+                  label: 'Add a page',
+                  testID: 'add-page',
+                  onPress: (): void => open({ kind: 'add' }),
+                  disabled: busy || full,
+              }
     return (
-        <Screen title="Manual pages" onBack={controller.home} testID="pages-screen">
-            <WorkflowNotice state={state} controller={controller} />
-            <Card>
-                <TextField
-                    label="Manual title"
-                    value={title}
-                    maxLength={200}
-                    onChangeText={setTitle}
-                    onEndEditing={(): void => {
-                        void controller.rename(title)
-                    }}
-                    editable={!state.storageReadOnly}
+        <ScreenBody testID="pages-screen">
+            {chrome === 'inline' ? (
+                <InlineHeader
+                    title="Add manual"
+                    subtitle={pages.length === 0 ? undefined : `Page ${pages.length} of up to ${MAX_PAGES}`}
+                    more={{ ...more, show: () => open({ kind: 'settings' }) }}
                 />
-                <View style={styles.privacy}>
-                    <Icon name="info" size="sm" color={colors.inkMuted} />
-                    <View style={styles.privacyText}>
-                        <Caption>{PRIVACY_COPY.stayOnDevice}</Caption>
-                        <Caption>{PRIVACY_COPY.read}</Caption>
-                        <Caption>
-                            Store up to 20 pages. Read up to 8 pages at a time. Phone photos are resized and compressed
-                            locally before upload.
-                        </Caption>
-                    </View>
-                </View>
-            </Card>
-            <View style={styles.sectionHeader}>
-                <Heading>Pages</Heading>
-                <StatusTag label={`${pages.length} of ${MAX_PAGES}`} tone={full ? 'caution' : 'neutral'} />
-            </View>
-            <ActionGroup>
-                <AppButton
-                    label="Scan a page"
-                    variant="accent"
-                    icon="camera"
-                    disabled={busy || full}
-                    onPress={(): void => controller.camera({ kind: 'page' })}
-                />
-                <AppButton
-                    label="Choose pages from photos"
-                    icon="image"
-                    disabled={busy || full}
-                    onPress={(): void => choosePages()}
-                />
-            </ActionGroup>
-            {pages.length === 0 ? (
-                <Card>
-                    <EmptyState title="No pages yet." body="Scan a page or choose pages from photos." />
-                </Card>
             ) : null}
-            {pages.map((page, index) => (
-                <Card key={page.pageId}>
-                    <View style={styles.pageRow}>
-                        <PageThumbnail
-                            uri={state.pageUris[page.pageId]}
-                            index={index}
-                            aspectRatio={page.width / page.height}
-                            onPress={(): void => setPreviewId(page.pageId)}
-                        />
-                        <View style={styles.pageInfo}>
-                            <Heading>{`Page ${index + 1}`}</Heading>
-                            <Caption>{`${index + 1} of ${pages.length}`}</Caption>
-                        </View>
-                    </View>
-                    <ActionGroup>
-                        <AppButton
-                            label="Up"
-                            accessibilityLabel={`Move page ${index + 1} up`}
-                            variant="quiet"
-                            disabled={busy || index === 0}
-                            onPress={(): void => {
-                                void controller.editPage(index, 'up')
-                            }}
-                        />
-                        <AppButton
-                            label="Down"
-                            accessibilityLabel={`Move page ${index + 1} down`}
-                            variant="quiet"
-                            disabled={busy || index === pages.length - 1}
-                            onPress={(): void => {
-                                void controller.editPage(index, 'down')
-                            }}
-                        />
-                        <AppButton
-                            label="Retake"
-                            accessibilityLabel={`Retake page ${index + 1}`}
-                            variant="quiet"
-                            disabled={busy}
-                            onPress={(): void => controller.camera({ kind: 'page', replaceIndex: index })}
-                        />
-                        <AppButton
-                            label="Replace"
-                            accessibilityLabel={`Replace page ${index + 1} from photos`}
-                            variant="quiet"
-                            disabled={busy}
-                            onPress={(): void => choosePages(index)}
-                        />
-                        <AppButton
-                            label="Remove"
-                            accessibilityLabel={`Remove page ${index + 1}`}
-                            variant="danger"
-                            disabled={busy}
-                            onPress={(): void => {
-                                void controller.editPage(index, 'remove')
-                            }}
-                        />
-                    </ActionGroup>
-                </Card>
-            ))}
-            {reading ? (
-                <Card>
-                    <Caption>Reading your pages. Page changes are paused until it finishes.</Caption>
-                    <SkeletonCard />
-                </Card>
-            ) : null}
-            <Stack gap="xs">
-                <TextField
-                    label="Reading language code"
-                    value={language}
-                    onChangeText={setLanguage}
-                    maxLength={16}
-                    editable={!busy}
-                    error={languageValid ? undefined : 'Use a language code such as en, fr or pt-BR.'}
-                />
-                {pages.length > MAX_PARSE_PAGES ? <Caption>{PARSE_SPLIT_MESSAGE}</Caption> : null}
-                <AppButton
-                    label={entry.session.rawExtraction === null ? 'Read manual' : 'Read manual again'}
-                    variant="primary"
-                    busy={reading}
-                    disabled={busy || pages.length === 0 || !languageValid}
-                    onPress={(): void => {
-                        void controller.parse(language)
-                    }}
-                />
-                {entry.session.rawExtraction === null ? null : (
-                    <AppButton
-                        label="Review extracted facts"
-                        variant="quiet"
-                        disabled={busy}
-                        onPress={(): void => controller.navigate('overview')}
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <PlainNotice state={state} controller={controller} />
+                <Instruction>
+                    {pages.length === 0
+                        ? 'Take a photo of each page of your paper manual.'
+                        : 'Add every page, even the parts list.'}
+                </Instruction>
+                {pages.length === 0 ? <Caption>You can add up to 20 pages.</Caption> : null}
+                {pages.length > MAX_PARSE_PAGES ? (
+                    <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
+                ) : null}
+                {pages.map((page, index) => (
+                    <PageRow
+                        key={page.pageId}
+                        index={index}
+                        uri={state.pageUris[page.pageId]}
+                        aspectRatio={page.width / page.height}
+                        onPress={(): void => open({ kind: 'page', pageId: page.pageId })}
                     />
-                )}
-            </Stack>
-            <BottomSheet
-                visible={previewPage !== undefined}
-                title={previewPage === undefined ? 'Manual page' : `Page ${pages.indexOf(previewPage) + 1}`}
-                onClose={(): void => setPreviewId(null)}
+                ))}
+                {saving ? <SkeletonCard /> : null}
+            </ScrollView>
+            <FixedBottomBar primary={primary} secondary={secondary} />
+            <MoreSheet
+                visible={more.open}
+                title={
+                    previewPage !== undefined
+                        ? `Page ${previewIndex + 1}`
+                        : sheet.kind === 'add'
+                          ? 'Add a page'
+                          : 'More'
+                }
+                onClose={close}
+                detents={previewPage !== undefined ? ['tall', 'full'] : ['peek', 'tall']}
             >
-                {previewPage === undefined ? null : (
-                    <PageImage
-                        uri={state.pageUris[previewPage.pageId]}
-                        label={`Manual page ${pages.indexOf(previewPage) + 1}`}
-                        aspectRatio={previewPage.width / previewPage.height}
-                    />
+                {previewPage !== undefined ? (
+                    <Stack gap="md">
+                        <PageImage
+                            uri={state.pageUris[previewPage.pageId]}
+                            label={`Manual page ${previewIndex + 1}`}
+                            aspectRatio={previewPage.width / previewPage.height}
+                        />
+                        <PageTools
+                            index={previewIndex}
+                            count={pages.length}
+                            busy={busy}
+                            controller={controller}
+                            choosePages={choosePages}
+                            onDone={close}
+                        />
+                    </Stack>
+                ) : sheet.kind === 'add' ? (
+                    <Stack gap="sm">
+                        <AppButton label="Take photo" icon="camera" disabled={busy || full} onPress={takePhoto} />
+                        <AppButton
+                            label="Choose from photos"
+                            accessibilityLabel="Choose pages from photos"
+                            icon="image"
+                            disabled={busy || full}
+                            onPress={choose}
+                        />
+                    </Stack>
+                ) : (
+                    <Stack gap="md">
+                        <TextField
+                            label="Name this build"
+                            value={title}
+                            maxLength={200}
+                            placeholder="e.g. Bedroom dresser"
+                            onChangeText={setTitle}
+                            onEndEditing={(): void => {
+                                void controller.rename(title)
+                            }}
+                            editable={!state.storageReadOnly}
+                        />
+                        <Stack gap="xs">
+                            <Heading>Reading language</Heading>
+                            <SegmentedControl
+                                label="Reading language"
+                                options={LANGUAGES}
+                                value={language}
+                                onChange={(code): void => {
+                                    setReadingLanguage(code)
+                                    setLanguage(code)
+                                }}
+                            />
+                        </Stack>
+                        {entry.session.rawExtraction === null ? null : (
+                            <AppButton
+                                label="Go to questions"
+                                disabled={busy}
+                                onPress={(): void => {
+                                    close()
+                                    controller.navigate('overview')
+                                }}
+                            />
+                        )}
+                        <Body>{PRIVACY_COPY.stayOnDevice}</Body>
+                        <Caption>Phone photos are made smaller on this phone before they are sent.</Caption>
+                    </Stack>
                 )}
-            </BottomSheet>
-        </Screen>
+            </MoreSheet>
+        </ScreenBody>
     )
 }
 
-function PageThumbnail({
-    uri,
+function PageTools({
     index,
+    count,
+    busy,
+    controller,
+    choosePages,
+    onDone,
+}: {
+    index: number
+    count: number
+    busy: boolean
+    controller: WorkflowScreenProps['controller']
+    choosePages: (replaceIndex?: number) => void
+    onDone: () => void
+}): ReactElement {
+    const number = index + 1
+    return (
+        <Stack gap="xs">
+            <AppButton
+                label="Retake"
+                accessibilityLabel={`Retake page ${number}`}
+                variant="quiet"
+                disabled={busy}
+                onPress={(): void => {
+                    onDone()
+                    controller.camera({ kind: 'page', replaceIndex: index })
+                }}
+            />
+            <AppButton
+                label="Replace from photos"
+                accessibilityLabel={`Replace page ${number} from photos`}
+                variant="quiet"
+                disabled={busy}
+                onPress={(): void => {
+                    onDone()
+                    choosePages(index)
+                }}
+            />
+            <AppButton
+                label="Move up"
+                accessibilityLabel={`Move page ${number} up`}
+                variant="quiet"
+                disabled={busy || index === 0}
+                onPress={(): void => {
+                    void controller.editPage(index, 'up')
+                    onDone()
+                }}
+            />
+            <AppButton
+                label="Move down"
+                accessibilityLabel={`Move page ${number} down`}
+                variant="quiet"
+                disabled={busy || index === count - 1}
+                onPress={(): void => {
+                    void controller.editPage(index, 'down')
+                    onDone()
+                }}
+            />
+            <AppButton
+                label="Remove"
+                accessibilityLabel={`Remove page ${number}`}
+                variant="danger"
+                disabled={busy}
+                onPress={(): void => {
+                    void controller.editPage(index, 'remove')
+                    onDone()
+                }}
+            />
+        </Stack>
+    )
+}
+
+function PageRow({
+    index,
+    uri,
     aspectRatio,
     onPress,
 }: {
-    uri: string | undefined
     index: number
+    uri: string | undefined
     aspectRatio: number
     onPress: () => void
 }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
     return (
-        <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`View page ${index + 1}`}
-            onPress={onPress}
-            {...focus.focusHandlers}
-            style={[styles.thumb, focusRingStyle(focus.focused, colors)]}
-        >
-            <PageImage uri={uri} label={`Manual page ${index + 1}`} aspectRatio={aspectRatio} />
-        </Pressable>
+        <Card tone="raised">
+            <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`View page ${index + 1}`}
+                onPress={onPress}
+                {...focus.focusHandlers}
+                style={[styles.pageRow, focusRingStyle(focus.focused, colors)]}
+            >
+                <View style={styles.thumb}>
+                    <PageImage uri={uri} label={`Manual page ${index + 1}`} aspectRatio={aspectRatio} />
+                </View>
+                <View style={styles.pageInfo}>
+                    <Heading>{`Page ${index + 1}`}</Heading>
+                </View>
+                <Icon name="chevronRight" color={colors.inkMuted} />
+            </Pressable>
+        </Card>
     )
 }
 
 const styles = StyleSheet.create({
-    privacy: { flexDirection: 'row', alignItems: 'flex-start', gap: space.xs },
-    privacyText: { flex: 1, gap: space.xs },
-    sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
-    pageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-    thumb: { width: 96, minHeight: touchTarget, justifyContent: 'center' },
-    pageInfo: { flex: 1, gap: space.xxs },
+    content: { padding: space.md, gap: space.md },
+    pageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: touchTarget },
+    thumb: { width: 96 },
+    pageInfo: { flex: 1 },
 })

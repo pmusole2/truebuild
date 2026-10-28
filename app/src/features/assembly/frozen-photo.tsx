@@ -73,15 +73,29 @@ type FrozenPhotoProps = {
     readonly overlay?: (displayed: Rect) => ReactNode
     // Plain-text names for anything the overlay draws, shown under the caption.
     readonly notes?: readonly PaneNote[]
+    // Hero mode: the photo fills a frame of exactly this height, its names sit on the image, and no caption is drawn.
+    readonly fillHeight?: number
 }
 
 /** The one frozen photo of this capture. Nothing here is live; the image does not update after it is taken. */
-export function FrozenPhoto({ observation, caption, onTapPoint, overlay, notes }: FrozenPhotoProps): ReactElement {
+export function FrozenPhoto({
+    observation,
+    caption,
+    onTapPoint,
+    overlay,
+    notes,
+    fillHeight,
+}: FrozenPhotoProps): ReactElement {
     const { colors } = useTheme()
     const [width, setWidth] = useState(0)
     const dataUri = useMemo(() => bytesToDataUri(observation.bytes, observation.mimeType), [observation])
     const imageSize = { width: observation.width, height: observation.height }
-    const boxHeight = width === 0 ? 0 : Math.min((width * imageSize.height) / imageSize.width, MAX_PHOTO_HEIGHT)
+    const boxHeight =
+        width === 0
+            ? 0
+            : fillHeight !== undefined
+              ? fillHeight
+              : Math.min((width * imageSize.height) / imageSize.width, MAX_PHOTO_HEIGHT)
     const box = { width, height: boxHeight }
     const displayed = containRect(box, imageSize)
 
@@ -137,8 +151,13 @@ export function FrozenPhoto({ observation, caption, onTapPoint, overlay, notes }
                     </>
                 )}
             </View>
-            <Caption>{caption}</Caption>
-            <PaneNotes notes={notes} />
+            {fillHeight !== undefined && notes !== undefined && notes.length > 0 ? (
+                <View testID="photo-labels" style={[styles.labels, { backgroundColor: colors.surface }]}>
+                    <PaneNotes notes={notes} />
+                </View>
+            ) : null}
+            {fillHeight === undefined ? <Caption>{caption}</Caption> : null}
+            {fillHeight === undefined ? <PaneNotes notes={notes} /> : null}
         </View>
     )
 }
@@ -150,11 +169,21 @@ const styles = StyleSheet.create({
     frame: {
         width: '100%',
         position: 'relative',
-        borderRadius: radius.lg,
+        borderRadius: radius.hero,
+        borderCurve: 'continuous',
         overflow: 'hidden',
     },
     image: {
         alignSelf: 'center',
+    },
+    labels: {
+        position: 'absolute',
+        left: space.xs,
+        right: space.xs,
+        bottom: space.xs,
+        padding: space.xs,
+        borderRadius: radius.md,
+        opacity: 0.94,
     },
     overlay: {
         position: 'absolute',

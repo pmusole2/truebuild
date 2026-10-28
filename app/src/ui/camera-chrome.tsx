@@ -2,7 +2,8 @@ import type { ReactElement, ReactNode } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../theme/theme'
-import { darkColors, radius, space } from '../theme/tokens'
+import { darkColors, radius, shutterSize, space } from '../theme/tokens'
+import { useFeedback } from './feedback'
 import { IconButton } from './button'
 import { focusRingStyle, useFocusRing } from './focus'
 import { Body } from './text'
@@ -90,16 +91,21 @@ export function ShutterButton({
     readonly disabled: boolean
 }): ReactElement {
     const { colors } = useTheme()
+    const { haptic } = useFeedback()
     const focus = useFocusRing()
     return (
         <Pressable
+            testID="camera-shutter"
             accessibilityRole="button"
             accessibilityLabel={label}
             accessibilityState={{ disabled }}
             aria-disabled={disabled}
             disabled={disabled}
             {...focus.focusHandlers}
-            onPress={onPress}
+            onPress={(): void => {
+                haptic('selection')
+                onPress()
+            }}
             style={({ pressed }) => [
                 focusRingStyle(focus.focused, colors),
                 styles.shutterRing,
@@ -200,20 +206,22 @@ const styles = StyleSheet.create({
         gap: space.sm,
     },
     shutterRing: {
-        width: 72,
-        height: 72,
+        width: shutterSize,
+        height: shutterSize,
         borderRadius: radius.pill,
-        borderWidth: 3,
+        borderWidth: 4,
         alignItems: 'center',
         justifyContent: 'center',
     },
     shutterCore: {
-        width: 56,
-        height: 56,
+        width: shutterSize - 16,
+        height: shutterSize - 16,
         borderRadius: radius.pill,
     },
+    // The shutter gives under the finger, so a press reads as a press.
     pressed: {
-        opacity: 0.8,
+        opacity: 0.85,
+        transform: [{ scale: 0.94 }],
     },
     disabled: {
         opacity: 0.4,

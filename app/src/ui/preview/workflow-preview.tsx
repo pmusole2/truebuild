@@ -6,12 +6,15 @@ import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
 import { stepAssemblyGuide } from '../../features/capture/step-facts'
 import { ShutterButton } from '../camera-chrome'
 import {
+    DoneScreen,
     GuideScreen,
     LibraryScreen,
     OverviewScreen,
     PagesScreen,
+    ReadingScreen,
     type WorkflowController,
 } from '../../features/capture/screens'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../../theme/theme'
 import type { ColorScheme } from '../../theme/tokens'
 import { SegmentedControl } from '../fields'
@@ -52,7 +55,7 @@ export const INERT_WORKFLOW_CONTROLLER = Object.freeze({
     targetChanged: doNothing,
 } satisfies WorkflowController)
 
-const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide', 'Camera', 'Settings']
+const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide', 'Done', 'Camera', 'Settings']
 const GROUP_OPTIONS = GROUPS.map((value) => ({ value, label: value }))
 const SCHEME_OPTIONS = [
     { value: 'light', label: 'Light' },
@@ -104,6 +107,8 @@ function PreviewFrame({
     readonly showControls: boolean
 }): ReactElement {
     const { colors } = useTheme()
+    // The gallery runs inside the app, under the status bar, so its controls clear the top inset themselves.
+    const insets = useSafeAreaInsets()
     const { state, entry } = workflowPreviewFixture(selected)
     const group = WORKFLOW_PREVIEW_CASES.find((preview) => preview.id === selected)!.group
     const options = WORKFLOW_PREVIEW_CASES.filter((preview) => preview.group === group).map((preview) => ({
@@ -113,7 +118,12 @@ function PreviewFrame({
 
     return (
         <View style={[styles.root, { backgroundColor: colors.canvas }]} testID="workflow-preview">
-            <View style={[styles.controls, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View
+                style={[
+                    styles.controls,
+                    { backgroundColor: colors.surface, borderColor: colors.border, paddingTop: 10 + insets.top },
+                ]}
+            >
                 <Caption>
                     {showControls ? WORKFLOW_PREVIEW_BANNER : 'Synthetic visual preview · local fixtures only'}
                 </Caption>
@@ -149,9 +159,7 @@ function PreviewFrame({
                             />
                         </ScrollView>
                         {selected === 'guide-instructions' ? (
-                            <Caption>
-                                Press the info button labelled “Step instructions” to open the real instruction sheet.
-                            </Caption>
+                            <Caption>Press More to open the real details sheet.</Caption>
                         ) : null}
                         <Caption>Screen actions are inert. Change fixtures with the controls above.</Caption>
                     </>
@@ -161,7 +169,7 @@ function PreviewFrame({
                 {selected === 'home-unavailable' ? (
                     <AppUnavailableScreen />
                 ) : selected === 'settings' ? (
-                    <SettingsScreen state={state} onBack={doNothing} onOpenDeviceSettings={doNothing} />
+                    <SettingsScreen state={state} onOpenDeviceSettings={doNothing} />
                 ) : state.route === 'camera' ? (
                     <CameraStage
                         intent={{
@@ -203,7 +211,11 @@ function PreviewFrame({
                         onRetry={doNothing}
                     />
                 ) : state.route === 'library' ? (
-                    <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} onOpenSettings={doNothing} />
+                    <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} />
+                ) : selected === 'done-finished' ? (
+                    <DoneScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
+                ) : state.route === 'pages' && state.pending !== null && state.pending.startsWith('Reading') ? (
+                    <ReadingScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
                 ) : state.route === 'pages' ? (
                     <PagesScreen
                         state={state}
@@ -223,7 +235,7 @@ function PreviewFrame({
 
 const styles = StyleSheet.create({
     root: { flex: 1, minHeight: 0 },
-    controls: { padding: 10, gap: 6, borderBottomWidth: 1 },
+    controls: { paddingHorizontal: 10, paddingBottom: 10, gap: 6, borderBottomWidth: 1 },
     topControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     device: { flex: 1, width: '100%', maxWidth: 480, alignSelf: 'center', minHeight: 0, borderWidth: 1 },
 })

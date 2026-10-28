@@ -1,201 +1,245 @@
 import type { ReactElement } from 'react'
-import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
-import { AppButton, IconButton } from '../../ui/button'
-import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
-import { ActionDock, Card, Screen as ScreenShell, Stack } from '../../ui/surface'
-import { Caption, Heading, Title } from '../../ui/text'
-import { EmptyState, ErrorState, LoadingState } from '../../ui/states'
-import { StatusTag } from '../../ui/status'
-import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import {
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    View,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
+} from 'react-native'
+import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
+import { FixedBottomBar } from '../../ui/bottom-bar'
+import { MoreSheet } from '../../ui/sheet'
+import { Card, Stack } from '../../ui/surface'
+import { Body, Caption, Heading, Instruction, LargeTitle } from '../../ui/text'
+import { LoadingState } from '../../ui/states'
+import { ProgressBar } from '../../ui/progress'
 import { Icon } from '../../ui/icons'
+import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
-import { WorkflowNotice } from './screen-chrome'
+import { AboutThisCheck, HowItWorks } from './more-sections'
+import { progressLine, stopFor } from './plain-copy'
+import { PlainNotice, ScreenBody } from './screen-layout'
+import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
+import { defaultNav, type ScreenNav } from './screen-nav'
+import { SettingsSections } from './settings-screen'
 import type { WorkflowScreenProps } from './workflow-types'
 
-// A non-binding outline of the flow; every item is "not started" because nothing has been added yet.
-const FIRST_RUN_STAGES: readonly StepListItem[] = [
-    { id: 'photograph', title: 'Photograph your manual pages', state: 'upcoming' },
-    { id: 'confirm', title: 'Confirm the facts read from them', state: 'upcoming' },
-    { id: 'assemble', title: 'Follow guided assembly and check steps', state: 'upcoming' },
-]
+/** Distance the large title takes to collapse into the small header title. */
+export const COLLAPSE_DISTANCE = 56
+
+/** 0 at rest, 1 once the large title has scrolled away. Pure so the header and the title share one rule. */
+export function collapseProgress(offset: number): number {
+    return Math.max(0, Math.min(1, offset / COLLAPSE_DISTANCE))
+}
+
+/** Small title that appears in the header as the large one collapses. Android and previews; iOS uses its native title. */
+export function PinnedTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
+    const style = useAnimatedStyle(() => ({ opacity: collapseProgress(scrollY.value) }))
+    return (
+        <Animated.View testID="pinned-title" style={style}>
+            <Heading numberOfLines={1}>{title}</Heading>
+        </Animated.View>
+    )
+}
+
+function CollapsingTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
+    const style = useAnimatedStyle(() => {
+        const progress = collapseProgress(scrollY.value)
+        return { opacity: 1 - progress, transform: [{ scale: 1 - progress * 0.2 }] }
+    })
+    return (
+        <Animated.View testID="collapsing-title" style={[styles.collapsing, style]}>
+            <LargeTitle>{title}</LargeTitle>
+        </Animated.View>
+    )
+}
+
+type LibraryProps = WorkflowScreenProps &
+    ChromeProps & {
+        readonly nav?: ScreenNav
+        // 'content' draws the large title inside the scroll (Android, previews); 'native' leaves it to the iOS header.
+        readonly largeTitle?: 'content' | 'native'
+        readonly scrollY?: SharedValue<number>
+    }
 
 /** Why Add manual is unavailable, so a disabled primary action is never unexplained. */
 function addHint(state: WorkflowScreenProps['state']): string | null {
     if (state.loading) {
-        return 'Available once your library has loaded.'
+        return 'Your builds are opening.'
     }
     if (state.storageReadOnly) {
-        return 'Adding is paused until the saved library is restored.'
+        return 'Adding is paused until your saved builds open again.'
     }
     if (state.pending !== null) {
-        return 'Available when the current request finishes.'
+        return 'Wait for the current request to finish.'
     }
     return null
 }
 
+const PRIMARY_LABEL = {
+    pages: 'Add photos',
+    overview: 'Answer a few questions',
+    guide: 'Keep building',
+    done: 'See finished build',
+} as const
+
 export function LibraryScreen({
     state,
     controller,
-    onOpenSettings,
-}: WorkflowScreenProps & { onOpenSettings?: () => void }): ReactElement {
-    const { height, fontScale } = useWindowDimensions()
-    // Same rule as the guide: on a short screen or with large text the primary action joins the one scroll.
-    const compact = height < 650 || fontScale >= 1.5
+    nav: navProp,
+    chrome = 'inline',
+    more: moreProp,
+    largeTitle = chrome === 'inline' ? 'content' : 'native',
+    scrollY: scrollYProp,
+}: LibraryProps): ReactElement {
+    const internalMore = useMoreState()
+    const more = moreProp ?? internalMore
+    const ownScroll = useSharedValue(0)
+    const scrollY = scrollYProp ?? ownScroll
+    const nav = navProp ?? defaultNav(controller)
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     const hint = addHint(state)
-    const firstRun = !state.loading && !state.storageReadOnly && state.entries.length === 0
-    // With nothing saved the first-run content sits in the middle of the scroll, not above a blank lower half.
-    const contentStyle = firstRun ? [styles.content, styles.centred] : styles.content
-    const header = (
-        <View style={styles.topBar}>
-            <View style={styles.titleWrap}>
-                <Title>Your manuals</Title>
-            </View>
-            {onOpenSettings === undefined ? null : (
-                <IconButton label="Settings" icon="settings" onPress={onOpenSettings} />
-            )}
-        </View>
-    )
-    const body = (
-        <>
-            <WorkflowNotice state={state} controller={controller} />
-            {state.loading ? (
-                <Card>
-                    <LoadingState label="Restoring local library…" shape="card" />
-                    <Caption>Your saved manuals stay on this device and are not changed while this loads.</Caption>
-                </Card>
-            ) : state.entries.length === 0 ? (
-                state.storageReadOnly ? (
-                    <ErrorState
-                        title="Saved library unavailable"
-                        body="Original local data is retained. Retry the local library above before making changes."
-                    />
-                ) : (
-                    <EmptyState title="No manuals yet." body="Scan or choose your own manual pages to start." />
-                )
-            ) : null}
-            {firstRun ? (
-                <Card>
-                    <Heading>How it works</Heading>
-                    <StepList steps={FIRST_RUN_STAGES} />
-                    <Caption>Follow one step at a time, with your manual&apos;s own pages beside you.</Caption>
-                </Card>
-            ) : null}
-            {state.entries.map((entry) => (
-                <ManualSummary
-                    key={entry.session.manualId}
-                    entry={entry}
-                    sole={state.entries.length === 1}
-                    onOpen={(): void => {
-                        void controller.open(entry.session.manualId)
-                    }}
-                />
-            ))}
-        </>
-    )
-    const add = (
-        <>
-            <AppButton
-                label="Add manual"
-                variant="accent"
-                icon="plus"
-                disabled={addDisabled}
-                onPress={(): void => {
-                    void controller.createManual()
-                }}
-            />
-            {hint === null ? null : <Caption>{hint}</Caption>}
-        </>
-    )
+    const failed = !state.loading && state.storageReadOnly && state.entries.length === 0
+    const empty = !state.loading && !state.storageReadOnly && state.entries.length === 0
+    // Most recently touched first; the first one is where "keep building" goes.
+    const entries = [...state.entries].sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
+    const sole = entries.length === 1 ? entries[0] : undefined
+    const addManual = (): void => {
+        void controller.createManual()
+    }
+    const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>): void => {
+        scrollY.value = event.nativeEvent.contentOffset.y
+    }
+    const primary = state.loading
+        ? { label: 'Add manual', onPress: addManual, disabled: true }
+        : failed
+          ? {
+                label: 'Try again',
+                testID: 'retry-library',
+                onPress: (): void => {
+                    void controller.restore()
+                },
+            }
+          : sole !== undefined && !addDisabled
+            ? {
+                  label: PRIMARY_LABEL[stopFor(sole)],
+                  testID: 'keep-building',
+                  onPress: (): void => nav.openStop(sole),
+              }
+            : { label: 'Add manual', icon: 'plus' as const, onPress: addManual, disabled: addDisabled }
+    const secondary = empty
+        ? { label: 'How it works', onPress: (): void => more.show() }
+        : sole !== undefined && !addDisabled
+          ? { label: 'Add manual', onPress: addManual }
+          : undefined
     return (
-        <ScreenShell header="hidden" scroll={false} padded={false} testID="library-screen">
-            {compact ? (
-                <ScrollView
-                    testID="library-scroll"
-                    contentContainerStyle={contentStyle}
-                    keyboardShouldPersistTaps="handled"
-                >
-                    {header}
-                    {body}
-                    <Stack gap="xs">{add}</Stack>
-                </ScrollView>
-            ) : (
-                <>
-                    <View style={styles.fixedHeader}>{header}</View>
-                    <ScrollView
-                        testID="library-scroll"
-                        contentContainerStyle={contentStyle}
-                        keyboardShouldPersistTaps="handled"
-                    >
-                        {body}
-                    </ScrollView>
-                    <ActionDock>{add}</ActionDock>
-                </>
-            )}
-        </ScreenShell>
+        <ScreenBody testID="library-screen">
+            {chrome === 'inline' ? <InlineHeader title="Your builds" more={more} /> : null}
+            {/* The scroll view is the first child so the iOS large title collapses with it. */}
+            <ScrollView
+                testID="library-scroll"
+                contentContainerStyle={[styles.content, empty && styles.centred]}
+                keyboardShouldPersistTaps="handled"
+                contentInsetAdjustmentBehavior="automatic"
+                scrollEventThrottle={16}
+                onScroll={onScroll}
+            >
+                {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
+                <PlainNotice state={state} controller={controller} />
+                {state.loading ? (
+                    <Card>
+                        <LoadingState label="Getting your builds ready." shape="card" />
+                    </Card>
+                ) : failed ? (
+                    <Instruction>We could not open your saved builds. Your photos are still on this phone.</Instruction>
+                ) : empty ? (
+                    <View style={styles.hero}>
+                        <Icon name="image" />
+                        <Instruction>Build furniture with step-by-step help.</Instruction>
+                    </View>
+                ) : null}
+                {sole === undefined ? null : <ContinueCard entry={sole} onOpen={(): void => nav.openStop(sole)} />}
+                {entries.length > 1
+                    ? entries.map((entry) => (
+                          <ManualRow
+                              key={entry.session.manualId}
+                              entry={entry}
+                              onOpen={(): void => nav.openStop(entry)}
+                          />
+                      ))
+                    : null}
+            </ScrollView>
+            <FixedBottomBar primary={primary} secondary={secondary} reason={hint} />
+            <MoreSheet visible={more.open} title="More" onClose={more.hide}>
+                <HowItWorks />
+                <SettingsSections state={state} />
+                <AboutThisCheck />
+            </MoreSheet>
+        </ScreenBody>
     )
 }
 
-// A sole manual is the continuation hero, so it takes the raised result card; several stay a flat list.
-function ManualSummary({
-    entry,
-    sole,
-    onOpen,
-}: {
-    entry: LibraryEntry
-    sole: boolean
-    onOpen: () => void
-}): ReactElement {
-    const confirmed = entry.session.reviewStatus === 'reviewed'
+function ContinueCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
-    const steps = entry.session.reviewedSteps.length
-    const pages = entry.session.pages.length
+    const total = entry.session.reviewedSteps.length
     const completed = entry.completedStepIds.length
     return (
-        <Card tone={sole ? 'result' : 'surface'} testID="manual-card">
+        <Card tone="raised" testID="manual-card">
             <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
                 {...focus.focusHandlers}
                 onPress={onOpen}
-                style={[styles.manualPress, focusRingStyle(focus.focused, colors)]}
+                style={[styles.press, focusRingStyle(focus.focused, colors)]}
             >
-                <View style={styles.manualTitle}>
-                    <View style={styles.titleWrap}>
-                        <Heading>{entry.session.title}</Heading>
-                    </View>
-                    {/* Decorative: the whole card is the control, named "Open <title>". The chevron says it continues. */}
-                    <Icon name="chevronRight" color={colors.inkMuted} />
-                </View>
-                <Caption>
-                    {`${pages} ${pages === 1 ? 'page' : 'pages'} · ${steps} ${steps === 1 ? 'step' : 'steps'} · ${completed} marked complete by you`}
-                </Caption>
-                {steps === 0 ? null : (
-                    <ProgressBar
-                        label={`Steps you marked complete: ${completed} of ${steps}`}
-                        value={completed}
-                        total={steps}
-                    />
+                <Heading>{entry.session.title}</Heading>
+                <Body>{progressLine(entry)}</Body>
+                {total === 0 ? null : (
+                    <ProgressBar label={`Steps done: ${completed} of ${total}`} value={completed} total={total} />
                 )}
-                <StatusTag
-                    label={confirmed ? 'Facts confirmed' : 'Facts not confirmed'}
-                    tone={confirmed ? 'pass' : 'caution'}
-                    icon={confirmed ? 'check' : 'help'}
-                />
+                <Instruction>Pick up where you left off.</Instruction>
+            </Pressable>
+        </Card>
+    )
+}
+
+function ManualRow({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
+    const { colors } = useTheme()
+    const focus = useFocusRing()
+    return (
+        <Card tone="raised" testID="manual-card">
+            <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${entry.session.title}`}
+                {...focus.focusHandlers}
+                onPress={onOpen}
+                style={[styles.row, focusRingStyle(focus.focused, colors)]}
+            >
+                <Stack gap="xs">
+                    <Heading>{entry.session.title}</Heading>
+                    <Caption>{progressLine(entry)}</Caption>
+                </Stack>
+                <Icon name="chevronRight" color={colors.inkMuted} />
             </Pressable>
         </Card>
     )
 }
 
 const styles = StyleSheet.create({
-    topBar: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-    titleWrap: { flex: 1 },
-    fixedHeader: { paddingHorizontal: space.md, paddingTop: space.md, paddingBottom: space.sm },
     content: { padding: space.md, gap: space.md },
     centred: { flexGrow: 1, justifyContent: 'center' },
-    manualPress: { gap: space.xs, minHeight: touchTarget },
-    manualTitle: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+    hero: { gap: space.sm, alignItems: 'flex-start' },
+    collapsing: { transformOrigin: 'left center' },
+    press: { gap: space.xs, minHeight: touchTarget },
+    row: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: space.sm,
+        minHeight: touchTarget,
+    },
 })

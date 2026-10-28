@@ -1,0 +1,100 @@
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { Keyboard, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { AppButton } from '../../ui/button'
+import { Notice } from '../../ui/status'
+import { useTheme } from '../../theme/theme'
+import { space } from '../../theme/tokens'
+import { isProblemNotice, plainNotice } from './plain-copy'
+import type { WorkflowScreenProps } from './workflow-types'
+
+/** The hero takes at least this share of the full window height on Guide and Quick check. */
+export const HERO_RATIO = 0.55
+// At accessibility text sizes the sentence and the primary need the room, so the hero gives some back.
+const LARGE_TEXT_SCALE = 2
+const LARGE_TEXT_HERO_RATIO = 0.4
+
+export function useKeyboardVisible(): boolean {
+    const [visible, setVisible] = useState(false)
+    useEffect(() => {
+        const show = (): void => setVisible(true)
+        const hide = (): void => setVisible(false)
+        const subscriptions = [
+            Keyboard.addListener('keyboardWillShow', show),
+            Keyboard.addListener('keyboardDidShow', show),
+            Keyboard.addListener('keyboardWillHide', hide),
+            Keyboard.addListener('keyboardDidHide', hide),
+        ]
+        return (): void => subscriptions.forEach((subscription) => subscription.remove())
+    }, [])
+    return visible
+}
+
+/** Hero height in points: 55% of the window, 40% at the largest text sizes, small while the keyboard is up. */
+export function heroHeightFor(windowHeight: number, fontScale: number, keyboard: boolean): number {
+    if (keyboard) {
+        return Math.round(windowHeight * 0.22)
+    }
+    return Math.round(windowHeight * (fontScale >= LARGE_TEXT_SCALE ? LARGE_TEXT_HERO_RATIO : HERO_RATIO))
+}
+
+export function useHeroHeight(keyboard = false): number {
+    const { height, fontScale } = useWindowDimensions()
+    return heroHeightFor(height, fontScale, keyboard)
+}
+
+/** Canvas fill for a screen body; the native header above and the fixed bar below belong to the screen, not to this. */
+export function ScreenBody({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View testID={testID} style={[styles.body, { backgroundColor: colors.canvas }]}>
+            {children}
+        </View>
+    )
+}
+
+/** Only text that overflows scrolls. The hero above and the bar below stay put. */
+export function TextRegion({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
+    return (
+        <ScrollView
+            testID={testID}
+            style={styles.region}
+            contentContainerStyle={styles.regionContent}
+            keyboardShouldPersistTaps="handled"
+            contentInsetAdjustmentBehavior="never"
+        >
+            {children}
+        </ScrollView>
+    )
+}
+
+/** A controller notice in plain words, with the one recovery that keeps working: retry reading saved builds. */
+export function PlainNotice({ state, controller }: WorkflowScreenProps): ReactElement | null {
+    if (state.notice === null && !state.storageReadOnly) {
+        return null
+    }
+    return (
+        <View accessibilityLiveRegion="polite" style={styles.notice}>
+            {state.notice === null ? null : (
+                <Notice tone={isProblemNotice(state.notice) ? 'error' : 'info'} text={plainNotice(state.notice)} />
+            )}
+            {state.storageReadOnly ? (
+                <AppButton
+                    label="Try again"
+                    testID="retry-library"
+                    busy={state.loading}
+                    disabled={state.loading || state.pending !== null}
+                    onPress={(): void => {
+                        void controller.restore()
+                    }}
+                />
+            ) : null}
+        </View>
+    )
+}
+
+const styles = StyleSheet.create({
+    body: { flex: 1 },
+    region: { flex: 1, minHeight: 0 },
+    regionContent: { padding: space.md, gap: space.sm },
+    notice: { gap: space.xs },
+})

@@ -1,189 +1,369 @@
-import { useState, type ReactElement } from 'react'
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
-import { stepEvidenceRequirements, type ManualBinding, type ManualSession, type ManualStep } from '@truebuild/contracts'
+import { useRef, useState, type ReactElement } from 'react'
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native'
+import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
-import { Card, Divider, Stack } from '../../ui/surface'
-import { BottomSheet } from '../../ui/sheet'
-import { Body, Callout, Caption, Heading } from '../../ui/text'
-import { Notice, StatusTag, type StatusTone } from '../../ui/status'
-import { Icon, type IconName } from '../../ui/icons'
+import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
 import { SegmentedControl, TextField } from '../../ui/fields'
+import { ProgressBar } from '../../ui/progress'
+import { MoreSheet } from '../../ui/sheet'
+import { Card, Stack } from '../../ui/surface'
+import { Body, Caption, Heading, Instruction } from '../../ui/text'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
-import { reviewedSession, unresolvedCriticalFacts, type WorkflowState } from './controller'
+import { reviewedSession, unresolvedCriticalFacts } from './controller'
 import type { LibraryEntry } from './library'
+import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
-import { ConfirmRow, Screen, WorkflowNotice } from './screen-chrome'
-import { factText, ModelProvenance, SourceDiagrams, StepFacts } from './step-facts'
-import type { WorkflowController, WorkflowScreenProps } from './workflow-types'
+import { editableQuestions, otherBlockers, type Question } from './quick-check-model'
+import { PlainNotice, ScreenBody, TextRegion, useHeroHeight, useKeyboardVisible } from './screen-layout'
+import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
+import { defaultNav, type ScreenNav } from './screen-nav'
+import { StepDetails } from './step-details'
+import { StepPicture } from './step-picture'
+import type { WorkflowScreenProps } from './workflow-types'
 
-type Chip = { label: string; tone: StatusTone; icon: IconName }
+type QuickCheckProps = WorkflowScreenProps & ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav }
 
+/** Internal issue wording turned into a plain line for More. Part ids and field names never show. */
+function plainIssue(issue: string): string {
+    return issue.replace(/^Part \S+ name: /u, 'A part name is unclear: ').replace(/, quantity of \S+:/u, ', how many:')
+}
+
+/**
+ * Quick check: one honest question at a time. Only what the existing gate lets a person fill in is asked (a missing
+ * orientation or missing visible checks, each from the step's cited page); anything else needs clearer pages. Nothing
+ * is guessed, and the whole manual is confirmed only by the explicit Start building tap once the questions are done.
+ */
 export function OverviewScreen({
     state,
     controller,
     entry,
-}: WorkflowScreenProps & { entry: LibraryEntry }): ReactElement {
+    nav: navProp,
+    chrome = 'inline',
+    more: moreProp,
+}: QuickCheckProps): ReactElement {
     const { session } = entry
-    // The whole-manual tick belongs to one revision; any change to the facts makes the user tick it again.
-    const [confirmation, setConfirmation] = useState({ revision: session.revision, checked: false })
-    const confirmed = confirmation.revision === session.revision && confirmation.checked
-    // Cards the person opened or closed by hand. A new revision restarts from the defaults, like the confirmation.
-    const [toggled, setToggled] = useState<{ revision: number; open: Readonly<Record<string, boolean>> }>({
-        revision: session.revision,
-        open: {},
-    })
-    const manualToggles = toggled.revision === session.revision ? toggled.open : {}
-    // The page opened full width from the strip, by position. Local view state only: no navigation, model or storage.
-    const [openPage, setOpenPage] = useState<number | null>(null)
-    const enlarged = openPage === null ? undefined : session.pages[openPage]
-    const canConfirm = reviewedSession(session) !== null
-    const unresolved = unresolvedCriticalFacts(session)
+    const nav = navProp ?? defaultNav(controller)
+    const internalMore = useMoreState()
+    const more = moreProp ?? internalMore
+    const keyboard = useKeyboardVisible()
+    const heroHeight = useHeroHeight(keyboard)
+    const questions = editableQuestions(session)
+    const [skipped, setSkipped] = useState<readonly string[]>([])
+    const [total] = useState(questions.length)
+    const asking = questions.filter((question) => !skipped.includes(question.id))
+    const current = asking[0]
+    const blockers = otherBlockers(session)
     const reviewed = session.reviewStatus === 'reviewed'
-    const notes = session.rawExtraction?.unknowns ?? []
+    const canConfirm = reviewedSession(session) !== null
+    const busy = state.pending !== null || state.storageReadOnly
+    const position = current === undefined ? 0 : total - questions.length + questions.indexOf(current) + 1
+    const noRead = session.rawExtraction === null
+    const unreadable = current !== undefined && current.step.sourceRefs.length === 0
+
+    let sentence: string
+    let primary: BarAction | null = null
+    let secondary: BarAction | undefined
+    if (noRead) {
+        sentence = 'Add photos of your manual and read them first.'
+        primary = { label: 'Add photos', onPress: nav.editPages }
+    } else if (current !== undefined && !unreadable) {
+        sentence =
+            current.kind === 'orientation'
+                ? `Which way should the part face in step ${current.step.order}?`
+                : `What should you see when step ${current.step.order} is done?`
+    } else if (questions.length > 0 || blockers.length > 0 || current !== undefined) {
+        sentence = 'One thing still needs a clearer photo before we can check your work.'
+        primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
+        secondary =
+            skipped.length > 0 ? { label: 'Answer skipped questions', onPress: (): void => setSkipped([]) } : undefined
+    } else if (canConfirm || reviewed) {
+        sentence = 'Thanks. Your steps are ready.'
+        primary = {
+            label: reviewed ? 'Keep building' : 'Start building',
+            testID: 'quick-check-start',
+            busy: state.pending !== null,
+            disabled: busy,
+            onPress: (): void => {
+                void nav.startBuilding()
+            },
+        }
+    } else {
+        sentence = 'One thing still needs a clearer photo before we can check your work.'
+        primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
+    }
+
     return (
-        <Screen title={session.title} onBack={controller.home} testID="overview-screen">
-            <WorkflowNotice state={state} controller={controller} />
-            <Caption>
-                Review extracted facts against your original diagrams. Unknown critical facts block verified checks.
-            </Caption>
-            {session.rawExtraction === null ? null : <ModelProvenance result={session.rawExtraction} />}
-            {session.pages.length === 0 ? null : <Caption>Tap a page to see it full width.</Caption>}
-            <View style={styles.pageStrip}>
-                {session.pages.map((page, index) => (
-                    <PageStripItem
-                        key={page.pageId}
-                        number={index + 1}
-                        page={page}
-                        uri={state.pageUris[page.pageId]}
-                        onOpen={(): void => setOpenPage(index)}
+        <ScreenBody testID="overview-screen">
+            <View testID="quick-check-screen" style={styles.flex}>
+                {chrome === 'inline' ? (
+                    <InlineHeader
+                        title="Quick check"
+                        subtitle={current === undefined || unreadable ? undefined : `Question ${position} of ${total}`}
+                        more={more}
                     />
-                ))}
-            </View>
-            {session.parts.length === 0 ? null : (
-                <Card>
-                    <Heading>Parts</Heading>
-                    {session.parts.map((part) => (
-                        <PartRow key={part.partId} partId={part.partId} name={factText(part.name, String)} />
-                    ))}
-                </Card>
-            )}
-            {unresolved.length === 0 ? null : <BlockerGroup issues={unresolved} />}
-            {notes.length === 0 ? null : (
-                <Card>
-                    <Heading>Notes from reading</Heading>
-                    {notes.map((unknown, index) => (
-                        <Body key={index}>{`Extraction note: ${unknown}`}</Body>
-                    ))}
-                </Card>
-            )}
-            {session.reviewedSteps.map((step, index) => {
-                const blockers = stepBlockerCount(session, step)
-                const locked = needsStepFacts(step)
-                const open = locked || (manualToggles[step.stepId] ?? blockers > 0)
-                return (
-                    <StepCard
-                        key={step.stepId}
+                ) : null}
+                {current !== undefined && !unreadable ? (
+                    <QuestionCard
+                        key={`${session.manualId}:${session.revision}:${current.id}`}
+                        question={current}
+                        session={session}
                         state={state}
                         controller={controller}
-                        session={session}
-                        step={step}
-                        index={index}
-                        blockers={blockers}
-                        open={open}
-                        locked={locked}
-                        reviewed={reviewed}
-                        onToggle={(): void =>
-                            setToggled({
-                                revision: session.revision,
-                                open: { ...manualToggles, [step.stepId]: !open },
-                            })
-                        }
+                        position={position}
+                        total={total}
+                        sentence={sentence}
+                        heroHeight={heroHeight}
+                        busy={busy}
+                        onSkip={(): void => setSkipped([...skipped, current.id])}
                     />
-                )
-            })}
-            {reviewed ? (
-                <Card>
-                    <StatusTag label="Facts confirmed by you" tone="pass" icon="check" />
-                    <Callout>Facts confirmed by you.</Callout>
-                    <AppButton
-                        label="Continue assembly"
-                        variant="accent"
-                        onPress={(): void => controller.navigate('guide')}
-                    />
-                </Card>
-            ) : (
-                <Card>
-                    <Divider testID="confirm-divider" />
-                    <ConfirmRow
-                        label="I checked all facts and corrections against the manual"
-                        checked={confirmed}
-                        disabled={!canConfirm}
-                        onToggle={(): void => setConfirmation({ revision: session.revision, checked: !confirmed })}
-                    />
-                    {canConfirm ? null : (
-                        <Caption>
-                            Add or retake clearer pages showing the unresolved facts, then read the manual again. No
-                            unknown facts will be filled in automatically.
-                        </Caption>
-                    )}
-                    <AppButton
-                        label="Confirm reviewed facts"
-                        variant="primary"
-                        disabled={!confirmed || !canConfirm || state.pending !== null || state.storageReadOnly}
-                        onPress={(): void => {
-                            void controller.confirm()
-                        }}
-                    />
-                </Card>
-            )}
-            <AppButton
-                label="Edit manual pages"
-                variant="quiet"
-                disabled={state.pending !== null}
-                onPress={(): void => controller.navigate('pages')}
+                ) : (
+                    <>
+                        <View style={styles.hero}>
+                            <StepPicture
+                                reference={session.reviewedSteps[0]?.sourceRefs[0]}
+                                session={session}
+                                pageUris={state.pageUris}
+                                height={heroHeight}
+                            />
+                        </View>
+                        <TextRegion>
+                            <PlainNotice state={state} controller={controller} />
+                            <Instruction>{sentence}</Instruction>
+                        </TextRegion>
+                        <FixedBottomBar primary={primary} secondary={secondary} />
+                    </>
+                )}
+            </View>
+            <QuickCheckMore
+                visible={more.open}
+                onClose={more.hide}
+                session={session}
+                state={state}
+                nav={nav}
+                issues={unresolvedCriticalFacts(session)}
             />
-            <BottomSheet
-                visible={enlarged !== undefined}
-                title={`Manual page ${(openPage ?? 0) + 1}`}
-                onClose={(): void => setOpenPage(null)}
-            >
-                {enlarged === undefined ? null : (
+        </ScreenBody>
+    )
+}
+
+function QuestionCard({
+    question,
+    session,
+    state,
+    controller,
+    position,
+    total,
+    sentence,
+    heroHeight,
+    busy,
+    onSkip,
+}: {
+    question: Question
+    session: ManualSession
+    state: WorkflowScreenProps['state']
+    controller: WorkflowScreenProps['controller']
+    position: number
+    total: number
+    sentence: string
+    heroHeight: number
+    busy: boolean
+    onSkip: () => void
+}): ReactElement {
+    const { step } = question
+    const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
+    const labels = new Map(
+        session.parts.map((part) => [part.partId, part.name.state === 'known' ? part.name.value : 'A part']),
+    )
+    const parts = step.parts.map((part) => ({ value: part.partId, label: labels.get(part.partId) ?? 'A part' }))
+    const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
+    const [text, setText] = useState('')
+    const [error, setError] = useState<string | undefined>(undefined)
+    const save = async (): Promise<void> => {
+        if (question.kind === 'orientation') {
+            const description = text.trim()
+            if (description.length === 0) {
+                setError('Write a few words first.')
+                return
+            }
+            if (partId === null) {
+                setError('Choose the part first.')
+                return
+            }
+            setError(undefined)
+            await controller.acceptStepFacts(binding, step.stepId, { orientation: { partId, description } })
+            return
+        }
+        const visibleChecks = text
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+        if (visibleChecks.length === 0) {
+            setError('Write at least one thing, one per line.')
+            return
+        }
+        setError(undefined)
+        await controller.acceptStepFacts(binding, step.stepId, { visibleChecks })
+    }
+    return (
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+            <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
+            <View style={styles.hero}>
+                <StepPicture
+                    reference={step.sourceRefs[0]}
+                    session={session}
+                    pageUris={state.pageUris}
+                    height={heroHeight}
+                />
+            </View>
+            <TextRegion>
+                <PlainNotice state={state} controller={controller} />
+                <Instruction>{sentence}</Instruction>
+                {question.reason === null ? null : <Caption>{`The manual says: ${question.reason}`}</Caption>}
+                {question.kind === 'orientation' && parts.length > 1 ? (
+                    <SegmentedControl label="Which part" options={parts} value={partId ?? ''} onChange={setPartId} />
+                ) : null}
+                {question.kind === 'orientation' && parts.length === 1 ? (
+                    <Caption>{`Part: ${parts[0]!.label}`}</Caption>
+                ) : null}
+                <TextField
+                    label={
+                        question.kind === 'orientation' ? 'What the picture shows' : 'What you should see, one per line'
+                    }
+                    value={text}
+                    onChangeText={setText}
+                    multiline={question.kind === 'checks'}
+                    placeholder={
+                        question.kind === 'orientation' ? 'e.g. the groove faces inward' : 'One thing per line'
+                    }
+                    error={error}
+                    editable={!busy}
+                />
+            </TextRegion>
+            <FixedBottomBar
+                primary={{
+                    label: 'Save',
+                    testID: 'quick-check-save',
+                    disabled: busy || (question.kind === 'orientation' && parts.length === 0),
+                    onPress: (): void => {
+                        void save()
+                    },
+                }}
+                secondary={{ label: 'Skip for now', testID: 'quick-check-skip', onPress: onSkip, disabled: busy }}
+            />
+        </KeyboardAvoidingView>
+    )
+}
+
+function QuickCheckMore({
+    visible,
+    onClose,
+    session,
+    state,
+    nav,
+    issues,
+}: {
+    visible: boolean
+    onClose: () => void
+    session: ManualSession
+    state: WorkflowScreenProps['state']
+    nav: ScreenNav
+    issues: readonly string[]
+}): ReactElement {
+    const [openPage, setOpenPage] = useState<number | null>(null)
+    const enlarged = openPage === null ? undefined : session.pages[openPage]
+    const notes = session.rawExtraction?.unknowns ?? []
+    const close = (): void => {
+        setOpenPage(null)
+        onClose()
+    }
+    return (
+        <MoreSheet
+            visible={visible}
+            title={enlarged === undefined ? 'What we read' : `Page ${(openPage ?? 0) + 1}`}
+            onClose={close}
+            detents={['tall', 'full']}
+        >
+            {enlarged !== undefined ? (
+                <Stack gap="sm">
                     <PageImage
                         uri={state.pageUris[enlarged.pageId]}
                         label={`Manual page ${(openPage ?? 0) + 1}`}
                         aspectRatio={enlarged.width / enlarged.height}
                     />
-                )}
-            </BottomSheet>
-        </Screen>
+                    <AppButton label="Back to what we read" variant="quiet" onPress={(): void => setOpenPage(null)} />
+                </Stack>
+            ) : (
+                <Stack gap="md">
+                    <Caption>You checked these against your manual. Tap a page to see it bigger.</Caption>
+                    <View style={styles.strip}>
+                        {session.pages.map((page, index) => (
+                            <PageStripItem
+                                key={page.pageId}
+                                number={index + 1}
+                                uri={state.pageUris[page.pageId]}
+                                aspectRatio={page.width / page.height}
+                                onOpen={(): void => setOpenPage(index)}
+                            />
+                        ))}
+                    </View>
+                    {session.parts.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Parts</Heading>
+                            {session.parts.map((part) => (
+                                <Body key={part.partId}>
+                                    {part.name.state === 'known' ? part.name.value : 'A part with no clear name'}
+                                </Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {issues.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Still unclear</Heading>
+                            {issues.map((issue) => (
+                                <Body key={issue}>{plainIssue(issue)}</Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {notes.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Things we could not read</Heading>
+                            {notes.map((note, index) => (
+                                <Body key={index}>{note}</Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {session.reviewedSteps.map((step: ManualStep, index) => (
+                        <Card tone="raised" key={step.stepId} testID="step-card">
+                            <StepDetails session={session} index={index} />
+                        </Card>
+                    ))}
+                    <AppButton
+                        label="Edit manual pages"
+                        variant="quiet"
+                        disabled={state.pending !== null}
+                        onPress={(): void => {
+                            close()
+                            nav.editPages()
+                        }}
+                    />
+                    <AboutThisCheck result={session.rawExtraction ?? undefined} />
+                </Stack>
+            )}
+        </MoreSheet>
     )
 }
 
-/**
- * A part, name first. The manual's own name is the row; the raw part id is secondary metadata beneath it. The whole row
- * keeps its earlier full name for assistive tech ("Part side-panel: Side panel"), so nothing is lost in either channel.
- */
-function PartRow({ partId, name }: { partId: string; name: string }): ReactElement {
-    return (
-        <View accessible={true} accessibilityLabel={`Part ${partId}: ${name}`} style={styles.partRow}>
-            <Body>{name}</Body>
-            <Caption>{`Part ID: ${partId}`}</Caption>
-        </View>
-    )
-}
-
-/** A page thumbnail that opens the page full width. The 96 by 64 strip item is the target, above the 44 point floor. */
 function PageStripItem({
     number,
-    page,
     uri,
+    aspectRatio,
     onOpen,
 }: {
     number: number
-    page: ManualSession['pages'][number]
     uri: string | undefined
+    aspectRatio: number
     onOpen: () => void
 }): ReactElement {
     const { colors } = useTheme()
@@ -198,360 +378,14 @@ function PageStripItem({
             onPress={onOpen}
             style={[styles.stripItem, focusRingStyle(focus.focused, colors)]}
         >
-            <PageImage uri={uri} label={`Manual page ${number}`} aspectRatio={page.width / page.height} />
+            <PageImage uri={uri} label={`Manual page ${number}`} aspectRatio={aspectRatio} />
         </Pressable>
-    )
-}
-
-/** One calm block for every unresolved critical fact; each reason is stated once here and in its step's open details. */
-function BlockerGroup({ issues }: { issues: readonly string[] }): ReactElement {
-    const { colors } = useTheme()
-    return (
-        <Card tone="result">
-            <View style={styles.blockerHeader}>
-                <Icon name="alert" size="sm" color={colors.refuse} />
-                <View style={styles.flex}>
-                    <Heading>{issues.length === 1 ? '1 fact needs you' : `${issues.length} facts need you`}</Heading>
-                </View>
-            </View>
-            <Caption>
-                The manual did not make these clear. Open the step below and add only what the cited page shows.
-                Confirmation stays off until they are resolved.
-            </Caption>
-            {issues.map((issue) => (
-                <Body key={issue}>{`Unresolved critical fact: ${issue}`}</Body>
-            ))}
-        </Card>
-    )
-}
-
-/** Same facts the confirm gate uses, limited to one step so its card can say whether it still needs the person. */
-function stepBlockerCount(session: ManualSession, step: ManualStep): number {
-    const requiredIds = new Set(step.parts.map((part) => part.partId))
-    return unresolvedCriticalFacts({
-        parts: session.parts.filter((part) => requiredIds.has(part.partId)),
-        reviewedSteps: [step],
-    }).length
-}
-
-/** A step needs facts from the manual when its orientation is unknown or it lists no visible check. */
-function needsStepFacts(step: ManualStep): boolean {
-    const required = stepEvidenceRequirements(step)
-    return (
-        (required.orientation && step.orientation.state === 'unknown') ||
-        (required.visibleChecks && step.visibleChecks.length === 0)
-    )
-}
-
-function stepChips(session: ManualSession, step: ManualStep, blockers: number): Chip[] {
-    const chips: Chip[] =
-        blockers > 0
-            ? [{ label: 'Needs your input', tone: 'caution', icon: 'help' }]
-            : [{ label: 'Facts readable', tone: 'neutral', icon: 'info' }]
-    const required = stepEvidenceRequirements(step)
-    if (required.orientation || step.orientation.state === 'known') {
-        chips.push(
-            step.orientation.state === 'known'
-                ? { label: 'Orientation known', tone: 'neutral', icon: 'check' }
-                : { label: 'Orientation unknown', tone: 'caution', icon: 'help' },
-        )
-    }
-    if (required.visibleChecks || step.visibleChecks.length > 0) {
-        chips.push(
-            step.visibleChecks.length === 0
-                ? { label: 'No visible checks', tone: 'caution', icon: 'help' }
-                : {
-                      label: `${step.visibleChecks.length} visible check${step.visibleChecks.length === 1 ? '' : 's'}`,
-                      tone: 'neutral',
-                      icon: 'check',
-                  },
-        )
-    }
-    const pageNumbers = [
-        ...new Set(
-            step.sourceRefs
-                .map((ref) => session.pages.findIndex((page) => page.pageId === ref.pageId) + 1)
-                .filter((number) => number > 0),
-        ),
-    ]
-    chips.push(
-        pageNumbers.length === 0
-            ? { label: 'No cited page', tone: 'caution', icon: 'help' }
-            : { label: `Cited page ${pageNumbers.join(', ')}`, tone: 'neutral', icon: 'image' },
-    )
-    if (step.correction !== null) {
-        chips.push({ label: 'Includes correction', tone: 'neutral', icon: 'info' })
-    }
-    return chips
-}
-
-function partSummary(session: ManualSession, step: ManualStep): string {
-    if (step.parts.length === 0) {
-        return 'No parts listed.'
-    }
-    const names = step.parts.map((part) => {
-        const registry = session.parts.find((candidate) => candidate.partId === part.partId)
-        return registry !== undefined && registry.name.state === 'known' ? registry.name.value : part.partId
-    })
-    return `Parts: ${names.join(', ')}`
-}
-
-/**
- * A scannable step: order, title, status chips and a one line summary. Full facts, cited diagrams and the fact editors
- * open beneath it. A step that still needs facts stays open so the editors are always reachable and drafts survive.
- */
-function StepCard({
-    state,
-    controller,
-    session,
-    step,
-    index,
-    blockers,
-    open,
-    locked,
-    reviewed,
-    onToggle,
-}: {
-    state: WorkflowState
-    controller: WorkflowController
-    session: ManualSession
-    step: ManualStep
-    index: number
-    blockers: number
-    open: boolean
-    locked: boolean
-    reviewed: boolean
-    onToggle: () => void
-}): ReactElement {
-    const { colors } = useTheme()
-    const focus = useFocusRing()
-    const heading = (
-        <View style={styles.cardTop}>
-            <View style={styles.flex}>
-                <Heading>{`${step.order}. ${step.title}`}</Heading>
-            </View>
-            {locked ? null : (
-                <View style={open ? styles.chevronOpen : undefined}>
-                    <Icon name="chevronRight" color={colors.inkMuted} />
-                </View>
-            )}
-        </View>
-    )
-    return (
-        <Card tone="result" testID="step-card">
-            {locked ? (
-                heading
-            ) : (
-                <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Step ${step.order} details`}
-                    accessibilityState={{ expanded: open }}
-                    {...focus.focusHandlers}
-                    onPress={onToggle}
-                    style={[styles.headerPress, focusRingStyle(focus.focused, colors)]}
-                >
-                    {heading}
-                </Pressable>
-            )}
-            <View style={styles.chips}>
-                {stepChips(session, step, blockers).map((chip, chipIndex) =>
-                    chipIndex === 0 ? (
-                        <StatusTag key={chip.label} label={chip.label} tone={chip.tone} icon={chip.icon} />
-                    ) : (
-                        <Caption key={chip.label}>{chip.label}</Caption>
-                    ),
-                )}
-            </View>
-            <Caption>{partSummary(session, step)}</Caption>
-            {open ? (
-                <Stack gap="sm">
-                    <StepFacts session={session} index={index} showHeading={false} />
-                    <SourceDiagrams refs={step.sourceRefs} session={session} pageUris={state.pageUris} />
-                    {locked ? (
-                        <StepFactEditor
-                            key={`${session.manualId}:${session.revision}:${step.stepId}`}
-                            state={state}
-                            controller={controller}
-                            session={session}
-                            step={step}
-                        />
-                    ) : null}
-                </Stack>
-            ) : null}
-            {reviewed ? (
-                <AppButton
-                    label={`Guide step ${step.order}`}
-                    onPress={(): void => {
-                        void controller.step(index)
-                    }}
-                />
-            ) : null}
-        </Card>
-    )
-}
-
-function partLabel(session: ManualSession, partId: string): string {
-    const registry = session.parts.find((part) => part.partId === partId)
-    return registry !== undefined && registry.name.state === 'known' ? `${registry.name.value} (${partId})` : partId
-}
-
-/**
- * Facts the manual did not give us. Typing and part choice are local drafts; only an explicit accept asks the controller
- * to write, and the controller checks the candidate against this step's own citations. Cancel discards unaccepted text.
- */
-function StepFactEditor({
-    state,
-    controller,
-    session,
-    step,
-}: {
-    state: WorkflowState
-    controller: WorkflowController
-    session: ManualSession
-    step: ManualStep
-}): ReactElement {
-    const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
-    const busy = state.pending !== null || state.storageReadOnly
-    const cited = step.sourceRefs.length > 0
-    const required = stepEvidenceRequirements(step)
-    const parts = step.parts.map((part) => ({ value: part.partId, label: partLabel(session, part.partId) }))
-    // A sole part is chosen for the draft only; with several parts the person must pick one.
-    const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
-    const [cue, setCue] = useState('')
-    const [checks, setChecks] = useState('')
-    const [cueError, setCueError] = useState<string | undefined>(undefined)
-    const [checksError, setChecksError] = useState<string | undefined>(undefined)
-
-    const acceptOrientation = async (): Promise<void> => {
-        const description = cue.trim()
-        if (description.length === 0) {
-            setCueError('Describe the visible cue, or leave orientation unknown.')
-            return
-        }
-        if (partId === null) {
-            setCueError('Choose the part this cue applies to.')
-            return
-        }
-        setCueError(undefined)
-        await controller.acceptStepFacts(binding, step.stepId, { orientation: { partId, description } })
-    }
-    const acceptChecks = async (): Promise<void> => {
-        const visibleChecks = checks
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0)
-        if (visibleChecks.length === 0) {
-            setChecksError('Enter at least one visible check, one condition per line.')
-            return
-        }
-        setChecksError(undefined)
-        await controller.acceptStepFacts(binding, step.stepId, { visibleChecks })
-    }
-    const cancelOrientation = (): void => {
-        setCue('')
-        setCueError(undefined)
-    }
-    const cancelChecks = (): void => {
-        setChecks('')
-        setChecksError(undefined)
-    }
-
-    return (
-        <Stack gap="sm">
-            <Caption>
-                Only accept what the cited manual supports. Anything it does not show stays unknown. Typing here changes
-                no facts until you accept.
-            </Caption>
-            {cited ? null : (
-                <Notice
-                    tone="error"
-                    text="This step has no cited manual page, so facts cannot be accepted here. Read the manual again after adding clearer pages."
-                />
-            )}
-            {required.orientation && step.orientation.state === 'unknown' ? (
-                <Stack gap="xs">
-                    {parts.length > 1 ? (
-                        <View pointerEvents={busy ? 'none' : 'auto'}>
-                            <ScrollView horizontal accessibilityLabel="Scroll orientation parts">
-                                <SegmentedControl
-                                    label="Part for the orientation cue"
-                                    options={parts}
-                                    value={partId ?? ''}
-                                    onChange={(value): void => setPartId(value)}
-                                />
-                            </ScrollView>
-                        </View>
-                    ) : parts.length === 1 ? (
-                        <Caption>{`Part: ${parts[0]!.label}`}</Caption>
-                    ) : (
-                        <Notice
-                            tone="error"
-                            text="This step lists no parts, so an orientation cue cannot be tied to one."
-                        />
-                    )}
-                    <TextField
-                        label="Orientation cue"
-                        value={cue}
-                        onChangeText={setCue}
-                        placeholder="What the manual shows, e.g. the groove faces inward"
-                        error={cueError}
-                        editable={!busy}
-                    />
-                    <View style={styles.actionRow}>
-                        <AppButton
-                            label="Accept orientation"
-                            disabled={busy || !cited || parts.length === 0}
-                            onPress={(): void => {
-                                void acceptOrientation()
-                            }}
-                        />
-                        <AppButton
-                            label="Cancel orientation draft"
-                            variant="quiet"
-                            disabled={busy}
-                            onPress={cancelOrientation}
-                        />
-                    </View>
-                </Stack>
-            ) : null}
-            {required.visibleChecks && step.visibleChecks.length === 0 ? (
-                <Stack gap="xs">
-                    <Caption>No visible checks are listed for this step. Enter one condition per line.</Caption>
-                    <TextField
-                        label="Visible checks, one per line"
-                        value={checks}
-                        onChangeText={setChecks}
-                        multiline
-                        placeholder="One condition per line"
-                        error={checksError}
-                        editable={!busy}
-                    />
-                    <View style={styles.actionRow}>
-                        <AppButton
-                            label="Accept visible checks"
-                            disabled={busy || !cited}
-                            onPress={(): void => {
-                                void acceptChecks()
-                            }}
-                        />
-                        <AppButton label="Cancel checks draft" variant="quiet" disabled={busy} onPress={cancelChecks} />
-                    </View>
-                </Stack>
-            ) : null}
-        </Stack>
     )
 }
 
 const styles = StyleSheet.create({
     flex: { flex: 1 },
-    actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    pageStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    // Large enough that a diagram is recognisable at a glance; the page image keeps its own aspect ratio inside.
-    stripItem: { width: 96, minHeight: 64 },
-    partRow: { gap: space.xxs },
-    blockerHeader: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
-    cardTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-    headerPress: { minHeight: touchTarget, justifyContent: 'center' },
-    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    chevronOpen: { transform: [{ rotate: '90deg' }] },
+    hero: { paddingHorizontal: space.md, paddingTop: space.sm },
+    strip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+    stripItem: { width: 96, minHeight: touchTarget },
 })
