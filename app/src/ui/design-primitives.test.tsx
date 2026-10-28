@@ -145,7 +145,7 @@ describe('progress', () => {
         expect(style(screen.getByRole('progressbar', { name: 'Guide progress' })).borderColor).toBe(lightColors.border)
     })
 
-    it('marks only the current step with a bar, and keeps the state word in its label', async () => {
+    it('marks only the current step selected, and keeps the state word in its label', async () => {
         await render(
             <StepList
                 steps={[
@@ -155,8 +155,10 @@ describe('progress', () => {
                 ]}
             />,
         )
-        expect(screen.getAllByTestId('step-current-bar', hidden)).toHaveLength(1)
-        expect(screen.getByLabelText('Step 2, Current: Seat the divider')).toBeTruthy()
+        const current = screen.getByLabelText('Step 2, Current: Seat the divider')
+        expect(current.props.accessibilityState.selected).toBe(true)
+        expect(screen.getByLabelText('Step 1, Done: Stand the panel').props.accessibilityState.selected).toBe(false)
+        expect(screen.getByLabelText('Step 3, Not started: Tighten').props.accessibilityState.selected).toBe(false)
     })
 })
 

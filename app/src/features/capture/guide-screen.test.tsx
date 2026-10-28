@@ -717,6 +717,7 @@ describe('next part and target guidance', () => {
         await setup('guide-pass-guided')
         const label = screen.getByTestId('photo-labels')
         expect(within(label).getByText(fontScale >= 2 ? 'Here' : 'Divider shelf')).toBeTruthy()
+        expect(label).toHaveProp('accessibilityLabel', 'Divider shelf')
         expect(screen.queryByText('Next part: Divider shelf')).toBeNull()
         expect(screen.queryByText('Move Divider shelf to the marked area')).toBeNull()
         await openMore()
