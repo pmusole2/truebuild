@@ -127,6 +127,10 @@ test('refusal shows the expected diagram and your photo side by side in More, an
     await expect(page.getByText('TEST MOCK ONLY: consult the cited diagram.', { exact: false }).first()).toBeVisible({
         timeout: 60_000,
     })
+    // A returned answer closes the composer and reads neutrally on the Guide; retained check details stay in More.
+    await expect(page.getByLabel('Question about your photo')).toHaveCount(0)
+    await expect(page.getByTestId('result-icon')).toHaveCount(0)
+    await openMore(page)
     // The answer is neutral: the refused check stays refused and no "Looks right" verdict appears.
     await expect(page.getByText('Answer', { exact: true })).toBeVisible()
     await expect(page.getByText('Not yet', { exact: true })).toBeVisible()

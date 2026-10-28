@@ -1,6 +1,5 @@
 import type { ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { useTheme } from '../theme/theme'
 import { lightColors, radius, space } from '../theme/tokens'
 import { Icon } from './icons'
 import { Body, Caption } from './text'
@@ -17,7 +16,6 @@ export type PaneNote = string | { readonly kind: 'next' | 'target' | 'move'; rea
  * outline is dashed for the next part and solid for the target, so the two differ by shape and not by colour alone.
  */
 export function PaneNotes({ notes }: { readonly notes: readonly PaneNote[] | undefined }): ReactElement | null {
-    const { colors } = useTheme()
     if (notes === undefined || notes.length === 0) {
         return null
     }
@@ -32,7 +30,7 @@ export function PaneNotes({ notes }: { readonly notes: readonly PaneNote[] | und
                 }
                 if (note.kind === 'move') {
                     return (
-                        <View key={note.text} style={[styles.move, { borderLeftColor: colors.ink }]}>
+                        <View key={note.text} style={styles.move}>
                             <Icon name="arrowRight" size="sm" />
                             <View style={styles.text}>
                                 <Body>{note.text}</Body>
@@ -70,7 +68,7 @@ export function PaneNotes({ notes }: { readonly notes: readonly PaneNote[] | und
 
 const styles = StyleSheet.create({
     notes: { gap: space.xs },
-    move: { flexDirection: 'row', alignItems: 'center', gap: space.xs, borderLeftWidth: 3, paddingLeft: space.xs },
+    move: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
     legend: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
     text: { flex: 1, minWidth: 0 },
     swatchBacking: {

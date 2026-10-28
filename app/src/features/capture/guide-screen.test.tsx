@@ -712,6 +712,18 @@ describe('step layout and demo controls', () => {
 })
 
 describe('next part and target guidance', () => {
+    it.each([1, 3.4])('keeps one short photo label at font scale %s and the full legend in More', async (fontScale) => {
+        mockWindow.fontScale = fontScale
+        await setup('guide-pass-guided')
+        const label = screen.getByTestId('photo-labels')
+        expect(within(label).getByText(fontScale >= 2 ? 'Here' : 'Divider shelf')).toBeTruthy()
+        expect(screen.queryByText('Next part: Divider shelf')).toBeNull()
+        expect(screen.queryByText('Move Divider shelf to the marked area')).toBeNull()
+        await openMore()
+        expect(more().getByText('Next part: Divider shelf')).toBeTruthy()
+        expect(more().getByText('Target for Divider shelf')).toBeTruthy()
+        expect(more().getByText('Move Divider shelf to the marked area')).toBeTruthy()
+    })
     // Synthetic fixtures only (mocked geometry, mocked part names): no recorded or live model output backs any value.
     const trigger = jest.fn()
     beforeEach(() => {
@@ -764,6 +776,7 @@ describe('next part and target guidance', () => {
         expect(screen.getByTestId(NEXT_ID).props.strokeDasharray).toEqual([6, 4])
         expect(screen.getByTestId(TARGET_ID).props.strokeDasharray).toBeUndefined()
         expect(screen.getAllByTestId(ARROW_ID)).toHaveLength(1)
+        await openMore()
         expect(screen.getByText('Next part: Divider shelf')).toBeTruthy()
         expect(screen.getByText('Target for Divider shelf')).toBeTruthy()
         expect(screen.getByText('Move Divider shelf to the marked area')).toBeTruthy()
@@ -774,6 +787,7 @@ describe('next part and target guidance', () => {
         await measureFrozenPhoto()
         expect(screen.getByTestId(NEXT_ID)).toBeTruthy()
         absent(TARGET_ID, ARROW_ID)
+        await openMore()
         expect(screen.getByText('Next part: Divider shelf')).toBeTruthy()
         expect(screen.queryByText(/^Target for /u)).toBeNull()
         expect(screen.queryByText(/to the marked area$/u)).toBeNull()
@@ -795,6 +809,7 @@ describe('next part and target guidance', () => {
         expect(screen.getByTestId(NEXT_ID)).toBeTruthy()
         expect(screen.getByTestId(TARGET_ID)).toBeTruthy()
         absent(ARROW_ID)
+        await openMore()
         expect(screen.getByText('Next part: Folding leg')).toBeTruthy()
         expect(screen.getByText('Target for Seat plate')).toBeTruthy()
         expect(screen.queryByText(/to the marked area$/u)).toBeNull()
@@ -804,6 +819,7 @@ describe('next part and target guidance', () => {
         await render(view('guide-stool-guided'))
         await measureFrozenPhoto()
         expect(screen.getAllByTestId(ARROW_ID)).toHaveLength(1)
+        await openMore()
         expect(screen.getByText('Move Folding leg to the marked area')).toBeTruthy()
         expect(screen.queryByText(/Divider/u)).toBeNull()
     })
@@ -858,6 +874,7 @@ describe('next part and target guidance', () => {
         await measureFrozenPhoto()
         expect(state.answer?.nextPartRegion).toBeDefined()
         expect(screen.getAllByTestId(ARROW_ID)).toHaveLength(1)
+        await openMore()
         expect(screen.getByText('Target for Divider shelf')).toBeTruthy()
     })
 

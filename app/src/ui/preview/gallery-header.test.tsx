@@ -38,6 +38,16 @@ function optionsFor(
 }
 
 describe('gallery native header', () => {
+    it('resets Camera and Home overrides when switching back to Guide on the same native route', () => {
+        const merged = {
+            ...optionsFor('home-empty').options,
+            ...optionsFor('camera-denied').options,
+            ...optionsFor('guide-pass').options,
+        }
+        expect(merged.headerShown).toBe(true)
+        expect(merged.headerLargeTitleEnabled).toBe(false)
+        expect(merged.headerBackVisible).toBe(true)
+    })
     it.each([
         ['pages-empty', 'Add manual'],
         ['pages-reading', 'Reading'],

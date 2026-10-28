@@ -5,6 +5,7 @@ import { useTheme } from '../../theme/theme'
 import { radius, space } from '../../theme/tokens'
 import { PaneNotes, type PaneNote } from '../../ui/pane-notes'
 import { Caption } from '../../ui/text'
+import { useLargeText } from '../../ui/large-text'
 import { bytesToDataUri } from '../../media/image-source'
 import { containRect, normalizedPointFromTap, type Point, type Rect } from './frame-geometry'
 import type { Observation } from './observation'
@@ -75,6 +76,8 @@ type FrozenPhotoProps = {
     readonly notes?: readonly PaneNote[]
     // Hero mode: the photo fills a frame of exactly this height, its names sit on the image, and no caption is drawn.
     readonly fillHeight?: number
+    // A single validated name on the hero. The full explanatory notes remain in More, outside hero mode.
+    readonly heroLabel?: string
     // Edge to edge: square corners, for a hero that runs the full width of the screen.
     readonly flush?: boolean
 }
@@ -87,9 +90,11 @@ export function FrozenPhoto({
     overlay,
     notes,
     fillHeight,
+    heroLabel,
     flush = false,
 }: FrozenPhotoProps): ReactElement {
     const { colors } = useTheme()
+    const large = useLargeText()
     const [width, setWidth] = useState(0)
     const dataUri = useMemo(() => bytesToDataUri(observation.bytes, observation.mimeType), [observation])
     const imageSize = { width: observation.width, height: observation.height }
@@ -159,9 +164,14 @@ export function FrozenPhoto({
                     </>
                 )}
             </View>
-            {fillHeight !== undefined && notes !== undefined && notes.length > 0 ? (
-                <View testID="photo-labels" style={[styles.labels, { backgroundColor: colors.surface }]}>
-                    <PaneNotes notes={notes} />
+            {fillHeight !== undefined && heroLabel !== undefined ? (
+                <View
+                    testID="photo-labels"
+                    accessible
+                    accessibilityLabel={heroLabel}
+                    style={[styles.labels, { backgroundColor: colors.surface }]}
+                >
+                    <Caption>{large ? 'Here' : heroLabel}</Caption>
                 </View>
             ) : null}
             {fillHeight === undefined ? <Caption>{caption}</Caption> : null}
@@ -188,7 +198,7 @@ const styles = StyleSheet.create({
     labels: {
         position: 'absolute',
         left: space.xs,
-        right: space.xs,
+        maxWidth: '90%',
         bottom: space.xs,
         padding: space.xs,
         borderRadius: radius.md,

@@ -231,6 +231,7 @@ export function GuideScreen({
             onTapPoint={fillHeight === undefined ? pointTap : undefined}
             notes={notes}
             fillHeight={fillHeight}
+            heroLabel={fillHeight === undefined ? undefined : (guidance.next?.name ?? guidance.target?.name)}
             flush={fillHeight !== undefined}
             overlay={(displayed): ReactNode => (
                 <>

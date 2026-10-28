@@ -32,7 +32,16 @@ export function galleryHeaderOptions(args: {
     readonly progressLabel: string | undefined
 }): ScreenOptions {
     const { id, state, entry, colors, more, scrollY, progressLabel } = args
-    const style = { ...headerStyleFor(colors), headerBackButtonDisplayMode: 'minimal' as const }
+    // Expo merges options on this one gallery route. Reset Camera/Home overrides when the selected fixture changes.
+    const style = {
+        ...headerStyleFor(colors),
+        headerShown: true,
+        headerLargeTitleEnabled: false,
+        headerBackVisible: true,
+        headerTitle: undefined,
+        headerRight: undefined,
+        headerBackButtonDisplayMode: 'minimal' as const,
+    }
     const trailing = (): ReactElement => <HeaderButtons more={more} />
     // The camera and the unavailable screen own their whole viewport in production, with no Stack header.
     if (state.route === 'camera' || id === 'home-unavailable') {
