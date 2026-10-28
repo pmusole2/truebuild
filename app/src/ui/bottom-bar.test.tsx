@@ -113,6 +113,31 @@ describe('FixedBottomBar at accessibility text sizes', () => {
         expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
     })
 
+    it('keeps the words of a quiet secondary that stands alone, so Cancel is never a stray icon', async () => {
+        mockWindow.fontScale = 3.12
+        await render(
+            <FixedBottomBar
+                primary={null}
+                secondary={{ label: 'Cancel', icon: 'close', testID: 'cancel', onPress: jest.fn() }}
+            />,
+        )
+        expect(screen.getByText('Cancel')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBe(screen.getByTestId('cancel'))
+    })
+
+    it('can float over the bottom edge and report its height, so a screen can pad its content by it', async () => {
+        const onHeight = jest.fn()
+        await render(<FixedBottomBar {...actions} placement="overlay" onHeight={onHeight} />)
+        expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style)).toMatchObject({
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+        })
+        await fireEvent(screen.getByTestId('bottom-bar'), 'layout', { nativeEvent: { layout: { height: 150 } } })
+        expect(onHeight).toHaveBeenCalledWith(150)
+    })
+
     it('lets a long reason scroll inside a bounded region instead of pushing the bar up', async () => {
         mockWindow.fontScale = 3.12
         await render(<FixedBottomBar primary={actions.primary} reason={'Wait for the current request. '.repeat(20)} />)

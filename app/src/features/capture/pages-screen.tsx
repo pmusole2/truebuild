@@ -134,6 +134,7 @@ export function PagesScreen({
             ) : null}
             <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
                 <PlainNotice state={state} controller={controller} />
+                {pages.length === 0 ? <Icon name="camera" /> : null}
                 <Instruction>
                     {pages.length === 0
                         ? 'Take a photo of each page of your paper manual.'

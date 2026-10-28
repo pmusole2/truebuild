@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
 import { FixedBottomBar } from '../../ui/bottom-bar'
@@ -11,10 +11,11 @@ import { Icon } from '../../ui/icons'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
-import { space, touchTarget } from '../../theme/tokens'
+import { radius, space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck, HowItWorks } from './more-sections'
 import { progressLine, stopFor } from './plain-copy'
+import { ManualImage } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
@@ -95,6 +96,10 @@ export function LibraryScreen({
 }: LibraryProps): ReactElement {
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
+    // The iOS large title collapses only with a scroll view that fills the screen, so there the bar floats over it and
+    // the list is padded by the bar's measured height. Elsewhere the bar sits below the list as before.
+    const overlay = largeTitle === 'native'
+    const [barHeight, setBarHeight] = useState(0)
     const ownScroll = useSharedValue(0)
     const scrollY = scrollYProp ?? ownScroll
     const nav = navProp ?? defaultNav(controller)
@@ -136,18 +141,22 @@ export function LibraryScreen({
                   onPress: addManual,
                   disabled: addDisabled,
               }
-    const secondary = empty
-        ? { label: 'How it works', icon: 'help' as const, onPress: (): void => more.show() }
-        : sole !== undefined && !addDisabled
-          ? { label: 'Add manual', icon: 'plus' as const, onPress: addManual }
-          : undefined
+    // The empty Home has no secondary: How it works is in More. A sole manual keeps one quiet Add beside its resume.
+    const secondary =
+        sole !== undefined && !addDisabled
+            ? { label: 'Add manual', icon: 'plus' as const, onPress: addManual }
+            : undefined
     return (
         <ScreenBody testID="library-screen">
             {chrome === 'inline' ? <InlineHeader title="Your builds" more={more} /> : null}
             {/* The scroll view is the first child so the iOS large title collapses with it. */}
             <ScrollView
                 testID="library-scroll"
-                contentContainerStyle={[styles.content, empty && styles.centred]}
+                contentContainerStyle={[
+                    styles.content,
+                    empty && styles.centred,
+                    overlay && { paddingBottom: space.md + barHeight },
+                ]}
                 keyboardShouldPersistTaps="handled"
                 contentInsetAdjustmentBehavior="automatic"
                 scrollEventThrottle={16}
@@ -167,18 +176,25 @@ export function LibraryScreen({
                         <Instruction>Build furniture with step-by-step help.</Instruction>
                     </View>
                 ) : null}
-                {sole === undefined ? null : <ContinueCard entry={sole} onOpen={(): void => nav.openStop(sole)} />}
+                {sole === undefined ? null : <ContinueCard entry={sole} pageUris={state.pageUris} />}
                 {entries.length > 1
                     ? entries.map((entry) => (
                           <ManualRow
                               key={entry.session.manualId}
                               entry={entry}
+                              pageUris={state.pageUris}
                               onOpen={(): void => nav.openStop(entry)}
                           />
                       ))
                     : null}
             </ScrollView>
-            <FixedBottomBar primary={primary} secondary={secondary} reason={hint} />
+            <FixedBottomBar
+                primary={primary}
+                secondary={secondary}
+                reason={hint}
+                placement={overlay ? 'overlay' : 'flow'}
+                onHeight={overlay ? setBarHeight : undefined}
+            />
             <MoreSheet visible={more.open} title="More" onClose={more.hide}>
                 <HowItWorks />
                 <SettingsSections state={state} />
@@ -188,32 +204,85 @@ export function LibraryScreen({
     )
 }
 
-function ContinueCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
+const THUMB_WIDTH = 64
+
+/**
+ * The first manual page, small and at its own proportions, when the page is already loaded. Nothing is read for it:
+ * Home clears the loaded pages, and then the existing image icon stands in. Decorative, never a target.
+ */
+function ManualThumb({
+    entry,
+    pageUris,
+}: {
+    entry: LibraryEntry
+    pageUris: LibraryProps['state']['pageUris']
+}): ReactElement {
     const { colors } = useTheme()
-    const focus = useFocusRing()
+    const page = entry.session.pages[0]
+    const uri = page === undefined ? undefined : pageUris[page.pageId]
+    const shown = page !== undefined && uri !== undefined
+    return (
+        <View
+            testID="manual-thumb"
+            accessibilityElementsHidden={true}
+            importantForAccessibility="no-hide-descendants"
+            style={[
+                styles.thumb,
+                { backgroundColor: colors.surfaceSunken },
+                shown ? { aspectRatio: page.width / page.height } : styles.thumbFallback,
+            ]}
+        >
+            {shown ? (
+                <ManualImage uri={uri} label="First page of your manual" />
+            ) : (
+                <Icon name="image" color={colors.inkMuted} />
+            )}
+        </View>
+    )
+}
+
+/** Where the one manual stands. A summary, not a button: "Keep building" below is the single way in. */
+function ContinueCard({
+    entry,
+    pageUris,
+}: {
+    entry: LibraryEntry
+    pageUris: LibraryProps['state']['pageUris']
+}): ReactElement {
     const total = entry.session.reviewedSteps.length
     const completed = entry.completedStepIds.length
     return (
         <Card tone="raised" testID="manual-card">
-            <PressMotion
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${entry.session.title}`}
-                {...focus.focusHandlers}
-                onPress={onOpen}
-                style={[styles.press, focusRingStyle(focus.focused, colors)]}
-            >
-                <Heading>{entry.session.title}</Heading>
-                <Body>{progressLine(entry)}</Body>
-                {total === 0 ? null : (
-                    <ProgressBar label={`Steps done: ${completed} of ${total}`} value={completed} total={total} />
-                )}
-                <Instruction>Pick up where you left off.</Instruction>
-            </PressMotion>
+            <View style={styles.summary}>
+                <ManualThumb entry={entry} pageUris={pageUris} />
+                <View style={styles.summaryText}>
+                    <Stack gap="xs">
+                        <Heading>{entry.session.title}</Heading>
+                        <Body>{progressLine(entry)}</Body>
+                        {total === 0 ? null : (
+                            <ProgressBar
+                                label={`Steps done: ${completed} of ${total}`}
+                                value={completed}
+                                total={total}
+                            />
+                        )}
+                        <Instruction>Pick up where you left off.</Instruction>
+                    </Stack>
+                </View>
+            </View>
         </Card>
     )
 }
 
-function ManualRow({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
+function ManualRow({
+    entry,
+    pageUris,
+    onOpen,
+}: {
+    entry: LibraryEntry
+    pageUris: LibraryProps['state']['pageUris']
+    onOpen: () => void
+}): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
     return (
@@ -225,10 +294,13 @@ function ManualRow({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void 
                 onPress={onOpen}
                 style={[styles.row, focusRingStyle(focus.focused, colors)]}
             >
-                <Stack gap="xs">
-                    <Heading>{entry.session.title}</Heading>
-                    <Caption>{progressLine(entry)}</Caption>
-                </Stack>
+                <ManualThumb entry={entry} pageUris={pageUris} />
+                <View style={styles.summaryText}>
+                    <Stack gap="xs">
+                        <Heading>{entry.session.title}</Heading>
+                        <Caption>{progressLine(entry)}</Caption>
+                    </Stack>
+                </View>
                 <Icon name="chevronRight" color={colors.inkMuted} />
             </PressMotion>
         </Card>
@@ -240,7 +312,10 @@ const styles = StyleSheet.create({
     centred: { flexGrow: 1, justifyContent: 'center' },
     hero: { gap: space.sm, alignItems: 'flex-start' },
     collapsing: { transformOrigin: 'left center' },
-    press: { gap: space.xs, minHeight: touchTarget },
+    summary: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
+    summaryText: { flex: 1 },
+    thumb: { width: THUMB_WIDTH, borderRadius: radius.md, overflow: 'hidden' },
+    thumbFallback: { height: THUMB_WIDTH, alignItems: 'center', justifyContent: 'center' },
     row: {
         flexDirection: 'row',
         alignItems: 'center',

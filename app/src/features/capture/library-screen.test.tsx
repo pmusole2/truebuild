@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
+import { StyleSheet } from 'react-native'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
 import { collapseProgress, COLLAPSE_DISTANCE, LibraryScreen } from './library-screen'
@@ -34,14 +35,16 @@ async function setup(
 }
 
 describe('first run', () => {
-    it('says one thing, with Add manual as the one primary, and keeps How it works behind a quiet link', async () => {
+    it('says one thing, with Add manual as the only action, and keeps How it works in More', async () => {
         await setup('home-empty')
         expect(screen.getByText('Build furniture with step-by-step help.')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
         expect(screen.queryByText('Use sample manual')).toBeNull()
-        // The explanation is not on the surface; it opens from the quiet link and from More.
+        // The explanation is not on the surface and has no second button beside the primary; it is in More.
         expect(screen.queryByText('Scan. Photograph the pages of your paper manual.')).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: 'How it works' }))
+        expect(screen.queryByRole('button', { name: 'How it works' })).toBeNull()
+        expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
         const more = within(screen.getByTestId('more-sheet'))
         for (const verb of ['Scan', 'Look', 'Next', 'Ask']) {
             expect(more.getByText(new RegExp(`^${verb}\\. `, 'u'))).toBeTruthy()
@@ -84,6 +87,26 @@ describe('Add manual placement', () => {
         expect(within(screen.getByTestId('library-scroll')).getByText('TrueBuild')).toBeTruthy()
         expect(within(screen.getByTestId('bottom-bar')).getByRole('button', { name: 'Add manual' })).toBeTruthy()
         expect(screen.getByRole('button', { name: 'More' })).toBeTruthy()
+    })
+
+    it('lets the native iOS list fill the screen under a floating bar, padded by the bar so nothing is hidden', async () => {
+        const { state } = workflowPreviewFixture('home-populated')
+        await render(
+            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="native" />,
+        )
+        expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style)).toMatchObject({
+            position: 'absolute',
+            bottom: 0,
+        })
+        const before = StyleSheet.flatten(screen.getByTestId('library-scroll').props.contentContainerStyle)
+        await fireEvent(screen.getByTestId('bottom-bar'), 'layout', { nativeEvent: { layout: { height: 140 } } })
+        const after = StyleSheet.flatten(screen.getByTestId('library-scroll').props.contentContainerStyle)
+        expect(after.paddingBottom).toBe(before.paddingBottom + 140)
+    })
+
+    it('keeps the bar below the list where the title is drawn in the content', async () => {
+        await setup('home-populated')
+        expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style).position).toBeUndefined()
     })
 
     it('draws no large title in the scroll when the native iOS header owns it', async () => {
@@ -153,11 +176,12 @@ describe('saved manuals', () => {
         expect(screen.getByText(`Step 2 of ${total}`)).toBeTruthy()
         expect(screen.getByRole('progressbar', { name: `Steps done: 1 of ${total}` })).toBeTruthy()
         expect(screen.queryByText(/verified|facts confirmed|marked complete by you/i)).toBeNull()
-        // The primary resumes at the furthest stop; the card does the same.
+        // The card only says where the build stands; the primary is the one way in, and Add manual stays quiet beside it.
+        expect(screen.getByText(title)).toBeTruthy()
+        expect(screen.queryByRole('button', { name: `Open ${title}` })).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'Keep building' }))
+        expect(open).toHaveBeenCalledTimes(1)
         expect(open).toHaveBeenLastCalledWith(entry.session.manualId, 'guide')
-        await fireEvent.press(screen.getByRole('button', { name: `Open ${title}` }))
-        expect(open).toHaveBeenCalledTimes(2)
         expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
     })
 
@@ -179,6 +203,32 @@ describe('saved manuals', () => {
         const { open } = await setup('home-populated', { entries: [entry] })
         await fireEvent.press(screen.getByRole('button', { name: label }))
         expect(open).toHaveBeenCalledWith(entry.session.manualId, route)
+    })
+
+    it('shows the first page as a small unstretched thumbnail when it is loaded, else the image icon, and never as a target', async () => {
+        const fixture = workflowPreviewFixture('home-populated')
+        const page = fixture.entry.session.pages[0]!
+        await setup('home-populated')
+        const thumb = (): Record<string, unknown> =>
+            StyleSheet.flatten(screen.getByTestId('manual-thumb', { includeHiddenElements: true }).props.style)
+        expect(thumb().aspectRatio).toBeCloseTo(page.width / page.height, 6)
+        expect(screen.getByLabelText('First page of your manual', { includeHiddenElements: true })).toBeTruthy()
+        expect(screen.queryByRole('button', { name: /First page/u })).toBeNull()
+        await screen.unmount()
+        // Home clears the loaded pages: nothing is read for the thumbnail, so the icon stands in.
+        await setup('home-populated', { pageUris: {} })
+        expect(thumb().aspectRatio).toBeUndefined()
+        expect(screen.queryByLabelText('First page of your manual', { includeHiddenElements: true })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Keep building' })).toBeTruthy()
+    })
+
+    it('puts the same thumbnail in each row of several manuals without changing the row’s one action', async () => {
+        const fixture = workflowPreviewFixture('home-populated')
+        const second = { ...fixture.entry, session: { ...fixture.entry.session, manualId: 'second', title: 'Second' } }
+        const { open } = await setup('home-populated', { entries: [fixture.entry, second] })
+        expect(screen.getAllByTestId('manual-thumb', { includeHiddenElements: true })).toHaveLength(2)
+        await fireEvent.press(screen.getByRole('button', { name: 'Open Second' }))
+        expect(open).toHaveBeenCalledTimes(1)
     })
 
     it('keeps several manuals as rows with Add manual as the one primary', async () => {

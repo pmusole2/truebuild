@@ -28,8 +28,8 @@ const REASON_MAX_RATIO = 0.2
  * The fixed bottom bar: one 56 point primary above the safe area, at most one quiet secondary, and an optional
  * one-line reason that explains a disabled primary. It sits outside every scroll view, so the primary never moves.
  *
- * At accessibility text sizes the primary shows one short verb and a secondary becomes a 44 point icon in the same row,
- * so the bar stays one row tall and the screen's own text keeps the room. Every action keeps its full accessible name
+ * At accessibility text sizes the primary shows one short verb and a secondary becomes a 44 point icon in the same row
+ * (a secondary with no primary keeps its words), so the bar stays one row tall and the screen's own text keeps the room. Every action keeps its full accessible name
  * and test ID; the visible words are the only thing that shortens.
  */
 export function FixedBottomBar({
@@ -37,11 +37,17 @@ export function FixedBottomBar({
     secondary,
     reason,
     testID = 'bottom-bar',
+    placement = 'flow',
+    onHeight,
 }: {
     readonly primary: BarAction | null
     readonly secondary?: BarAction
     readonly reason?: string | null
     readonly testID?: string
+    // 'overlay' floats the bar over the bottom edge so a scroll view above can fill the whole screen (the iOS large title
+    // only collapses with a full-screen scroll view). The screen then pads its content by the height reported here.
+    readonly placement?: 'flow' | 'overlay'
+    readonly onHeight?: (height: number) => void
 }): ReactElement {
     const { colors } = useTheme()
     const insets = useSafeAreaInsets()
@@ -51,11 +57,17 @@ export function FixedBottomBar({
         large && action.compactLabel !== undefined
             ? { ...action, label: action.compactLabel, accessibilityLabel: action.accessibilityLabel ?? action.label }
             : action
-    const iconSecondary = large && secondary !== undefined && secondary.icon !== undefined
+    // A secondary that stands alone (no primary beside it) keeps its words: an icon by itself reads as debris.
+    const iconSecondary = large && primary !== null && secondary !== undefined && secondary.icon !== undefined
     return (
         <View
             testID={testID}
-            style={[styles.bar, { backgroundColor: colors.canvas, paddingBottom: space.sm + insets.bottom }]}
+            onLayout={onHeight === undefined ? undefined : (event): void => onHeight(event.nativeEvent.layout.height)}
+            style={[
+                styles.bar,
+                placement === 'overlay' && styles.overlay,
+                { backgroundColor: colors.canvas, paddingBottom: space.sm + insets.bottom },
+            ]}
         >
             {reason === undefined || reason === null ? null : large ? (
                 <ScrollView
@@ -70,13 +82,11 @@ export function FixedBottomBar({
                     <Callout tone="muted">{reason}</Callout>
                 </View>
             )}
-            {iconSecondary && secondary !== undefined ? (
+            {iconSecondary && primary !== null && secondary !== undefined ? (
                 <View style={styles.row}>
-                    {primary === null ? null : (
-                        <View style={styles.grow}>
-                            <AppButton variant="accent" size="primary" {...shown(primary)} />
-                        </View>
-                    )}
+                    <View style={styles.grow}>
+                        <AppButton variant="accent" size="primary" {...shown(primary)} />
+                    </View>
                     <IconButton
                         label={secondary.accessibilityLabel ?? secondary.label}
                         icon={secondary.icon!}
@@ -97,6 +107,7 @@ export function FixedBottomBar({
 
 const styles = StyleSheet.create({
     bar: { paddingHorizontal: space.md, paddingTop: space.sm, gap: space.xs, flexShrink: 0 },
+    overlay: { position: 'absolute', left: 0, right: 0, bottom: 0 },
     reason: { alignItems: 'center' },
     row: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
     grow: { flex: 1 },
