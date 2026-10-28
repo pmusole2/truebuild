@@ -16,6 +16,7 @@ import {
     WorkflowNotice,
 } from './screens'
 import { PRIVACY_COPY } from './privacy-copy'
+import { StepFacts } from './step-facts'
 
 function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage; kv: KeyValueStorage } {
     const data = new Map<string, string>()
@@ -865,4 +866,17 @@ it('shows cited quantity basis and chosen alternatives as manual information in 
     expect(screen.getByText('Quantity basis cited page 1')).toBeTruthy()
     expect(screen.getAllByText('Alternative cited page 1')).toHaveLength(2)
     expect(screen.queryByText(/Unresolved critical fact/)).toBeNull()
+})
+
+it('names the earlier step while retaining the carried number and instruction citation', async () => {
+    const session = createDemoManual()
+    session.reviewedSteps[1]!.parts[0]!.quantityBasis = {
+        kind: 'carried_over',
+        stepId: 'step-1',
+        partId: 'side-panel',
+        sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+    }
+    await render(<StepFacts session={session} index={1} />)
+    expect(screen.getByText('side-panel: 1 (carried over from step 1)')).toBeTruthy()
+    expect(screen.getByText('Quantity basis cited page 1')).toBeTruthy()
 })

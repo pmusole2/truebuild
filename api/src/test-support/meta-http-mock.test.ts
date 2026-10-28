@@ -29,7 +29,7 @@ async function media(): Promise<{ session: ReturnType<typeof createDemoManual>; 
 }
 
 describe('documented loopback mock with real API composition', () => {
-    it('parses ten pages, then checks and asks over twenty pages, over authenticated multipart without a SAM still call', async () => {
+    it('parses eight pages, then checks and asks over twenty pages, over authenticated multipart without a SAM still call', async () => {
         const mock = await startMetaMock({ scenario: 'reversed' })
         try {
             const runtime = createRuntimeFromEnvironment(

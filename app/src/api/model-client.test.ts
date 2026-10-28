@@ -786,7 +786,7 @@ it('validates and serializes parse language, defaults English, and rejects large
         language: 'free text',
     })
     expect(invalid.status).toBe('unavailable')
-    const pages = Array.from({ length: 11 }, (_, index) => ({
+    const pages = Array.from({ length: 9 }, (_, index) => ({
         ...session.pages[0]!,
         pageId: `page-${index}`,
         assetId: `asset-${index}`,
@@ -797,7 +797,7 @@ it('validates and serializes parse language, defaults English, and rejects large
         pages.map(() => source),
         { requestId: REQUEST_ID },
     )
-    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('10 pages') })
+    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('8 pages') })
     expect(run.calls).toHaveLength(2)
 })
 
@@ -809,12 +809,12 @@ it('preserves bounded server parse failure messages through non-success HTTP res
             binding: manualBinding,
             code: 'invalid_input',
             retryable: false,
-            message: 'Split into 10 pages.',
+            message: 'Split into 8 pages.',
         }),
     )
     expect(
         await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
-    ).toMatchObject({ status: 'unavailable', message: 'Split into 10 pages.' })
+    ).toMatchObject({ status: 'unavailable', message: 'Split into 8 pages.' })
 })
 
 it('rejects new parse citations outside supplied pages', async () => {

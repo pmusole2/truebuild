@@ -74,18 +74,19 @@ const COMPACT_UNAVAILABLE =
     'Compact context cannot cover every required citation within two manual pages. No model request was sent.'
 const MAX_RESPONSE_BYTES = 1_048_576
 const DEFAULT_PARSE_LANGUAGE = 'en'
-const PARSE_FIRST_ATTEMPT_BASE_MS = 45_000
-const PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS = 5_000
+const PARSE_FIRST_ATTEMPT_BASE_MS = 55_000
+const PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS = 10_000
+const PARSE_FIRST_ATTEMPT_MAX_MS = 95_000
 const PARSE_BASE_PAGES = 4
 const PARSE_REPAIR_MS = 40_000
 const PARSE_OVERALL_MS = 100_000
 const PARSE_RETURN_MARGIN_MS = 1_000
 
-/** Application budget, not a measured provider bound: 45 s through four pages, then 5 s per additional page. */
+/** Application budget, not a measured provider bound: 55 s through four pages, then 10 s per page, capped at 95 s. */
 export function parseFirstAttemptTimeoutMs(pageCount: number): number {
-    return (
-        PARSE_FIRST_ATTEMPT_BASE_MS +
-        Math.max(0, Math.min(pageCount, MAX_PARSE_PAGES) - PARSE_BASE_PAGES) * PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS
+    return Math.min(
+        PARSE_FIRST_ATTEMPT_MAX_MS,
+        PARSE_FIRST_ATTEMPT_BASE_MS + Math.max(0, pageCount - PARSE_BASE_PAGES) * PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS,
     )
 }
 
@@ -452,6 +453,8 @@ const INSTRUCTIONS = [
     'Parse: Read supplied manual text and diagrams. For each assembly step, propose page-grounded known part names and required quantities, orientation tied to a step part, connection, at least one camera-observable visibleChecks entry, and step sourceRefs whenever the pages provide a basis.',
     'Parse citations: Every known name, quantity, orientation, connection and visible-check description needs sourceRefs to its supporting supplied page IDs.',
     'Parse quantities: Use stated counts or count distinct clearly depicted required parts in the step diagram when text is silent. Do not double-count repeated views or infer hidden counts. Never invent a quantity: when the pages say the count is user-supplied (the builder chooses it) or not specified, keep quantity unknown with a specific reason and set quantityBasis to {kind: user_supplied or not_specified, sourceRefs} citing the page that says so. When no page says so and no count can be read, keep quantity unknown with quantityBasis null; that remains an unresolved unknown. Use quantityBasis null whenever quantity is known.',
+    'Parse carried quantities (the only exception to quantityBasis null when known): When a part already introduced or assembled in an earlier step is reused in a later step, copy the earlier known quantity value, state and sourceRefs for that same part and set quantityBasis to {kind: carried_over, stepId: the earlier step stepId, partId: the same part partId, sourceRefs: the manual pages that ground the reuse}. Reference only an explicit earlier step and the same part ID; never infer a link from equal counts, from a later or the same step, or from a different part. The earlier same-part quantity must itself be known, or a carried chain that ends at a known quantity; when the earlier quantity remains unknown, keep this quantity unknown and unresolved and never fabricate a count. Use stepId null and partId null for every other quantityBasis kind.',
+    'Parse capacity: A capacity or range printed in the manual is not a required installed count. When the manual gives only a capacity or range and the builder chooses the installed amount, keep quantity unknown and set quantityBasis to {kind: not_specified or user_supplied, sourceRefs} citing that text; never invent a count from it. A supplied part whose quantity is truly unstated and that no page says the builder chooses stays unknown and still unresolved; neither a carried quantity nor a capacity statement waives it.',
     'Parse alternatives: When the manual offers mutually exclusive or optional methods for the same goal, emit ONE parent step, never duplicated required steps. Record every method in the step alternatives array (alternativeId, title, description, sourceRefs; two to sixteen unique ids) and set selectedAlternativeId to the alternative the manual marks as the explicit default or recommended; when it marks none, choose the first alternative as printed. A person reviews the recorded selectedAlternativeId. Step parts, orientation, connection, visibleChecks and sourceRefs describe only the selected path; parts used only by an unselected alternative belong in that alternative description with citations, never in the required parts or the part registry, and never as unknown phantom parts. Use alternatives null and selectedAlternativeId null for a single path.',
     'Parse step kinds: Set kind to assembly for placing or mounting parts (null also means assembly), or to adjust, connect, tighten or route when the step only adjusts, joins, tightens or routes already placed parts. Assembly steps always need orientation, connection and at least one visible check. For the other kinds set requirements {orientation, connection, visibleChecks} to true only for evidence the manual states or shows; otherwise leave that fact unknown with a specific reason or visibleChecks empty, and never invent a camera-observable check, orientation or connection the manual does not state.',
     'Parse language: Use printed text only from the selected parse language. Ignore facts in other languages and never mix or translate their text. Language-neutral diagrams remain valid grounding for observable counts and placement, even when the page has no selected-language text. Keep a textual fact unknown when the selected-language block does not state it rather than borrowing another language.',

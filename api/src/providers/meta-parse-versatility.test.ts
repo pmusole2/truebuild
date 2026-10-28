@@ -4,7 +4,7 @@ import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
 
-import { createMetaProvider, stepRefs, type ParseManualInput } from './meta-provider'
+import { createMetaProvider, parseFirstAttemptTimeoutMs, stepRefs, type ParseManualInput } from './meta-provider'
 
 // Everything here is synthetic and mocked: no recorded provider output, no live request.
 const CITED = [{ pageId: 'demo-page-1', region: null }]
@@ -276,6 +276,244 @@ describe('parse validation of alternatives, quantity basis and step kinds', () =
     })
 })
 
+describe('parse prompt and validation for carried-over quantities', () => {
+    // All values are synthetic: a mocked provider reply, never a recorded or live extraction.
+    function carriedManual(clean: ParsedManual, steps = 2): ParsedManual {
+        const value = structuredClone(clean)
+        const anchor = value.steps[1]!
+        // Step 2 reuses the part introduced in step 1 and copies its known quantity.
+        anchor.parts = anchor.parts.map((part) =>
+            part.partId === 'side-panel'
+                ? {
+                      ...part,
+                      quantityBasis: {
+                          kind: 'carried_over',
+                          stepId: 'step-1',
+                          partId: 'side-panel',
+                          sourceRefs: CITED,
+                      },
+                  }
+                : part,
+        )
+        for (let order = 3; order <= steps; order += 1) {
+            const previous = value.steps[order - 2]!
+            value.steps.push({
+                ...structuredClone(previous),
+                stepId: `step-${order}`,
+                order,
+                title: `Continue assembly ${order}`,
+                visibleChecks: previous.visibleChecks.map((check) => ({
+                    ...check,
+                    checkId: `${check.checkId}-${order}`,
+                })),
+                correction: null,
+                parts: previous.parts.map((part) =>
+                    part.partId === 'side-panel'
+                        ? {
+                              ...part,
+                              quantityBasis: {
+                                  kind: 'carried_over',
+                                  stepId: previous.stepId,
+                                  partId: 'side-panel',
+                                  sourceRefs: CITED,
+                              },
+                          }
+                        : part,
+                ),
+            })
+        }
+        return value
+    }
+
+    function setPart(value: ParsedManual, stepIndex: number, change: Record<string, unknown>): ParsedManual {
+        const copy = structuredClone(value)
+        const step = copy.steps[stepIndex]!
+        step.parts = step.parts.map((part) => (part.partId === 'side-panel' ? { ...part, ...change } : part))
+        return copy
+    }
+
+    it('adds a carried_over instruction for earlier known same-part quantities without changing earlier guidance', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const instructions = String(bodies[0]!.instructions)
+        expect(instructions).toContain('carried_over')
+        expect(instructions).toMatch(/earlier step/u)
+        expect(instructions).toMatch(/same part/u)
+        expect(instructions).toMatch(/copy the earlier known quantity/u)
+        expect(instructions).toMatch(/never fabricate/iu)
+        expect(instructions).toMatch(/unresolved/u)
+        // The existing quantity, alternatives, step kind and language lines remain present.
+        expect(instructions).toMatch(/Never invent a quantity/u)
+        expect(instructions).toContain('user_supplied')
+        expect(instructions).toMatch(/mutually exclusive or optional methods/u)
+        expect(instructions).toMatch(/Set kind to assembly for placing or mounting parts/u)
+        expect(instructions).toMatch(/Language-neutral diagrams remain valid grounding/u)
+    })
+
+    it('tells the model a capacity or range is not an installed count and an unstated supplied quantity stays unknown', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const instructions = String(bodies[0]!.instructions)
+        expect(instructions).toMatch(/capacity or range/iu)
+        expect(instructions).toMatch(/not a required installed count/u)
+        expect(instructions).toMatch(/not_specified/u)
+        expect(instructions).toMatch(/truly unstated/u)
+        expect(instructions).toMatch(/still unresolved/u)
+    })
+
+    it('keeps the production prompt free of brand or manual specific strings', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(String(bodies[0]!.instructions)).not.toMatch(/ikea|cable|kallax|billy|demo-page|side-panel|divider/iu)
+    })
+
+    it('accepts an earlier known same-part quantity carried into a later step with no repair', async () => {
+        const { input, clean } = await fixture()
+        const { provider, fetchImpl } = queued([carriedManual(clean)])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps[1]!.parts[0]).toMatchObject({
+            quantity: { state: 'known', value: 1 },
+            quantityBasis: { kind: 'carried_over', stepId: 'step-1', partId: 'side-panel' },
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts a chain of carried quantities that ends at a known anchor with no repair', async () => {
+        const { input, clean } = await fixture()
+        const { provider, fetchImpl } = queued([carriedManual(clean, 3)])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps).toHaveLength(3)
+        expect(result.steps[2]!.parts[0]!.quantityBasis).toMatchObject({ kind: 'carried_over', stepId: 'step-2' })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+        [
+            'an unknown step',
+            { quantityBasis: { kind: 'carried_over', stepId: 'step-9', partId: 'side-panel', sourceRefs: CITED } },
+        ],
+        [
+            'a self reference',
+            { quantityBasis: { kind: 'carried_over', stepId: 'step-2', partId: 'side-panel', sourceRefs: CITED } },
+        ],
+        [
+            'a different part',
+            { quantityBasis: { kind: 'carried_over', stepId: 'step-1', partId: 'divider', sourceRefs: CITED } },
+        ],
+        ['a mismatched count', { quantity: { state: 'known', value: 2, sourceRefs: CITED } }],
+        [
+            'an uncited basis',
+            { quantityBasis: { kind: 'carried_over', stepId: 'step-1', partId: 'side-panel', sourceRefs: [] } },
+        ],
+        [
+            'an unsupplied page',
+            {
+                quantityBasis: {
+                    kind: 'carried_over',
+                    stepId: 'step-1',
+                    partId: 'side-panel',
+                    sourceRefs: [{ pageId: 'ghost', region: null }],
+                },
+            },
+        ],
+        ['an unknown count', { quantity: UNKNOWN }],
+        [
+            'a missing step reference',
+            { quantityBasis: { kind: 'carried_over', stepId: null, partId: 'side-panel', sourceRefs: CITED } },
+        ],
+    ])('rejects a carried quantity with %s without spending a repair', async (_label, change) => {
+        const { input, clean } = await fixture()
+        const { provider, fetchImpl } = queued([setPart(carriedManual(clean), 1, change)])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a forward reference and a reference to a later step', async () => {
+        const { input, clean } = await fixture()
+        const forward = setPart(carriedManual(clean), 0, {
+            quantityBasis: { kind: 'carried_over', stepId: 'step-2', partId: 'side-panel', sourceRefs: CITED },
+        })
+        const { provider, fetchImpl } = queued([forward])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a carried basis on a legacy quantity kind that names a step', async () => {
+        const { input, clean } = await fixture()
+        const value = setPart(clean, 1, {
+            quantity: UNKNOWN,
+            quantityBasis: { kind: 'user_supplied', stepId: 'step-1', partId: 'side-panel', sourceRefs: CITED },
+        })
+        const { provider, fetchImpl } = queued([value])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a carried chain whose anchor quantity is unknown instead of repairing around it', async () => {
+        const { input, clean } = await fixture()
+        const anchorUnknown = setPart(carriedManual(clean), 0, { quantity: UNKNOWN, quantityBasis: null })
+        const { provider, fetchImpl } = queued([anchorUnknown])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('still spends exactly one bounded repair for a truly unstated supplied quantity after a known earlier use', async () => {
+        const { input, clean } = await fixture()
+        // Step 2 states no count and no basis: an earlier known same-part value is not an automatic waiver.
+        const unstated = setPart(clean, 1, { quantity: UNKNOWN, quantityBasis: null })
+        const { provider, fetchImpl, bodies } = queued([unstated, unstated])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(fetchImpl).toHaveBeenCalledTimes(2)
+        expect(String(bodies[1]!.instructions)).toContain('quantity of side-panel')
+        expect(result.steps[1]!.parts[0]!.quantity).toEqual(UNKNOWN)
+    })
+
+    it('keeps a capacity-only cited not_specified quantity unknown with no invented count or repair', async () => {
+        const { input, clean } = await fixture()
+        const capacity = setPart(clean, 1, {
+            quantity: { state: 'unknown', reason: 'The manual gives a capacity range, not an installed count.' },
+            quantityBasis: { kind: 'not_specified', sourceRefs: CITED },
+        })
+        const { provider, fetchImpl } = queued([capacity])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps[1]!.parts[0]).toMatchObject({
+            quantity: { state: 'unknown' },
+            quantityBasis: { kind: 'not_specified' },
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a capacity-only quantity that invents a count under a not_specified basis', async () => {
+        const { input, clean } = await fixture()
+        const invented = setPart(clean, 1, { quantityBasis: { kind: 'not_specified', sourceRefs: CITED } })
+        const { provider, fetchImpl } = queued([invented])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps step-level citation custody for a carried quantity basis', () => {
+        const value = carriedManual(createDemoManual().rawExtraction!)
+        const basis = { pageId: 'basis-page', region: null }
+        const step = setPart(value, 1, {
+            quantityBasis: { kind: 'carried_over', stepId: 'step-1', partId: 'side-panel', sourceRefs: [basis] },
+        }).steps[1]!
+        expect(stepRefs(step)).toContainEqual(basis)
+    })
+})
+
 describe('parse language', () => {
     it('keeps English facts from a mocked multilingual page without mixing the other block', async () => {
         const { input, clean } = await fixture()
@@ -333,7 +571,7 @@ describe('parse language', () => {
 describe('page-scaled first parse attempt and page limit', () => {
     it.each([
         [7, 59_500],
-        [10, 70_000],
+        [8, 90_000],
     ])(
         'retains a slow unresolved first parse at %i pages instead of overrunning overall time in repair',
         async (pages, firstMs) => {
@@ -376,19 +614,32 @@ describe('page-scaled first parse attempt and page limit', () => {
         }
     }
 
-    it('accepts a 55 second first response for a seven-page manual that the old 45 second budget would time out', async () => {
-        expect(await timed(7, 55_000)).toEqual({ calls: 1, outcome: 'accepted' })
+    it('accepts an 80 second first response for a seven-page manual that the retired 60 second budget would time out', async () => {
+        expect(await timed(7, 80_000)).toEqual({ calls: 1, outcome: 'accepted' })
     })
 
     it.each([
-        [1, 45_000],
-        [4, 45_000],
-        [5, 50_000],
-        [7, 60_000],
-        [10, 75_000],
+        [1, 55_000],
+        [4, 55_000],
+        [5, 65_000],
+        [7, 85_000],
+        [8, 95_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
+    })
+
+    it.each([
+        [1, 55_000],
+        [4, 55_000],
+        [5, 65_000],
+        [6, 75_000],
+        [7, 85_000],
+        [8, 95_000],
+        [9, 95_000],
+        [20, 95_000],
+    ])('computes %i pages as a %i ms first attempt and never exceeds 95 seconds', (pages, expected) => {
+        expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
     })
 
     it('accepts exactly the shared page maximum', async () => {
@@ -398,11 +649,20 @@ describe('page-scaled first parse attempt and page limit', () => {
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
-    it('rejects an eleventh page before normalization or any request without leaking a message', async () => {
-        const { input, clean } = await fixture(MAX_PARSE_PAGES + 1)
-        const { provider, fetchImpl } = queued([clean])
-        const error = await provider.parseManual(input, new AbortController().signal).catch((caught: unknown) => caught)
-        expect(error).toMatchObject({ code: 'invalid_input', message: 'invalid_input' })
-        expect(fetchImpl).not.toHaveBeenCalled()
+    it('keeps the shared page maximum at eight', () => {
+        expect(MAX_PARSE_PAGES).toBe(8)
     })
+
+    it.each([9, 10])(
+        'rejects %i pages before normalization or any request without leaking a message',
+        async (pageCount) => {
+            const { input, clean } = await fixture(pageCount)
+            const { provider, fetchImpl } = queued([clean])
+            const error = await provider
+                .parseManual(input, new AbortController().signal)
+                .catch((caught: unknown) => caught)
+            expect(error).toMatchObject({ code: 'invalid_input', message: 'invalid_input' })
+            expect(fetchImpl).not.toHaveBeenCalled()
+        },
+    )
 })

@@ -57,7 +57,7 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
                         <Caption>{PRIVACY_COPY.stayOnDevice}</Caption>
                         <Caption>{PRIVACY_COPY.read}</Caption>
                         <Caption>
-                            Store up to 20 pages. Read up to 10 pages at a time. Phone photos are resized and compressed
+                            Store up to 20 pages. Read up to 8 pages at a time. Phone photos are resized and compressed
                             locally before upload.
                         </Caption>
                     </View>

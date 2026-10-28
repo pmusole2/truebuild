@@ -147,7 +147,7 @@ describe('manual parse versatility', () => {
         expect(
             modelParseMetadataSchema.safeParse({
                 ...metadata,
-                pages: Array.from({ length: 11 }, (_, index) => ({
+                pages: Array.from({ length: 9 }, (_, index) => ({
                     ...session.pages[0],
                     pageId: `p${index}`,
                     assetId: `a${index}`,

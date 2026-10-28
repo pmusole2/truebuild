@@ -1,5 +1,7 @@
 import {
     captureBindingSchema,
+    carriedQuantitySourceRefs,
+    hasValidQuantityEvidence,
     LIMITS,
     manualBindingSchema,
     manualSessionSchema,
@@ -12,9 +14,8 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
-export const MAX_PARSE_PAGES = 10
-export const PARSE_SPLIT_MESSAGE =
-    'Read up to 10 pages at a time. Split this manual into sections of 10 pages or fewer.'
+export const MAX_PARSE_PAGES = 8
+export const PARSE_SPLIT_MESSAGE = 'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.'
 export const parseLanguageSchema = z
     .string()
     .trim()
@@ -76,6 +77,7 @@ function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
     const parts = usedParts(step)
     return [
         ...step.sourceRefs,
+        ...carriedQuantitySourceRefs(step, session.reviewedSteps),
         ...step.parts.flatMap((part) => [...refs(part.quantity), ...(part.quantityBasis?.sourceRefs ?? [])]),
         ...(step.alternatives?.flatMap((alternative) => alternative.sourceRefs) ?? []),
         ...refs(step.orientation),
@@ -89,7 +91,13 @@ function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
 /** Default full-manual context in manual order; unresolved current-step evidence fails closed. */
 export function selectStepSourcePageIds(session: ManualSession, stepId: string): string[] | null {
     const step = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
-    if (!step || session.reviewStatus !== 'reviewed') return null
+    if (
+        !step ||
+        session.reviewStatus !== 'reviewed' ||
+        step.parts.some((part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps))
+    ) {
+        return null
+    }
     const pages = session.pages.map((page) => page.pageId)
     const ids = new Set(pages)
     if (
@@ -133,8 +141,9 @@ export function unresolvedCriticalFacts(session: Pick<ManualSession, 'parts' | '
             issues.push(`${label}: required parts are missing.`)
         }
         for (const part of step.parts) {
-            if (part.quantity.state === 'unknown' && !part.quantityBasis) {
-                issues.push(`${label}, quantity of ${part.partId}: ${part.quantity.reason}`)
+            if (!hasValidQuantityEvidence(step, part, session.reviewedSteps)) {
+                const reason = part.quantity.state === 'unknown' ? part.quantity.reason : 'Invalid quantity evidence.'
+                issues.push(`${label}, quantity of ${part.partId}: ${reason}`)
             }
         }
         if (required.orientation && step.orientation.state === 'unknown') {

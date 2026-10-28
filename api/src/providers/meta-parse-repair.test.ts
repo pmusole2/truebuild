@@ -414,7 +414,7 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += scope === 'first attempt' ? 45_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
+            monotonic += scope === 'first attempt' ? 55_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
             return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean))
         })
         const runParseRepair: NonNullable<MetaProviderOptions['runParseRepair']> = async (work) => {

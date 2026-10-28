@@ -70,13 +70,26 @@ const partRequirementSchema = z
         quantity: factSchema(positiveIntegerSchema),
         quantityBasis: z
             .strictObject({
-                kind: z.enum(['user_supplied', 'not_specified']),
+                kind: z.enum(['user_supplied', 'not_specified', 'carried_over']),
                 sourceRefs: knownSourceRefsSchema,
+                stepId: idSchema.nullable().optional(),
+                partId: idSchema.nullable().optional(),
             })
             .nullable()
             .optional(),
     })
     .superRefine((part, ctx) => {
+        const basis = part.quantityBasis
+        if (basis?.kind === 'carried_over') {
+            if (basis.stepId == null || basis.partId !== part.partId || part.quantity.state !== 'known') {
+                ctx.addIssue({
+                    code: 'custom',
+                    message: 'Carried quantity requires a known count and same-part reference',
+                })
+            }
+        } else if (basis?.stepId != null || basis?.partId != null) {
+            ctx.addIssue({ code: 'custom', message: 'Only carried quantities may reference an earlier step or part' })
+        }
         if (part.quantityBasis?.kind === 'not_specified' && part.quantity.state === 'known') {
             ctx.addIssue({ code: 'custom', message: 'An unspecified quantity cannot contain a numeric count' })
         }
@@ -169,6 +182,75 @@ export const manualStepSchema = z
 
 export type ManualStep = z.infer<typeof manualStepSchema>
 
+/** Validate every link by identity and order; the public numeric Fact shape stays unchanged. */
+export function hasValidQuantityEvidence(
+    step: ManualStep,
+    part: PartRequirement,
+    steps: readonly ManualStep[],
+): boolean {
+    let currentStep = step
+    let currentPart = part
+    const visited = new Set<string>()
+
+    for (let depth = 0; depth <= steps.length; depth++) {
+        if (!partRequirementSchema.safeParse(currentPart).success) {
+            return false
+        }
+        const basis = currentPart.quantityBasis
+        if (basis?.kind !== 'carried_over') {
+            return currentPart.quantity.state === 'known' || basis != null
+        }
+        if (currentPart.quantity.state !== 'known' || visited.has(currentStep.stepId)) {
+            return false
+        }
+        visited.add(currentStep.stepId)
+        const targets = steps.filter((candidate) => candidate.stepId === basis.stepId)
+        const target = targets.length === 1 ? targets[0] : undefined
+        if (!target || target.order >= currentStep.order || basis.partId !== currentPart.partId) {
+            return false
+        }
+        const targetParts = target.parts.filter((candidate) => candidate.partId === basis.partId)
+        const targetPart = targetParts.length === 1 ? targetParts[0] : undefined
+        if (
+            !targetPart ||
+            targetPart.quantity.state !== 'known' ||
+            targetPart.quantity.value !== currentPart.quantity.value
+        ) {
+            return false
+        }
+        currentStep = target
+        currentPart = targetPart
+    }
+    return false
+}
+
+/** Include anchor fact/basis citations without following arbitrary or invalid references. */
+export function carriedQuantitySourceRefs(step: ManualStep, steps: readonly ManualStep[]): SourceRef[] {
+    const refs = new Map<string, SourceRef>()
+    for (const part of step.parts) {
+        if (part.quantityBasis?.kind !== 'carried_over' || !hasValidQuantityEvidence(step, part, steps)) {
+            continue
+        }
+        let currentPart = part
+        for (let depth = 0; depth < steps.length; depth++) {
+            const basis = currentPart.quantityBasis
+            if (basis?.kind !== 'carried_over') {
+                break
+            }
+            const target = steps.find((candidate) => candidate.stepId === basis.stepId)
+            const targetPart = target?.parts.find((candidate) => candidate.partId === basis.partId)
+            if (!targetPart || targetPart.quantity.state !== 'known') {
+                break
+            }
+            for (const ref of [...targetPart.quantity.sourceRefs, ...(targetPart.quantityBasis?.sourceRefs ?? [])]) {
+                refs.set(JSON.stringify(ref), ref)
+            }
+            currentPart = targetPart
+        }
+    }
+    return [...refs.values()]
+}
+
 /** Legacy or assembly steps always retain every assembly evidence requirement. */
 export function stepEvidenceRequirements(step: ManualStep): {
     parts: boolean
@@ -227,6 +309,14 @@ function validateRegistry(parts: ManualPart[], steps: ManualStep[], ctx: z.Refin
     const partIds = new Set(parts.map((part) => part.partId))
 
     for (const step of steps) {
+        for (const part of step.parts) {
+            if (part.quantityBasis?.kind === 'carried_over' && !hasValidQuantityEvidence(step, part, steps)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    message: 'Carried quantity must match valid earlier same-part evidence',
+                })
+            }
+        }
         const references = step.parts.map((part) => part.partId)
         if (step.orientation.state === 'known') {
             references.push(step.orientation.value.partId)
@@ -339,7 +429,7 @@ export const manualSessionSchema = z
                     return (
                         step.sourceRefs.length === 0 ||
                         (required.parts && step.parts.length === 0) ||
-                        step.parts.some((part) => part.quantity.state === 'unknown' && !part.quantityBasis) ||
+                        step.parts.some((part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps)) ||
                         (required.orientation && step.orientation.state === 'unknown') ||
                         (required.connection && step.connection.state === 'unknown') ||
                         (required.visibleChecks && step.visibleChecks.length === 0) ||

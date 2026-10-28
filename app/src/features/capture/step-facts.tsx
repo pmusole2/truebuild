@@ -39,7 +39,7 @@ export function StepFacts({
             {showHeading ? <Heading>{`${step.order}. ${step.title}`}</Heading> : null}
             {step.parts.map((part) => (
                 <View key={part.partId}>
-                    <Body>{`${part.partId}: ${quantityText(part)}`}</Body>
+                    <Body>{`${part.partId}: ${quantityText(part, session)}`}</Body>
                     {part.quantityBasis == null ? null : (
                         <CitationLabels refs={part.quantityBasis.sourceRefs} session={session} label="Quantity basis" />
                     )}
@@ -104,7 +104,12 @@ export function StepSummary({ session, index }: { session: ManualSession; index:
     )
 }
 
-function quantityText(part: PartRequirement): string {
+function quantityText(part: PartRequirement, session?: ManualSession): string {
+    if (part.quantityBasis?.kind === 'carried_over' && part.quantity.state === 'known') {
+        const earlier = session?.reviewedSteps.find((step) => step.stepId === part.quantityBasis?.stepId)
+        const label = earlier?.order ?? part.quantityBasis.stepId
+        return `${part.quantity.value} (carried over from step ${label})`
+    }
     if (part.quantity.state === 'known' || part.quantityBasis == null) {
         return factText(part.quantity, String)
     }

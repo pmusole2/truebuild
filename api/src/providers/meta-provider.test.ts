@@ -754,10 +754,47 @@ describe('documented Meta conformance', () => {
         Object.values(metaOutputSchemas).forEach(inspect)
     })
 
-    it('parses the ten-page maximum with a full extraction output budget', async () => {
+    it('keeps the carried quantity basis strict, nullable and within the nesting limit', () => {
+        function nesting(value: unknown, depth = 0): number {
+            if (!value || typeof value !== 'object') return depth
+            if (Array.isArray(value)) return Math.max(depth, ...value.map((entry) => nesting(entry, depth)))
+            const node = value as Record<string, unknown>
+            const next = node.type === 'object' || node.type === 'array' ? depth + 1 : depth
+            return Math.max(next, ...Object.values(node).map((entry) => nesting(entry, next)))
+        }
+        function find(value: unknown, key: string): Record<string, unknown>[] {
+            if (!value || typeof value !== 'object') return []
+            if (Array.isArray(value)) return value.flatMap((entry) => find(entry, key))
+            const node = value as Record<string, unknown>
+            return [
+                ...(key in node && typeof node[key] === 'object' ? [node] : []),
+                ...Object.values(node).flatMap((entry) => find(entry, key)),
+            ]
+        }
+        const basis = find(metaOutputSchemas.parse, 'properties').filter((node) =>
+            JSON.stringify((node.properties as Record<string, unknown>).kind ?? null).includes('user_supplied'),
+        )
+        expect(basis.length).toBeGreaterThan(0)
+        for (const node of basis as {
+            properties: Record<string, unknown>
+            required: string[]
+            additionalProperties: boolean
+        }[]) {
+            expect(node.additionalProperties).toBe(false)
+            expect(new Set(node.required)).toEqual(new Set(['kind', 'sourceRefs', 'stepId', 'partId']))
+            expect(JSON.stringify(node.properties.kind)).toContain('carried_over')
+            for (const key of ['stepId', 'partId']) {
+                expect(JSON.stringify(node.properties[key])).toContain('"type":"null"')
+                expect(JSON.stringify(node.properties[key])).not.toContain('"type":"object"')
+            }
+        }
+        expect(nesting(metaOutputSchemas.parse)).toBeLessThanOrEqual(10)
+    })
+
+    it('parses the eight-page maximum with a full extraction output budget', async () => {
         const input = await validInput()
         const page = input.sourceImages[0]!
-        const pages = Array.from({ length: 10 }, (_, index) => ({
+        const pages = Array.from({ length: 8 }, (_, index) => ({
             ...page,
             page: { ...page.page, pageId: `page-${index}`, assetId: `asset-${index}` },
         }))
