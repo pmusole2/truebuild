@@ -7,7 +7,7 @@ import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
 import { focusRingStyle, useFocusRing } from './focus'
 
-// `accent` is the single amber call to action per screen. `danger` is reserved for refusing or discarding work.
+// `accent` marks the single primary task on a screen. Quiet actions use text without competing filled containers.
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'quiet' | 'danger'
 
 const VARIANT_TOKENS: Readonly<Record<ButtonVariant, { container: ColorToken; border: ColorToken; text: ColorToken }>> =
@@ -30,6 +30,7 @@ export type AppButtonProps = {
     // Full name for assistive tech when the visible label is shortened (for example "Up" for "Move page 2 up").
     readonly accessibilityLabel?: string
     readonly testID?: string
+    readonly icon?: IconName
 }
 
 export function AppButton({
@@ -41,6 +42,7 @@ export function AppButton({
     hint,
     accessibilityLabel,
     testID,
+    icon,
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
@@ -65,6 +67,7 @@ export function AppButton({
             style={({ pressed }) => [
                 styles.base,
                 { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                variant === 'quiet' && styles.quiet,
                 focusRingStyle(focus.focused, colors),
                 pressed && !inactive && styles.pressed,
                 inactive && styles.inactive,
@@ -72,6 +75,7 @@ export function AppButton({
         >
             <View style={styles.row}>
                 {busy ? <ActivityIndicator color={colors[tokens.text]} /> : null}
+                {!busy && icon !== undefined ? <Icon name={icon} size="sm" color={colors[tokens.text]} /> : null}
                 <Text
                     maxFontSizeMultiplier={type.maxFontSizeMultiplier}
                     style={[type.style, styles.label, { color: colors[tokens.text] }]}
@@ -122,6 +126,7 @@ export function IconButton({
                 styles.base,
                 styles.square,
                 { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                variant === 'quiet' && styles.quiet,
                 focusRingStyle(focus.focused, colors),
                 pressed && !disabled && styles.pressed,
                 disabled && styles.inactive,
@@ -135,6 +140,7 @@ export function IconButton({
 const styles = StyleSheet.create({
     base: {
         minHeight: touchTarget,
+        minWidth: touchTarget,
         paddingHorizontal: space.md,
         paddingVertical: space.xs,
         borderWidth: 1,
@@ -142,6 +148,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
+    quiet: { backgroundColor: 'transparent', borderColor: 'transparent' },
     square: {
         width: touchTarget,
         paddingHorizontal: 0,

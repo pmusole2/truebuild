@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react-native'
 import type * as ReactModule from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import type * as ReactNative from 'react-native'
-import { Text, type ViewProps } from 'react-native'
+import { StyleSheet, Text, type ViewProps } from 'react-native'
 import { Card, Screen, Stack } from './surface'
 
 // Insets are not under test here. The mock keeps the requested edges visible on the rendered node.
@@ -38,11 +38,12 @@ describe('Screen shell', () => {
 
     it('a full-bleed shell with the native header hidden clears the top inset itself', async () => {
         await render(
-            <Screen testID="shell" header="hidden" scroll={false}>
+            <Screen testID="shell" header="hidden" scroll={false} padded={false}>
                 <Text>Camera</Text>
             </Screen>,
         )
         expect(screen.getByTestId('shell')).toHaveProp('edges', ['top', 'left', 'right', 'bottom'])
+        expect(StyleSheet.flatten(screen.getByText('Camera').parent?.props.style)).not.toHaveProperty('padding')
     })
 
     it('a non-scrolling shell still renders its content', async () => {

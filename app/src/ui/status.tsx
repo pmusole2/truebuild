@@ -74,12 +74,13 @@ export function Notice({ text, tone = 'info' }: { readonly text: string; readonl
         <View
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
-            style={[
-                styles.notice,
-                { backgroundColor: colors.surfaceSunken, borderLeftColor: colors[NOTICE_BAR[tone]] },
-            ]}
+            style={[styles.notice, { backgroundColor: colors.surfaceSunken, borderColor: colors.border }]}
         >
-            <Text maxFontSizeMultiplier={type.maxFontSizeMultiplier} style={[type.style, { color: colors.ink }]}>
+            <Icon name={tone === 'info' ? 'info' : 'alert'} size="sm" color={colors[NOTICE_BAR[tone]]} />
+            <Text
+                maxFontSizeMultiplier={type.maxFontSizeMultiplier}
+                style={[type.style, styles.noticeText, { color: colors.ink }]}
+            >
                 {text}
             </Text>
         </View>
@@ -93,7 +94,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: space.xs,
         borderWidth: 1,
-        borderRadius: radius.sm,
+        borderRadius: radius.pill,
         paddingHorizontal: space.xs,
         paddingVertical: space.xxs,
     },
@@ -101,8 +102,12 @@ const styles = StyleSheet.create({
         flexShrink: 1,
     },
     notice: {
-        borderLeftWidth: 4,
-        borderRadius: radius.sm,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: space.xs,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderRadius: radius.md,
         padding: space.sm,
     },
+    noticeText: { flex: 1 },
 })

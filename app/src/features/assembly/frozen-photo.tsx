@@ -1,15 +1,9 @@
 import { useMemo, useState, type ReactElement, type ReactNode } from 'react'
-import {
-    Image,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
-    type GestureResponderEvent,
-    type LayoutChangeEvent,
-} from 'react-native'
+import { Image, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native'
 import Svg from 'react-native-svg'
-import { palette, radius, space } from '../../components/theme'
+import { useTheme } from '../../theme/theme'
+import { radius, space } from '../../theme/tokens'
+import { Caption } from '../../ui/text'
 import { bytesToDataUri } from '../../media/image-source'
 import { containRect, normalizedPointFromTap, type Point, type Rect } from './frame-geometry'
 import type { Observation } from './observation'
@@ -80,6 +74,7 @@ type FrozenPhotoProps = {
 
 /** The one frozen photo of this capture. Nothing here is live; the image does not update after it is taken. */
 export function FrozenPhoto({ observation, caption, onTapPoint, overlay }: FrozenPhotoProps): ReactElement {
+    const { colors } = useTheme()
     const [width, setWidth] = useState(0)
     const dataUri = useMemo(() => bytesToDataUri(observation.bytes, observation.mimeType), [observation])
     const imageSize = { width: observation.width, height: observation.height }
@@ -114,7 +109,10 @@ export function FrozenPhoto({ observation, caption, onTapPoint, overlay }: Froze
 
     return (
         <View style={styles.wrap}>
-            <View onLayout={onLayout} style={[styles.frame, { height: boxHeight }]}>
+            <View
+                onLayout={onLayout}
+                style={[styles.frame, { height: boxHeight, backgroundColor: colors.surfaceSunken }]}
+            >
                 {width === 0 ? null : (
                     <>
                         {onTapPoint === undefined ? (
@@ -136,7 +134,7 @@ export function FrozenPhoto({ observation, caption, onTapPoint, overlay }: Froze
                     </>
                 )}
             </View>
-            <Text style={styles.caption}>{caption}</Text>
+            <Caption>{caption}</Caption>
         </View>
     )
 }
@@ -148,8 +146,7 @@ const styles = StyleSheet.create({
     frame: {
         width: '100%',
         position: 'relative',
-        backgroundColor: palette.paperDeep,
-        borderRadius: radius,
+        borderRadius: radius.lg,
         overflow: 'hidden',
     },
     image: {
@@ -159,9 +156,5 @@ const styles = StyleSheet.create({
         position: 'absolute',
         left: 0,
         top: 0,
-    },
-    caption: {
-        color: palette.graphite,
-        fontSize: 13,
     },
 })

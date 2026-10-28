@@ -147,8 +147,8 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
     },
     sheet: {
-        borderTopLeftRadius: radius.lg,
-        borderTopRightRadius: radius.lg,
+        borderTopLeftRadius: radius.sheet,
+        borderTopRightRadius: radius.sheet,
         borderWidth: 1,
         padding: space.md,
         gap: space.md,

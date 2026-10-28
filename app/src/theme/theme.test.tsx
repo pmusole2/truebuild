@@ -75,9 +75,12 @@ describe('type scale', () => {
         expect(typeScale[role].maxFontSizeMultiplier).toBeGreaterThanOrEqual(2)
     })
 
-    it('keeps the display face for titles and the system sans for reading text', () => {
+    it('uses the platform system sans consistently for every type role', () => {
         expect(typeScale.title.fontFamily).toBe(typeScale.display.fontFamily)
         expect(typeScale.body.fontFamily).toBeUndefined()
+        for (const role of ROLES) {
+            expect(typeScale[role].fontFamily).toBeUndefined()
+        }
     })
 })
 

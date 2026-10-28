@@ -28,7 +28,7 @@ describe('typography primitives', () => {
         expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 2)
     })
 
-    it('captions and labels are muted, and labels stay uppercase in the mono stamp style', async () => {
+    it('captions and labels are muted, and labels retain their uppercase hierarchy', async () => {
         await render(
             <>
                 <Caption>Simulated photo</Caption>

@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { radius, space } from '../theme/tokens'
-import { Notice, VerdictTag, type Verdict } from './status'
+import { VerdictTag, type Verdict } from './status'
 import { Body, Caption } from './text'
 import { Card, Stack } from './surface'
 
@@ -34,12 +34,16 @@ export function ResultSheet({
             <Card elevation={1}>
                 <View style={[styles.bar, { backgroundColor: bar }]} />
                 <Stack gap="sm">
-                    {provenance === undefined ? null : <Notice tone="caution" text={provenance} />}
+                    {provenance === undefined ? null : <Caption>{provenance}</Caption>}
                     <VerdictTag verdict={verdict} />
                     <Body>{reason}</Body>
-                    {missing.map((item) => (
-                        <Caption key={item}>{`Missing: ${item}`}</Caption>
-                    ))}
+                    {missing.length === 0 ? null : (
+                        <View style={styles.missing}>
+                            {missing.map((item) => (
+                                <Caption key={item}>{`Missing: ${item}`}</Caption>
+                            ))}
+                        </View>
+                    )}
                     {citedPage}
                     {actions}
                 </Stack>
@@ -59,6 +63,7 @@ const styles = StyleSheet.create({
         left: 0,
         top: 0,
         bottom: 0,
-        width: 4,
+        width: 3,
     },
+    missing: { gap: space.xxs },
 })

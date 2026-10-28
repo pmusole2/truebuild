@@ -14,11 +14,14 @@ export function Screen({
     children,
     scroll = true,
     header = 'native',
+    padded = true,
     testID,
 }: {
     readonly children: ReactNode
     readonly scroll?: boolean
     readonly header?: 'native' | 'hidden'
+    // Camera and guide layouts supply their own insets while retaining the safe-area boundary.
+    readonly padded?: boolean
     readonly testID?: string
 }): ReactElement {
     const { colors } = useTheme()
@@ -26,13 +29,16 @@ export function Screen({
     if (!scroll) {
         return (
             <SafeAreaView edges={edges} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
-                <View style={styles.fill}>{children}</View>
+                <View style={[styles.fill, padded && styles.padding]}>{children}</View>
             </SafeAreaView>
         )
     }
     return (
         <SafeAreaView edges={edges} style={[styles.root, { backgroundColor: colors.canvas }]} testID={testID}>
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <ScrollView
+                contentContainerStyle={[styles.content, padded && styles.padding]}
+                keyboardShouldPersistTaps="handled"
+            >
                 {children}
             </ScrollView>
         </SafeAreaView>
@@ -88,18 +94,33 @@ export function Divider(): ReactElement {
     )
 }
 
+/** Wrapping secondary controls stay readable at narrow widths and with larger system text. */
+export function ActionGroup({ children }: { readonly children: ReactNode }): ReactElement {
+    return <View style={styles.actions}>{children}</View>
+}
+
+/** Kept outside a screen's scroll content so its primary action remains available beside a long result. */
+export function ActionDock({ children }: { readonly children: ReactNode }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View style={[styles.dock, { backgroundColor: colors.surface, borderColor: colors.border }]}>{children}</View>
+    )
+}
+
 const styles = StyleSheet.create({
     root: {
         flex: 1,
     },
     fill: {
         flex: 1,
-        padding: space.md,
+        minHeight: 0,
     },
     content: {
-        padding: space.md,
         gap: space.md,
     },
+    padding: { padding: space.md },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+    dock: { borderTopWidth: StyleSheet.hairlineWidth, padding: space.md, gap: space.xs, flexShrink: 0 },
     card: {
         borderWidth: 1,
         borderRadius: radius.lg,

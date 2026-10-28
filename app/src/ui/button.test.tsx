@@ -7,8 +7,11 @@ import { AppButton, IconButton } from './button'
 describe('AppButton', () => {
     it('exposes a named button with its hint and runs the action once per press', async () => {
         const onPress = jest.fn()
-        await render(<AppButton label="Find part in photo" hint="Searches the frozen photo" onPress={onPress} />)
+        await render(
+            <AppButton label="Find part in photo" icon="search" hint="Searches the frozen photo" onPress={onPress} />,
+        )
         const button = screen.getByRole('button', { name: 'Find part in photo' })
+        expect(screen.getAllByRole('button')).toHaveLength(1)
         expect(button.props.accessibilityHint).toBe('Searches the frozen photo')
         await fireEvent.press(button)
         expect(onPress).toHaveBeenCalledTimes(1)
@@ -38,7 +41,7 @@ describe('AppButton', () => {
         expect(screen.getByRole('button', { name: 'Use sample manual' })).toHaveStyle({ minHeight: touchTarget })
     })
 
-    it('the accent variant carries the amber call to action and danger carries the refusal tone', async () => {
+    it('the accent variant carries the primary action colour and danger carries the refusal tone', async () => {
         await render(
             <>
                 <AppButton label="Take photo" variant="accent" onPress={(): void => undefined} />

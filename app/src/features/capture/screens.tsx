@@ -1,103 +1,29 @@
-import { useState, type ReactElement, type ReactNode } from 'react'
-import { Image, Linking, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
-import type {
-    CheckResult,
-    Fact,
-    ManualBinding,
-    ManualSession,
-    ManualStep,
-    ParsedManual,
-    QuestionResult,
-    SourceRef,
-} from '@truebuild/contracts'
-import { FrozenPhoto } from '../assembly/frozen-photo'
-import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
-import { stepPartChoices } from '../assembly/question-state'
+import { useState, type ReactElement } from 'react'
+import { Image, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton, IconButton } from '../../ui/button'
-import { BottomSheet } from '../../ui/sheet'
-import { Card, Screen as ScreenShell, Stack } from '../../ui/surface'
-import { Body, Callout, Caption, Heading, Label, Title } from '../../ui/text'
-import { Icon } from '../../ui/icons'
+import { Card, Stack } from '../../ui/surface'
+import { Body, Callout, Caption, Heading } from '../../ui/text'
 import { EmptyState, ErrorState, LoadingState } from '../../ui/states'
-import { Notice, StatusTag, type NoticeTone } from '../../ui/status'
-import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
-import { ComparisonFrame, MeasuredPane, type ComparisonPane } from '../../ui/comparison'
-import { AskSheet } from '../../ui/ask-sheet'
-import { ResultSheet } from '../../ui/result-sheet'
+import { Notice, StatusTag } from '../../ui/status'
 import { SegmentedControl, TextField } from '../../ui/fields'
 import { Skeleton } from '../../ui/skeleton'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import { PRIVACY_COPY } from './privacy-copy'
-import { groundedRegion } from './grounded-region'
-import { reviewedSession, unresolvedCriticalFacts, type CaptureController, type WorkflowState } from './controller'
+import { reviewedSession, unresolvedCriticalFacts, type WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
+import { ConfirmRow, Screen, WorkflowNotice } from './screen-chrome'
+import { factText, ModelProvenance, SourceDiagrams, StepFacts } from './step-facts'
+import type { WorkflowController, WorkflowScreenProps } from './workflow-types'
 
-export type WorkflowScreenProps = { state: WorkflowState; controller: CaptureController }
-
-// Notices that describe a failure or an unavailable service read as errors; progress and cancellation read as information.
-const FAILURE_NOTICE = /unavailable|timed out|could not|not allowed|cannot|not confirmed|nothing was/iu
-
-export function noticeTone(text: string): NoticeTone {
-    return FAILURE_NOTICE.test(text) ? 'error' : 'info'
-}
-
-/** Shared frame: safe-area shell, our own top bar with an optional back control, and the screen title. */
-export function Screen({
-    title,
-    children,
-    onBack,
-    trailing,
-    testID,
-}: {
-    title: string
-    children: ReactNode
-    onBack?: () => void
-    trailing?: ReactNode
-    testID?: string
-}): ReactElement {
-    return (
-        <ScreenShell header="hidden" testID={testID}>
-            <Stack gap="md">
-                <View style={styles.topBar}>
-                    {onBack === undefined ? null : <IconButton label="Back" icon="chevronLeft" onPress={onBack} />}
-                    <View style={styles.titleWrap}>
-                        <Title>{title}</Title>
-                    </View>
-                    {trailing ?? null}
-                </View>
-                {children}
-            </Stack>
-        </ScreenShell>
-    )
-}
-
-export function WorkflowNotice({ state, controller }: WorkflowScreenProps): ReactElement {
-    return (
-        <View accessibilityLiveRegion="polite">
-            <Stack gap="sm">
-                {state.notice === null ? null : <Notice tone={noticeTone(state.notice)} text={state.notice} />}
-                {state.storageReadOnly ? (
-                    <AppButton
-                        label={state.loading ? 'Reading local library…' : 'Retry local library'}
-                        busy={state.loading}
-                        disabled={state.loading || state.pending !== null}
-                        onPress={(): void => {
-                            void controller.restore()
-                        }}
-                    />
-                ) : null}
-                {state.pending === null ? null : (
-                    <Card>
-                        <Callout>{state.pending}</Callout>
-                        <AppButton label="Cancel" variant="quiet" onPress={controller.cancel} />
-                    </Card>
-                )}
-            </Stack>
-        </View>
-    )
-}
+// Public barrel: the extracted modules keep their original import path.
+export { GuideScreen, PANEL_MAX_RATIO } from './guide-screen'
+export { AnswerPanel, CheckPanel } from './result-panels'
+export { ConfirmRow, noticeTone, Screen, WorkflowNotice } from './screen-chrome'
+export { SourceDiagrams, StepFacts } from './step-facts'
+export type { WorkflowController, WorkflowScreenProps } from './workflow-types'
 
 export function LibraryScreen({
     state,
@@ -312,82 +238,6 @@ function PageImage({
     )
 }
 
-function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
-    return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
-}
-
-export function StepFacts({ session, index }: { session: ManualSession; index: number }): ReactElement {
-    const step = session.reviewedSteps[index]
-    if (step === undefined) {
-        return <Body tone="muted">No extracted steps yet.</Body>
-    }
-    return (
-        <Stack gap="xs">
-            <Heading>{`${step.order}. ${step.title}`}</Heading>
-            {step.parts.map((part) => (
-                <Body key={part.partId}>{`${part.partId}: ${factText(part.quantity, String)}`}</Body>
-            ))}
-            <Body>{`Orientation: ${factText(step.orientation, (value) => value.description)}`}</Body>
-            <Body>{`Connection: ${factText(step.connection, (value) => value.description)}`}</Body>
-            {step.visibleChecks.map((check) => (
-                <Body key={check.checkId}>{`Visible check: ${factText(check.description, String)}`}</Body>
-            ))}
-            {step.correction?.actions.map((action) => (
-                <Body key={action.actionId}>{`Correction: ${action.instruction}`}</Body>
-            ))}
-        </Stack>
-    )
-}
-
-/** Expected diagrams for cited pages. Highlights are measured against each page's own size, so letterboxing is correct. */
-export function SourceDiagrams({
-    refs,
-    session,
-    pageUris,
-}: {
-    refs: readonly SourceRef[]
-    session: ManualSession
-    pageUris: WorkflowState['pageUris']
-}): ReactElement {
-    return (
-        <Stack gap="sm">
-            {refs.map((ref, index) => {
-                const page = session.pages.find((candidate) => candidate.pageId === ref.pageId)
-                if (page === undefined) {
-                    return <Caption key={index}>Cited diagram unavailable.</Caption>
-                }
-                const pageNumber = session.pages.indexOf(page) + 1
-                const uri = pageUris[page.pageId]
-                const pane: ComparisonPane = {
-                    caption: `Expected diagram · page ${pageNumber}`,
-                    media:
-                        uri === undefined ? (
-                            <Caption>Loading page…</Caption>
-                        ) : (
-                            <Image
-                                source={{ uri }}
-                                accessibilityLabel={`Expected diagram page ${pageNumber}`}
-                                resizeMode="stretch"
-                                style={StyleSheet.absoluteFill}
-                            />
-                        ),
-                    mediaSize: { width: page.width, height: page.height },
-                    regions:
-                        ref.region === null ? [] : [{ id: `cited-${index}`, label: 'Cited area', box: ref.region }],
-                }
-                return (
-                    <MeasuredPane
-                        key={`${ref.pageId}-${index}`}
-                        pane={pane}
-                        testID={`diagram-${index}`}
-                        sideBySide={false}
-                    />
-                )
-            })}
-        </Stack>
-    )
-}
-
 export function OverviewScreen({
     state,
     controller,
@@ -519,7 +369,7 @@ function StepFactEditor({
     step,
 }: {
     state: WorkflowState
-    controller: CaptureController
+    controller: WorkflowController
     session: ManualSession
     step: ManualStep
 }): ReactElement {
@@ -654,361 +504,6 @@ function StepFactEditor({
     )
 }
 
-/** Explicit checkbox: a 44 point row with a visible mark, a text label and a web focus ring. */
-export function ConfirmRow({
-    label,
-    checked,
-    disabled,
-    onToggle,
-}: {
-    label: string
-    checked: boolean
-    disabled: boolean
-    onToggle: () => void
-}): ReactElement {
-    const { colors } = useTheme()
-    const focus = useFocusRing()
-    return (
-        <Pressable
-            accessibilityRole="checkbox"
-            accessibilityLabel={label}
-            accessibilityState={{ checked, disabled }}
-            aria-checked={checked}
-            disabled={disabled}
-            {...focus.focusHandlers}
-            onPress={onToggle}
-            style={[
-                styles.confirmRow,
-                { borderColor: colors.border, backgroundColor: colors.surfaceRaised },
-                disabled && styles.disabled,
-                focusRingStyle(focus.focused, colors),
-            ]}
-        >
-            <View
-                style={[
-                    styles.checkBox,
-                    { borderColor: colors.borderStrong, backgroundColor: checked ? colors.fillStrong : colors.surface },
-                ]}
-            >
-                {checked ? <Icon name="check" size="sm" color={colors.fillStrongInk} /> : null}
-            </View>
-            <View style={styles.confirmText}>
-                <Body>{label}</Body>
-            </View>
-        </Pressable>
-    )
-}
-
-export const PANEL_MAX_RATIO = 0.5
-
-/**
- * Assembly guide: the frozen photo is the primary surface. A bounded bottom panel holds the verdict, the neutral answer,
- * the question composer and the step actions. Step instructions and the full step list open in a bounded sheet.
- */
-export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & { entry: LibraryEntry }): ReactElement {
-    const { session } = entry
-    const step = session.reviewedSteps[entry.stepIndex]
-    const blocked = controller.coverageNotice()
-    const highlight = groundedRegion(state.answer ?? state.check)
-    const busy = state.pending !== null || state.storageReadOnly
-    const editable = controller.canCompose
-    const { colors } = useTheme()
-    const { height } = useWindowDimensions()
-    const [instructionsOpen, setInstructionsOpen] = useState(false)
-    const choices = step === undefined ? [] : stepPartChoices(session, step)
-    const completed = new Set(entry.completedStepIds)
-    const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
-        id: item.stepId,
-        title: item.title,
-        state: completed.has(item.stepId) ? 'done' : index === entry.stepIndex ? 'current' : 'upcoming',
-    }))
-    const check = state.check
-    const refusal = check !== null && check.decision === 'refuse' ? check : null
-    const target = state.target
-    const targetSummary =
-        target === null
-            ? 'Choose a point or part.'
-            : target.kind === 'part'
-              ? `Selected part: ${choices.find((choice) => choice.partId === target.partId)?.label ?? target.partId}`
-              : 'Selected point in photo.'
-    // Point selection goes through the controller, which refuses it while a check is in flight.
-    const onPoint = (point: Point): void => controller.targetChanged({ kind: 'point', ...point })
-    const pointTap = editable && state.capture !== null ? onPoint : undefined
-    const stepTitle = step === undefined ? session.title : `${step.order}. ${step.title}`
-    return (
-        <ScreenShell header="hidden" scroll={false} testID="guide-screen">
-            <View style={styles.guide}>
-                <View style={styles.guideTop}>
-                    <IconButton label="Back" icon="chevronLeft" onPress={(): void => controller.navigate('overview')} />
-                    <View style={styles.titleWrap}>
-                        <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
-                        <Heading>{stepTitle}</Heading>
-                    </View>
-                    <IconButton label="Step instructions" icon="info" onPress={(): void => setInstructionsOpen(true)} />
-                </View>
-                <ScrollView style={styles.preview} contentContainerStyle={styles.previewContent}>
-                    {state.capture === null ? (
-                        <EmptyState
-                            title="No photo for this step yet."
-                            body="Take a photo of this step to check or ask about it."
-                        />
-                    ) : refusal !== null ? (
-                        <RefusalComparison
-                            refusal={refusal}
-                            observation={state.capture.observation}
-                            entry={entry}
-                            pageUris={state.pageUris}
-                            onTapPoint={pointTap}
-                        />
-                    ) : (
-                        <FrozenPhoto
-                            observation={state.capture.observation}
-                            caption="Frozen photo for this step. New photos clear prior results."
-                            onTapPoint={pointTap}
-                            overlay={
-                                highlight === null
-                                    ? undefined
-                                    : (displayed): ReactNode => (
-                                          <CheckHighlight rect={boxOnDisplay(highlight, displayed)} />
-                                      )
-                            }
-                        />
-                    )}
-                </ScrollView>
-                <ScrollView
-                    testID="guide-panel"
-                    style={[
-                        styles.panel,
-                        {
-                            maxHeight: height * PANEL_MAX_RATIO,
-                            backgroundColor: colors.surface,
-                            borderColor: colors.border,
-                        },
-                    ]}
-                    contentContainerStyle={styles.panelContent}
-                    keyboardShouldPersistTaps="handled"
-                >
-                    <WorkflowNotice state={state} controller={controller} />
-                    {blocked === null ? null : <Notice tone="caution" text={blocked} />}
-                    {check === null ? null : <CheckPanel check={check} session={session} pageUris={state.pageUris} />}
-                    {state.answer === null ? null : (
-                        <AnswerPanel answer={state.answer} session={session} pageUris={state.pageUris} />
-                    )}
-                    <AppButton
-                        label="Take new photo and check"
-                        variant="accent"
-                        disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
-                        onPress={(): void => controller.camera({ kind: 'check' })}
-                    />
-                    <AppButton
-                        label="Take photo to ask"
-                        disabled={busy || blocked !== null || session.reviewStatus !== 'reviewed'}
-                        onPress={(): void => controller.camera({ kind: 'question' })}
-                    />
-                    {state.capture === null ? null : (
-                        <Card>
-                            <Heading>Ask about this photo</Heading>
-                            <AskSheet
-                                question={state.question}
-                                questionLabel="Question about frozen photo"
-                                onQuestionChange={controller.questionChanged}
-                                parts={choices.map((choice) => ({ id: choice.partId, label: choice.label }))}
-                                selectedPartId={target?.kind === 'part' ? target.partId : null}
-                                onSelectPart={(partId): void => controller.targetChanged({ kind: 'part', partId })}
-                                targetSummary={targetSummary}
-                                hasTarget={target !== null}
-                                editable={editable}
-                                busy={state.pending !== null && state.pending.startsWith('Asking')}
-                                onSubmit={(): void => {
-                                    void controller.ask()
-                                }}
-                            />
-                        </Card>
-                    )}
-                    <AppButton
-                        label="Mark step complete myself"
-                        disabled={busy}
-                        onPress={(): void => {
-                            void controller.completeStep()
-                        }}
-                    />
-                    <View style={styles.actionRow}>
-                        <AppButton
-                            label="Previous step"
-                            variant="quiet"
-                            disabled={busy || entry.stepIndex === 0}
-                            onPress={(): void => {
-                                void controller.step(entry.stepIndex - 1)
-                            }}
-                        />
-                        <AppButton
-                            label="Next step"
-                            variant="quiet"
-                            disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
-                            onPress={(): void => {
-                                void controller.step(entry.stepIndex + 1)
-                            }}
-                        />
-                    </View>
-                </ScrollView>
-            </View>
-            <BottomSheet
-                visible={instructionsOpen}
-                title={`Step ${entry.stepIndex + 1} instructions`}
-                onClose={(): void => setInstructionsOpen(false)}
-            >
-                <StepFacts session={session} index={entry.stepIndex} />
-                <SourceDiagrams refs={step?.sourceRefs ?? []} session={session} pageUris={state.pageUris} />
-                <ProgressBar
-                    label="Steps marked complete"
-                    value={entry.completedStepIds.length}
-                    total={session.reviewedSteps.length}
-                />
-                <StepList steps={stepItems} />
-            </BottomSheet>
-        </ScreenShell>
-    )
-}
-
-/** The verdict for a frozen check, exactly as the backend returned it. Refusals keep their reason and missing evidence. */
-export function CheckPanel({
-    check,
-    session,
-    pageUris,
-}: {
-    check: CheckResult
-    session: ManualSession
-    pageUris: WorkflowState['pageUris']
-}): ReactElement {
-    return (
-        <View>
-            <ResultSheet
-                verdict={check.decision}
-                reason={check.reason}
-                missing={check.missingEvidence}
-                citedPage={
-                    check.decision === 'refuse' ? undefined : (
-                        <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={pageUris} />
-                    )
-                }
-            />
-            <ModelProvenance result={check} />
-            {check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
-                <Caption>{`Second opinion: ${check.secondOpinion.model} (${check.secondOpinion.status})`}</Caption>
-            )}
-        </View>
-    )
-}
-
-/** Server provenance only. Notes remain bounded plain text and never change a verdict or answer's meaning. */
-function ModelProvenance({ result }: { result: Pick<ParsedManual, 'model' | 'modelNotes'> }): ReactElement {
-    return (
-        <>
-            {result.model === undefined ? null : <Caption>{`Model: ${result.model}`}</Caption>}
-            {result.modelNotes?.slice(0, 10).map((note, index) => (
-                <Caption key={index}>{`Model note: ${note.slice(0, 500)}`}</Caption>
-            ))}
-        </>
-    )
-}
-
-/**
- * A question answer. It is neutral: no pass, refuse or cannot-verify tag, because a question never verifies a step.
- */
-export function AnswerPanel({
-    answer,
-    session,
-    pageUris,
-}: {
-    answer: QuestionResult
-    session: ManualSession
-    pageUris: WorkflowState['pageUris']
-}): ReactElement {
-    return (
-        <Card>
-            <Heading>Answer</Heading>
-            <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
-            <Body>{answer.answer}</Body>
-            <ModelProvenance result={answer} />
-            {answer.missingEvidence.map((missing, index) => (
-                <Caption key={index}>{`Missing: ${missing}`}</Caption>
-            ))}
-            <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
-        </Card>
-    )
-}
-
-/**
- * A refusal shows the expected diagram and the frozen photo side by side, with the observed region measured on each.
- * The photo pane stays tappable, so a point can be chosen after a refusal without retaking the photo.
- */
-function RefusalComparison({
-    refusal,
-    observation,
-    entry,
-    pageUris,
-    onTapPoint,
-}: {
-    refusal: CheckResult
-    observation: { uri: string; width: number; height: number }
-    entry: LibraryEntry
-    pageUris: WorkflowState['pageUris']
-    onTapPoint: ((point: Point) => void) | undefined
-}): ReactElement {
-    const cited = refusal.sourceRefs[0]
-    const page =
-        cited === undefined ? undefined : entry.session.pages.find((candidate) => candidate.pageId === cited.pageId)
-    const diagramUri = page === undefined ? undefined : pageUris[page.pageId]
-    const diagram: ComparisonPane = {
-        caption: 'Manual diagram',
-        media:
-            diagramUri === undefined ? (
-                <Caption>Cited diagram unavailable.</Caption>
-            ) : (
-                <Image
-                    source={{ uri: diagramUri }}
-                    accessibilityLabel="Cited manual page"
-                    resizeMode="stretch"
-                    style={StyleSheet.absoluteFill}
-                />
-            ),
-        mediaSize: page === undefined ? { width: 1, height: 1 } : { width: page.width, height: page.height },
-        regions: cited?.region ? [{ id: 'cited', label: 'Cited area', box: cited.region }] : [],
-    }
-    const photo: ComparisonPane = {
-        caption: 'Your photo',
-        media: (
-            <Image
-                source={{ uri: observation.uri }}
-                accessibilityLabel="Your photo of this step"
-                resizeMode="stretch"
-                style={StyleSheet.absoluteFill}
-            />
-        ),
-        mediaSize: { width: observation.width, height: observation.height },
-        regions: refusal.observedRegion
-            ? [{ id: 'observed', label: 'Observed part', box: refusal.observedRegion }]
-            : [],
-        onTapPoint,
-    }
-    return <ComparisonFrame diagram={diagram} photo={photo} />
-}
-
-function CheckHighlight({ rect }: { rect: { x: number; y: number; width: number; height: number } }): ReactElement {
-    const { colors } = useTheme()
-    return (
-        <View
-            pointerEvents="none"
-            accessibilityElementsHidden={true}
-            importantForAccessibility="no"
-            style={[
-                styles.highlight,
-                { borderColor: colors.accent, left: rect.x, top: rect.y, width: rect.width, height: rect.height },
-            ]}
-        />
-    )
-}
-
 export function SettingsScreen({ state, onBack }: { state: WorkflowState; onBack: () => void }): ReactElement {
     const count = state.entries.length
     return (
@@ -1047,30 +542,6 @@ export function SettingsScreen({ state, onBack }: { state: WorkflowState; onBack
 }
 
 const styles = StyleSheet.create({
-    guide: { flex: 1 },
-    guideTop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.sm,
-        paddingHorizontal: space.md,
-        paddingTop: space.sm,
-    },
-    preview: { flex: 1 },
-    previewContent: { padding: space.md, gap: space.md },
-    panel: {
-        borderTopWidth: 1,
-        borderTopLeftRadius: radius.lg,
-        borderTopRightRadius: radius.lg,
-    },
-    panelContent: { padding: space.md, gap: space.md },
-    topBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.sm,
-    },
-    titleWrap: {
-        flex: 1,
-    },
     actionRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
@@ -1092,33 +563,5 @@ const styles = StyleSheet.create({
     manualPress: {
         gap: space.xs,
         minHeight: touchTarget,
-    },
-    confirmRow: {
-        minHeight: touchTarget,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.sm,
-        borderWidth: 1,
-        borderRadius: radius.md,
-        padding: space.sm,
-    },
-    confirmText: {
-        flex: 1,
-    },
-    checkBox: {
-        width: 28,
-        height: 28,
-        borderWidth: 1,
-        borderRadius: radius.sm,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    disabled: {
-        opacity: 0.5,
-    },
-    highlight: {
-        position: 'absolute',
-        borderWidth: 3,
-        borderRadius: radius.sm,
     },
 })
