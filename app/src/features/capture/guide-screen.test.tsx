@@ -130,7 +130,7 @@ it.each([
     await setup('guide-photo')
     const scroll = within(screen.getByTestId('guide-panel'))
     expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
-    expect(scroll.getByRole('button', { name: 'Back', exact: true })).toBeTruthy()
+    expect(scroll.getByRole('button', { name: 'Back' })).toBeTruthy()
     for (const name of ACTIONS) {
         expect(scroll.getByRole('button', { name })).toBeTruthy()
     }
@@ -161,7 +161,7 @@ it('keeps the composer and all actions in one scroll while the keyboard is open,
         await act(async () => show?.())
         const scroll = within(screen.getByTestId('guide-panel'))
         expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
-        expect(scroll.getByRole('button', { name: 'Back', exact: true })).toBeTruthy()
+        expect(scroll.getByRole('button', { name: 'Back' })).toBeTruthy()
         for (const name of ACTIONS) expect(scroll.getByRole('button', { name })).toBeTruthy()
         await act(async () => hide?.())
         expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()

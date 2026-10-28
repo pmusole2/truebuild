@@ -141,6 +141,7 @@ const styles = StyleSheet.create({
     base: {
         minHeight: touchTarget,
         minWidth: touchTarget,
+        maxWidth: '100%',
         paddingHorizontal: space.md,
         paddingVertical: space.xs,
         borderWidth: 1,
@@ -156,6 +157,8 @@ const styles = StyleSheet.create({
     },
     row: {
         flexDirection: 'row',
+        maxWidth: '100%',
+        flexShrink: 1,
         alignItems: 'center',
         gap: space.xs,
     },
