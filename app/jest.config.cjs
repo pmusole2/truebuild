@@ -10,6 +10,6 @@ module.exports = {
         '^\\./multipart-image$': '<rootDir>/src/api/multipart-image.ts',
     },
     transformIgnorePatterns: [
-        'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|expo-.*|@expo/.*|react-native-.*)',
+        'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|expo-.*|@expo/.*|react-native-.*|standard-navigation)',
     ],
 }
