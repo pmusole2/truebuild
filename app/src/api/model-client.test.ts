@@ -3,6 +3,7 @@ import {
     LIMITS,
     type ApiResult,
     type CaptureBinding,
+    type ManualBinding,
     type ManualSession,
     type SegmentEvent,
 } from '@truebuild/contracts'
@@ -30,6 +31,7 @@ const captureBinding: CaptureBinding = {
     stepId: 'step-1',
     captureId: 'capture-1',
 }
+const manualBinding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
 const sourcePageIds = ['demo-page-1']
 const observation: ImageBytes = { bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg', width: 4, height: 3 }
 const source: ImageBytes = {
@@ -60,6 +62,10 @@ function scripted(response: () => Response): { fetch: ModelFetch; calls: Recorde
 
 function client(fetch: ModelFetch): ModelApiClient {
     return new ModelApiClient({ baseUrl: BASE_URL, secret: SECRET, fetch })
+}
+
+function okParse(): unknown {
+    return { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value: session.rawExtraction }
 }
 
 function okCheck(overrides: Record<string, unknown> = {}): unknown {
@@ -397,7 +403,7 @@ describe('ModelApiClient multipart dispatch', () => {
         expect(call?.init.redirect).toBe('error')
     })
 
-    it('uses the 8s check deadline, not the 30s parse deadline', async () => {
+    it('uses the 8s check deadline, not the 65s parse deadline', async () => {
         vi.useFakeTimers()
         try {
             const pending = new Promise<Response>(() => undefined)
@@ -414,7 +420,47 @@ describe('ModelApiClient multipart dispatch', () => {
 
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(MODEL_PARSE_TIMEOUT_MS).toBe(65_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('accepts a parse reply delivered at 50 seconds', async () => {
+        vi.useFakeTimers()
+        let deliver: ((response: Response) => void) | undefined
+        const fetch = vi.fn(
+            (): Promise<Response> =>
+                new Promise((resolve) => {
+                    deliver = resolve
+                }),
+        )
+        try {
+            const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+            await vi.advanceTimersByTimeAsync(50_000)
+            expect(fetch).toHaveBeenCalledTimes(1)
+            deliver?.(jsonResponse(200, okParse()))
+            expect(await pending).toMatchObject({ status: 'ok', mode: 'model', requestId: REQUEST_ID })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('times out a hung parse at 65 seconds once without retry', async () => {
+        vi.useFakeTimers()
+        const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
+        try {
+            const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+            await vi.advanceTimersByTimeAsync(MODEL_PARSE_TIMEOUT_MS - 1)
+            let settled = false
+            void pending.then(() => (settled = true))
+            await Promise.resolve()
+            expect(settled).toBe(false)
+
+            await vi.advanceTimersByTimeAsync(2)
+            expect(await pending).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(fetch).toHaveBeenCalledTimes(1)
         } finally {
             vi.useRealTimers()
         }

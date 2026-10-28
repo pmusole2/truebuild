@@ -17,7 +17,7 @@ import { SharedKeyAuth } from './auth'
 import { ModelCallCounter } from './budget'
 import { DEFAULT_ORIGINS } from './cors'
 import { createApiHandlers } from './handlers'
-import { createModelHandlers, guardModelFetch } from './model-service'
+import { createModelHandlers, guardModelFetch, runModelParseRepair } from './model-service'
 
 // Compatibility metadata only: no token, session persistence, expiry timer, or authorization role.
 const PROCESS_METADATA = Object.freeze({ runId: randomUUID(), expiresAt: Number.MAX_SAFE_INTEGER })
@@ -117,7 +117,9 @@ export function createRuntimeFromEnvironment(
             checkTimeoutMs,
             secondOpinionModel: secondary,
             checkContext,
-            provider: configured ? createMetaProvider(providerOptions) : null,
+            provider: configured
+                ? createMetaProvider({ ...providerOptions, runParseRepair: runModelParseRepair })
+                : null,
             samProvider: configured ? createSamProvider(providerOptions) : null,
         }),
     }

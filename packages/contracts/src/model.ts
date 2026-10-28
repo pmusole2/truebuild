@@ -100,6 +100,48 @@ export function selectCompactStepSourcePageIds(session: ManualSession, stepId: s
     return selected.length > 0 && selected.length <= 2 ? selected : null
 }
 
+/** Factual unknowns that block a reviewed manual. Human correction review state is intentionally not a factual unknown. */
+export function unresolvedCriticalFacts(session: Pick<ManualSession, 'parts' | 'reviewedSteps'>): string[] {
+    const issues: string[] = []
+    for (const part of session.parts) {
+        if (part.name.state === 'unknown') {
+            issues.push(`Part ${part.partId} name: ${part.name.reason}`)
+        }
+    }
+    if (session.reviewedSteps.length === 0) {
+        issues.push('No assembly steps could be read.')
+    }
+    for (const step of session.reviewedSteps) {
+        const label = `Step ${step.order}`
+        if (step.sourceRefs.length === 0) {
+            issues.push(`${label}: expected diagram citation is missing.`)
+        }
+        if (step.parts.length === 0) {
+            issues.push(`${label}: required parts are missing.`)
+        }
+        for (const part of step.parts) {
+            if (part.quantity.state === 'unknown') {
+                issues.push(`${label}, quantity of ${part.partId}: ${part.quantity.reason}`)
+            }
+        }
+        if (step.orientation.state === 'unknown') {
+            issues.push(`${label} orientation: ${step.orientation.reason}`)
+        }
+        if (step.connection.state === 'unknown') {
+            issues.push(`${label} connection: ${step.connection.reason}`)
+        }
+        if (step.visibleChecks.length === 0) {
+            issues.push(`${label}: visible checks are missing.`)
+        }
+        for (const check of step.visibleChecks) {
+            if (check.description.state === 'unknown') {
+                issues.push(`${label}, visible check ${check.checkId}: ${check.description.reason}`)
+            }
+        }
+    }
+    return issues
+}
+
 function validateCheck(value: CheckContext, ctx: z.RefinementCtx): void {
     const { binding, session, sourcePageIds } = value
     const step = session.reviewedSteps.find((candidate) => candidate.stepId === binding.stepId)

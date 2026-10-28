@@ -65,6 +65,10 @@ type EffectContext = {
     fingerprint?: string
     attempts: number
     maxAttempts?: number
+    /** Present only on an admitted parse route; the one-use repair child never carries it. */
+    repair?: { used: boolean }
+    /** Status of the first upstream response; only a first 200 can authorize the repair. */
+    firstStatus?: number
 }
 const effects = new AsyncLocalStorage<EffectContext>()
 
@@ -109,6 +113,7 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
             context.attempts += 1
             const inherited = init?.signal ?? (input instanceof Request ? input.signal : undefined)
             const signal = inherited ? AbortSignal.any([inherited, context.deadline.signal]) : context.deadline.signal
+            const attempt = context.attempts
             return transport(input, { ...init, signal, redirect: 'error' }).then((response): Response => {
                 try {
                     context.check()
@@ -117,12 +122,40 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                     throw error
                 }
                 context.retry = RETRY_STATUSES.has(response.status)
+                if (attempt === 1) context.firstStatus = response.status
                 return response
             })
         } catch (error) {
             return Promise.reject(error)
         }
     }
+}
+
+/**
+ * Trusted composition only (injected by model-runtime into the meta provider). After an admitted parse received HTTP 200
+ * and the provider found unresolved critical facts, this spends the single repair: the budget is claimed before launch,
+ * and the child runs in a fresh context that allows one changed upstream request and cannot repair again.
+ */
+export async function runModelParseRepair<T>(work: () => Promise<T>): Promise<T> {
+    const parent = effects.getStore()
+    if (!parent?.repair || parent.repair.used || !parent.counter || !parent.dispatched || parent.firstStatus !== 200) {
+        throw new AdmissionError('unauthorized', 401)
+    }
+    parent.check()
+    parent.repair.used = true
+    parent.counter.claim()
+    return effects.run(
+        {
+            check: parent.check,
+            deadline: parent.deadline,
+            counter: parent.counter,
+            dispatched: false,
+            retry: false,
+            attempts: 0,
+            maxAttempts: 1,
+        },
+        work,
+    )
 }
 
 function fail(code: FailureCode, identity?: Identity): ApiResult<never> {
@@ -324,6 +357,7 @@ export function createModelHandlers(options: {
         validate: (value: T, metadata: M) => boolean,
         scopeHeaders?: (metadata: M) => Record<string, string>,
         publish?: (value: T, input: I) => { value: T; rollback?: () => void },
+        policy: { maxAttempts?: number; repairable?: boolean } = {},
     ): Handler {
         return async (request): Promise<Response> => {
             let execution: Execution | undefined
@@ -331,6 +365,8 @@ export function createModelHandlers(options: {
             let rollback: (() => void) | undefined
             try {
                 execution = admit(request, auth, duration, allowedOrigins)
+                if (policy.maxAttempts !== undefined) execution.context.maxAttempts = policy.maxAttempts
+                if (policy.repairable) execution.context.repair = { used: false }
                 if (!dispatch) {
                     throw new AdmissionError('unconfigured', 503)
                 }
@@ -388,7 +424,7 @@ export function createModelHandlers(options: {
     const parse = jsonHandler(
         modelParseMetadataSchema,
         parsedManualSchema,
-        30_000,
+        60_000,
         parseFiles,
         provider
             ? (input, signal): ReturnType<MetaProvider['parseManual']> => provider.parseManual(input, signal)
@@ -405,6 +441,9 @@ export function createModelHandlers(options: {
                 reviewedSteps: [],
                 reviewStatus: 'unreviewed',
             }).success,
+        undefined,
+        undefined,
+        { maxAttempts: 1, repairable: true },
     )
     const scopeHeaders = (metadata: ModelCheckMetadata): Record<string, string> => {
         const mode = options.checkContext ?? 'full'

@@ -30,6 +30,7 @@ import { askModelQuestion, loadCitedSources, observationImage } from '../assembl
 import type { Observation } from '../assembly/observation'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
 
+const QUESTION_CAPTURE_TIMEOUT_MS = 30_000
 const LOCAL_LIBRARY_READ_FAILURE =
     'Local library images could not be read. Original data is retained. Retry reading the local library before making changes.'
 const LOCAL_LIBRARY_SAVE_FAILURE =
@@ -90,46 +91,7 @@ export function reviewedSession(session: ManualSession): ManualSession | null {
     return valid.success ? valid.data : null
 }
 
-export function unresolvedCriticalFacts(session: ManualSession): string[] {
-    const issues: string[] = []
-    for (const part of session.parts) {
-        if (part.name.state === 'unknown') {
-            issues.push(`Part ${part.partId} name: ${part.name.reason}`)
-        }
-    }
-    if (session.reviewedSteps.length === 0) {
-        issues.push('No assembly steps could be read.')
-    }
-    for (const step of session.reviewedSteps) {
-        const label = `Step ${step.order}`
-        if (step.sourceRefs.length === 0) {
-            issues.push(`${label}: expected diagram citation is missing.`)
-        }
-        if (step.parts.length === 0) {
-            issues.push(`${label}: required parts are missing.`)
-        }
-        for (const part of step.parts) {
-            if (part.quantity.state === 'unknown') {
-                issues.push(`${label}, quantity of ${part.partId}: ${part.quantity.reason}`)
-            }
-        }
-        if (step.orientation.state === 'unknown') {
-            issues.push(`${label} orientation: ${step.orientation.reason}`)
-        }
-        if (step.connection.state === 'unknown') {
-            issues.push(`${label} connection: ${step.connection.reason}`)
-        }
-        if (step.visibleChecks.length === 0) {
-            issues.push(`${label}: visible checks are missing.`)
-        }
-        for (const check of step.visibleChecks) {
-            if (check.description.state === 'unknown') {
-                issues.push(`${label}, visible check ${check.checkId}: ${check.description.reason}`)
-            }
-        }
-    }
-    return issues
-}
+export { unresolvedCriticalFacts } from '@truebuild/contracts/model'
 
 /** One application owner. Epoch + abort + binding checks fence every asynchronous handoff; persisted state never includes
  * verdicts/answers or pending work. Restored captures are view-only until a fresh photo is taken.
@@ -786,7 +748,7 @@ export class CaptureController {
         this.operation = operation
         this.operationKind = 'capture'
         const guard = createCallGuard(
-            intent.kind === 'check' ? MODEL_CHECK_TIMEOUT_MS : MODEL_PARSE_TIMEOUT_MS,
+            intent.kind === 'check' ? MODEL_CHECK_TIMEOUT_MS : QUESTION_CAPTURE_TIMEOUT_MS,
             operation.signal,
         )
         const capturedAt = this.now()

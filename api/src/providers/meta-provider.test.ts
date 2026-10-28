@@ -387,7 +387,12 @@ describe('inactive direct Meta transport', (): void => {
         const input = await validInput()
         // This response is a transport fixture; only the outgoing request instructions are under test.
         await localServer(
-            jsonResponder(responseBody({ parts: [], steps: [], unknowns: ['Synthetic fixture, not a manual read.'] })),
+            jsonResponder(
+                responseBody({
+                    ...structuredClone(input.session.rawExtraction!),
+                    unknowns: ['Synthetic fixture, not a manual read.'],
+                }),
+            ),
             async (transport): Promise<void> => {
                 await transport.provider.parseManual(
                     {
@@ -420,6 +425,7 @@ describe('inactive direct Meta transport', (): void => {
                     'Do not double-count repeated views or infer hidden counts.',
                     'Use placement words such as flat, vertical, upright, facing, top or bottom, or the drawing;',
                     'an explicit orientation label is not required.',
+                    'A step that only places one part has a connection: describe how it rests or attaches, e.g. placed on the ground.',
                     'Describe the expected completed step using supported visible conditions:',
                     'part present, attached at the stated place, visible knob/screw count, or upright/flat placement.',
                     'Never invent torque, hidden fasteners or nonvisible checks.',
@@ -879,7 +885,7 @@ describe('server-only task routing and provenance', () => {
             return Response.json(
                 responseBody(
                     format === 'truebuild_parse'
-                        ? { parts: [], steps: [], unknowns: [] }
+                        ? structuredClone(input.session.rawExtraction!)
                         : format === 'truebuild_question'
                           ? { answer: 'Uncertain', sourceRefs: [], missingEvidence: ['Need view'] }
                           : result,

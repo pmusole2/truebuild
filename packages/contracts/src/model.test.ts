@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createDemoManual } from './index'
+import { createDemoManual, type ManualSession, type ManualStep } from './index'
 import {
     modelCheckMetadataSchema,
     modelSecondOpinionMetadataSchema,
@@ -9,6 +9,7 @@ import {
     modelParseMetadataSchema,
     modelQuestionMetadataSchema,
     modelSegmentMetadataSchema,
+    unresolvedCriticalFacts,
 } from './model'
 
 function metadata(): unknown {
@@ -167,4 +168,90 @@ it('keeps server model provenance Standard-only and second-opinion states cohere
             checkResultSchema.safeParse({ ...base, model, secondOpinion: { model, status, token: 'ticket' } }).success,
         ).toBe(false)
     }
+})
+
+describe('unresolvedCriticalFacts', () => {
+    function withFirstStep(session: ManualSession, change: Partial<ManualStep>): ManualSession {
+        const [first, ...rest] = session.reviewedSteps
+        return { ...session, reviewedSteps: [{ ...first!, ...change }, ...rest] }
+    }
+
+    it('reports nothing for a complete manual and ignores human correction review state', () => {
+        const session = createDemoManual()
+        expect(unresolvedCriticalFacts(session)).toEqual([])
+        const uncorrected = {
+            ...session,
+            reviewedSteps: session.reviewedSteps.map((step) => ({
+                ...step,
+                correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+            })),
+        }
+        expect(unresolvedCriticalFacts(uncorrected)).toEqual([])
+    })
+
+    it.each([
+        {
+            field: 'part name',
+            change: (session: ManualSession): ManualSession => ({
+                ...session,
+                parts: [
+                    { ...session.parts[0]!, name: { state: 'unknown', reason: 'Name unreadable.' } },
+                    session.parts[1]!,
+                ],
+            }),
+            message: 'Part side-panel name: Name unreadable.',
+        },
+        {
+            field: 'missing steps',
+            change: (session: ManualSession): ManualSession => ({ ...session, reviewedSteps: [] }),
+            message: 'No assembly steps could be read.',
+        },
+        {
+            field: 'diagram citation',
+            change: (session: ManualSession): ManualSession => withFirstStep(session, { sourceRefs: [] }),
+            message: 'Step 1: expected diagram citation is missing.',
+        },
+        {
+            field: 'missing parts',
+            change: (session: ManualSession): ManualSession => withFirstStep(session, { parts: [] }),
+            message: 'Step 1: required parts are missing.',
+        },
+        {
+            field: 'quantity',
+            change: (session: ManualSession): ManualSession =>
+                withFirstStep(session, {
+                    parts: [{ partId: 'side-panel', quantity: { state: 'unknown', reason: 'Count hidden.' } }],
+                }),
+            message: 'Step 1, quantity of side-panel: Count hidden.',
+        },
+        {
+            field: 'orientation',
+            change: (session: ManualSession): ManualSession =>
+                withFirstStep(session, { orientation: { state: 'unknown', reason: 'Arrow hidden.' } }),
+            message: 'Step 1 orientation: Arrow hidden.',
+        },
+        {
+            field: 'connection',
+            change: (session: ManualSession): ManualSession =>
+                withFirstStep(session, { connection: { state: 'unknown', reason: 'Joint hidden.' } }),
+            message: 'Step 1 connection: Joint hidden.',
+        },
+        {
+            field: 'missing visible checks',
+            change: (session: ManualSession): ManualSession => withFirstStep(session, { visibleChecks: [] }),
+            message: 'Step 1: visible checks are missing.',
+        },
+        {
+            field: 'visible check',
+            change: (session: ManualSession): ManualSession =>
+                withFirstStep(session, {
+                    visibleChecks: [
+                        { checkId: 'groove-inward', description: { state: 'unknown', reason: 'Groove unclear.' } },
+                    ],
+                }),
+            message: 'Step 1, visible check groove-inward: Groove unclear.',
+        },
+    ])('reports the $field critical fact exactly once', ({ change, message }): void => {
+        expect(unresolvedCriticalFacts(change(createDemoManual()))).toEqual([message])
+    })
 })

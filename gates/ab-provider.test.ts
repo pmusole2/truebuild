@@ -177,7 +177,7 @@ describe('default production factory with the real provider and the documented l
         expect(mock.wireRequests.map((request) => request.model)).toEqual([SPARK])
     }, 30_000)
 
-    it('lets the provider retry a transient Wonder 503 up to three attempts, then reports the arm failed without another gate retry', async () => {
+    it('reports a Wonder parse HTTP 503 after one HTTP attempt without a repair or gate retry', async () => {
         const cwd = await setup()
         const mock = await startMock()
         let wonderCalls = 0
@@ -190,11 +190,11 @@ describe('default production factory with the real provider and the documented l
         })
         await abMain(ARGV, cwd)
         const report = await lastReport(cwd)
-        expect(wonderCalls).toBe(3)
+        expect(wonderCalls).toBe(1)
         expect(report.models.wonder).toMatchObject({
             status: 'failed',
             reason: 'provider_error',
-            attempts: 3,
+            attempts: 1,
             attemptsStatus: 'lower_bound',
         })
         expect(report.models.spark?.status).toBe('completed')
