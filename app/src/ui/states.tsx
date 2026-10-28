@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { useTheme } from '../theme/theme'
-import { space } from '../theme/tokens'
+import { radius, space } from '../theme/tokens'
 import { AppButton } from './button'
 import { Body, Heading } from './text'
 import { Icon } from './icons'
@@ -38,6 +38,7 @@ export function EmptyState({
 }): ReactElement {
     return (
         <Stack gap="sm">
+            <StateIcon />
             <Heading>{title}</Heading>
             <Body tone="muted">{body}</Body>
             {action === undefined ? null : (
@@ -63,11 +64,15 @@ export function ErrorState({
             <View accessible={true} accessibilityRole="alert" style={styles.alert}>
                 <View style={styles.titleRow}>
                     <Icon name="alert" color={colors.refuse} />
-                    <Heading tone="refuse">{title}</Heading>
+                    <View style={styles.stateTitle}>
+                        <Heading>{title}</Heading>
+                    </View>
                 </View>
                 <Body>{body}</Body>
             </View>
-            {retry === undefined ? null : <AppButton label={retry.label} variant="danger" onPress={retry.onPress} />}
+            {retry === undefined ? null : (
+                <AppButton label={retry.label} icon="refresh" variant="secondary" onPress={retry.onPress} />
+            )}
         </Stack>
     )
 }
@@ -85,7 +90,7 @@ export function PermissionState({
 }): ReactElement {
     return (
         <Stack gap="sm">
-            <Icon name="camera" />
+            <StateIcon camera />
             <Heading>{title}</Heading>
             <Body tone="muted">{body}</Body>
             <AppButton label={primary.label} variant="accent" onPress={primary.onPress} />
@@ -96,10 +101,21 @@ export function PermissionState({
     )
 }
 
+function StateIcon({ camera = false }: { readonly camera?: boolean }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View style={[styles.stateIcon, { backgroundColor: colors.surfaceSunken }]}>
+            <Icon name={camera ? 'camera' : 'image'} color={colors.inkMuted} />
+        </View>
+    )
+}
+
 const styles = StyleSheet.create({
     alert: {
         gap: space.sm,
     },
+    stateTitle: { flex: 1, minWidth: 0 },
+    stateIcon: { alignSelf: 'flex-start', padding: space.sm, borderRadius: radius.lg },
     titleRow: {
         flexDirection: 'row',
         alignItems: 'center',

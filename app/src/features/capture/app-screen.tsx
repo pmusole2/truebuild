@@ -15,13 +15,13 @@ import {
     LibraryScreen,
     OverviewScreen,
     PagesScreen,
-    Screen,
     SettingsScreen,
     SourceDiagrams,
     StepFacts,
 } from './screens'
 import { testRestoreDelayMs } from './test-controls'
 import type { AssemblyGuide } from './camera-screen'
+import { AppUnavailableScreen } from './app-unavailable'
 
 export const imageDigest: Digest = async (bytes): Promise<string> => {
     const result = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, Uint8Array.from(bytes))
@@ -45,13 +45,7 @@ export function CaptureApp(): ReactElement {
             return { controller: null }
         }
     })
-    return runtime.controller === null ? (
-        <Screen title="TrueBuild">
-            <Text>API configuration is unavailable. Configure a valid TrueBuild API origin for this build.</Text>
-        </Screen>
-    ) : (
-        <CaptureWorkflow controller={runtime.controller} />
-    )
+    return runtime.controller === null ? <AppUnavailableScreen /> : <CaptureWorkflow controller={runtime.controller} />
 }
 /** The step guide shown over the assembly camera. Manual scanning has no step guide. */
 function assemblyGuide(entry: LibraryEntry | undefined, state: WorkflowState): AssemblyGuide | undefined {

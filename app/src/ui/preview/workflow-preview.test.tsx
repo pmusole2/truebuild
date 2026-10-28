@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import { INERT_WORKFLOW_CONTROLLER, WorkflowPreview } from './workflow-preview'
 import { WORKFLOW_PREVIEW_BANNER } from './workflow-fixtures'
+import { Linking } from 'react-native'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../test-support/reanimated-mock'))
 jest.mock(
@@ -50,5 +51,17 @@ it('renders camera recovery through the pure stage without opening hardware or s
         expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
         fetchSpy.mockRestore()
+    }
+})
+
+it('keeps settings inspection inert, including the device settings action', async () => {
+    const settings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined)
+    try {
+        await render(<WorkflowPreview initialCase="settings" />)
+        expect(screen.getByText('What leaves this phone')).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'Open device settings' }))
+        expect(settings).not.toHaveBeenCalled()
+    } finally {
+        settings.mockRestore()
     }
 })

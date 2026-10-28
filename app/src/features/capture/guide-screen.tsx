@@ -78,6 +78,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
         state: completed.has(item.stepId) ? 'done' : index === entry.stepIndex ? 'current' : 'upcoming',
     }))
     const check = state.check
+    const hasResult = check !== null || state.answer !== null
     const refusal = check !== null && check.decision === 'refuse' ? check : null
     const target = state.target
     const targetSummary =
@@ -152,32 +153,27 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
             )}
         </ActionDock>
     )
+    const header = (
+        <View style={[styles.header, compact && styles.compactHeader]}>
+            <View style={styles.guideTop}>
+                <IconButton label="Back" icon="chevronLeft" onPress={(): void => controller.navigate('overview')} />
+                <View style={styles.titleWrap}>
+                    <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
+                    <Heading>{stepTitle}</Heading>
+                </View>
+                <IconButton label="Step instructions" icon="info" onPress={(): void => setInstructionsOpen(true)} />
+            </View>
+            <ProgressBar
+                label="Guide progress"
+                value={entry.completedStepIds.length}
+                total={session.reviewedSteps.length}
+            />
+        </View>
+    )
     return (
         <ScreenShell header="hidden" scroll={false} padded={false} testID="guide-screen">
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.guide}>
-                <View style={styles.header}>
-                    <View style={styles.guideTop}>
-                        <IconButton
-                            label="Back"
-                            icon="chevronLeft"
-                            onPress={(): void => controller.navigate('overview')}
-                        />
-                        <View style={styles.titleWrap}>
-                            <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
-                            <Heading>{stepTitle}</Heading>
-                        </View>
-                        <IconButton
-                            label="Step instructions"
-                            icon="info"
-                            onPress={(): void => setInstructionsOpen(true)}
-                        />
-                    </View>
-                    <ProgressBar
-                        label="Guide progress"
-                        value={entry.completedStepIds.length}
-                        total={session.reviewedSteps.length}
-                    />
-                </View>
+                {compact ? null : header}
                 <ScrollView
                     ref={guideScroll}
                     testID="guide-panel"
@@ -186,13 +182,14 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                     contentContainerStyle={styles.mainContent}
                     keyboardShouldPersistTaps="handled"
                 >
+                    {compact ? header : null}
                     <WorkflowNotice state={state} controller={controller} />
                     {blocked === null ? null : <Notice tone="caution" text={blocked} />}
                     {state.answer === null ? null : (
                         <AnswerPanel answer={state.answer} session={session} pageUris={state.pageUris} />
                     )}
                     {check === null ? null : <CheckPanel check={check} session={session} pageUris={state.pageUris} />}
-                    <StepSummary session={session} index={entry.stepIndex} />
+                    {hasResult ? null : <StepSummary session={session} index={entry.stepIndex} />}
                     {state.capture === null ? (
                         <EmptyState
                             title="No photo for this step yet."
@@ -220,6 +217,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                             }
                         />
                     )}
+                    {hasResult ? <StepSummary session={session} index={entry.stepIndex} /> : null}
                     {state.capture === null ? null : (
                         <Card>
                             <Heading>Ask about this photo</Heading>
@@ -265,6 +263,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
 const styles = StyleSheet.create({
     guide: { flex: 1 },
     header: { gap: space.sm, paddingHorizontal: space.md, paddingTop: space.sm },
+    compactHeader: { paddingHorizontal: 0, paddingTop: 0 },
     guideTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     titleWrap: { flex: 1 },
     main: { flex: 1 },

@@ -7,6 +7,7 @@ import { Card } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
 import { ComparisonFrame, type ComparisonPane } from '../../ui/comparison'
 import { ResultSheet } from '../../ui/result-sheet'
+import { ResultReveal } from '../../ui/result-reveal'
 import { useTheme } from '../../theme/theme'
 import { radius } from '../../theme/tokens'
 import type { WorkflowState } from './controller'
@@ -24,7 +25,10 @@ export function CheckPanel({
     pageUris: WorkflowState['pageUris']
 }): ReactElement {
     return (
-        <View>
+        <ResultReveal
+            identity={`check:${check.decision}:${check.reason}`}
+            feedback={check.decision === 'pass' ? 'success' : 'warning'}
+        >
             <ResultSheet
                 verdict={check.decision}
                 reason={check.reason}
@@ -39,7 +43,7 @@ export function CheckPanel({
             {check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
                 <Caption>{`Second opinion: ${check.secondOpinion.model} (${check.secondOpinion.status})`}</Caption>
             )}
-        </View>
+        </ResultReveal>
     )
 }
 
@@ -57,18 +61,20 @@ export function AnswerPanel({
     pageUris: WorkflowState['pageUris']
 }): ReactElement {
     return (
-        <View accessibilityLiveRegion="polite">
-            <Card>
-                <Heading>Answer</Heading>
-                <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
-                <Body>{answer.answer}</Body>
-                <ModelProvenance result={answer} />
-                {answer.missingEvidence.map((missing, index) => (
-                    <Caption key={index}>{`Missing: ${missing}`}</Caption>
-                ))}
-                <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
-            </Card>
-        </View>
+        <ResultReveal identity={`answer:${answer.answer}`} feedback="selection">
+            <View accessibilityLiveRegion="polite">
+                <Card>
+                    <Heading>Answer</Heading>
+                    <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
+                    <Body>{answer.answer}</Body>
+                    <ModelProvenance result={answer} />
+                    {answer.missingEvidence.map((missing, index) => (
+                        <Caption key={index}>{`Missing: ${missing}`}</Caption>
+                    ))}
+                    <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
+                </Card>
+            </View>
+        </ResultReveal>
     )
 }
 

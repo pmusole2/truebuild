@@ -130,6 +130,7 @@ it.each([
     await setup('guide-photo')
     const scroll = within(screen.getByTestId('guide-panel'))
     expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
+    expect(scroll.getByRole('button', { name: 'Back', exact: true })).toBeTruthy()
     for (const name of ACTIONS) {
         expect(scroll.getByRole('button', { name })).toBeTruthy()
     }
@@ -160,6 +161,7 @@ it('keeps the composer and all actions in one scroll while the keyboard is open,
         await act(async () => show?.())
         const scroll = within(screen.getByTestId('guide-panel'))
         expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
+        expect(scroll.getByRole('button', { name: 'Back', exact: true })).toBeTruthy()
         for (const name of ACTIONS) expect(scroll.getByRole('button', { name })).toBeTruthy()
         await act(async () => hide?.())
         expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()
@@ -206,6 +208,19 @@ it('opens and closes the instructions sheet with the full facts and step list', 
 })
 
 describe('results', () => {
+    it('places refusal evidence before the parts summary so the comparison can fit beside the action dock', async () => {
+        const fixture = workflowPreviewFixture('guide-refuse')
+        const { toJSON } = await render(
+            <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />,
+        )
+        const tree = JSON.stringify(toJSON())
+        const comparison = tree.indexOf('Manual diagram')
+        const summary = tree.indexOf('"Parts"')
+        expect(comparison).toBeGreaterThanOrEqual(0)
+        expect(summary).toBeGreaterThanOrEqual(0)
+        expect(comparison).toBeLessThan(summary)
+    })
+
     it('places a new answer before a retained check so returning to the top reveals the answer', async () => {
         const fixture = workflowPreviewFixture('guide-answer')
         fixture.state.check = workflowPreviewFixture('guide-cannot-verify').state.check

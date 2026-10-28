@@ -1,6 +1,8 @@
 import { useState, type ReactElement } from 'react'
 import { Image, ScrollView, StyleSheet, View } from 'react-native'
 import { CameraStage } from '../../features/capture/camera-stage'
+import { SettingsScreen } from '../../features/capture/settings-screen'
+import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
 import { SourceDiagrams, StepFacts } from '../../features/capture/step-facts'
 import { ShutterButton } from '../camera-chrome'
 import {
@@ -14,6 +16,7 @@ import { ThemeProvider, useTheme } from '../../theme/theme'
 import type { ColorScheme } from '../../theme/tokens'
 import { SegmentedControl } from '../fields'
 import { Caption } from '../text'
+import { FeedbackProvider } from '../feedback'
 import {
     WORKFLOW_PREVIEW_BANNER,
     WORKFLOW_PREVIEW_CASES,
@@ -49,7 +52,7 @@ export const INERT_WORKFLOW_CONTROLLER = Object.freeze({
     targetChanged: doNothing,
 } satisfies WorkflowController)
 
-const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide', 'Camera']
+const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide', 'Camera', 'Settings']
 const GROUP_OPTIONS = GROUPS.map((value) => ({ value, label: value }))
 const SCHEME_OPTIONS = [
     { value: 'light', label: 'Light' },
@@ -73,15 +76,17 @@ export function WorkflowPreview({
     const [scheme, setScheme] = useState<ColorScheme>(initialScheme)
     const [selected, setSelected] = useState<WorkflowPreviewCase>(initialCase)
     return (
-        <ThemeProvider scheme={scheme}>
-            <PreviewFrame
-                scheme={scheme}
-                onScheme={setScheme}
-                selected={selected}
-                onSelect={setSelected}
-                showControls={showControls}
-            />
-        </ThemeProvider>
+        <FeedbackProvider reduceMotion={true}>
+            <ThemeProvider scheme={scheme}>
+                <PreviewFrame
+                    scheme={scheme}
+                    onScheme={setScheme}
+                    selected={selected}
+                    onSelect={setSelected}
+                    showControls={showControls}
+                />
+            </ThemeProvider>
+        </FeedbackProvider>
     )
 }
 
@@ -153,7 +158,11 @@ function PreviewFrame({
                 ) : null}
             </View>
             <View key={selected} style={[styles.device, { borderColor: colors.border }]}>
-                {state.route === 'camera' ? (
+                {selected === 'home-unavailable' ? (
+                    <AppUnavailableScreen />
+                ) : selected === 'settings' ? (
+                    <SettingsScreen state={state} onBack={doNothing} onOpenDeviceSettings={doNothing} />
+                ) : state.route === 'camera' ? (
                     <CameraStage
                         intent={{
                             kind:
@@ -207,7 +216,7 @@ function PreviewFrame({
                         onRetry={doNothing}
                     />
                 ) : state.route === 'library' ? (
-                    <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} />
+                    <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} onOpenSettings={doNothing} />
                 ) : state.route === 'pages' ? (
                     <PagesScreen
                         state={state}

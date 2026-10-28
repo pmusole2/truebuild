@@ -21,6 +21,7 @@ export { ThumbnailCard, ManualCard } from './cards'
 export { CameraChrome, ShutterButton, ViewfinderCorners } from './camera-chrome'
 export { BottomSheet, InstructionSheet } from './sheet'
 export { ResultSheet } from './result-sheet'
+export { ResultReveal } from './result-reveal'
 export { AskSheet, type AskPart } from './ask-sheet'
 export {
     ComparisonFrame,

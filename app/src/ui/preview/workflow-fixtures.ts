@@ -13,6 +13,8 @@ export const WORKFLOW_PREVIEW_CASES = [
     { id: 'home-populated', label: 'Home · saved manuals', group: 'Home' },
     { id: 'home-loading', label: 'Home · loading', group: 'Home' },
     { id: 'home-error', label: 'Home · error', group: 'Home' },
+    { id: 'home-unavailable', label: 'Home · build unavailable', group: 'Home' },
+    { id: 'settings', label: 'Settings · privacy and permissions', group: 'Settings' },
     { id: 'pages-empty', label: 'Pages · empty', group: 'Pages' },
     { id: 'pages-populated', label: 'Pages · added', group: 'Pages' },
     { id: 'pages-reading', label: 'Pages · reading', group: 'Pages' },
@@ -51,15 +53,16 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
     session.title = 'Grooved shelf · synthetic manual'
     const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
     const state: WorkflowState = {
-        route: id.startsWith('home')
-            ? 'library'
-            : id.startsWith('pages')
-              ? 'pages'
-              : id.startsWith('review')
-                ? 'overview'
-                : id.startsWith('camera')
-                  ? 'camera'
-                  : 'guide',
+        route:
+            id.startsWith('home') || id === 'settings'
+                ? 'library'
+                : id.startsWith('pages')
+                  ? 'pages'
+                  : id.startsWith('review')
+                    ? 'overview'
+                    : id.startsWith('camera')
+                      ? 'camera'
+                      : 'guide',
         entries: [entry],
         selectedId: session.manualId,
         pending: null,

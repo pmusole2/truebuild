@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type ReactElement } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { Linking } from 'react-native'
 import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
@@ -214,6 +215,13 @@ it('settings explain storage, what leaves the phone and camera access, with coun
     expect(screen.getByText(PRIVACY_COPY.check)).toBeTruthy()
     expect(screen.getByText(PRIVACY_COPY.read)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Open device settings' })).toBeTruthy()
+    const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined)
+    try {
+        await fireEvent.press(screen.getByRole('button', { name: 'Open device settings' }))
+        expect(openSettings).toHaveBeenCalledTimes(1)
+    } finally {
+        openSettings.mockRestore()
+    }
 })
 
 it('a successful answer after a refused check never shows a Pass verdict, and the check verdict stays refused', async () => {

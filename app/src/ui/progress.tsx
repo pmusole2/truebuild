@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, touchTarget } from '../theme/tokens'
@@ -50,6 +50,8 @@ export type StepListItem = {
 export function StepList({ steps }: { readonly steps: readonly StepListItem[] }): ReactElement {
     const { colors } = useTheme()
     const type = typeProps('body')
+    const { fontScale } = useWindowDimensions()
+    const markerSize = 28 * Math.min(Math.max(fontScale, 1), type.maxFontSizeMultiplier)
     return (
         <View style={styles.list}>
             {steps.map((step, index) => {
@@ -63,9 +65,19 @@ export function StepList({ steps }: { readonly steps: readonly StepListItem[] })
                         accessibilityState={{ selected: current }}
                         style={[styles.row, current && { backgroundColor: colors.surfaceRaised }]}
                     >
-                        <View style={[styles.marker, { borderColor: colors.borderStrong }]}>
+                        <View
+                            style={[
+                                styles.marker,
+                                { borderColor: colors.borderStrong, width: markerSize, height: markerSize },
+                            ]}
+                        >
                             {presentation.icon === null ? (
-                                <Text style={[type.style, { color: colors.ink }]}>{index + 1}</Text>
+                                <Text
+                                    maxFontSizeMultiplier={type.maxFontSizeMultiplier}
+                                    style={[type.style, { color: colors.ink }]}
+                                >
+                                    {index + 1}
+                                </Text>
                             ) : (
                                 <Icon name={presentation.icon} size="sm" color={colors.ink} />
                             )}

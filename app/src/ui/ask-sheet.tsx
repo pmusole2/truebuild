@@ -142,6 +142,7 @@ const styles = StyleSheet.create({
     },
     chip: {
         minHeight: touchTarget,
+        maxWidth: '100%',
         paddingHorizontal: space.sm,
         justifyContent: 'center',
         borderWidth: 1,
