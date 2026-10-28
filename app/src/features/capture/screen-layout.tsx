@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
-import { Keyboard, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { Dimensions, Keyboard, Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { AppButton } from '../../ui/button'
 import { Notice } from '../../ui/status'
 import { useTheme } from '../../theme/theme'
@@ -36,7 +36,10 @@ export function heroHeightFor(windowHeight: number, _fontScale: number, keyboard
 
 export function useHeroHeight(keyboard = false): number {
     const { height, fontScale } = useWindowDimensions()
-    return heroHeightFor(height, fontScale, keyboard)
+    // Android's app window excludes system bars; native screenshots measure the full screen. Keep the same 55% share
+    // on both platforms. The window subscription above still refreshes this measurement after a rotation/resize.
+    const viewport = Platform.OS === 'android' ? Dimensions.get('screen').height : height
+    return heroHeightFor(viewport, fontScale, keyboard)
 }
 
 /** Canvas fill for a screen body; the native header above and the fixed bar below belong to the screen, not to this. */

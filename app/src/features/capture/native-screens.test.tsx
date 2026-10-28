@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
-import { StyleSheet } from 'react-native'
+import { Dimensions, Platform, StyleSheet } from 'react-native'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
 import { cropFor, placeCrop } from './step-picture'
@@ -229,4 +229,33 @@ describe('step picture and hero', () => {
             height: Math.round(844 * 0.55),
         })
     })
+
+    it.each([1, 3.4])(
+        'uses the full Android viewport rather than a window reduced by system bars at scale %s',
+        async (fontScale) => {
+            mockWindow.height = 800
+            mockWindow.fontScale = fontScale
+            const platform = jest.replaceProperty(Platform, 'OS', 'android')
+            const get = Dimensions.get.bind(Dimensions)
+            const dimensions = jest.spyOn(Dimensions, 'get').mockImplementation((name) => ({
+                ...get(name),
+                ...(name === 'screen' ? { height: 900 } : {}),
+            }))
+            try {
+                const fixture = workflowPreviewFixture('done-finished')
+                await render(
+                    <DoneScreen
+                        state={fixture.state}
+                        entry={fixture.entry}
+                        controller={INERT_WORKFLOW_CONTROLLER}
+                        nav={nav()}
+                    />,
+                )
+                expect(StyleSheet.flatten(screen.getByTestId('done-hero').props.style).height).toBe(495)
+            } finally {
+                dimensions.mockRestore()
+                platform.restore()
+            }
+        },
+    )
 })

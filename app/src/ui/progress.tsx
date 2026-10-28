@@ -74,14 +74,6 @@ export function StepList({ steps }: { readonly steps: readonly StepListItem[] })
                         accessibilityState={{ selected: current }}
                         style={[styles.row, current && { backgroundColor: colors.surfaceRaised }]}
                     >
-                        {current ? (
-                            <View
-                                testID="step-current-bar"
-                                accessibilityElementsHidden={true}
-                                importantForAccessibility="no"
-                                style={[styles.currentBar, { backgroundColor: colors.accent }]}
-                            />
-                        ) : null}
                         <View
                             testID={`step-marker-${step.id}`}
                             style={[
@@ -136,7 +128,6 @@ const styles = StyleSheet.create({
         borderRadius: radius.sm,
         overflow: 'hidden',
     },
-    currentBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
     marker: {
         width: 28,
         height: 28,

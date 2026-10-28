@@ -449,7 +449,7 @@ it.each([
 
 it('maps controller notices to plain words and never repeats a recovery that does not exist', () => {
     expect(plainNotice('Cancelled. No late reply will be shown. Retry is a new request.')).toBe(
-        'Stopped. Nothing more will be shown for that request. You can start again.',
+        'Stopped, so nothing more will be shown.',
     )
     expect(plainNotice('Review and confirm the extracted facts first.')).toBe(
         'Answer the quick questions first, then you can check your work.',

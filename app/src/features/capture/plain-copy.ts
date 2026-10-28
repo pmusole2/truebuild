@@ -72,7 +72,7 @@ export function plainPending(pending: string | null): string | null {
 }
 
 const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
-    [/^Cancelled\./u, 'Stopped. Nothing more will be shown for that request. You can start again.'],
+    [/^Cancelled\./u, 'Stopped, so nothing more will be shown.'],
     [/^Finishing the local save/u, 'Still saving. Please wait a moment.'],
     [
         /^Local library images could not be read|^Local images could not be read/u,

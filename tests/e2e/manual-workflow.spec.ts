@@ -205,11 +205,7 @@ test('a cancelled reading says that nothing more is shown, and the reading is no
     await expect(page.getByText('Stop reading? You can start again.', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Stop reading', exact: true }).click()
     // Home stays mounted under Add and reads the same notice, so the screen on top is the last match.
-    await expect(
-        page
-            .getByText('Stopped. Nothing more will be shown for that request. You can start again.', { exact: true })
-            .last(),
-    ).toBeVisible()
+    await expect(page.getByText('Stopped, so nothing more will be shown.', { exact: true }).last()).toBeVisible()
     await expect(page.getByRole('button', { name: 'Read my manual', exact: true })).toBeVisible()
     await cdp.send('Network.emulateNetworkConditions', {
         offline: false,
