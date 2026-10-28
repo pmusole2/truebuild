@@ -383,6 +383,7 @@ function QuickCheckMore({
                       ? 'What we read'
                       : `Page ${(openPage ?? 0) + 1}`
             }
+            compactTitle={editing !== undefined ? 'Fix' : enlarged === undefined ? 'More' : undefined}
             onClose={close}
             detents={['tall', 'full']}
         >

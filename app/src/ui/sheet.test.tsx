@@ -1,7 +1,17 @@
 import { describe, expect, it, jest } from '@jest/globals'
 import { act, fireEvent, render, screen } from '@testing-library/react-native'
-import { AccessibilityInfo, Dimensions, StyleSheet, Text } from 'react-native'
-import { BottomSheet, DETENT_RATIO, InstructionSheet, MoreSheet, SHEET_MAX_HEIGHT_RATIO, snapHeight } from './sheet'
+import { AccessibilityInfo, Dimensions, Keyboard, StyleSheet, Text } from 'react-native'
+import {
+    BottomSheet,
+    DETENT_RATIO,
+    fitDetents,
+    InstructionSheet,
+    keyboardOverlap,
+    MoreSheet,
+    SHEET_MAX_HEIGHT_RATIO,
+    snapHeight,
+} from './sheet'
+import { FeedbackProvider } from './feedback'
 import { spies } from './test-support/reanimated-mock'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
@@ -181,5 +191,134 @@ describe('snapHeight', () => {
     it('closes when thrown below the close line', () => {
         expect(snapHeight(120, heights, 180)).toBe(0)
         expect(snapHeight(-50, heights, 180)).toBe(0)
+    })
+})
+
+describe('keyboard-fitted sheet', () => {
+    type Handler = (event: { endCoordinates?: { height: number } }) => void
+    let handlers: Record<string, Handler[]>
+    beforeEach(() => {
+        handlers = {}
+        jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, handler: Handler) => {
+            ;(handlers[name] ??= []).push(handler)
+            return { remove: (): void => undefined }
+        }) as unknown as typeof Keyboard.addListener)
+    })
+    afterEach(() => jest.restoreAllMocks())
+
+    const window = (): number => Dimensions.get('window').height
+    const heightOf = (): number => StyleSheet.flatten(screen.getByTestId('more-sheet').props.style).height as number
+    const keyboard = async (height: number): Promise<void> => {
+        await act(async () => handlers.keyboardDidShow?.forEach((handler) => handler({ endCoordinates: { height } })))
+    }
+    const hideKeyboard = async (): Promise<void> => {
+        await act(async () => handlers.keyboardDidHide?.forEach((handler) => handler({})))
+    }
+    const sheet = (): React.ReactElement => (
+        <FeedbackProvider reduceMotion={true}>
+            <MoreSheet
+                visible={true}
+                title="Ask about this step"
+                onClose={(): void => undefined}
+                detents={['tall', 'full']}
+            >
+                <Text>Composer</Text>
+            </MoreSheet>
+        </FeedbackProvider>
+    )
+
+    it('fits its detents to the space above the keyboard and keeps the handle, title and Close on screen', async () => {
+        const view = await render(sheet())
+        const open = heightOf()
+        expect(open).toBeCloseTo(window() * DETENT_RATIO.full, 0)
+        await keyboard(window() * 0.5)
+        await view.rerender(sheet())
+        // Never taller than what is left above the keyboard, so nothing is pushed off the top.
+        expect(heightOf()).toBeLessThanOrEqual(window() - window() * 0.5)
+        expect(heightOf()).toBeLessThan(open)
+        expect(StyleSheet.flatten(screen.getByTestId('sheet-scrim').props.style).paddingBottom).toBe(window() * 0.5)
+        expect(screen.getByTestId('sheet-handle')).toBeTruthy()
+        expect(screen.getByRole('header', { name: 'Ask about this step' })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Close sheet' })).toBeTruthy()
+        expect(screen.getByTestId('more-sheet-scroll')).toBeTruthy()
+    })
+
+    it('returns to the chosen resting detent when the keyboard hides', async () => {
+        const view = await render(sheet())
+        await fireEvent(screen.getByTestId('sheet-handle'), 'accessibilityAction', {
+            nativeEvent: { actionName: 'increment' },
+        })
+        await view.rerender(sheet())
+        const chosen = heightOf()
+        expect(chosen).toBeCloseTo(window() * DETENT_RATIO.full, 0)
+        await keyboard(window() * 0.5)
+        await view.rerender(sheet())
+        expect(heightOf()).toBeLessThan(chosen)
+        await hideKeyboard()
+        await view.rerender(sheet())
+        expect(heightOf()).toBeCloseTo(chosen, 0)
+    })
+
+    it('does not count the keyboard twice when the platform already shrank the window', async () => {
+        const view = await render(sheet())
+        const scrim = screen.getByTestId('sheet-scrim')
+        await fireEvent(scrim, 'layout', { nativeEvent: { layout: { height: window() } } })
+        // Android resize: the container is now shorter by the keyboard, and the keyboard event arrives as well.
+        await fireEvent(scrim, 'layout', { nativeEvent: { layout: { height: window() - 500 } } })
+        await keyboard(500)
+        await view.rerender(sheet())
+        expect(StyleSheet.flatten(screen.getByTestId('sheet-scrim').props.style).paddingBottom).toBe(0)
+        expect(heightOf()).toBeLessThanOrEqual(window() - 500)
+        expect(heightOf()).toBeGreaterThan(window() - 500 - 80)
+    })
+
+    it.each([
+        [false, true],
+        [true, false],
+    ])('with reduced motion %s the fit springs: %s', async (reduced, springs) => {
+        const element = (): React.ReactElement => (
+            <FeedbackProvider reduceMotion={reduced}>
+                <MoreSheet visible={true} title="Ask" onClose={(): void => undefined} detents={['tall', 'full']}>
+                    <Text>Composer</Text>
+                </MoreSheet>
+            </FeedbackProvider>
+        )
+        const view = await render(element())
+        spies.withSpring.mockClear()
+        await keyboard(window() * 0.5)
+        await view.rerender(element())
+        const fitted = window() * 0.5 - 8
+        expect(spies.withSpring.mock.calls.some(([target]) => target === Math.round(fitted))).toBe(springs)
+        // Either way the sheet ends at the fitted height; reduced motion sets it directly.
+        await view.rerender(element())
+        expect(heightOf()).toBeLessThanOrEqual(window() * 0.5)
+    })
+})
+
+describe('short visible title at accessibility text sizes', () => {
+    it('shows the concise title and keeps the complete name for assistive tech', async () => {
+        // Jest reports a font scale of 2, which is already an accessibility size.
+        await render(
+            <MoreSheet visible={true} title="Ask about this step" compactTitle="Ask" onClose={(): void => undefined}>
+                <Text>Composer</Text>
+            </MoreSheet>,
+        )
+        expect(screen.getByText('Ask')).toBeTruthy()
+        expect(screen.queryByText('Ask about this step')).toBeNull()
+        expect(screen.getByRole('header', { name: 'Ask about this step' })).toBeTruthy()
+    })
+})
+
+describe('fitting helpers', () => {
+    it('counts only the part of the keyboard the platform has not already removed from the container', () => {
+        expect(keyboardOverlap(300, 800, 800)).toBe(300)
+        expect(keyboardOverlap(300, 800, 500)).toBe(0)
+        expect(keyboardOverlap(300, 800, 650)).toBe(150)
+        expect(keyboardOverlap(0, 800, 800)).toBe(0)
+    })
+
+    it('never lets a detent pass the space above the keyboard', () => {
+        expect(fitDetents([0.45, 0.78, 0.92], 800, 800, 8)).toEqual([360, 624, 736])
+        expect(fitDetents([0.45, 0.78, 0.92], 800, 500, 8)).toEqual([360, 492, 492])
     })
 })

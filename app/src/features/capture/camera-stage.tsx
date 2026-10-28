@@ -227,6 +227,11 @@ export function CameraStage({
                 <MoreSheet
                     visible={instructionsOpen && assembly && presentation.status === 'preview'}
                     title={guide?.progress ?? 'This step'}
+                    compactTitle={
+                        guide === undefined
+                            ? undefined
+                            : `Step ${compactProgress(guide.progress)?.split('/')[0] ?? ''}`.trim()
+                    }
                     onClose={(): void => setInstructionsOpen(false)}
                     detents={['tall', 'full']}
                 >

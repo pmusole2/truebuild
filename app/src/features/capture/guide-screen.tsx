@@ -297,6 +297,7 @@ export function GuideScreen({
             <MoreSheet
                 visible={more.open}
                 title={more.mode === 'ask' ? 'Ask about this step' : 'More about this step'}
+                compactTitle={more.mode === 'ask' ? 'Ask' : 'More'}
                 onClose={more.hide}
                 detents={more.mode === 'ask' ? ['tall', 'full'] : ['peek', 'tall', 'full']}
                 initialDetent="tall"

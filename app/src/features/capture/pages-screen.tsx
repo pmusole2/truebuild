@@ -162,6 +162,7 @@ export function PagesScreen({
                           ? 'Add a page'
                           : 'More'
                 }
+                compactTitle={previewPage === undefined ? (sheet.kind === 'add' ? 'Add' : 'More') : undefined}
                 onClose={close}
                 detents={previewPage !== undefined ? ['tall', 'full'] : ['peek', 'tall']}
             >

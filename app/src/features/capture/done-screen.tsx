@@ -56,7 +56,13 @@ export function DoneScreen({
             <FixedBottomBar
                 primary={{ label: 'Back to Home', compactLabel: 'Home', testID: 'done-home', onPress: nav.leave }}
             />
-            <MoreSheet visible={more.open} title="All steps" onClose={more.hide} detents={['tall', 'full']}>
+            <MoreSheet
+                visible={more.open}
+                title="All steps"
+                compactTitle="Steps"
+                onClose={more.hide}
+                detents={['tall', 'full']}
+            >
                 <Stack gap="md">
                     <StepList steps={items} />
                 </Stack>
