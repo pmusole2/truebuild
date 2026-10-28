@@ -86,7 +86,9 @@ export function ReadingScreen({
             <TextRegion>
                 <Instruction>{sentence}</Instruction>
                 {reading ? <Caption>Keep this screen open.</Caption> : null}
-                {!reading && state.notice !== null ? <Caption>{plainNotice(state.notice)}</Caption> : null}
+                {!reading && state.notice !== null && plainNotice(state.notice) !== sentence ? (
+                    <Caption>{plainNotice(state.notice)}</Caption>
+                ) : null}
             </TextRegion>
             <FixedBottomBar {...bar} />
         </ScreenBody>

@@ -2,14 +2,13 @@ import type { ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import {
     stepEvidenceRequirements,
-    type Fact,
     type ManualSession,
     type ParsedManual,
     type SourceRef,
     type PartRequirement,
 } from '@truebuild/contracts'
 import { Card, Stack } from '../../ui/surface'
-import { Body, Callout, Caption, Heading, Label } from '../../ui/text'
+import { Body, Caption, Label } from '../../ui/text'
 import { MeasuredPane, type ComparisonFit, type ComparisonPane } from '../../ui/comparison'
 import { space } from '../../theme/tokens'
 import { stepPartChoices } from '../assembly/question-state'

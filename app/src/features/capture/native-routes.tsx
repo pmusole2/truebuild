@@ -136,7 +136,6 @@ export function NativeRouteSync(): null {
             return
         }
         apply(command)
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- facts is derived from the three fields below
     }, [facts.route, facts.selectedId, facts.reading])
     return null
 }

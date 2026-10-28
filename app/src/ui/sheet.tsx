@@ -197,8 +197,13 @@ function SheetFrame({
         }
         // Screen readers land on the sheet title, the first thing the sheet says.
         const focusTimer = setTimeout(() => {
-            if (titleRef.current !== null) {
-                AccessibilityInfo.sendAccessibilityEvent(titleRef.current, 'focus')
+            // Not every platform can move screen reader focus (the web cannot): focus is best-effort.
+            if (titleRef.current !== null && typeof AccessibilityInfo.sendAccessibilityEvent === 'function') {
+                try {
+                    AccessibilityInfo.sendAccessibilityEvent(titleRef.current, 'focus')
+                } catch {
+                    return
+                }
             }
         }, 0)
         return (): void => {

@@ -1,11 +1,10 @@
 import { render, screen } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
-import { StyleSheet } from 'react-native'
 import Svg from 'react-native-svg'
 import type { CheckResult } from '@truebuild/contracts'
 import { FeedbackProvider } from '../../ui/feedback'
 import { spies } from '../../ui/test-support/reanimated-mock'
-import { lightColors, motion } from '../../theme/tokens'
+import { motion } from '../../theme/tokens'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
 import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey } from './result-panels'
 

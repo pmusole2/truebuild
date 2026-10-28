@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native'
 import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'

@@ -8,7 +8,12 @@ const API = process.env.TRUEBUILD_E2E_API_ORIGIN ?? 'http://127.0.0.1:31071'
 const WEB = `http://localhost:${process.env.TRUEBUILD_E2E_WEB_PORT ?? '18071'}`
 const SCENARIO = process.env.TRUEBUILD_E2E_SCENARIO ?? 'reversed'
 const SECOND_OPINION = process.env.TRUEBUILD_E2E_SECOND_OPINION
-const VERDICT: Record<string, string> = { correct: 'Pass', reversed: 'Refuse', uncertain: 'Cannot verify' }
+// The hero sentence starts with the verdict in plain words; the tag in More names it again.
+const VERDICT_SENTENCE: Record<string, RegExp> = {
+    correct: /^Looks right\./u,
+    reversed: /^Not yet\./u,
+    uncertain: /^We can't tell from this photo\./u,
+}
 const DECISION: Record<string, string> = { correct: 'pass', reversed: 'refuse', uncertain: 'cannot_verify' }
 
 // Synthetic 1x1 PNG: browser decoding, normalization and storage run for real.
@@ -23,7 +28,9 @@ test.beforeEach(async ({ context }) => {
 
 async function openFreshLibrary(page: Page): Promise<void> {
     await page.goto('/')
-    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByText('Build furniture with step-by-step help.', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    })
 }
 
 async function addTwoPagesAndRead(page: Page): Promise<Response> {
@@ -37,37 +44,45 @@ async function addTwoPagesAndRead(page: Page): Promise<Response> {
         { name: 'page-2.png', mimeType: 'image/png', buffer: png },
     ])
     await expect(page.getByText('Page 2', { exact: true })).toBeVisible()
+    // Page tools live in the page's sheet, not on the Add screen.
+    await page.getByRole('button', { name: 'View page 2', exact: true }).click()
+    // Moving a page closes its sheet.
     await page.getByRole('button', { name: 'Move page 2 up', exact: true }).click()
     const parse = page.waitForResponse(
         (response) => response.url() === `${API}/api/manuals/parse` && response.request().method() === 'POST',
     )
-    await page.getByRole('button', { name: 'Read manual', exact: true }).click()
+    await page.getByRole('button', { name: 'Read my manual', exact: true }).click()
     return parse
 }
 
-async function confirmFactsAndContinue(page: Page): Promise<void> {
-    await expect(page.getByRole('checkbox')).toBeVisible({ timeout: 120_000 })
-    await page.getByRole('checkbox').click()
-    await page.getByRole('button', { name: 'Confirm reviewed facts', exact: true }).click()
-    await expect(page.getByText('Facts confirmed by you.', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Continue assembly', exact: true }).click()
-    await expect(page.getByRole('button', { name: 'Take new photo and check', exact: true })).toBeVisible()
+async function startBuilding(page: Page): Promise<void> {
+    // Reading ends on Quick check. Nothing is unclear in the mock plan, so the only step left is one explicit tap.
+    await expect(page.getByText('Thanks. Your steps are ready.', { exact: true })).toBeVisible({ timeout: 120_000 })
+    await page.getByRole('button', { name: 'Start building', exact: true }).click()
+    await expect(page.getByTestId('guide-primary')).toBeVisible()
 }
 
-test('real path: pages are read by the API, facts are confirmed, the library restores after reload, and a check returns the scenario verdict', async ({
+async function openMore(page: Page): Promise<void> {
+    await page.getByRole('button', { name: 'More', exact: true }).click()
+    await expect(page.getByText('More about this step', { exact: true })).toBeVisible()
+}
+
+test('real path: pages are read by the API, the plan is started, the guide restores after reload, and a check returns the scenario verdict', async ({
     page,
 }) => {
     await openFreshLibrary(page)
     const parse = await addTwoPagesAndRead(page)
     expect((await parse).status()).toBe(200)
-    await confirmFactsAndContinue(page)
+    await startBuilding(page)
 
+    // The address is the guide's own: a reload opens the same build at the same step.
     await page.reload()
-    await page.getByRole('button', { name: 'Open Untitled manual', exact: true }).click()
-    await expect(page.getByText('Facts confirmed by you.', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Continue assembly', exact: true }).click()
+    await expect(page.getByTestId('guide-primary')).toBeVisible({ timeout: 60_000 })
+    // And from Home, the one primary resumes it.
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Keep building', exact: true }).click()
 
-    await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+    await page.getByTestId('guide-primary').click()
     const capture = page.getByRole('button', { name: 'Capture photo', exact: true })
     await expect(capture).toBeEnabled({ timeout: 60_000 })
     const check = page.waitForResponse(
@@ -79,53 +94,59 @@ test('real path: pages are read by the API, facts are confirmed, the library res
     const body = (await response.json()) as { status: string; value: { decision: string } }
     expect(body.status).toBe('ok')
     expect(body.value.decision).toBe(DECISION[SCENARIO])
-    await expect(page.getByText(VERDICT[SCENARIO] ?? '', { exact: true })).toBeVisible({ timeout: 90_000 })
+    await expect(page.getByText(VERDICT_SENTENCE[SCENARIO] ?? /$^/u)).toBeVisible({ timeout: 90_000 })
 })
 
-test('refusal shows the expected diagram and the frozen photo side by side, and a question is requested from the API', async ({
+test('refusal shows the expected diagram and your photo side by side in More, and a question is requested from the API', async ({
     page,
 }) => {
     test.skip(SCENARIO !== 'reversed', 'refusal layout is scenario-specific')
     await openFreshLibrary(page)
     await addTwoPagesAndRead(page)
-    await confirmFactsAndContinue(page)
-    await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+    await startBuilding(page)
+    await page.getByTestId('guide-primary').click()
     await expect(page.getByRole('button', { name: 'Capture photo', exact: true })).toBeEnabled({ timeout: 60_000 })
     await page.getByRole('button', { name: 'Capture photo', exact: true }).click()
-    await expect(page.getByText('Manual diagram', { exact: true })).toBeVisible({ timeout: 90_000 })
+    await expect(page.getByText(/^Not yet\./u)).toBeVisible({ timeout: 90_000 })
+    await openMore(page)
+    await expect(page.getByText('Manual diagram', { exact: true })).toBeVisible()
     await expect(page.getByText('Your photo', { exact: true })).toBeVisible()
-    await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
+    await expect(page.getByText('Not yet', { exact: true })).toBeVisible()
 
     // A point chosen on the refused photo itself, without retaking it, is a valid question target.
     await page.getByRole('button', { name: 'Your photo: tap a point to ask about it', exact: true }).click()
     await expect(page.getByText('Selected point in photo.', { exact: true })).toBeVisible()
-    await page.getByLabel('Question about frozen photo').fill('Which way should this part face?')
+    await page.getByLabel('Question about your photo').fill('Which way should this part face?')
     const question = page.waitForResponse(
         (response) => response.url() === `${API}/api/questions` && response.request().method() === 'POST',
     )
     await page.getByRole('button', { name: 'Send question', exact: true }).click()
     expect((await question).status()).toBe(200)
-    await expect(page.getByText('TEST MOCK ONLY: consult the cited diagram.', { exact: false })).toBeVisible({
+    await expect(page.getByText('TEST MOCK ONLY: consult the cited diagram.', { exact: false }).first()).toBeVisible({
         timeout: 60_000,
     })
-    // The answer is neutral: the refused check stays refused and no Pass verdict appears.
+    // The answer is neutral: the refused check stays refused and no "Looks right" verdict appears.
     await expect(page.getByText('Answer', { exact: true })).toBeVisible()
-    await expect(page.getByText('Refuse', { exact: true })).toBeVisible()
-    await expect(page.getByText('Pass', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Not yet', { exact: true })).toBeVisible()
+    await expect(page.getByText('Looks right', { exact: true })).toHaveCount(0)
 })
 
 test('the library shows its restoring state while it loads, before any manual is listed', async ({ page }) => {
     // Development-build query parameter: delays only the first restore, so the loading state is observable.
     await page.goto('/?truebuildTestRestoreDelayMs=3000')
-    await expect(page.getByText('Restoring local library…', { exact: true })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByLabel('Getting your builds ready.')).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByText('Build furniture with step-by-step help.', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    })
 })
 
-test('an unknown critical fact is listed and blocks confirmation until the facts are resolved', async ({ page }) => {
+test('an unknown critical fact is asked as one honest question and blocks starting until it is answered', async ({
+    page,
+}) => {
     await openFreshLibrary(page)
     const parse = await addTwoPagesAndRead(page)
     expect((await parse).status()).toBe(200)
-    await expect(page.getByRole('checkbox')).toBeVisible({ timeout: 120_000 })
+    await expect(page.getByText('Thanks. Your steps are ready.', { exact: true })).toBeVisible({ timeout: 120_000 })
     // Test-only, schema-valid local edit of the stored plan: step 1 orientation becomes an unknown critical fact.
     await page.evaluate(() => {
         const key = 'truebuild/library/v1'
@@ -138,16 +159,17 @@ test('an unknown critical fact is listed and blocks confirmation until the facts
         }
         localStorage.setItem(key, JSON.stringify(manifest))
     })
+    // The address is the Quick check's own: reloading opens it with the stored plan.
     await page.reload()
-    await page.getByRole('button', { name: 'Open Untitled manual', exact: true }).click()
-    await expect(
-        page.getByText('Unresolved critical fact: Step 1 orientation: Arrow is not visible in the photo.'),
-    ).toBeVisible()
-    await expect(page.getByRole('checkbox')).toBeDisabled()
-    await expect(page.getByRole('button', { name: 'Confirm reviewed facts', exact: true })).toBeDisabled()
+    await expect(page.getByText('Which way should the part face in step 1?', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    })
+    await expect(page.getByText('The manual says: Arrow is not visible in the photo.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start building', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeVisible()
 })
 
-test('a cancelled reading says that no late reply is shown, and the reading is not repeated automatically', async ({
+test('a cancelled reading says that nothing more is shown, and the reading is not repeated automatically', async ({
     page,
     context,
 }) => {
@@ -166,29 +188,40 @@ test('a cancelled reading says that no late reply is shown, and the reading is n
         downloadThroughput: -1,
         uploadThroughput: -1,
     })
-    await page.getByRole('button', { name: 'Read manual', exact: true }).click()
-    await expect(page.getByText('Reading manual pages…', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Read my manual', exact: true }).click()
+    await expect(page.getByText('Reading your manual. This can take a minute.', { exact: true })).toBeVisible()
+    // Cancel asks first, then stops the same request the old Cancel did and returns to the pages.
     await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(page.getByText('Cancelled. No late reply will be shown', { exact: false })).toBeVisible()
+    await expect(page.getByText('Stop reading? You can start again.', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Stop reading', exact: true }).click()
+    // Home stays mounted under Add and reads the same notice, so the screen on top is the last match.
+    await expect(
+        page
+            .getByText('Stopped. Nothing more will be shown for that request. You can start again.', { exact: true })
+            .last(),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Read my manual', exact: true })).toBeVisible()
     await cdp.send('Network.emulateNetworkConditions', {
         offline: false,
         latency: 0,
         downloadThroughput: -1,
         uploadThroughput: -1,
     })
-    await expect(page.getByRole('checkbox')).toHaveCount(0)
+    await expect(page.getByText('Thanks. Your steps are ready.', { exact: true })).toHaveCount(0)
 })
 
-test('camera access is requested only on demand: without permission the page explains it and returns to the library', async ({
+test('camera access is requested only on demand: without permission the screen explains it and returns to the pages', async ({
     page,
     context,
 }) => {
     await context.clearPermissions()
     await openFreshLibrary(page)
     await page.getByRole('button', { name: 'Add manual', exact: true }).click()
-    await page.getByRole('button', { name: 'Scan a page', exact: true }).click()
-    await expect(page.getByText('Camera permission is needed', { exact: false })).toBeVisible()
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await page.getByRole('button', { name: 'Take photo', exact: true }).click()
+    await expect(
+        page.getByText('We need the camera to take photos of your manual and your work.', { exact: true }),
+    ).toBeVisible()
+    await page.getByRole('button', { name: 'Go back', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Choose pages from photos', exact: true })).toBeVisible()
 })
 
@@ -203,17 +236,19 @@ test('a local library that cannot be read keeps its data, says so, and offers an
         }
     })
     await page.goto('/')
-    await expect(page.getByText('Saved library unavailable', { exact: true })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByRole('button', { name: 'Retry local library', exact: true })).toBeVisible()
+    await expect(
+        page.getByText('We could not open your saved builds. Your photos are still on this phone.', { exact: true }),
+    ).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByRole('button', { name: 'Try again', exact: true }).first()).toBeVisible()
 })
 
-test('settings describe storage, what leaves the phone and camera access', async ({ page }) => {
+test('More on Home describes storage, what leaves the phone and camera access', async ({ page }) => {
     await openFreshLibrary(page)
-    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'More', exact: true }).click()
     await expect(page.getByText('What leaves this phone', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open device settings', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Back', exact: true }).click()
-    await expect(page.getByText('No manuals yet.', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Close sheet', exact: true }).click()
+    await expect(page.getByText('Build furniture with step-by-step help.', { exact: true })).toBeVisible()
 })
 
 test('keyboard focus is visible on a control on web', async ({ page }) => {
@@ -231,14 +266,14 @@ if (SECOND_OPINION !== undefined) {
         test.setTimeout(90_000)
         await openFreshLibrary(page)
         await addTwoPagesAndRead(page)
-        await confirmFactsAndContinue(page)
+        await startBuilding(page)
         const paths: string[] = []
         page.on('request', (request) => {
             if (request.method() === 'POST' && request.url().startsWith(`${API}/api/checks`)) {
                 paths.push(new URL(request.url()).pathname)
             }
         })
-        await page.getByRole('button', { name: 'Take new photo and check', exact: true }).click()
+        await page.getByTestId('guide-primary').click()
         const capture = page.getByRole('button', { name: 'Capture photo', exact: true })
         await expect(capture).toBeEnabled({ timeout: 60_000 })
         const primaryResponse = page.waitForResponse(
@@ -263,11 +298,16 @@ if (SECOND_OPINION !== undefined) {
             },
         })
         if (Number(process.env.TRUEBUILD_E2E_SECOND_OPINION_DELAY_MS ?? 0) >= 9_000) {
-            await expect(page.getByText('Cannot verify', { exact: true })).toBeVisible()
-            await expect(page.getByText('Model: muse-spark-1.3', { exact: true })).toBeVisible()
-            await expect(page.getByText('Second opinion pending (muse-wonder-1.0)…', { exact: true })).toBeVisible()
+            await expect(page.getByText(/^We can't tell from this photo\./u)).toBeVisible()
+            await expect(page.getByText('Taking a second look…', { exact: true })).toBeVisible()
+            // The primary result is kept; Cancel and the model details are in More.
+            await openMore(page)
+            await expect(page.getByText('Can’t tell', { exact: true })).toBeVisible()
             await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+            await page.getByTestId('judge-entry').click()
+            await expect(page.getByText('Model: muse-spark-1.3', { exact: true })).toBeVisible()
             expect(secondaryFinished).toBe(false)
+            await page.getByRole('button', { name: 'Close sheet', exact: true }).click()
         }
         const response = await secondaryResponse
         expect(response.status()).toBe(200)
@@ -286,9 +326,12 @@ if (SECOND_OPINION !== undefined) {
                 },
             },
         })
-        await expect(page.getByText(refused ? 'Refuse' : 'Cannot verify', { exact: true })).toBeVisible()
-        await expect(page.getByText('Pass', { exact: true })).toHaveCount(0)
-        await expect(page.getByText('Second opinion pending (muse-wonder-1.0)…', { exact: true })).toHaveCount(0)
+        await expect(page.getByText(refused ? /^Not yet\./u : /^We can't tell from this photo\./u)).toBeVisible()
+        await expect(page.getByText(/^Looks right\./u)).toHaveCount(0)
+        await expect(page.getByText('Taking a second look…', { exact: true })).toHaveCount(0)
+        await openMore(page)
+        await expect(page.getByText('Looks right', { exact: true })).toHaveCount(0)
+        await page.getByTestId('judge-entry').click()
         if (secondary.status === 'ok') {
             await expect(page.getByText(`Model: ${secondary.value.model}`, { exact: true })).toBeVisible()
             for (const note of secondary.value.modelNotes ?? []) {
