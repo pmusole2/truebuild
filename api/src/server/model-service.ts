@@ -19,6 +19,8 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    MAX_PARSE_PAGES,
+    PARSE_SPLIT_MESSAGE,
     selectCompactStepSourcePageIds,
     modelCheckMetadataSchema,
     modelSecondOpinionMetadataSchema,
@@ -31,7 +33,7 @@ import {
     type ModelQuestionMetadata,
     type ModelSegmentMetadata,
 } from '@truebuild/contracts/model'
-import type { z } from 'zod'
+import { z } from 'zod'
 
 import {
     MetaProviderError,
@@ -77,6 +79,9 @@ class AdmissionError extends Error {
     constructor(
         readonly code: FailureCode,
         readonly status: number,
+        /** Static, non-sensitive text shown to the user for a known rejection; never provider or request data. */
+        readonly publicMessage?: string,
+        readonly identity?: Identity,
     ) {
         super(code)
     }
@@ -159,13 +164,14 @@ export async function runModelParseRepair<T>(work: () => Promise<T>): Promise<T>
     )
 }
 
-function fail(code: FailureCode, identity?: Identity): ApiResult<never> {
+function fail(code: FailureCode, identity?: Identity, message?: string): ApiResult<never> {
     return {
         status: 'unavailable',
         requestId: identity?.requestId ?? 'invalid-request',
         binding: identity?.binding ?? null,
         code,
         retryable: false,
+        ...(message === undefined ? {} : { message }),
     }
 }
 
@@ -204,7 +210,10 @@ function admit(request: Request, auth: SharedKeyAuth, duration: number, origins?
     }
 }
 
-function errorResult(error: unknown, execution?: Execution): { code: FailureCode; status: number } {
+function errorResult(
+    error: unknown,
+    execution?: Execution,
+): { code: FailureCode; status: number; message?: string; identity?: Identity } {
     try {
         execution?.check()
     } catch (current) {
@@ -214,7 +223,12 @@ function errorResult(error: unknown, execution?: Execution): { code: FailureCode
         return { code: 'unauthorized', status: 401 }
     }
     if (error instanceof AdmissionError) {
-        return { code: error.code, status: error.status }
+        return {
+            code: error.code,
+            status: error.status,
+            ...(error.publicMessage === undefined ? {} : { message: error.publicMessage }),
+            ...(error.identity === undefined ? {} : { identity: error.identity }),
+        }
     }
     if (error instanceof ModelBodyError) {
         return { code: 'invalid_input', status: error.status }
@@ -259,8 +273,42 @@ async function parseFiles(
         })
         deadline.checkpoint()
     }
-    return { requestId: metadata.requestId, binding: metadata.binding, pages }
+    return {
+        requestId: metadata.requestId,
+        binding: metadata.binding,
+        pages,
+        ...(metadata.language === undefined ? {} : { language: metadata.language }),
+    }
 }
+
+/**
+ * Recognises only the known too-many-pages case before any other validation, normalization, budget claim or upstream
+ * dispatch. Every other malformed body keeps the generic invalid_input response without a message.
+ */
+const parseRouteIdentitySchema = z.object({
+    mode: modelParseMetadataSchema.shape.mode,
+    requestId: modelParseMetadataSchema.shape.requestId,
+    binding: modelParseMetadataSchema.shape.binding,
+})
+const parseRouteMetadataSchema = z
+    .unknown()
+    .transform((value): unknown => {
+        if (
+            typeof value === 'object' &&
+            value !== null &&
+            'pages' in value &&
+            Array.isArray(value.pages) &&
+            value.pages.length > MAX_PARSE_PAGES
+        ) {
+            const identity = parseRouteIdentitySchema.safeParse(value)
+            if (identity.success) {
+                throw new AdmissionError('invalid_input', 400, PARSE_SPLIT_MESSAGE, identity.data)
+            }
+            throw new ModelBodyError(400)
+        }
+        return value
+    })
+    .pipe(modelParseMetadataSchema)
 
 async function checkFiles(
     metadata: ModelCheckMetadata,
@@ -413,7 +461,7 @@ export function createModelHandlers(options: {
                 const failure = errorResult(error, execution)
                 return corsResponse(
                     request,
-                    Response.json(fail(failure.code, metadata), {
+                    Response.json(fail(failure.code, metadata ?? failure.identity, failure.message), {
                         status: failure.status,
                         headers: { 'cache-control': 'no-store' },
                     }),
@@ -426,7 +474,7 @@ export function createModelHandlers(options: {
     }
 
     const parse = jsonHandler(
-        modelParseMetadataSchema,
+        parseRouteMetadataSchema,
         parsedManualSchema,
         105_000,
         parseFiles,

@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react'
+import { MAX_PARSE_PAGES, PARSE_SPLIT_MESSAGE, parseLanguageSchema } from '@truebuild/contracts/model'
 import { Pressable, StyleSheet, View } from 'react-native'
 import { AppButton } from '../../ui/button'
 import { ActionGroup, Card, Stack } from '../../ui/surface'
@@ -28,6 +29,8 @@ export type PagesScreenProps = WorkflowScreenProps & {
 export function PagesScreen({ state, controller, entry, choosePages }: PagesScreenProps): ReactElement {
     const { colors } = useTheme()
     const [title, setTitle] = useState(entry.session.title)
+    const [language, setLanguage] = useState('en')
+    const languageValid = parseLanguageSchema.safeParse(language).success
     const [previewId, setPreviewId] = useState<string | null>(null)
     const { pages } = entry.session
     const busy = state.pending !== null || state.storageReadOnly
@@ -54,7 +57,8 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
                         <Caption>{PRIVACY_COPY.stayOnDevice}</Caption>
                         <Caption>{PRIVACY_COPY.read}</Caption>
                         <Caption>
-                            Up to 20 pages. Phone photos are resized and compressed locally before upload.
+                            Store up to 20 pages. Read up to 10 pages at a time. Phone photos are resized and compressed
+                            locally before upload.
                         </Caption>
                     </View>
                 </View>
@@ -149,13 +153,22 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
                 </Card>
             ) : null}
             <Stack gap="xs">
+                <TextField
+                    label="Reading language code"
+                    value={language}
+                    onChangeText={setLanguage}
+                    maxLength={16}
+                    editable={!busy}
+                    error={languageValid ? undefined : 'Use a language code such as en, fr or pt-BR.'}
+                />
+                {pages.length > MAX_PARSE_PAGES ? <Caption>{PARSE_SPLIT_MESSAGE}</Caption> : null}
                 <AppButton
                     label={entry.session.rawExtraction === null ? 'Read manual' : 'Read manual again'}
                     variant="primary"
                     busy={reading}
-                    disabled={busy || pages.length === 0}
+                    disabled={busy || pages.length === 0 || !languageValid}
                     onPress={(): void => {
-                        void controller.parse()
+                        void controller.parse(language)
                     }}
                 />
                 {entry.session.rawExtraction === null ? null : (

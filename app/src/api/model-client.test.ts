@@ -773,3 +773,63 @@ describe('segment terminal publication', () => {
         }
     })
 })
+
+it('validates and serializes parse language, defaults English, and rejects large parse batches without dispatch', async () => {
+    const run = scripted(() => jsonResponse(200, okParse()))
+    const api = client(run.fetch)
+    await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(JSON.parse(String((run.calls[0]!.init.body as FormData).get('metadata'))).language).toBe('en')
+    await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID, language: 'fr' })
+    expect(JSON.parse(String((run.calls[1]!.init.body as FormData).get('metadata'))).language).toBe('fr')
+    const invalid = await api.parse(manualBinding, session.pages, [source], {
+        requestId: REQUEST_ID,
+        language: 'free text',
+    })
+    expect(invalid.status).toBe('unavailable')
+    const pages = Array.from({ length: 11 }, (_, index) => ({
+        ...session.pages[0]!,
+        pageId: `page-${index}`,
+        assetId: `asset-${index}`,
+    }))
+    const large = await api.parse(
+        manualBinding,
+        pages,
+        pages.map(() => source),
+        { requestId: REQUEST_ID },
+    )
+    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('10 pages') })
+    expect(run.calls).toHaveLength(2)
+})
+
+it('preserves bounded server parse failure messages through non-success HTTP responses', async () => {
+    const run = scripted(() =>
+        jsonResponse(400, {
+            status: 'unavailable',
+            requestId: REQUEST_ID,
+            binding: manualBinding,
+            code: 'invalid_input',
+            retryable: false,
+            message: 'Split into 10 pages.',
+        }),
+    )
+    expect(
+        await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
+    ).toMatchObject({ status: 'unavailable', message: 'Split into 10 pages.' })
+})
+
+it('rejects new parse citations outside supplied pages', async () => {
+    const value = structuredClone(session.rawExtraction!)
+    value.steps[0]!.alternatives = ['a', 'b'].map((alternativeId) => ({
+        alternativeId,
+        title: alternativeId,
+        description: alternativeId,
+        sourceRefs: [{ pageId: 'missing', region: null }],
+    }))
+    value.steps[0]!.selectedAlternativeId = 'a'
+    const run = scripted(() =>
+        jsonResponse(200, { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }),
+    )
+    expect(
+        await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
+    ).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
+})

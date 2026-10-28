@@ -792,3 +792,77 @@ describe('PagesScreen', () => {
         }
     })
 })
+
+it('allows review of a cited adjustment without assembly-only warnings or fact editors', async () => {
+    const session = createDemoManual()
+    session.reviewStatus = 'unreviewed'
+    session.rawExtraction = null
+    const original = session.reviewedSteps[0]!
+    session.reviewedSteps = [
+        {
+            ...original,
+            kind: 'adjust',
+            parts: [],
+            orientation: { state: 'unknown', reason: 'No orientation specified.' },
+            connection: { state: 'unknown', reason: 'No connection specified.' },
+            visibleChecks: [],
+        },
+    ]
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(
+        <OverviewScreen
+            controller={controller}
+            state={controller.getSnapshot()}
+            entry={{ session, stepIndex: 0, completedStepIds: [], capture: null }}
+        />,
+    )
+    expect(screen.queryByText('Orientation unknown')).toBeNull()
+    expect(screen.queryByText('No visible checks')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Accept orientation' })).toBeNull()
+    expect(
+        screen.getByRole('checkbox', { name: 'I checked all facts and corrections against the manual' }).props
+            .accessibilityState.disabled,
+    ).toBe(false)
+})
+
+it('shows cited quantity basis and chosen alternatives as manual information in one step', async () => {
+    const session = createDemoManual()
+    const step = session.reviewedSteps[0]!
+    const sourceRefs = step.sourceRefs
+    session.rawExtraction = null
+    session.reviewStatus = 'unreviewed'
+    session.reviewedSteps = [
+        {
+            ...step,
+            parts: [
+                {
+                    ...step.parts[0]!,
+                    quantity: { state: 'unknown', reason: 'User provides the item.' },
+                    quantityBasis: { kind: 'user_supplied', sourceRefs },
+                },
+            ],
+            alternatives: [
+                { alternativeId: 'wall', title: 'Wall mount', description: 'Attach to the wall.', sourceRefs },
+                { alternativeId: 'floor', title: 'Floor mount', description: 'Rest on the floor.', sourceRefs },
+            ],
+            selectedAlternativeId: 'wall',
+        },
+    ]
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(
+        <OverviewScreen
+            controller={controller}
+            state={controller.getSnapshot()}
+            entry={{ session, stepIndex: 0, completedStepIds: [], capture: null }}
+        />,
+    )
+    await fireEvent.press(screen.getByRole('button', { name: 'Step 1 details' }))
+    expect(screen.getByText('Chosen path: Wall mount — Attach to the wall.')).toBeTruthy()
+    expect(screen.getByText('Other path: Floor mount — Rest on the floor.')).toBeTruthy()
+    expect(screen.getByText(/Quantity basis: supplied by you/)).toBeTruthy()
+    expect(screen.getByText('Quantity basis cited page 1')).toBeTruthy()
+    expect(screen.getAllByText('Alternative cited page 1')).toHaveLength(2)
+    expect(screen.queryByText(/Unresolved critical fact/)).toBeNull()
+})

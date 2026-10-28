@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
 import { createDemoManual, type CheckResult, type ParsedManual, type SegmentEvent } from '@truebuild/contracts'
-import { modelCheckMetadataSchema, type ModelCheckMetadata } from '@truebuild/contracts/model'
+import {
+    modelCheckMetadataSchema,
+    MAX_PARSE_PAGES,
+    PARSE_SPLIT_MESSAGE,
+    type ModelCheckMetadata,
+} from '@truebuild/contracts/model'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -1406,5 +1411,105 @@ describe('Meta provider parse repair through the guarded transport', (): void =>
         })
         expect(outbound).toHaveBeenCalledTimes(1)
         expect(state.counter.used).toBe(1)
+    })
+})
+
+describe('parse page limit and language at the route boundary', (): void => {
+    async function pagedRequest(
+        state: Awaited<ReturnType<typeof setup>>,
+        pageCount: number,
+        extra: Record<string, unknown> = {},
+    ): Promise<Request> {
+        const form = new FormData()
+        const pages = Array.from({ length: pageCount }, (_unused, index) => ({
+            ...state.metadata.session.pages[0]!,
+            ...(index === 0 ? {} : { pageId: `page-${index + 1}`, assetId: `asset-${index + 1}` }),
+        }))
+        form.set(
+            'metadata',
+            JSON.stringify({
+                mode: 'model',
+                requestId: 'parse-paged',
+                binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+                pages,
+                ...extra,
+            }),
+        )
+        pages.forEach((_page, index): void => {
+            form.set(`source-${index}`, new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'source.png')
+        })
+        return new Request('http://127.0.0.1:3001/api/manuals/parse', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': state.key, origin: 'http://localhost:8081' },
+            body: form,
+        })
+    }
+
+    it.each([MAX_PARSE_PAGES + 1, 22])(
+        'rejects %i pages with a bound split message before claiming budget',
+        async (count): Promise<void> => {
+            const state = await setup()
+            const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => Response.json(completed(parsed())))
+            const actual = createMetaProvider({
+                apiKey: 'synthetic-test-key',
+                fetchImpl: guardModelFetch(outbound),
+                runParseRepair: runModelParseRepair,
+            })
+            const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
+            const response = await handlers.parse(await pagedRequest(state, count))
+            expect(response.status).toBe(400)
+            expect(await response.json()).toMatchObject({
+                status: 'unavailable',
+                code: 'invalid_input',
+                retryable: false,
+                message: PARSE_SPLIT_MESSAGE,
+                requestId: 'parse-paged',
+                binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+            })
+            expect(PARSE_SPLIT_MESSAGE).toContain('10 pages')
+            expect(state.counter.used).toBe(0)
+            expect(outbound).not.toHaveBeenCalled()
+        },
+    )
+
+    it('does not add the split message to other invalid bodies', async (): Promise<void> => {
+        const state = await setup()
+        const handlers = createModelHandlers({
+            ...state,
+            provider: provider(async (): Promise<CheckResult> => checked),
+            samProvider: null,
+        })
+        const response = await handlers.parse(await pagedRequest(state, 1, { language: 'not a language' }))
+        expect(response.status).toBe(400)
+        expect(await response.json()).not.toHaveProperty('message')
+        expect(state.counter.used).toBe(0)
+    })
+
+    it('admits exactly ten pages and carries the selected language to the provider', async (): Promise<void> => {
+        const state = await setup()
+        let seen: { pages: number; language?: string } | undefined
+        const testProvider = provider(async (): Promise<CheckResult> => checked)
+        testProvider.parseManual = async (value): Promise<ParsedManual> => {
+            seen = { pages: value.pages.length, language: value.language }
+            return parsed()
+        }
+        const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
+        const response = await handlers.parse(await pagedRequest(state, MAX_PARSE_PAGES, { language: 'es' }))
+        expect(response.status).toBe(200)
+        expect(seen).toEqual({ pages: MAX_PARSE_PAGES, language: 'es' })
+        expect(state.counter.used).toBe(1)
+    })
+
+    it('leaves language absent for the provider default when the client sends none', async (): Promise<void> => {
+        const state = await setup()
+        let seen: string | undefined = 'unset'
+        const testProvider = provider(async (): Promise<CheckResult> => checked)
+        testProvider.parseManual = async (value): Promise<ParsedManual> => {
+            seen = value.language
+            return parsed()
+        }
+        const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
+        expect((await handlers.parse(await pagedRequest(state, 1))).status).toBe(200)
+        expect(seen).toBeUndefined()
     })
 })

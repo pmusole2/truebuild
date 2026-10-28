@@ -1,3 +1,4 @@
+import { MAX_PARSE_PAGES, PARSE_SPLIT_MESSAGE, parseLanguageSchema } from '@truebuild/contracts/model'
 import { releaseTemporaryImage } from '../../media/owned-temporary-images'
 import { selectedStepSourcePageIds } from '../assembly/source-selection'
 import {
@@ -483,7 +484,7 @@ export class CaptureController {
             contentHash: await this.ports.digest(image.bytes),
         }
     }
-    async parse(): Promise<void> {
+    async parse(language = 'en'): Promise<void> {
         const entry = this.current
         if (
             entry === undefined ||
@@ -492,6 +493,15 @@ export class CaptureController {
             this.saving ||
             this.state.storageReadOnly
         ) {
+            return
+        }
+        if (entry.session.pages.length > MAX_PARSE_PAGES) {
+            this.publish({ notice: PARSE_SPLIT_MESSAGE })
+            return
+        }
+        const parsedLanguage = parseLanguageSchema.safeParse(language)
+        if (!parsedLanguage.success) {
+            this.publish({ notice: 'Enter a language code such as en, fr or pt-BR.' })
             return
         }
         const token = this.invalidate()
@@ -512,7 +522,12 @@ export class CaptureController {
                 { kind: 'manual', manualId: entry.session.manualId, revision },
                 entry.session.pages,
                 images,
-                { requestId: `extract-${this.ports.id()}`, signal: guard.signal, checkpoint: guard.checkpoint },
+                {
+                    requestId: `extract-${this.ports.id()}`,
+                    signal: guard.signal,
+                    checkpoint: guard.checkpoint,
+                    language: parsedLanguage.data,
+                },
             )
             guard.checkpoint()
             if (token !== this.epoch) {
@@ -520,7 +535,9 @@ export class CaptureController {
             }
             if (result.status !== 'ok') {
                 this.publish({
-                    notice: `Manual reading unavailable (${result.code}). Check the connection and page/upload budgets, then retry as a new request.`,
+                    notice:
+                        result.message ??
+                        `Manual reading unavailable (${result.code}). Check the connection and page/upload budgets, then retry as a new request.`,
                 })
                 return
             }

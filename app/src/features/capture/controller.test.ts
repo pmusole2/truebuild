@@ -1340,3 +1340,41 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect(controller.getSnapshot().pending).toBeNull()
     })
 })
+
+it('rejects over-ten-page parsing before reading local bytes or dispatching', async () => {
+    const { controller, store, calls } = setup()
+    controllers.push(controller)
+    await controller.restore()
+    await controller.createManual()
+    await controller.importPages(async () => Array.from({ length: 11 }, () => photo))
+    const read = vi.spyOn(store, 'readAsset')
+    await controller.parse()
+    expect(controller.getSnapshot().notice).toContain('10 pages')
+    expect(read).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(0)
+})
+
+it('validates parse language before reading and propagates a valid requested language', async () => {
+    let language: string | undefined
+    const { controller, store } = setup(async (_url, init) => {
+        const metadata = modelParseMetadataSchema.parse(JSON.parse(String((init.body as FormData).get('metadata'))))
+        language = metadata.language
+        return Response.json({
+            status: 'ok',
+            mode: 'model',
+            requestId: metadata.requestId,
+            binding: metadata.binding,
+            value: parsed(metadata.pages[0]!.pageId),
+        })
+    })
+    controllers.push(controller)
+    await controller.restore()
+    await controller.createManual()
+    await controller.importPages(async () => [photo])
+    const read = vi.spyOn(store, 'readAsset')
+    await controller.parse('free text')
+    expect(read).not.toHaveBeenCalled()
+    expect(language).toBeUndefined()
+    await controller.parse('es')
+    expect(language).toBe('es')
+})

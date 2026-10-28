@@ -1,6 +1,13 @@
 import type { ReactElement } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
-import type { Fact, ManualSession, ParsedManual, SourceRef } from '@truebuild/contracts'
+import {
+    stepEvidenceRequirements,
+    type Fact,
+    type ManualSession,
+    type ParsedManual,
+    type SourceRef,
+    type PartRequirement,
+} from '@truebuild/contracts'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Label } from '../../ui/text'
 import { MeasuredPane, type ComparisonPane } from '../../ui/comparison'
@@ -26,14 +33,30 @@ export function StepFacts({
     if (step === undefined) {
         return <Body tone="muted">No extracted steps yet.</Body>
     }
+    const required = stepEvidenceRequirements(step)
     return (
         <Stack gap="xs">
             {showHeading ? <Heading>{`${step.order}. ${step.title}`}</Heading> : null}
             {step.parts.map((part) => (
-                <Body key={part.partId}>{`${part.partId}: ${factText(part.quantity, String)}`}</Body>
+                <View key={part.partId}>
+                    <Body>{`${part.partId}: ${quantityText(part)}`}</Body>
+                    {part.quantityBasis == null ? null : (
+                        <CitationLabels refs={part.quantityBasis.sourceRefs} session={session} label="Quantity basis" />
+                    )}
+                </View>
             ))}
-            <Body>{`Orientation: ${factText(step.orientation, (value) => value.description)}`}</Body>
-            <Body>{`Connection: ${factText(step.connection, (value) => value.description)}`}</Body>
+            {required.orientation || step.orientation.state === 'known' ? (
+                <Body>{`Orientation: ${factText(step.orientation, (value) => value.description)}`}</Body>
+            ) : null}
+            {required.connection || step.connection.state === 'known' ? (
+                <Body>{`Connection: ${factText(step.connection, (value) => value.description)}`}</Body>
+            ) : null}
+            {step.alternatives?.map((alternative) => (
+                <View key={alternative.alternativeId}>
+                    <Body>{`${alternative.alternativeId === step.selectedAlternativeId ? 'Chosen path' : 'Other path'}: ${alternative.title} — ${alternative.description}`}</Body>
+                    <CitationLabels refs={alternative.sourceRefs} session={session} label="Alternative" />
+                </View>
+            ))}
             {step.visibleChecks.map((check) => (
                 <Body key={check.checkId}>{`Visible check: ${factText(check.description, String)}`}</Body>
             ))}
@@ -53,6 +76,7 @@ export function StepSummary({ session, index }: { session: ManualSession; index:
     if (step === undefined) {
         return null
     }
+    const required = stepEvidenceRequirements(step)
     const labels = new Map(stepPartChoices(session, step).map((choice) => [choice.partId, choice.label]))
     return (
         <Card tone="raised">
@@ -65,16 +89,45 @@ export function StepSummary({ session, index }: { session: ManualSession; index:
                         <Body key={part.partId}>
                             {part.quantity.state === 'known'
                                 ? `${part.quantity.value} × ${name}`
-                                : `${name}: ${factText(part.quantity, String)}`}
+                                : `${name}: ${quantityText(part)}`}
                         </Body>
                     )
                 })}
             </View>
-            <View style={styles.group}>
-                <Label>Orientation</Label>
-                <Body>{factText(step.orientation, (value) => value.description)}</Body>
-            </View>
+            {required.orientation || step.orientation.state === 'known' ? (
+                <View style={styles.group}>
+                    <Label>Orientation</Label>
+                    <Body>{factText(step.orientation, (value) => value.description)}</Body>
+                </View>
+            ) : null}
         </Card>
+    )
+}
+
+function quantityText(part: PartRequirement): string {
+    if (part.quantity.state === 'known' || part.quantityBasis == null) {
+        return factText(part.quantity, String)
+    }
+    return `Quantity basis: ${part.quantityBasis.kind === 'user_supplied' ? 'supplied by you' : 'not specified by the manual'}`
+}
+
+function CitationLabels({
+    refs,
+    session,
+    label,
+}: {
+    refs: readonly SourceRef[]
+    session: ManualSession
+    label: string
+}): ReactElement {
+    return (
+        <>
+            {refs.map((ref, index) => (
+                <Caption
+                    key={index}
+                >{`${label} cited page ${session.pages.findIndex((page) => page.pageId === ref.pageId) + 1}`}</Caption>
+            ))}
+        </>
     )
 }
 

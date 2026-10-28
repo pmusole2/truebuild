@@ -754,10 +754,10 @@ describe('documented Meta conformance', () => {
         Object.values(metaOutputSchemas).forEach(inspect)
     })
 
-    it('parses twenty bounded pages with a full extraction output budget', async () => {
+    it('parses the ten-page maximum with a full extraction output budget', async () => {
         const input = await validInput()
         const page = input.sourceImages[0]!
-        const pages = Array.from({ length: 20 }, (_, index) => ({
+        const pages = Array.from({ length: 10 }, (_, index) => ({
             ...page,
             page: { ...page.page, pageId: `page-${index}`, assetId: `asset-${index}` },
         }))

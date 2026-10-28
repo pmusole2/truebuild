@@ -19,6 +19,8 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    MAX_PARSE_PAGES,
+    PARSE_SPLIT_MESSAGE,
     MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
     modelParseMetadataSchema,
@@ -67,6 +69,7 @@ export interface ImageBytes {
 export interface ModelRequestContext {
     readonly requestId: string
     readonly signal?: AbortSignal
+    readonly language?: string
     /** Trusted in-process outer action deadline; never serialized or supplied by the backend. */
     readonly checkpoint?: () => void
 }
@@ -190,7 +193,23 @@ export class ModelApiClient {
         images: readonly ImageBytes[],
         ctx: ModelRequestContext,
     ): Promise<ApiResult<ParsedManual>> {
-        const metadata = { mode: 'model', requestId: ctx.requestId, binding, pages: [...pages] }
+        if (pages.length > MAX_PARSE_PAGES) {
+            return {
+                status: 'unavailable',
+                requestId: ctx.requestId,
+                binding,
+                code: 'invalid_input',
+                retryable: false,
+                message: PARSE_SPLIT_MESSAGE,
+            }
+        }
+        const metadata = {
+            mode: 'model',
+            requestId: ctx.requestId,
+            binding,
+            pages: [...pages],
+            language: ctx.language ?? 'en',
+        }
         const sourceIds = pages.map((_page, index) => `source-${index}`)
         const valid = modelParseMetadataSchema.safeParse(metadata)
         if (!valid.success || images.length !== pages.length || !fileFieldsWithinLimits(images)) {
@@ -629,6 +648,8 @@ function everyRefInside(parsed: ParsedManual, pageIds: ReadonlySet<string>): boo
         ...parsed.parts.flatMap((part) => (part.name.state === 'known' ? part.name.sourceRefs : [])),
         ...parsed.steps.flatMap((step) => [
             ...step.sourceRefs,
+            ...(step.alternatives?.flatMap((alternative) => alternative.sourceRefs) ?? []),
+            ...step.parts.flatMap((part) => part.quantityBasis?.sourceRefs ?? []),
             ...step.parts.flatMap((part) => (part.quantity.state === 'known' ? part.quantity.sourceRefs : [])),
             ...(step.orientation.state === 'known' ? step.orientation.sourceRefs : []),
             ...(step.connection.state === 'known' ? step.connection.sourceRefs : []),

@@ -4,12 +4,22 @@ import {
     manualBindingSchema,
     manualSessionSchema,
     questionTargetSchema,
+    stepEvidenceRequirements,
     type Fact,
     type ManualStep,
     type ManualSession,
     type SourceRef,
 } from '@truebuild/contracts'
 import { z } from 'zod'
+
+export const MAX_PARSE_PAGES = 10
+export const PARSE_SPLIT_MESSAGE =
+    'Read up to 10 pages at a time. Split this manual into sections of 10 pages or fewer.'
+export const parseLanguageSchema = z
+    .string()
+    .trim()
+    .regex(/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u)
+    .max(16)
 
 // Shared client/server multipart metadata ceiling; independent of the aggregate image budget.
 export const MODEL_METADATA_MAX_BYTES = 524_288
@@ -29,6 +39,7 @@ export const modelParseMetadataSchema = z
         ...common,
         binding: manualBindingSchema,
         pages: z.array(manualSessionSchema.shape.pages.element).min(1).max(LIMITS.manualPages),
+        language: parseLanguageSchema.optional(),
     })
     .superRefine((value, ctx): void => {
         if (
@@ -65,7 +76,8 @@ function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
     const parts = usedParts(step)
     return [
         ...step.sourceRefs,
-        ...step.parts.flatMap((part) => refs(part.quantity)),
+        ...step.parts.flatMap((part) => [...refs(part.quantity), ...(part.quantityBasis?.sourceRefs ?? [])]),
+        ...(step.alternatives?.flatMap((alternative) => alternative.sourceRefs) ?? []),
         ...refs(step.orientation),
         ...refs(step.connection),
         ...step.visibleChecks.flatMap((check) => refs(check.description)),
@@ -113,24 +125,25 @@ export function unresolvedCriticalFacts(session: Pick<ManualSession, 'parts' | '
     }
     for (const step of session.reviewedSteps) {
         const label = `Step ${step.order}`
+        const required = stepEvidenceRequirements(step)
         if (step.sourceRefs.length === 0) {
             issues.push(`${label}: expected diagram citation is missing.`)
         }
-        if (step.parts.length === 0) {
+        if (required.parts && step.parts.length === 0) {
             issues.push(`${label}: required parts are missing.`)
         }
         for (const part of step.parts) {
-            if (part.quantity.state === 'unknown') {
+            if (part.quantity.state === 'unknown' && !part.quantityBasis) {
                 issues.push(`${label}, quantity of ${part.partId}: ${part.quantity.reason}`)
             }
         }
-        if (step.orientation.state === 'unknown') {
+        if (required.orientation && step.orientation.state === 'unknown') {
             issues.push(`${label} orientation: ${step.orientation.reason}`)
         }
-        if (step.connection.state === 'unknown') {
+        if (required.connection && step.connection.state === 'unknown') {
             issues.push(`${label} connection: ${step.connection.reason}`)
         }
-        if (step.visibleChecks.length === 0) {
+        if (required.visibleChecks && step.visibleChecks.length === 0) {
             issues.push(`${label}: visible checks are missing.`)
         }
         for (const check of step.visibleChecks) {

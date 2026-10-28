@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from 'react'
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
-import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
+import { stepEvidenceRequirements, type ManualBinding, type ManualSession, type ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Callout, Caption, Heading } from '../../ui/text'
@@ -175,7 +175,11 @@ function stepBlockerCount(session: ManualSession, step: ManualStep): number {
 
 /** A step needs facts from the manual when its orientation is unknown or it lists no visible check. */
 function needsStepFacts(step: ManualStep): boolean {
-    return step.orientation.state === 'unknown' || step.visibleChecks.length === 0
+    const required = stepEvidenceRequirements(step)
+    return (
+        (required.orientation && step.orientation.state === 'unknown') ||
+        (required.visibleChecks && step.visibleChecks.length === 0)
+    )
 }
 
 function stepChips(session: ManualSession, step: ManualStep, blockers: number): Chip[] {
@@ -183,18 +187,25 @@ function stepChips(session: ManualSession, step: ManualStep, blockers: number): 
         blockers > 0
             ? [{ label: 'Needs your input', tone: 'caution', icon: 'help' }]
             : [{ label: 'Facts readable', tone: 'neutral', icon: 'info' }]
-    chips.push(
-        step.orientation.state === 'known'
-            ? { label: 'Orientation known', tone: 'neutral', icon: 'check' }
-            : { label: 'Orientation unknown', tone: 'caution', icon: 'help' },
-        step.visibleChecks.length === 0
-            ? { label: 'No visible checks', tone: 'caution', icon: 'help' }
-            : {
-                  label: `${step.visibleChecks.length} visible check${step.visibleChecks.length === 1 ? '' : 's'}`,
-                  tone: 'neutral',
-                  icon: 'check',
-              },
-    )
+    const required = stepEvidenceRequirements(step)
+    if (required.orientation || step.orientation.state === 'known') {
+        chips.push(
+            step.orientation.state === 'known'
+                ? { label: 'Orientation known', tone: 'neutral', icon: 'check' }
+                : { label: 'Orientation unknown', tone: 'caution', icon: 'help' },
+        )
+    }
+    if (required.visibleChecks || step.visibleChecks.length > 0) {
+        chips.push(
+            step.visibleChecks.length === 0
+                ? { label: 'No visible checks', tone: 'caution', icon: 'help' }
+                : {
+                      label: `${step.visibleChecks.length} visible check${step.visibleChecks.length === 1 ? '' : 's'}`,
+                      tone: 'neutral',
+                      icon: 'check',
+                  },
+        )
+    }
     const pageNumbers = [
         ...new Set(
             step.sourceRefs
@@ -341,6 +352,7 @@ function StepFactEditor({
     const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
     const busy = state.pending !== null || state.storageReadOnly
     const cited = step.sourceRefs.length > 0
+    const required = stepEvidenceRequirements(step)
     const parts = step.parts.map((part) => ({ value: part.partId, label: partLabel(session, part.partId) }))
     // A sole part is chosen for the draft only; with several parts the person must pick one.
     const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
@@ -395,7 +407,7 @@ function StepFactEditor({
                     text="This step has no cited manual page, so facts cannot be accepted here. Read the manual again after adding clearer pages."
                 />
             )}
-            {step.orientation.state === 'unknown' ? (
+            {required.orientation && step.orientation.state === 'unknown' ? (
                 <Stack gap="xs">
                     {parts.length > 1 ? (
                         <View pointerEvents={busy ? 'none' : 'auto'}>
@@ -441,7 +453,7 @@ function StepFactEditor({
                     </View>
                 </Stack>
             ) : null}
-            {step.visibleChecks.length === 0 ? (
+            {required.visibleChecks && step.visibleChecks.length === 0 ? (
                 <Stack gap="xs">
                     <Caption>No visible checks are listed for this step. Enter one condition per line.</Caption>
                     <TextField

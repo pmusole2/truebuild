@@ -101,9 +101,26 @@ export async function readModelMultipart<T>(
             throw new ModelBodyError(400)
         }
         deadline.checkpoint()
+        const metadata = form.getAll('metadata')
+        const raw = metadata[0]
+        if (metadata.length !== 1 || typeof raw !== 'string' || Buffer.byteLength(raw) > MODEL_METADATA_MAX_BYTES) {
+            throw new ModelBodyError(400)
+        }
+        let value: unknown
+        try {
+            value = JSON.parse(raw)
+        } catch {
+            throw new ModelBodyError(400)
+        }
+        // A parse-specific rejection may carry a safe split message before the generic file-count limit rejects it.
+        // Body and metadata byte ceilings already hold; every accepted request still passes the entry checks below.
+        const parsed = schema.safeParse(value)
+        deadline.checkpoint()
+        if (!parsed.success) {
+            throw new ModelBodyError(400)
+        }
         const names = new Set<string>()
         const files = new Map<string, File>()
-        let raw: string | undefined
         for (const [name, value] of form.entries()) {
             if (names.has(name) || names.size >= LIMITS.requestImages + 1) {
                 throw new ModelBodyError(400)
@@ -113,27 +130,12 @@ export async function readModelMultipart<T>(
                 if (typeof value !== 'string' || Buffer.byteLength(value) > MODEL_METADATA_MAX_BYTES) {
                     throw new ModelBodyError(400)
                 }
-                raw = value
             } else {
                 if (typeof value === 'string') {
                     throw new ModelBodyError(400)
                 }
                 files.set(name, value)
             }
-        }
-        if (raw === undefined) {
-            throw new ModelBodyError(400)
-        }
-        let value: unknown
-        try {
-            value = JSON.parse(raw)
-        } catch {
-            throw new ModelBodyError(400)
-        }
-        const parsed = schema.safeParse(value)
-        deadline.checkpoint()
-        if (!parsed.success) {
-            throw new ModelBodyError(400)
         }
         return { metadata: parsed.data, files }
     } finally {

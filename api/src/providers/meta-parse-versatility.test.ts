@@ -1,0 +1,408 @@
+import { createHash } from 'node:crypto'
+import { createDemoManual, type ManualStep, type ParsedManual } from '@truebuild/contracts'
+import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
+import sharp from 'sharp'
+import { describe, expect, it, vi } from 'vitest'
+
+import { createMetaProvider, stepRefs, type ParseManualInput } from './meta-provider'
+
+// Everything here is synthetic and mocked: no recorded provider output, no live request.
+const CITED = [{ pageId: 'demo-page-1', region: null }]
+const UNKNOWN = { state: 'unknown' as const, reason: 'The manual does not state this.' }
+
+function envelope(value: unknown): Record<string, unknown> {
+    return {
+        status: 'completed',
+        output: [
+            {
+                type: 'message',
+                role: 'assistant',
+                status: 'completed',
+                content: [{ type: 'output_text', text: JSON.stringify(value) }],
+            },
+        ],
+    }
+}
+
+async function fixture(pageCount = 1): Promise<{ input: ParseManualInput; clean: ParsedManual }> {
+    const session = createDemoManual()
+    const pages: ParseManualInput['pages'] = []
+    for (let index = 0; index < pageCount; index += 1) {
+        const bytes = await sharp({
+            create: { width: 8, height: 4, channels: 3, background: { r: index * 20, g: 9, b: 9 } },
+        })
+            .png()
+            .toBuffer()
+        pages.push({
+            page: {
+                ...session.pages[0]!,
+                pageId: index === 0 ? session.pages[0]!.pageId : `demo-page-${index + 1}`,
+                assetId: index === 0 ? session.pages[0]!.assetId : `demo-asset-${index + 1}`,
+                width: 8,
+                height: 4,
+                mimeType: 'image/png',
+                contentHash: createHash('sha256').update(bytes).digest('hex'),
+            },
+            bytes,
+        })
+    }
+    return {
+        input: {
+            requestId: 'parse-versatility',
+            binding: { kind: 'manual', manualId: session.manualId, revision: session.revision },
+            pages,
+        },
+        clean: structuredClone(session.rawExtraction!),
+    }
+}
+
+function queued(
+    values: unknown[],
+    options: { parseModel?: 'muse-spark-1.3' | 'muse-wonder-1.0' } = {},
+): {
+    provider: ReturnType<typeof createMetaProvider>
+    fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>
+    bodies: Record<string, unknown>[]
+} {
+    const bodies: Record<string, unknown>[] = []
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        if (bodies.length > values.length) throw new Error('Unexpected additional model request')
+        return Response.json(envelope(values[bodies.length - 1]))
+    })
+    return { provider: createMetaProvider({ apiKey: '<synthetic>', ...options, fetchImpl }), fetchImpl, bodies }
+}
+
+function withStep(clean: ParsedManual, change: Partial<ManualStep>): ParsedManual {
+    const value = structuredClone(clean)
+    value.steps[0] = { ...value.steps[0]!, ...change }
+    return value
+}
+
+function content(body: Record<string, unknown>): { type: string; text?: string }[] {
+    const input = body.input as { content: { type: string; text?: string }[] }[]
+    return input[0]!.content
+}
+
+function manualContext(body: Record<string, unknown>): Record<string, unknown> {
+    const first = content(body)[0]!
+    return (JSON.parse(first.text!) as { manualContext: Record<string, unknown> }).manualContext
+}
+
+const alternatives = [
+    { alternativeId: 'wall', title: 'Wall route', description: 'Route the cable along the wall.', sourceRefs: CITED },
+    {
+        alternativeId: 'floor',
+        title: 'Floor route',
+        description: 'Route the cable under the floor.',
+        sourceRefs: CITED,
+    },
+]
+
+describe('parse prompt for versatile manuals', () => {
+    it('preserves language-neutral diagram grounding while filtering printed text blocks', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(String(bodies[0]!.instructions)).toContain('Language-neutral diagrams remain valid grounding')
+        expect(String(bodies[0]!.instructions)).toContain('This language filter applies to printed text only')
+    })
+
+    it('asks for one parent step with cited alternatives and a recorded selection', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const instructions = String(bodies[0]!.instructions)
+        expect(instructions).toMatch(/mutually exclusive or optional methods/u)
+        expect(instructions).toMatch(/ONE parent step/u)
+        expect(instructions).toContain('alternatives')
+        expect(instructions).toContain('selectedAlternativeId')
+        expect(instructions).toMatch(/explicit default/u)
+        expect(instructions).toMatch(/first alternative as printed/u)
+        expect(instructions).toMatch(/only the selected path/u)
+        expect(instructions).toMatch(/never in the required parts or the part registry/u)
+    })
+
+    it('forbids invented quantities and names the cited user-supplied and not-specified basis', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const instructions = String(bodies[0]!.instructions)
+        expect(instructions).toMatch(/Never invent a quantity/u)
+        expect(instructions).toContain('quantityBasis')
+        expect(instructions).toContain('user_supplied')
+        expect(instructions).toContain('not_specified')
+        expect(instructions).toMatch(/quantity unknown/u)
+    })
+
+    it('distinguishes assembly steps from adjust, connect, tighten and route steps', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const instructions = String(bodies[0]!.instructions)
+        for (const kind of ['assembly', 'adjust', 'connect', 'tighten', 'route']) expect(instructions).toContain(kind)
+        expect(instructions).toContain('requirements')
+        expect(instructions).toMatch(
+            /Assembly steps always need orientation, connection and at least one visible check/u,
+        )
+        expect(instructions).toMatch(/never invent a camera-observable check/iu)
+    })
+
+    it('still sends every ordered page image with the parse operation last', async () => {
+        const { input, clean } = await fixture(3)
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        const kinds = content(bodies[0]!).map((block) => block.type)
+        expect(kinds).toEqual(['input_text', 'input_image', 'input_image', 'input_image', 'input_text'])
+    })
+})
+
+describe('parse validation of alternatives, quantity basis and step kinds', () => {
+    it('accepts one parent step with two cited alternatives and a recorded selection without a repair', async () => {
+        const { input, clean } = await fixture()
+        const value = withStep(clean, { alternatives, selectedAlternativeId: 'wall' })
+        const { provider, fetchImpl } = queued([value])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps).toHaveLength(clean.steps.length)
+        expect(result.steps[0]).toMatchObject({ selectedAlternativeId: 'wall', alternatives })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+        ['selection is not an alternative', { alternatives, selectedAlternativeId: 'ceiling' }],
+        ['selection is missing', { alternatives, selectedAlternativeId: null }],
+        [
+            'alternative cites an unsupplied page',
+            {
+                alternatives: [
+                    { ...alternatives[0]!, sourceRefs: [{ pageId: 'ghost', region: null }] },
+                    alternatives[1]!,
+                ],
+                selectedAlternativeId: 'wall',
+            },
+        ],
+        [
+            'alternative ids repeat',
+            { alternatives: [alternatives[0]!, alternatives[0]!], selectedAlternativeId: 'wall' },
+        ],
+    ] as const)('rejects an extraction where the %s', async (_label, change) => {
+        const { input, clean } = await fixture()
+        const { provider, fetchImpl } = queued([withStep(clean, change as Partial<ManualStep>)])
+        await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+            code: 'invalid_output',
+        })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['user_supplied', 'not_specified'] as const)(
+        'keeps a %s quantity unknown without spending a repair',
+        async (kind) => {
+            const { input, clean } = await fixture()
+            const step = clean.steps[0]!
+            const value = withStep(clean, {
+                parts: step.parts.map((part) => ({
+                    ...part,
+                    quantity: UNKNOWN,
+                    quantityBasis: { kind, sourceRefs: CITED },
+                })),
+            })
+            const { provider, fetchImpl } = queued([value])
+            const result = await provider.parseManual(input, new AbortController().signal)
+            expect(result.steps[0]!.parts[0]).toMatchObject({ quantity: UNKNOWN, quantityBasis: { kind } })
+            expect(fetchImpl).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it('keeps an ungrounded unknown quantity as an unresolved fact and spends the single repair', async () => {
+        const { input, clean } = await fixture()
+        const step = clean.steps[0]!
+        const ungrounded = withStep(clean, {
+            parts: step.parts.map((part) => ({ ...part, quantity: UNKNOWN, quantityBasis: null })),
+        })
+        const { provider, fetchImpl, bodies } = queued([ungrounded, ungrounded])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(fetchImpl).toHaveBeenCalledTimes(2)
+        expect(String(bodies[1]!.instructions)).toContain('quantity of')
+        expect(result.steps[0]!.parts[0]!.quantity).toEqual(UNKNOWN)
+    })
+
+    it('accepts a tighten step without orientation, connection or visible checks and no repair', async () => {
+        const { input, clean } = await fixture()
+        const value = withStep(clean, {
+            kind: 'tighten',
+            requirements: null,
+            parts: [],
+            orientation: UNKNOWN,
+            connection: UNKNOWN,
+            visibleChecks: [],
+        })
+        const { provider, fetchImpl } = queued([value])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps[0]).toMatchObject({ kind: 'tighten', visibleChecks: [] })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not waive the same missing evidence for an assembly step', async () => {
+        const { input, clean } = await fixture()
+        const value = withStep(clean, {
+            kind: 'assembly',
+            orientation: UNKNOWN,
+            connection: UNKNOWN,
+            visibleChecks: [],
+        })
+        const { provider, fetchImpl, bodies } = queued([value, value])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(fetchImpl).toHaveBeenCalledTimes(2)
+        expect(String(bodies[1]!.instructions)).toContain('visible checks are missing')
+    })
+
+    it('counts quantity-basis and alternative citations as step source references', () => {
+        const step = createDemoManual().reviewedSteps[0]!
+        const basis = { pageId: 'basis-page', region: null }
+        const alternative = { pageId: 'alternative-page', region: null }
+        const refs = stepRefs({
+            ...step,
+            parts: [
+                { ...step.parts[0]!, quantity: UNKNOWN, quantityBasis: { kind: 'user_supplied', sourceRefs: [basis] } },
+            ],
+            alternatives: [
+                { ...alternatives[0]!, sourceRefs: [alternative] },
+                { ...alternatives[1]!, sourceRefs: CITED },
+            ],
+            selectedAlternativeId: 'wall',
+        })
+        expect(refs).toContainEqual(basis)
+        expect(refs).toContainEqual(alternative)
+    })
+})
+
+describe('parse language', () => {
+    it('keeps English facts from a mocked multilingual page without mixing the other block', async () => {
+        const { input, clean } = await fixture()
+        const blocks = { en: 'Support bracket', fr: 'Support de fixation' }
+        // The response is mocked, not OCR evidence: this checks the English policy and the returned fact plumbing.
+        clean.parts[0]!.name = { state: 'known', value: blocks.en, sourceRefs: CITED }
+        const { provider, bodies } = queued([clean])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.parts[0]!.name).toMatchObject({ value: blocks.en })
+        expect(JSON.stringify(result.parts[0]!.name)).not.toContain(blocks.fr)
+        expect(manualContext(bodies[0]!).language).toBe('en')
+        expect(String(bodies[0]!.instructions)).toContain('ignore facts in other languages')
+        expect(String(bodies[0]!.instructions)).toContain('never mix or translate')
+    })
+
+    it('defaults the request language to English in context and instructions', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(manualContext(bodies[0]!).language).toBe('en')
+        expect(String(bodies[0]!.instructions)).toMatch(/Selected parse language: en/u)
+    })
+
+    it('propagates a selected language and tells the model to ignore, never mix or translate others', async () => {
+        const { input, clean } = await fixture(2)
+        const { provider, bodies } = queued([clean])
+        // The mock returns English text: it demonstrates request plumbing, not real multilingual OCR.
+        const result = await provider.parseManual({ ...input, language: 'fr-CA' }, new AbortController().signal)
+        expect(result.parts[0]!.name).toMatchObject({ state: 'known' })
+        expect(manualContext(bodies[0]!).language).toBe('fr-CA')
+        const instructions = String(bodies[0]!.instructions)
+        expect(instructions).toMatch(/Selected parse language: fr-CA/u)
+        expect(instructions).toMatch(/only blocks written in that language/u)
+        expect(instructions).toMatch(/ignore facts in other languages/u)
+        expect(instructions).toMatch(/never mix or translate/u)
+        expect(instructions).toMatch(/keep the fact unknown/u)
+        expect(content(bodies[0]!).filter((block) => block.type === 'input_image')).toHaveLength(2)
+    })
+
+    it.each(['EN', 'english', 'e', 'fr_CA', 'fr-', 'x'.repeat(17), '', ' '])(
+        'rejects invalid language %j before any request',
+        async (language) => {
+            const { input, clean } = await fixture()
+            const { provider, fetchImpl } = queued([clean])
+            await expect(
+                provider.parseManual({ ...input, language }, new AbortController().signal),
+            ).rejects.toMatchObject({
+                code: 'invalid_input',
+            })
+            expect(fetchImpl).not.toHaveBeenCalled()
+        },
+    )
+})
+
+describe('page-scaled first parse attempt and page limit', () => {
+    it.each([
+        [7, 59_500],
+        [10, 70_000],
+    ])(
+        'retains a slow unresolved first parse at %i pages instead of overrunning overall time in repair',
+        async (pages, firstMs) => {
+            const { input, clean } = await fixture(pages)
+            clean.steps[0]!.orientation = UNKNOWN
+            let monotonic = 100
+            const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
+            const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
+                monotonic += fetchImpl.mock.calls.length === 1 ? firstMs : 40_001
+                return Response.json(envelope(clean))
+            })
+            try {
+                const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
+                const result = await provider.parseManual(input, new AbortController().signal)
+                expect(result.steps[0]!.orientation).toEqual(UNKNOWN)
+                expect(fetchImpl).toHaveBeenCalledTimes(1)
+            } finally {
+                clock.mockRestore()
+            }
+        },
+    )
+
+    async function timed(pageCount: number, elapsedMs: number): Promise<{ calls: number; outcome: unknown }> {
+        const { input, clean } = await fixture(pageCount)
+        let monotonic = 100
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
+        const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
+            monotonic += elapsedMs
+            return Response.json(envelope(clean))
+        })
+        try {
+            const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
+            const outcome = await provider.parseManual(input, new AbortController().signal).then(
+                () => 'accepted' as const,
+                (error: unknown) => (error as { code?: string }).code,
+            )
+            return { calls: fetchImpl.mock.calls.length, outcome }
+        } finally {
+            clock.mockRestore()
+        }
+    }
+
+    it('accepts a 55 second first response for a seven-page manual that the old 45 second budget would time out', async () => {
+        expect(await timed(7, 55_000)).toEqual({ calls: 1, outcome: 'accepted' })
+    })
+
+    it.each([
+        [1, 45_000],
+        [4, 45_000],
+        [5, 50_000],
+        [7, 60_000],
+        [10, 75_000],
+    ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
+        expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
+        expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
+    })
+
+    it('accepts exactly the shared page maximum', async () => {
+        const { input, clean } = await fixture(MAX_PARSE_PAGES)
+        const { provider, fetchImpl } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects an eleventh page before normalization or any request without leaking a message', async () => {
+        const { input, clean } = await fixture(MAX_PARSE_PAGES + 1)
+        const { provider, fetchImpl } = queued([clean])
+        const error = await provider.parseManual(input, new AbortController().signal).catch((caught: unknown) => caught)
+        expect(error).toMatchObject({ code: 'invalid_input', message: 'invalid_input' })
+        expect(fetchImpl).not.toHaveBeenCalled()
+    })
+})

@@ -2,7 +2,7 @@ import type { ProviderMetrics } from '../providers/meta-transport'
 import { ModelCallCounter } from '../server/budget'
 import { createHash } from 'node:crypto'
 import { createDemoManual } from '@truebuild/contracts'
-import { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
+import { MAX_PARSE_PAGES, MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 import { ModelApiClient } from '../../../app/src/api/model-client'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
@@ -29,7 +29,7 @@ async function media(): Promise<{ session: ReturnType<typeof createDemoManual>; 
 }
 
 describe('documented loopback mock with real API composition', () => {
-    it('parses twenty pages, checks and asks over authenticated multipart without a SAM still call', async () => {
+    it('parses ten pages, then checks and asks over twenty pages, over authenticated multipart without a SAM still call', async () => {
         const mock = await startMetaMock({ scenario: 'reversed' })
         try {
             const runtime = createRuntimeFromEnvironment(
@@ -64,8 +64,8 @@ describe('documented loopback mock with real API composition', () => {
             expect(
                 await client.parse(
                     { kind: 'manual', manualId: session.manualId, revision: session.revision },
-                    pages,
-                    images,
+                    pages.slice(0, MAX_PARSE_PAGES),
+                    images.slice(0, MAX_PARSE_PAGES),
                     { requestId: 'parse-many' },
                 ),
             ).toMatchObject({ status: 'ok', mode: 'model' })
@@ -112,7 +112,7 @@ describe('documented loopback mock with real API composition', () => {
                 mock.wireRequests.map(
                     (request) => request.input[0].content.filter((part) => part.type === 'input_image').length,
                 ),
-            ).toEqual([20, 21, 21])
+            ).toEqual([MAX_PARSE_PAGES, 21, 21])
             expect(runtime.counter.used).toBe(3)
             expect(mock.requests.map((request) => request.operation)).toEqual(['parse', 'check', 'question'])
             expect(mock.failures).toEqual([])

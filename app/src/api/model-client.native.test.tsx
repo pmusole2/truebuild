@@ -101,7 +101,7 @@ afterAll(() => {
 })
 
 function expectedBody(): Uint8Array {
-    const metadata = JSON.stringify({ mode: 'model', requestId, binding, pages })
+    const metadata = JSON.stringify({ mode: 'model', requestId, binding, pages, language: 'en' })
     const chunks: (string | Uint8Array)[] = [
         `--${boundary}\r\ncontent-disposition: form-data; name="metadata"\r\n\r\n${metadata}\r\n`,
     ]

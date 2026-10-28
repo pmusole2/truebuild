@@ -64,7 +64,23 @@ export type Orientation = z.infer<typeof orientationSchema>
 export type Connection = z.infer<typeof connectionSchema>
 
 const manualPartSchema = z.strictObject({ partId: idSchema, name: factSchema(titleSchema) })
-const partRequirementSchema = z.strictObject({ partId: idSchema, quantity: factSchema(positiveIntegerSchema) })
+const partRequirementSchema = z
+    .strictObject({
+        partId: idSchema,
+        quantity: factSchema(positiveIntegerSchema),
+        quantityBasis: z
+            .strictObject({
+                kind: z.enum(['user_supplied', 'not_specified']),
+                sourceRefs: knownSourceRefsSchema,
+            })
+            .nullable()
+            .optional(),
+    })
+    .superRefine((part, ctx) => {
+        if (part.quantityBasis?.kind === 'not_specified' && part.quantity.state === 'known') {
+            ctx.addIssue({ code: 'custom', message: 'An unspecified quantity cannot contain a numeric count' })
+        }
+    })
 const visibleCheckSchema = z.strictObject({ checkId: idSchema, description: factSchema(descriptionSchema) })
 const correctionActionSchema = z.strictObject({
     actionId: idSchema,
@@ -95,6 +111,29 @@ export const manualStepSchema = z
         stepId: idSchema,
         order: positiveIntegerSchema,
         title: titleSchema,
+        kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
+        requirements: z
+            .strictObject({
+                orientation: z.boolean(),
+                connection: z.boolean(),
+                visibleChecks: z.boolean(),
+            })
+            .nullable()
+            .optional(),
+        alternatives: z
+            .array(
+                z.strictObject({
+                    alternativeId: idSchema,
+                    title: titleSchema,
+                    description: descriptionSchema,
+                    sourceRefs: knownSourceRefsSchema,
+                }),
+            )
+            .min(2)
+            .max(16)
+            .nullable()
+            .optional(),
+        selectedAlternativeId: idSchema.nullable().optional(),
         parts: z.array(partRequirementSchema).max(256),
         orientation: factSchema(orientationSchema),
         connection: factSchema(connectionSchema),
@@ -103,6 +142,19 @@ export const manualStepSchema = z
         correction: correctionPlanSchema.nullable(),
     })
     .superRefine((step, ctx) => {
+        const alternatives = step.alternatives ?? []
+        rejectDuplicates(
+            alternatives.map((alternative) => alternative.alternativeId),
+            'alternative',
+            ctx,
+        )
+        if (
+            alternatives.length > 0
+                ? !alternatives.some((alternative) => alternative.alternativeId === step.selectedAlternativeId)
+                : step.selectedAlternativeId != null
+        ) {
+            ctx.addIssue({ code: 'custom', message: 'Selected alternative must identify one cited path' })
+        }
         rejectDuplicates(
             step.parts.map((part) => part.partId),
             'step part',
@@ -116,6 +168,22 @@ export const manualStepSchema = z
     })
 
 export type ManualStep = z.infer<typeof manualStepSchema>
+
+/** Legacy or assembly steps always retain every assembly evidence requirement. */
+export function stepEvidenceRequirements(step: ManualStep): {
+    parts: boolean
+    orientation: boolean
+    connection: boolean
+    visibleChecks: boolean
+} {
+    const assembly = step.kind == null || step.kind === 'assembly'
+    return {
+        parts: assembly,
+        orientation: assembly || step.requirements?.orientation === true,
+        connection: assembly || step.requirements?.connection === true,
+        visibleChecks: assembly || step.requirements?.visibleChecks === true,
+    }
+}
 
 const manualPageSchema = z
     .strictObject({
@@ -209,7 +277,8 @@ function allSourceRefs(parts: ManualPart[], steps: ManualStep[]): SourceRef[] {
         ...parts.flatMap((part) => factRefs(part.name)),
         ...steps.flatMap((step) => [
             ...step.sourceRefs,
-            ...step.parts.flatMap((part) => factRefs(part.quantity)),
+            ...step.parts.flatMap((part) => [...factRefs(part.quantity), ...(part.quantityBasis?.sourceRefs ?? [])]),
+            ...(step.alternatives?.flatMap((alternative) => alternative.sourceRefs) ?? []),
             ...factRefs(step.orientation),
             ...factRefs(step.connection),
             ...step.visibleChecks.flatMap((check) => factRefs(check.description)),
@@ -265,17 +334,19 @@ export const manualSessionSchema = z
             const unresolved =
                 session.reviewedSteps.length === 0 ||
                 session.parts.some((part) => part.name.state === 'unknown') ||
-                session.reviewedSteps.some(
-                    (step) =>
+                session.reviewedSteps.some((step) => {
+                    const required = stepEvidenceRequirements(step)
+                    return (
                         step.sourceRefs.length === 0 ||
-                        step.parts.length === 0 ||
-                        step.parts.some((part) => part.quantity.state === 'unknown') ||
-                        step.orientation.state === 'unknown' ||
-                        step.connection.state === 'unknown' ||
-                        step.visibleChecks.length === 0 ||
+                        (required.parts && step.parts.length === 0) ||
+                        step.parts.some((part) => part.quantity.state === 'unknown' && !part.quantityBasis) ||
+                        (required.orientation && step.orientation.state === 'unknown') ||
+                        (required.connection && step.connection.state === 'unknown') ||
+                        (required.visibleChecks && step.visibleChecks.length === 0) ||
                         step.visibleChecks.some((check) => check.description.state === 'unknown') ||
-                        (step.correction !== null && !step.correction.reviewed),
-                )
+                        (step.correction !== null && !step.correction.reviewed)
+                    )
+                })
             if (unresolved) {
                 ctx.addIssue({ code: 'custom', message: 'Reviewed manual has unresolved critical facts or review' })
             }
@@ -420,6 +491,7 @@ export type ApiResult<T> =
           binding: ManualBinding | CaptureBinding | null
           code: z.infer<typeof unavailableCodeSchema>
           retryable: boolean
+          message?: string
       }
 
 export function apiResultSchema<T>(valueSchema: z.ZodType<T>): z.ZodType<ApiResult<T>> {
@@ -437,6 +509,7 @@ export function apiResultSchema<T>(valueSchema: z.ZodType<T>): z.ZodType<ApiResu
             binding: bindingSchema.nullable(),
             code: unavailableCodeSchema,
             retryable: z.boolean(),
+            message: descriptionSchema.optional(),
         }),
     ])
 }

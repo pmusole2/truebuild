@@ -336,7 +336,10 @@ export function interpretEnvelope<T>(
         const failure = apiResultSchema(z.unknown()).safeParse(json)
 
         if (failure.success && failure.data.status === 'unavailable' && echoesRequest(failure.data, call, mode)) {
-            return unavailableResult(call.requestId, call.binding, failure.data.code, failure.data.retryable)
+            return {
+                ...unavailableResult<T>(call.requestId, call.binding, failure.data.code, failure.data.retryable),
+                ...(failure.data.message === undefined ? {} : { message: failure.data.message }),
+            }
         }
 
         return classify(status, call)
