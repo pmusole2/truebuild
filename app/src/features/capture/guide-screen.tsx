@@ -10,9 +10,9 @@ import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction } from '../../ui/text'
 import type { PaneNote } from '../../ui/pane-notes'
-import { StepList, type StepListItem } from '../../ui/progress'
+import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { AskSheet } from '../../ui/ask-sheet'
-import { ResultReveal } from '../../ui/result-reveal'
+import { useFeedback } from '../../ui/feedback'
 import { space } from '../../theme/tokens'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
@@ -92,6 +92,27 @@ export function GuideScreen({
               : 'Selected point in photo.'
     const onPoint = (point: Point): void => controller.targetChanged({ kind: 'point', ...point })
     const pointTap = editable && capture !== null ? onPoint : undefined
+
+    // One notification per new result, announced once however often it is shown again. An answer never changes how a
+    // retained check was announced.
+    const { haptic } = useFeedback()
+    const announced = useRef<{ check: string | null; answer: string | null }>({ check: null, answer: null })
+    useEffect(() => {
+        if (check === null) {
+            return
+        }
+        const identity = `${check.decision}:${check.reason}`
+        if (announced.current.check !== identity) {
+            announced.current.check = identity
+            haptic(check.decision === 'pass' ? 'success' : 'warning')
+        }
+    }, [check, haptic])
+    useEffect(() => {
+        if (answer !== null && announced.current.answer !== answer.answer) {
+            announced.current.answer = answer.answer
+            haptic('selection')
+        }
+    }, [answer, haptic])
 
     // A reply to a question closes the composer so the answer reads on the hero.
     const previousAnswer = useRef(answer)
@@ -197,35 +218,28 @@ export function GuideScreen({
     const pairedFrom = capture === null || refusal !== null ? null : answer !== null ? 'answer' : 'check'
     const pairedRefs =
         pairedFrom === 'answer' ? (answer?.sourceRefs ?? []) : pairedFrom === 'check' ? (check?.sourceRefs ?? []) : []
-    const heroImage =
-        capture === null ? (
-            <StepPicture
-                reference={step?.sourceRefs[0]}
-                session={session}
-                pageUris={state.pageUris}
-                height={heroHeight}
-            />
-        ) : (
-            frozenPhoto(capture.observation, guideNotes, heroHeight)
-        )
+    const heroImage = (
+        <View testID="guide-hero" style={{ height: heroHeight }}>
+            {capture === null ? (
+                <StepPicture
+                    reference={step?.sourceRefs[0]}
+                    session={session}
+                    pageUris={state.pageUris}
+                    height={heroHeight}
+                    testID="guide-hero-picture"
+                />
+            ) : (
+                frozenPhoto(capture.observation, guideNotes, heroHeight)
+            )}
+        </View>
+    )
     const reason = state.pending !== null && check !== null ? plainPending(state.pending) : null
     const parts = step !== undefined && !hasResult && state.pending === null ? partsLine(session, step) : null
     const sentenceNode =
         check !== null || answer !== null ? (
-            <ResultReveal
-                identity={
-                    check !== null && answer === null
-                        ? `check:${check.decision}:${check.reason}`
-                        : `answer:${answer?.answer ?? ''}`
-                }
-                feedback={
-                    answer !== null || check === null ? 'selection' : check.decision === 'pass' ? 'success' : 'warning'
-                }
-            >
-                <View accessibilityLiveRegion="polite">
-                    <Instruction>{sentence.text}</Instruction>
-                </View>
-            </ResultReveal>
+            <View accessibilityLiveRegion="polite">
+                <Instruction>{sentence.text}</Instruction>
+            </View>
         ) : (
             <Instruction>{sentence.text}</Instruction>
         )
@@ -354,20 +368,18 @@ function GuideMore({
     const ask = (
         <Stack gap="sm">
             <Heading>Ask about this step</Heading>
-            {capture === null ? (
-                <>
-                    <Body>Take a photo first, then ask about it.</Body>
-                    <AppButton
-                        label="Take photo to ask"
-                        icon="help"
-                        disabled={askBlocked}
-                        onPress={(): void => {
-                            onClose()
-                            controller.camera({ kind: 'question' })
-                        }}
-                    />
-                </>
-            ) : (
+            {capture === null ? <Body>Take a photo first, then ask about it.</Body> : null}
+            <AppButton
+                label="Take photo to ask"
+                icon="help"
+                variant={capture === null ? 'secondary' : 'quiet'}
+                disabled={askBlocked}
+                onPress={(): void => {
+                    onClose()
+                    controller.camera({ kind: 'question' })
+                }}
+            />
+            {capture === null ? null : (
                 <AskSheet
                     question={state.question}
                     questionLabel="Question about your photo"
@@ -465,7 +477,7 @@ function GuideMore({
             )}
             {evidence}
             {extraSources}
-            <Stack gap="xs">
+            <View testID="full-step" style={styles.fullStep}>
                 <Heading>The full step</Heading>
                 <StepLayout
                     session={session}
@@ -475,10 +487,15 @@ function GuideMore({
                 />
                 <StepDetails session={session} index={entry.stepIndex} showHeading={false} />
                 <SourceDiagrams refs={instructionRefs} session={session} pageUris={state.pageUris} fit="page" />
-            </Stack>
+            </View>
             {ask}
             <Stack gap="sm">
                 <Heading>All steps</Heading>
+                <ProgressBar
+                    label="Steps marked complete"
+                    value={entry.completedStepIds.length}
+                    total={session.reviewedSteps.length}
+                />
                 <StepList steps={stepItems} />
                 <View style={styles.row}>
                     <View style={styles.cell}>
@@ -542,6 +559,7 @@ const styles = StyleSheet.create({
     chevron: { position: 'absolute', top: 0, bottom: 0, justifyContent: 'center' },
     chevronLeft: { left: space.md + space.xs },
     chevronRight: { right: space.md + space.xs },
+    fullStep: { gap: space.xs },
     row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     cell: { flexGrow: 1, flexBasis: 0, minWidth: 150 },
 })

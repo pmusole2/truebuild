@@ -6,9 +6,9 @@ import { ThemeProvider } from '../theme/theme'
 import { Notice, StatusTag, VerdictTag, type Verdict } from './status'
 
 const VERDICT_LABELS: readonly (readonly [Verdict, string])[] = [
-    ['pass', 'Pass'],
-    ['refuse', 'Refuse'],
-    ['cannot_verify', 'Cannot verify'],
+    ['pass', 'Looks right'],
+    ['refuse', 'Not yet'],
+    ['cannot_verify', 'Can’t tell'],
 ]
 
 describe('verdict tags', () => {
@@ -24,8 +24,8 @@ describe('verdict tags', () => {
                 <VerdictTag verdict="refuse" />
             </>,
         )
-        expect(screen.getByText('Pass')).toHaveStyle({ color: lightColors.pass })
-        expect(screen.getByText('Refuse')).toHaveStyle({ color: lightColors.refuse })
+        expect(screen.getByText('Looks right')).toHaveStyle({ color: lightColors.pass })
+        expect(screen.getByText('Not yet')).toHaveStyle({ color: lightColors.refuse })
     })
 
     it.each([
@@ -44,7 +44,7 @@ describe('verdict tags', () => {
             expect(screen.getByText('Simulated result')).toHaveStyle({ color: colors.ink })
             expect(contrastRatio(colors.ink, colors.surfaceRaised)).toBeGreaterThan(7)
             expect(screen.getByText('Simulated result')).not.toHaveStyle({ color: colors.fillStrongInk })
-            expect(screen.getByText('Pass')).toHaveStyle({ color: colors.pass })
+            expect(screen.getByText('Looks right')).toHaveStyle({ color: colors.pass })
         },
     )
 })

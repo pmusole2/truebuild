@@ -48,11 +48,11 @@ it('renders permission checks before camera hardware and offers explicit permiss
     const { rerender } = await render(
         <CameraScreen busy={false} intent={{ kind: 'page' }} onCancel={noop} onCapture={noop} />,
     )
-    expect(screen.getByText('Checking camera access…')).toBeTruthy()
+    expect(screen.getByText('Getting the camera ready.')).toBeTruthy()
     expect(screen.queryByTestId('camera-feed')).toBeNull()
     mockPermission = { granted: false, canAskAgain: false }
     await rerender(<CameraScreen busy={false} intent={{ kind: 'page' }} onCancel={noop} onCapture={noop} />)
-    expect(screen.getByRole('button', { name: 'Open device settings' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Settings' })).toBeTruthy()
     expect(screen.queryByTestId('camera-feed')).toBeNull()
     await fireEvent.press(screen.getByRole('button', { name: 'Allow camera' }))
     expect(mockRequestPermission).toHaveBeenCalledTimes(1)
@@ -85,9 +85,9 @@ it('shows a mount failure and remounts on retry without allowing an unready capt
     mockPermission = { granted: true, canAskAgain: true }
     await render(<CameraScreen busy={false} intent={{ kind: 'page' }} onCancel={noop} onCapture={noop} />)
     await fireEvent(screen.getByTestId('camera-feed'), 'mountError')
-    expect(screen.getByText('Camera unavailable')).toBeTruthy()
+    expect(screen.getByText('The camera is not working. Close other apps and try again.')).toBeTruthy()
     expect(screen.queryByTestId('camera-feed')).toBeNull()
-    await fireEvent.press(screen.getByRole('button', { name: 'Retry camera' }))
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
     expect(screen.getByTestId('camera-feed')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Capture photo' }).props.accessibilityState.disabled).toBe(true)
 })

@@ -127,6 +127,7 @@ export function FrozenPhoto({
     return (
         <View style={styles.wrap}>
             <View
+                testID="frozen-photo-frame"
                 onLayout={onLayout}
                 style={[styles.frame, { height: boxHeight, backgroundColor: colors.surfaceSunken }]}
             >

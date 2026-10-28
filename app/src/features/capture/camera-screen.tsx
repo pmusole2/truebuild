@@ -26,7 +26,7 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
     const [attempt, setAttempt] = useState(0)
     const shutter = (
         <ShutterButton
-            label={busy ? 'Preparing photo…' : 'Take photo'}
+            label={busy ? 'Preparing photo…' : 'Capture photo'}
             onPress={(): void => {
                 const view = camera.current
                 if (view === null) {

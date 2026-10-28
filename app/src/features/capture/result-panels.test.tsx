@@ -47,15 +47,11 @@ it('announces a new answer with neutral selection feedback and no verdict', asyn
         </FeedbackProvider>,
     )
     expect(trigger).toHaveBeenCalledWith('selection')
-    for (const label of ['Pass', 'Refuse', 'Cannot verify']) expect(screen.queryByText(label)).toBeNull()
+    for (const label of ['Looks right', 'Not yet', 'Can’t tell']) expect(screen.queryByText(label)).toBeNull()
     expect(screen.getByText('Answer')).toBeTruthy()
     expect(screen.getByText('Answer to your question from the manual pages. It is not a step check.')).toBeTruthy()
-    // It leads like a result, but its bar is the neutral ink of a plain notice, never a pass, refuse or caution colour.
-    const bar = StyleSheet.flatten(screen.getByTestId('card-bar', { includeHiddenElements: true }).props.style)
-    expect(bar.backgroundColor).toBe(lightColors.ink)
-    for (const verdictColour of [lightColors.pass, lightColors.refuse, lightColors.caution]) {
-        expect(bar.backgroundColor).not.toBe(verdictColour)
-    }
+    // It leads like a result but carries no accent bar, so no pass, refuse or caution colour can be read into it.
+    expect(screen.queryByTestId('card-bar', { includeHiddenElements: true })).toBeNull()
 })
 
 it('notifies again when a later capture displays the same result text after the prior result was cleared', async () => {

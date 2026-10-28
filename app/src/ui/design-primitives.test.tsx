@@ -125,12 +125,9 @@ describe('status and notices', () => {
         expect(style(tag)).toMatchObject({ minHeight: 28, paddingHorizontal: 12 })
     })
 
-    it('marks a notice with a tone bar and keeps its alert role for errors', async () => {
+    it('has no accent bar and keeps its alert role for errors', async () => {
         await render(<Notice tone="error" text="Check unavailable." />)
-        expect(style(screen.getByTestId('notice-bar', hidden))).toMatchObject({
-            width: 3,
-            backgroundColor: lightColors.refuse,
-        })
+        expect(screen.queryByTestId('notice-bar', hidden)).toBeNull()
         expect(screen.getByRole('alert')).toBeTruthy()
     })
 })

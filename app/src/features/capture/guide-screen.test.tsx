@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { CheckResult, Layout } from '@truebuild/contracts'
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
+import { act, fireEvent, render as renderScreen, screen, within } from '@testing-library/react-native'
 import { Keyboard, StyleSheet, type KeyboardEvent, type StyleProp } from 'react-native'
 import { FeedbackProvider } from '../../ui/feedback'
 import { spies as animationSpies } from '../../ui/test-support/reanimated-mock'
@@ -30,6 +30,23 @@ type Spies = { [K in 'camera' | 'step' | 'completeStep' | 'ask' | 'targetChanged
 
 const STEP_COUNT = 3
 
+// Evidence, comparison and citation tests all read More. This opens it right after each render in those suites.
+let autoMore = false
+const render: typeof renderScreen = async (ui, options) => {
+    const result = await renderScreen(ui, options)
+    if (autoMore) {
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+    }
+    return result
+}
+
+// The default surface is the hero, one sentence and the primary. Everything else is in the More sheet, opened from the
+// header's More button.
+const openMore = async (): Promise<void> => {
+    await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+}
+const more = (): ReturnType<typeof within> => within(screen.getByTestId('more-sheet'))
+
 async function setup(
     id: WorkflowPreviewCase,
     options: {
@@ -37,6 +54,7 @@ async function setup(
         entry?: Partial<LibraryEntry>
         controller?: Partial<WorkflowController>
         reviewStatus?: 'unreviewed'
+        more?: boolean
     } = {},
 ): Promise<Spies> {
     const fixture = workflowPreviewFixture(id)
@@ -61,16 +79,25 @@ async function setup(
     }
     const controller: WorkflowController = { ...INERT_WORKFLOW_CONTROLLER, ...spies, ...options.controller }
     await render(<GuideScreen state={state} controller={controller} entry={entry} />)
+    if (options.more === true) {
+        await openMore()
+    }
     return spies
 }
 
-const PRIMARY = 'Take new photo and check'
-const ACTIONS = [PRIMARY, 'Take photo to ask', 'Previous step', 'Next step', 'Mark step complete myself'] as const
-const disabled = (name: string): unknown => screen.getByRole('button', { name }).props.accessibilityState.disabled
+const PRIMARY = 'Take photo'
+const MORE_ACTIONS = ['Take photo to ask', 'Previous step', 'Next step', 'Mark step complete myself'] as const
+// RNTL treats everything behind an open modal sheet as hidden, so the default surface is read with this option.
+const behind = { includeHiddenElements: true } as const
+const disabled = (name: string): unknown =>
+    screen.getByRole('button', { name, ...behind }).props.accessibilityState.disabled
+const primaryDisabled = (): unknown => screen.getByTestId('guide-primary', behind).props.accessibilityState.disabled
 
 it('calls each public controller action exactly once with its original arguments', async () => {
     const spies = await setup('guide-photo', { entry: { stepIndex: 1 } })
-    for (const name of ACTIONS) {
+    await fireEvent.press(screen.getByRole('button', { name: PRIMARY }))
+    await openMore()
+    for (const name of ['Previous step', 'Next step', 'Mark step complete myself', 'Take photo to ask']) {
         await fireEvent.press(screen.getByRole('button', { name }))
     }
     expect(spies.camera.mock.calls).toEqual([[{ kind: 'check' }], [{ kind: 'question' }]])
@@ -80,32 +107,37 @@ it('calls each public controller action exactly once with its original arguments
 
 describe('action availability', () => {
     // Camera actions also wait for a reviewed manual and coverage; step moves and completion only wait for idleness.
+    // When coverage or the unanswered questions block the step, the primary becomes the way forward (answer the
+    // questions or add clearer photos) and stays pressable; only the camera actions are held back.
     it.each([
         ['a request is pending', { state: { pending: 'Checking the frozen photo…' } }, [true, true, true, true, true]],
         ['storage is read-only', { state: { storageReadOnly: true } }, [true, true, true, true, true]],
         [
             'coverage blocks the step',
             { controller: { coverageNotice: (): string => 'Pages are not covered.' } },
-            [true, true, false, false, false],
+            [false, true, false, false, false],
         ],
-        ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }, [true, true, false, false, false]],
+        ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }, [false, true, false, false, false]],
         ['the guide is idle', {}, [false, false, false, false, false]],
     ] as const)('when %s', async (_name, options, expected) => {
-        await setup('guide-photo', { ...options, entry: { stepIndex: 1 } })
-        expect(ACTIONS.map(disabled)).toEqual(expected)
+        await setup('guide-photo', { ...options, entry: { stepIndex: 1 }, more: true })
+        expect([primaryDisabled(), ...MORE_ACTIONS.map(disabled)]).toEqual(expected)
     })
 
     it.each([
         ['first step', 'first', [true, false]],
         ['last step', 'last', [false, true]],
     ] as const)('stops navigation on the %s', async (_name, position, [previous, next]) => {
-        await setup('guide-photo', { entry: { stepIndex: position === 'first' ? 0 : STEP_COUNT - 1 } })
+        await setup('guide-photo', { entry: { stepIndex: position === 'first' ? 0 : STEP_COUNT - 1 }, more: true })
         expect([disabled('Previous step'), disabled('Next step')]).toEqual([previous, next])
+        // The small chevrons on the picture follow the same limits.
+        expect([disabled('Earlier step'), disabled('Later step')]).toEqual([previous, next])
     })
 
     it('does not call the controller when a disabled action is pressed', async () => {
-        const spies = await setup('guide-photo', { state: { pending: 'Checking the frozen photo…' } })
-        for (const name of ACTIONS) {
+        const spies = await setup('guide-photo', { state: { pending: 'Checking the frozen photo…' }, more: true })
+        await fireEvent.press(screen.getByTestId('guide-primary', behind))
+        for (const name of MORE_ACTIONS) {
             await fireEvent.press(screen.getByRole('button', { name }))
         }
         expect(spies.camera).not.toHaveBeenCalled()
@@ -114,109 +146,140 @@ describe('action availability', () => {
     })
 })
 
-it('keeps every step action in a dock outside the scrolling guide', async () => {
-    await setup('guide-pass')
-    const scroll = screen.getByTestId('guide-panel')
-    expect(scroll.props.accessibilityLabel).toBe('Step guide and results')
-    for (const name of ACTIONS) {
-        expect(screen.getByRole('button', { name })).toBeTruthy()
-        expect(within(scroll).queryByRole('button', { name })).toBeNull()
-    }
-    // The primary action is pinned above the secondary actions' own scroll, so it never scrolls out of reach.
-    expect(within(screen.getByTestId('guide-actions')).queryByRole('button', { name: PRIMARY })).toBeNull()
-})
-
-it.each([
-    ['a short phone', { width: 320, height: 568, fontScale: 1 }],
-    ['large system text', { width: 390, height: 844, fontScale: 2 }],
-])('keeps the composer and all actions in one reachable scroll with %s', async (_label, dimensions) => {
-    Object.assign(mockWindow, dimensions)
+it('keeps the primary in a fixed bar outside the scrolling text, with every other action in More', async () => {
     await setup('guide-photo')
-    const scroll = within(screen.getByTestId('guide-panel'))
-    expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
-    expect(scroll.getByRole('button', { name: 'Back' })).toBeTruthy()
-    for (const name of ACTIONS) {
-        expect(scroll.getByRole('button', { name })).toBeTruthy()
+    const scroll = screen.getByTestId('guide-panel')
+    const bar = within(screen.getByTestId('bottom-bar'))
+    expect(bar.getByTestId('guide-primary')).toBeTruthy()
+    expect(within(scroll).queryByTestId('guide-primary')).toBeNull()
+    // One primary, and no second button in the bar.
+    expect(bar.getAllByRole('button')).toHaveLength(1)
+    for (const name of MORE_ACTIONS) {
+        expect(screen.queryByRole('button', { name })).toBeNull()
+    }
+    await openMore()
+    for (const name of MORE_ACTIONS) {
+        expect(more().getByRole('button', { name })).toBeTruthy()
     }
 })
 
-it('keeps the composer and all actions in one scroll while the keyboard is open, then restores the dock', async () => {
-    let show: (() => void) | undefined
-    let hide: (() => void) | undefined
-    const listen = jest.spyOn(Keyboard, 'addListener').mockImplementation((name, listener) => {
-        const call = (): void => {
-            const event: KeyboardEvent = {
-                duration: 0,
-                easing: 'keyboard',
-                endCoordinates: { height: 320, width: 390, screenX: 0, screenY: 524 },
+describe('the hero stays large and pinned', () => {
+    const heroHeight = (): number => {
+        const flat = StyleSheet.flatten(screen.getByTestId('guide-hero').props.style) as { height: number }
+        return flat.height
+    }
+
+    it.each([
+        ['a standard phone', { width: 390, height: 844, fontScale: 1 }, 464],
+        ['a short phone', { width: 320, height: 568, fontScale: 1 }, 312],
+        [
+            'large system text, which gives some hero back to the sentence and primary',
+            { width: 390, height: 844, fontScale: 2 },
+            338,
+        ],
+    ])(
+        'takes 55 percent of the window on %s (at least 40 at the largest text)',
+        async (_label, dimensions, expected) => {
+            Object.assign(mockWindow, dimensions)
+            await setup('guide-empty')
+            expect(heroHeight()).toBe(expected)
+            // Only the text region scrolls; the primary is outside it.
+            expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()
+            expect(screen.getByRole('button', { name: PRIMARY })).toBeTruthy()
+        },
+    )
+
+    it('shrinks the hero while the keyboard is open, then restores it', async () => {
+        let show: (() => void) | undefined
+        let hide: (() => void) | undefined
+        const listen = jest.spyOn(Keyboard, 'addListener').mockImplementation((name, listener) => {
+            const call = (): void => {
+                const event: KeyboardEvent = {
+                    duration: 0,
+                    easing: 'keyboard',
+                    endCoordinates: { height: 320, width: 390, screenX: 0, screenY: 524 },
+                }
+                listener(event)
             }
-            listener(event)
+            if (name === 'keyboardDidShow') {
+                show = call
+            }
+            if (name === 'keyboardDidHide') {
+                hide = call
+            }
+            return { remove: jest.fn() }
+        })
+        try {
+            await setup('guide-photo')
+            await act(async () => show?.())
+            expect(heroHeight()).toBeLessThan(464)
+            expect(screen.getByRole('button', { name: PRIMARY })).toBeTruthy()
+            await act(async () => hide?.())
+            expect(heroHeight()).toBe(464)
+        } finally {
+            listen.mockRestore()
         }
-        if (name === 'keyboardDidShow') {
-            show = call
-        }
-        if (name === 'keyboardDidHide') {
-            hide = call
-        }
-        return { remove: jest.fn() }
     })
-    try {
-        await setup('guide-photo')
-        await act(async () => show?.())
-        const scroll = within(screen.getByTestId('guide-panel'))
-        expect(scroll.getByLabelText('Question about frozen photo')).toBeTruthy()
-        expect(scroll.getByRole('button', { name: 'Back' })).toBeTruthy()
-        for (const name of ACTIONS) expect(scroll.getByRole('button', { name })).toBeTruthy()
-        await act(async () => hide?.())
-        expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()
-    } finally {
-        listen.mockRestore()
-    }
 })
 
-it('shows the current step, progress, parts with quantities and orientation without opening instructions', async () => {
+it('shows the step in one sentence with its parts, and the step picture as the hero, before any photo', async () => {
     await setup('guide-empty')
     const { session } = workflowPreviewFixture('guide-empty').entry
     const step = session.reviewedSteps[0]!
-    expect(screen.getByText(`${step.order}. ${step.title}`)).toBeTruthy()
+    expect(screen.getByText(step.title)).toBeTruthy()
     expect(screen.getByText(`Step 1 of ${STEP_COUNT}`)).toBeTruthy()
-    expect(screen.getByRole('progressbar', { name: 'Guide progress' })).toBeTruthy()
-    for (const part of step.parts) {
-        expect(part.quantity.state).toBe('known')
+    expect(screen.getByTestId('guide-hero')).toBeTruthy()
+    const names = step.parts.map((part) => {
         const registry = session.parts.find((candidate) => candidate.partId === part.partId)
-        const name = registry?.name.state === 'known' ? registry.name.value : part.partId
-        expect(screen.getByText(`${part.quantity.state === 'known' ? part.quantity.value : ''} × ${name}`)).toBeTruthy()
-    }
-    expect(step.orientation.state).toBe('known')
-    expect(screen.getByText(step.orientation.state === 'known' ? step.orientation.value.description : '')).toBeTruthy()
-    expect(screen.getByText('No photo for this step yet.')).toBeTruthy()
+        const name = registry?.name.state === 'known' ? registry.name.value : 'a part'
+        return `${name} ×${part.quantity.state === 'known' ? part.quantity.value : ''}`
+    })
+    expect(screen.getByText(`You need: ${names.join(', ')}`)).toBeTruthy()
+    // Nothing else competes on the default surface: no guide progress bar, no ask card, no step list.
+    expect(screen.queryByRole('progressbar')).toBeNull()
     expect(screen.queryByText('Ask about this photo')).toBeNull()
+    expect(screen.queryByText('No photo for this step yet.')).toBeNull()
 })
 
-it('keeps an unknown orientation reason visible in the summary', async () => {
+it('keeps an unknown orientation reason in the full step, in More', async () => {
     const fixture = workflowPreviewFixture('review-unresolved')
     const reason = 'The inward groove is obscured in this synthetic page.'
-    await setup('guide-empty', { entry: fixture.entry })
-    expect(screen.getByText(`Unknown: ${reason}`)).toBeTruthy()
+    await setup('guide-empty', { entry: fixture.entry, more: true })
+    expect(more().getByText(`Which way it faces: The manual does not say. ${reason}`)).toBeTruthy()
 })
 
-it('opens and closes the instructions sheet with the full facts and step list', async () => {
+it('opens and closes More with the full step, the earlier progress and the step list', async () => {
     await setup('guide-photo')
-    expect(screen.queryByText('Step 1 instructions')).toBeNull()
-    await fireEvent.press(screen.getByRole('button', { name: 'Step instructions' }))
-    expect(screen.getByText('Step 1 instructions')).toBeTruthy()
-    expect(screen.getByRole('progressbar', { name: 'Steps marked complete' })).toBeTruthy()
-    expect(screen.getAllByText(/^Orientation: /u)).toHaveLength(1)
+    expect(screen.queryByText('More about this step')).toBeNull()
+    await openMore()
+    expect(screen.getByText('More about this step')).toBeTruthy()
+    expect(more().getByRole('progressbar', { name: 'Steps marked complete' })).toBeTruthy()
+    expect(more().getAllByText(/^Which way it faces: /u)).toHaveLength(1)
     await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
-    expect(screen.queryByText('Step 1 instructions')).toBeNull()
+    await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+    expect(screen.queryByText('More about this step')).toBeNull()
 })
 
 describe('results', () => {
-    it('places refusal evidence before the parts summary so the comparison can fit beside the action dock', async () => {
+    it('says the verdict in one sentence on the hero, with the full reason in More', async () => {
+        await setup('guide-pass')
+        const check = workflowPreviewFixture('guide-pass').state.check!
+        expect(screen.getByText(`Looks right. ${check.reason}`)).toBeTruthy()
+        // The verdict tag, missing-evidence list and provenance are not on the default surface.
+        expect(screen.queryByText('Looks right')).toBeNull()
+        await openMore()
+        expect(more().getByText('Looks right')).toBeTruthy()
+        expect(more().getByText(check.reason)).toBeTruthy()
+    })
+
+    it('places refusal evidence before the parts summary so the comparison reads first in More', async () => {
         const fixture = workflowPreviewFixture('guide-refuse')
         const { toJSON } = await render(
             <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />,
         )
+        await openMore()
         const tree = JSON.stringify(toJSON())
         const comparison = tree.indexOf('Manual diagram')
         const summary = tree.indexOf('"Parts"')
@@ -225,48 +288,72 @@ describe('results', () => {
         expect(comparison).toBeLessThan(summary)
     })
 
-    it('places a new answer before a retained check so returning to the top reveals the answer', async () => {
+    it('places a new answer before a retained check so the answer reads first in More', async () => {
         const fixture = workflowPreviewFixture('guide-answer')
         fixture.state.check = workflowPreviewFixture('guide-cannot-verify').state.check
         const { toJSON } = await render(
             <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />,
         )
+        await openMore()
         const tree = JSON.stringify(toJSON())
-        const answerPosition = tree.indexOf(fixture.state.answer!.answer)
+        // The hero sentence is the answer; the check's own text is in More, after the answer's.
+        const answerPosition = tree.lastIndexOf(fixture.state.answer!.answer.slice(0, 20))
         const checkPosition = tree.indexOf(fixture.state.check!.reason)
         expect(answerPosition).toBeGreaterThanOrEqual(0)
         expect(checkPosition).toBeGreaterThanOrEqual(0)
-        expect(answerPosition).toBeLessThan(checkPosition)
-        expect(screen.getByText('Cannot verify')).toBeTruthy()
+        expect(more().getByText('Can’t tell')).toBeTruthy()
     })
 
-    it('shows a check result with its reason and missing evidence', async () => {
-        await setup('guide-cannot-verify')
+    it('shows a check result with its reason and missing evidence in More', async () => {
+        await setup('guide-cannot-verify', { more: true })
         expect(
-            screen.getByText('Synthetic uncertainty: the groove direction is not visible from this angle.'),
+            more().getByText('Synthetic uncertainty: the groove direction is not visible from this angle.'),
         ).toBeTruthy()
-        expect(screen.getByText('Missing: A clear view of the inward face and groove.')).toBeTruthy()
+        expect(more().getByText('Missing: A clear view of the inward face and groove.')).toBeTruthy()
+    })
+
+    it('says "We can’t tell" plainly for an unverifiable photo and never prints the system phrase', async () => {
+        await setup('guide-cannot-verify')
+        expect(screen.getByText(/^We can't tell from this photo\./u)).toBeTruthy()
+        expect(screen.queryByText(/cannot verify/iu)).toBeNull()
     })
 
     it('shows a neutral answer in a live region without any verdict', async () => {
-        await setup('guide-answer')
-        expect(screen.getByText('Answer')).toBeTruthy()
-        expect(screen.getByText(/^Synthetic answer:/u)).toBeTruthy()
-        for (const verdict of ['Pass', 'Refuse', 'Cannot verify']) {
-            expect(screen.queryByText(verdict)).toBeNull()
+        await setup('guide-answer', { more: true })
+        expect(more().getByText('Answer')).toBeTruthy()
+        expect(more().getByText(/^Synthetic answer:/u)).toBeTruthy()
+        for (const verdict of ['Looks right', 'Not yet', 'Can’t tell']) {
+            expect(more().queryByText(verdict)).toBeNull()
         }
-        expect(screen.getByText('Answer to your question from the manual pages. It is not a step check.')).toBeTruthy()
-        let node = screen.getByText('Answer').parent
+        expect(more().getByText('Answer to your question from the manual pages. It is not a step check.')).toBeTruthy()
+        let node = more().getByText('Answer').parent
         while (node !== null && node !== undefined && node.props.accessibilityLiveRegion === undefined) {
             node = node.parent
         }
         expect(node?.props.accessibilityLiveRegion).toBe('polite')
     })
+
+    it('shows an answer on the hero as the existing response text, never as a check', async () => {
+        await setup('guide-answer')
+        const answer = workflowPreviewFixture('guide-answer').state.answer!
+        expect(screen.getByText(answer.answer)).toBeTruthy()
+        expect(screen.queryByText(/^Looks right\./u)).toBeNull()
+    })
+
+    it('keeps model names and notes out of More until About this check is opened', async () => {
+        const fixture = workflowPreviewFixture('guide-pass')
+        const check = { ...fixture.state.check!, model: 'synthetic-model-1', modelNotes: ['Synthetic note.'] }
+        await setup('guide-pass', { state: { check }, more: true })
+        expect(more().queryByText('Model: synthetic-model-1')).toBeNull()
+        await fireEvent.press(screen.getByTestId('judge-entry'))
+        expect(screen.getByText('Model: synthetic-model-1')).toBeTruthy()
+        expect(screen.getByText('Model note: Synthetic note.')).toBeTruthy()
+    })
 })
 
 describe('question composer', () => {
     it('stays blocked without a target and chooses a step part through the controller', async () => {
-        const spies = await setup('guide-photo', { state: { question: 'Which way?', target: null } })
+        const spies = await setup('guide-photo', { state: { question: 'Which way?', target: null }, more: true })
         expect(disabled('Send question')).toBe(true)
         expect(screen.getByText('Choose a point or part.')).toBeTruthy()
         const part = workflowPreviewFixture('guide-photo').entry.session.reviewedSteps[0]!.parts[0]!.partId
@@ -275,18 +362,34 @@ describe('question composer', () => {
         expect(spies.targetChanged.mock.calls[0]![0]).toEqual({ kind: 'part', partId: part })
     })
 
+    it('opens straight on the question from the header Ask icon', async () => {
+        await setup('guide-photo')
+        await fireEvent.press(screen.getByRole('button', { name: 'Ask' }))
+        expect(screen.getAllByText('Ask about this step').length).toBeGreaterThan(0)
+        expect(screen.getByLabelText('Question about your photo')).toBeTruthy()
+        expect(screen.queryByText('All steps')).toBeNull()
+    })
+
+    it('asks for a photo first when there is none', async () => {
+        const spies = await setup('guide-empty')
+        await fireEvent.press(screen.getByRole('button', { name: 'Ask' }))
+        expect(screen.getByText('Take a photo first, then ask about it.')).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'Take photo to ask' }))
+        expect(spies.camera.mock.calls).toEqual([[{ kind: 'question' }]])
+    })
+
     it.each([
         ['text and a part target', 'Which way?', { kind: 'part' as const, partId: 'side-panel' }, false],
         ['a target but blank text', '   ', { kind: 'part' as const, partId: 'side-panel' }, true],
     ])('gates Send with %s', async (_name, question, target, expectedDisabled) => {
-        const spies = await setup('guide-photo', { state: { question, target } })
+        const spies = await setup('guide-photo', { state: { question, target }, more: true })
         expect(disabled('Send question')).toBe(expectedDisabled)
         await fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
         expect(spies.ask).toHaveBeenCalledTimes(expectedDisabled ? 0 : 1)
     })
 
     it('stays blocked when the controller cannot compose', async () => {
-        await setup('guide-answer', { controller: { canCompose: false } })
+        await setup('guide-answer', { controller: { canCompose: false }, more: true })
         expect(disabled('Send question')).toBe(true)
     })
 })
@@ -304,10 +407,9 @@ describe('grounded region overlay', () => {
     // FrozenPhoto draws its overlay only after its frame is measured. The frame has no test id, so the layout event
     // goes to the first child of the element that holds the caption, which is the measured frame.
     async function measurePhoto(): Promise<void> {
-        const caption = screen.getByText('Frozen photo for this step. New photos clear prior results.')
-        const frame = caption.parent?.children[0]
-        if (frame === undefined || typeof frame === 'string') throw new Error('Frozen photo frame not found')
-        await fireEvent(frame, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 200 } } })
+        await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+            nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 200 } },
+        })
     }
 
     function view(fixtureId: WorkflowPreviewCase, patch: Partial<WorkflowState>): ReactElement {
@@ -405,6 +507,7 @@ describe('grounded region overlay', () => {
                 <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />
             </FeedbackProvider>,
         )
+        await openMore()
         expect(screen.getByTestId('photo-tap')).toBeTruthy()
         expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
         expect(animationSpies.withSequence).not.toHaveBeenCalled()
@@ -431,17 +534,21 @@ describe('step layout and demo controls', () => {
     })
 
     it('replaces the step summary with a valid layout while the verdict and reason stay', async () => {
-        await setup('guide-pass', { state: { check: checkWith('guide-pass', visibleChecks) } })
-        expect(screen.getByText(CHECK_TEXT)).toBeTruthy()
+        await setup('guide-pass', { more: true, state: { check: checkWith('guide-pass', visibleChecks) } })
+        expect(screen.getAllByText(CHECK_TEXT).length).toBeGreaterThan(0)
         expect(screen.queryByText('Parts')).toBeNull()
-        expect(screen.getByText('Synthetic result: the groove faces inward as shown in the manual.')).toBeTruthy()
+        expect(
+            screen.getAllByText(/Synthetic result: the groove faces inward as shown in the manual\./u).length,
+        ).toBeGreaterThan(0)
     })
 
     it('keeps the step summary when the layout is absent or any reference is stale', async () => {
-        await setup('guide-pass', { state: { check: checkWith('guide-pass', staleLayout) } })
+        await setup('guide-pass', { more: true, state: { check: checkWith('guide-pass', staleLayout) } })
         expect(screen.getByText('Parts')).toBeTruthy()
         expect(screen.queryByText(CHECK_TEXT)).toBeNull()
-        expect(screen.getByText('Synthetic result: the groove faces inward as shown in the manual.')).toBeTruthy()
+        expect(
+            screen.getAllByText(/Synthetic result: the groove faces inward as shown in the manual\./u).length,
+        ).toBeGreaterThan(0)
     })
 
     it('reads the layout from the answer when an answer and a check are both present', async () => {
@@ -450,8 +557,8 @@ describe('step layout and demo controls', () => {
             source: 'fallback',
             components: [{ type: 'part_grid', partIds: ['side-panel'] }],
         })
-        await setup('guide-photo', { state: { answer, check } })
-        expect(screen.getByText(CHECK_TEXT)).toBeTruthy()
+        await setup('guide-photo', { more: true, state: { answer, check } })
+        expect(screen.getAllByText(CHECK_TEXT).length).toBeGreaterThan(0)
         expect(screen.queryByText('1 × Side panel')).toBeNull()
     })
 
@@ -468,15 +575,17 @@ describe('step layout and demo controls', () => {
                 controller={INERT_WORKFLOW_CONTROLLER}
             />,
         )
+        await openMore()
         const tree = JSON.stringify(toJSON())
         expect(tree.indexOf('Manual diagram')).toBeLessThan(tree.indexOf('Turn the panel so the groove faces inward.'))
         expect(
-            screen.getByText('Synthetic refusal: turn the panel so the groove faces inward before continuing.'),
-        ).toBeTruthy()
+            screen.getAllByText(/Synthetic refusal: turn the panel so the groove faces inward before continuing\./u)
+                .length,
+        ).toBeGreaterThan(0)
     })
 
     it('chooses a known-orientation step through the existing controller', async () => {
-        const spies = await setup('guide-photo', { entry: { stepIndex: 1 } })
+        const spies = await setup('guide-photo', { more: true, entry: { stepIndex: 1 } })
         await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
         expect(spies.step.mock.calls).toEqual([[2]])
         expect(screen.getByRole('button', { name: /^Current · Step 2:/u }).props.accessibilityState.disabled).toBe(true)
@@ -487,13 +596,13 @@ describe('step layout and demo controls', () => {
         ['storage is read-only', { state: { storageReadOnly: true } }],
         ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }],
     ])('does not choose a step when %s', async (_name, options) => {
-        const spies = await setup('guide-photo', { ...options, entry: { stepIndex: 1 } })
+        const spies = await setup('guide-photo', { more: true, ...options, entry: { stepIndex: 1 } })
         await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
         expect(spies.step).not.toHaveBeenCalled()
     })
 
     it('recaps only the saved completions under Earlier progress', async () => {
-        await setup('guide-empty', { entry: { completedStepIds: ['step-2'] } })
+        await setup('guide-empty', { more: true, entry: { completedStepIds: ['step-2'] } })
         expect(screen.getByText('Earlier progress')).toBeTruthy()
         expect(screen.getByText('Marked complete: 2. Seat the divider in the groove')).toBeTruthy()
         expect(screen.queryByText('Marked complete: 1. Stand the side panel upright')).toBeNull()
@@ -509,6 +618,7 @@ describe('step layout and demo controls', () => {
             />
         )
         const { rerender } = await render(view(0))
+        await openMore()
         await fireEvent.press(screen.getByRole('button', { name: 'Mark one Side panel located' }))
         expect(screen.getByText('All counted parts located by you')).toBeTruthy()
         await rerender(view(1))
@@ -541,10 +651,9 @@ describe('next part and target guidance', () => {
         )
     }
     async function measureFrozenPhoto(width = 300): Promise<void> {
-        const caption = screen.getByText('Frozen photo for this step. New photos clear prior results.')
-        const frame = caption.parent?.children[0]
-        if (frame === undefined || typeof frame === 'string') throw new Error('Frozen photo frame not found')
-        await fireEvent(frame, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width, height: 200 } } })
+        await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+            nativeEvent: { layout: { x: 0, y: 0, width, height: 200 } },
+        })
     }
     const NEXT_ID = 'part-next-line'
     const TARGET_ID = 'part-target-line'
@@ -652,8 +761,9 @@ describe('next part and target guidance', () => {
             }),
         )
         await measureFrozenPhoto(300)
-        // 300 wide, capped at 360 tall: the 400x600 photo is 240x360 centred at x 30.
-        expect(screen.getByTestId(NEXT_ID).props).toMatchObject({ x: 30, y: 0, width: 120, height: 180 })
+        // The hero frame is 300 wide and 464 tall (55 percent of the window): the 400x600 photo is contained at
+        // 300x450, centred 7 down, and the region follows the image, not the frame.
+        expect(screen.getByTestId(NEXT_ID).props).toMatchObject({ x: 0, y: 7, width: 150, height: 225 })
     })
 
     it('draws the answer’s regions on the frozen photo, and the answer’s result wins over a retained check', async () => {
@@ -678,6 +788,7 @@ describe('next part and target guidance', () => {
                 />
             </FeedbackProvider>,
         )
+        await openMore()
         await fireEvent(screen.getByTestId('photo-frame'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 220 } },
         })
@@ -697,6 +808,7 @@ describe('next part and target guidance', () => {
 
     it('draws no overlay or note in the refusal comparison when the refusal located nothing', async () => {
         await render(view('guide-refuse'))
+        await openMore()
         await fireEvent(screen.getByTestId('photo-frame'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 220 } },
         })
@@ -757,7 +869,14 @@ function workflowObserved(): { x: number; y: number; width: number; height: numb
 }
 
 describe('evidence pair for a source-backed result', () => {
-    const PHOTO_CAPTION = 'Frozen photo for this step. New photos clear prior results.'
+    beforeEach(() => {
+        autoMore = true
+    })
+    afterEach(() => {
+        autoMore = false
+    })
+
+    const PHOTO_CAPTION = 'Your photo for this step.'
     const flat = (element: { props: { style?: StyleProp<object> } }): Record<string, unknown> =>
         StyleSheet.flatten(element.props.style) as Record<string, unknown>
     const measurePair = async (width: number): Promise<void> => {
@@ -772,7 +891,7 @@ describe('evidence pair for a source-backed result', () => {
             await setup(id)
             await measurePair(358)
             expect(flat(screen.getByTestId('evidence-pair')).flexDirection).toBe('row')
-            await fireEvent(screen.getByTestId('diagram-0-frame'), 'layout', {
+            await fireEvent(within(screen.getByTestId('evidence-pair')).getByTestId('diagram-0-frame'), 'layout', {
                 nativeEvent: { layout: { x: 0, y: 0, width: 175, height: 220 } },
             })
             const pair = within(screen.getByTestId('evidence-pair'))
@@ -822,9 +941,10 @@ describe('evidence pair for a source-backed result', () => {
         await measurePair(358)
         expect(within(screen.getByTestId('evidence-pair')).getByTestId('diagram-0')).toBeTruthy()
         expect(within(screen.getByTestId('evidence-pair')).queryByTestId('diagram-1')).toBeNull()
-        expect(screen.getAllByTestId('diagram-0')).toHaveLength(1)
-        expect(screen.getAllByTestId('diagram-1')).toHaveLength(1)
-        expect(screen.getAllByText('Expected diagram · page 1')).toHaveLength(2)
+        // Every further cited page sits beneath the pair, once; the full step then repeats them full width.
+        expect(screen.getAllByTestId('diagram-1')).toHaveLength(2)
+        expect(within(screen.getByTestId('full-step')).getAllByTestId('diagram-0')).toHaveLength(1)
+        expect(within(screen.getByTestId('full-step')).getAllByTestId('diagram-1')).toHaveLength(1)
         // FrozenPhoto draws its tap target only after its frame is measured; the frame precedes the caption.
         const frame = screen.getByText(PHOTO_CAPTION).parent?.children[0]
         if (frame === undefined || typeof frame === 'string') throw new Error('Frozen photo frame not found')
@@ -841,7 +961,8 @@ describe('evidence pair for a source-backed result', () => {
         fixture.state.check = workflowPreviewFixture('guide-cannot-verify').state.check
         await render(<GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />)
         await measurePair(358)
-        expect(screen.getAllByTestId('diagram-0')).toHaveLength(2)
+        // The pair, the retained check's own page, and the full step's full-width page.
+        expect(screen.getAllByTestId('diagram-0')).toHaveLength(3)
         expect(within(screen.getByTestId('evidence-pair')).getAllByTestId('diagram-0')).toHaveLength(1)
     })
 
@@ -868,12 +989,20 @@ describe('evidence pair for a source-backed result', () => {
     it('shows the cited page alone when there is no photo yet', async () => {
         await setup('guide-pass', { state: { capture: null } })
         expect(screen.queryByTestId('evidence-pair')).toBeNull()
-        expect(screen.getByText('No photo for this step yet.')).toBeTruthy()
-        expect(screen.getByTestId('diagram-0')).toBeTruthy()
+        // The hero is the step's own picture, and the cited page is the full-width one in the full step.
+        expect(screen.getByTestId('guide-hero-picture', { includeHiddenElements: true })).toBeTruthy()
+        expect(within(screen.getByTestId('full-step')).getByTestId('diagram-0')).toBeTruthy()
     })
 })
 
-describe('full-width diagram action beside half-width evidence', () => {
+describe('no separate diagram button beside half-width evidence', () => {
+    beforeEach(() => {
+        autoMore = true
+    })
+    afterEach(() => {
+        autoMore = false
+    })
+
     const ACTION = 'View diagram full width'
     const measure = async (testID: string, width: number): Promise<void> => {
         await fireEvent(screen.getByTestId(testID), 'layout', {
@@ -881,21 +1010,17 @@ describe('full-width diagram action beside half-width evidence', () => {
         })
     }
 
-    it('opens the existing step instructions sheet from the pair while it is side by side, leaving photo taps alone', async () => {
+    it('has no separate View diagram full width button: the full-width cited page is in the full step, in More', async () => {
         const spies = await setup('guide-pass')
-        expect(screen.queryByRole('button', { name: ACTION })).toBeNull()
         await measure('evidence-pair', 358)
-        expect(screen.queryByTestId('bottom-sheet')).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: ACTION }))
-        const sheet = within(screen.getByTestId('bottom-sheet'))
-        expect(sheet.getByText('Step 1 instructions')).toBeTruthy()
-        expect(sheet.getByText('Expected diagram · page 1')).toBeTruthy()
-        // It only opens the sheet: no controller action ran and no question target was chosen.
+        expect(screen.queryByRole('button', { name: ACTION })).toBeNull()
+        expect(within(screen.getByTestId('full-step')).getByText('Expected diagram · page 1')).toBeTruthy()
+        // Nothing ran: no controller action and no question target.
         expect(spies.targetChanged).not.toHaveBeenCalled()
         expect(spies.camera).not.toHaveBeenCalled()
     })
 
-    it('is not offered when the pair stacks, where the diagram is already full width', async () => {
+    it('has no button either when the pair stacks, where the diagram is already full width', async () => {
         Object.assign(mockWindow, { fontScale: 1.5 })
         await setup('guide-pass')
         await measure('evidence-pair', 358)
@@ -904,7 +1029,7 @@ describe('full-width diagram action beside half-width evidence', () => {
 
     it('draws the guidance lines once, full width beneath the side-by-side pair, and under the photo when stacked', async () => {
         const MOVE = 'Move Divider shelf to the marked area'
-        const PHOTO_CAPTION = 'Frozen photo for this step. New photos clear prior results.'
+        const PHOTO_CAPTION = 'Your photo for this step.'
         const photoColumn = (): ReturnType<typeof within> => within(screen.getByText(PHOTO_CAPTION).parent!)
         const { unmount } = await render(
             <GuideScreen
@@ -931,19 +1056,26 @@ describe('full-width diagram action beside half-width evidence', () => {
         expect(photoColumn().getByText(MOVE)).toBeTruthy()
     })
 
-    it('is offered under the half-width refusal comparison and opens the same sheet', async () => {
+    it('keeps the half-width refusal comparison free of a diagram button, with its guidance lines once beneath', async () => {
         await setup('guide-refuse-guided')
         await measure('comparison-stack', 358)
         // Beside the diagram the photo pane is narrow, so its guidance lines sit once beneath both panes.
         expect(screen.getAllByText('Move Divider shelf to the marked area')).toHaveLength(1)
         expect(within(screen.getByTestId('photo')).queryByText('Move Divider shelf to the marked area')).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: ACTION }))
-        expect(within(screen.getByTestId('bottom-sheet')).getByText('Step 2 instructions')).toBeTruthy()
+        expect(screen.queryByRole('button', { name: ACTION })).toBeNull()
+        expect(within(screen.getByTestId('full-step')).getByText('Expected diagram · page 1')).toBeTruthy()
     })
 })
 
 describe('portrait photo and page (guide-portrait-guided, mocked 400 x 600)', () => {
-    const PHOTO_CAPTION = 'Frozen photo for this step. New photos clear prior results.'
+    beforeEach(() => {
+        autoMore = true
+    })
+    afterEach(() => {
+        autoMore = false
+    })
+
+    const PHOTO_CAPTION = 'Your photo for this step.'
     const frame = (): Parameters<typeof fireEvent>[0] => {
         const node = screen.getByText(PHOTO_CAPTION).parent?.children[0]
         if (node === undefined || typeof node === 'string') throw new Error('Frozen photo frame not found')
@@ -1005,11 +1137,12 @@ describe('portrait photo and page (guide-portrait-guided, mocked 400 x 600)', ()
         await fireEvent(screen.getByTestId('evidence-pair'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 300 } },
         })
-        await fireEvent(screen.getByTestId('diagram-0-frame'), 'layout', {
+        const pairDiagram = within(screen.getByTestId('evidence-pair'))
+        await fireEvent(pairDiagram.getByTestId('diagram-0-frame'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 171, height: 220 } },
         })
         // 171 wide would be 256.5 tall, so the 220 cap applies and the 400 x 600 page is contained: 146.67 wide, 12.17 in.
-        const media = flatStyle(screen.getByTestId('diagram-0-media'))
+        const media = flatStyle(pairDiagram.getByTestId('diagram-0-media'))
         expect(media.height).toBeCloseTo(220, 6)
         expect(media.width).toBeCloseTo((220 * 400) / 600, 6)
         expect(media.left).toBeCloseTo((171 - (220 * 400) / 600) / 2, 6)
@@ -1017,6 +1150,13 @@ describe('portrait photo and page (guide-portrait-guided, mocked 400 x 600)', ()
 })
 
 describe('arrow at the half-width pane a 390 point phone really gives each image (about 171 points)', () => {
+    beforeEach(() => {
+        autoMore = true
+    })
+    afterEach(() => {
+        autoMore = false
+    })
+
     it('draws the arrow, with its halo, in the refusal comparison photo pane', async () => {
         const fixture = workflowPreviewFixture('guide-refuse-guided')
         await render(<GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />)
@@ -1033,8 +1173,7 @@ describe('arrow at the half-width pane a 390 point phone really gives each image
     it('draws the arrow on the frozen photo beside the cited page', async () => {
         const fixture = workflowPreviewFixture('guide-pass-guided')
         await render(<GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />)
-        const frame = screen.getByText('Frozen photo for this step. New photos clear prior results.').parent
-            ?.children[0]
+        const frame = screen.getByText('Your photo for this step.').parent?.children[0]
         if (frame === undefined || typeof frame === 'string') throw new Error('Frozen photo frame not found')
         await fireEvent(frame, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 171, height: 114 } } })
         expect(screen.getAllByTestId('part-arrow-line', { includeHiddenElements: true })).toHaveLength(1)
@@ -1043,6 +1182,13 @@ describe('arrow at the half-width pane a 390 point phone really gives each image
 })
 
 describe('full-width result citations', () => {
+    beforeEach(() => {
+        autoMore = true
+    })
+    afterEach(() => {
+        autoMore = false
+    })
+
     it.each(['guide-pass', 'guide-answer', 'guide-refuse'] as const)(
         '%s opens the actual cited page before the step page and keeps both once',
         async (id) => {
@@ -1063,8 +1209,8 @@ describe('full-width result citations', () => {
             await fireEvent(screen.getByTestId(pair), 'layout', {
                 nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 300 } },
             })
-            await fireEvent.press(screen.getByRole('button', { name: 'View diagram full width' }))
-            const sheet = within(screen.getByTestId('bottom-sheet-scroll'))
+            expect(screen.queryByRole('button', { name: 'View diagram full width' })).toBeNull()
+            const sheet = within(screen.getByTestId('full-step'))
             const labels = sheet.getAllByText(/^Expected diagram · page /u).map((node) => node.props.children)
             expect(labels).toEqual(['Expected diagram · page 2', 'Expected diagram · page 1'])
         },
@@ -1075,8 +1221,7 @@ describe('full-width result citations', () => {
         await fireEvent(screen.getByTestId('evidence-pair'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 300 } },
         })
-        await fireEvent.press(screen.getByRole('button', { name: 'View diagram full width' }))
-        const sheet = within(screen.getByTestId('bottom-sheet-scroll'))
+        const sheet = within(screen.getByTestId('full-step'))
         await fireEvent(sheet.getByTestId('diagram-0-frame'), 'layout', {
             nativeEvent: { layout: { x: 0, y: 0, width: 354, height: 220 } },
         })

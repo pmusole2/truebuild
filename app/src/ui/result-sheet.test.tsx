@@ -6,9 +6,9 @@ import { ResultSheet } from './result-sheet'
 
 describe('ResultSheet', () => {
     it.each([
-        ['pass', 'Pass'],
-        ['refuse', 'Refuse'],
-        ['cannot_verify', 'Cannot verify'],
+        ['pass', 'Looks right'],
+        ['refuse', 'Not yet'],
+        ['cannot_verify', 'Can’t tell'],
     ] as const)('a %s result names its verdict in text and shows the full reason', async (verdict, label) => {
         await render(<ResultSheet verdict={verdict} reason="The groove faces the divider." />)
         expect(screen.getByText(label)).toBeTruthy()
