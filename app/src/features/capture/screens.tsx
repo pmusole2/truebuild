@@ -1,6 +1,15 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { Image, Linking, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
-import type { CheckResult, Fact, ManualSession, ParsedManual, QuestionResult, SourceRef } from '@truebuild/contracts'
+import type {
+    CheckResult,
+    Fact,
+    ManualBinding,
+    ManualSession,
+    ManualStep,
+    ParsedManual,
+    QuestionResult,
+    SourceRef,
+} from '@truebuild/contracts'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import { stepPartChoices } from '../assembly/question-state'
@@ -15,7 +24,7 @@ import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { ComparisonFrame, MeasuredPane, type ComparisonPane } from '../../ui/comparison'
 import { AskSheet } from '../../ui/ask-sheet'
 import { ResultSheet } from '../../ui/result-sheet'
-import { TextField } from '../../ui/fields'
+import { SegmentedControl, TextField } from '../../ui/fields'
 import { Skeleton } from '../../ui/skeleton'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { useTheme } from '../../theme/theme'
@@ -385,7 +394,9 @@ export function OverviewScreen({
     entry,
 }: WorkflowScreenProps & { entry: LibraryEntry }): ReactElement {
     const { session } = entry
-    const [confirmed, setConfirmed] = useState(false)
+    // The whole-manual tick belongs to one revision; any change to the facts makes the user tick it again.
+    const [confirmation, setConfirmation] = useState({ revision: session.revision, checked: false })
+    const confirmed = confirmation.revision === session.revision && confirmation.checked
     const canConfirm = reviewedSession(session) !== null
     const unresolved = unresolvedCriticalFacts(session)
     const reviewed = session.reviewStatus === 'reviewed'
@@ -425,6 +436,15 @@ export function OverviewScreen({
                 <Card key={step.stepId}>
                     <StepFacts session={session} index={index} />
                     <SourceDiagrams refs={step.sourceRefs} session={session} pageUris={state.pageUris} />
+                    {needsStepFacts(step) ? (
+                        <StepFactEditor
+                            key={`${session.manualId}:${session.revision}:${step.stepId}`}
+                            state={state}
+                            controller={controller}
+                            session={session}
+                            step={step}
+                        />
+                    ) : null}
                     {reviewed ? (
                         <AppButton
                             label={`Guide step ${step.order}`}
@@ -451,7 +471,7 @@ export function OverviewScreen({
                         label="I checked all facts and corrections against the manual"
                         checked={confirmed}
                         disabled={!canConfirm}
-                        onToggle={(): void => setConfirmed(!confirmed)}
+                        onToggle={(): void => setConfirmation({ revision: session.revision, checked: !confirmed })}
                     />
                     {canConfirm ? null : (
                         <Caption>
@@ -475,6 +495,162 @@ export function OverviewScreen({
                 onPress={(): void => controller.navigate('pages')}
             />
         </Screen>
+    )
+}
+
+/** A step needs facts from the manual when its orientation is unknown or it lists no visible check. */
+function needsStepFacts(step: ManualStep): boolean {
+    return step.orientation.state === 'unknown' || step.visibleChecks.length === 0
+}
+
+function partLabel(session: ManualSession, partId: string): string {
+    const registry = session.parts.find((part) => part.partId === partId)
+    return registry !== undefined && registry.name.state === 'known' ? `${registry.name.value} (${partId})` : partId
+}
+
+/**
+ * Facts the manual did not give us. Typing and part choice are local drafts; only an explicit accept asks the controller
+ * to write, and the controller checks the candidate against this step's own citations. Cancel discards unaccepted text.
+ */
+function StepFactEditor({
+    state,
+    controller,
+    session,
+    step,
+}: {
+    state: WorkflowState
+    controller: CaptureController
+    session: ManualSession
+    step: ManualStep
+}): ReactElement {
+    const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
+    const busy = state.pending !== null || state.storageReadOnly
+    const cited = step.sourceRefs.length > 0
+    const parts = step.parts.map((part) => ({ value: part.partId, label: partLabel(session, part.partId) }))
+    // A sole part is chosen for the draft only; with several parts the person must pick one.
+    const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
+    const [cue, setCue] = useState('')
+    const [checks, setChecks] = useState('')
+    const [cueError, setCueError] = useState<string | undefined>(undefined)
+    const [checksError, setChecksError] = useState<string | undefined>(undefined)
+
+    const acceptOrientation = async (): Promise<void> => {
+        const description = cue.trim()
+        if (description.length === 0) {
+            setCueError('Describe the visible cue, or leave orientation unknown.')
+            return
+        }
+        if (partId === null) {
+            setCueError('Choose the part this cue applies to.')
+            return
+        }
+        setCueError(undefined)
+        await controller.acceptStepFacts(binding, step.stepId, { orientation: { partId, description } })
+    }
+    const acceptChecks = async (): Promise<void> => {
+        const visibleChecks = checks
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+        if (visibleChecks.length === 0) {
+            setChecksError('Enter at least one visible check, one condition per line.')
+            return
+        }
+        setChecksError(undefined)
+        await controller.acceptStepFacts(binding, step.stepId, { visibleChecks })
+    }
+    const cancelOrientation = (): void => {
+        setCue('')
+        setCueError(undefined)
+    }
+    const cancelChecks = (): void => {
+        setChecks('')
+        setChecksError(undefined)
+    }
+
+    return (
+        <Stack gap="sm">
+            <Caption>
+                Only accept what the cited manual supports. Anything it does not show stays unknown. Typing here changes
+                no facts until you accept.
+            </Caption>
+            {cited ? null : (
+                <Notice
+                    tone="error"
+                    text="This step has no cited manual page, so facts cannot be accepted here. Read the manual again after adding clearer pages."
+                />
+            )}
+            {step.orientation.state === 'unknown' ? (
+                <Stack gap="xs">
+                    {parts.length > 1 ? (
+                        <View pointerEvents={busy ? 'none' : 'auto'}>
+                            <ScrollView horizontal accessibilityLabel="Scroll orientation parts">
+                                <SegmentedControl
+                                    label="Part for the orientation cue"
+                                    options={parts}
+                                    value={partId ?? ''}
+                                    onChange={(value): void => setPartId(value)}
+                                />
+                            </ScrollView>
+                        </View>
+                    ) : parts.length === 1 ? (
+                        <Caption>{`Part: ${parts[0]!.label}`}</Caption>
+                    ) : (
+                        <Notice
+                            tone="error"
+                            text="This step lists no parts, so an orientation cue cannot be tied to one."
+                        />
+                    )}
+                    <TextField
+                        label="Orientation cue"
+                        value={cue}
+                        onChangeText={setCue}
+                        placeholder="What the manual shows, e.g. the groove faces inward"
+                        error={cueError}
+                        editable={!busy}
+                    />
+                    <View style={styles.actionRow}>
+                        <AppButton
+                            label="Accept orientation"
+                            disabled={busy || !cited || parts.length === 0}
+                            onPress={(): void => {
+                                void acceptOrientation()
+                            }}
+                        />
+                        <AppButton
+                            label="Cancel orientation draft"
+                            variant="quiet"
+                            disabled={busy}
+                            onPress={cancelOrientation}
+                        />
+                    </View>
+                </Stack>
+            ) : null}
+            {step.visibleChecks.length === 0 ? (
+                <Stack gap="xs">
+                    <Caption>No visible checks are listed for this step. Enter one condition per line.</Caption>
+                    <TextField
+                        label="Visible checks, one per line"
+                        value={checks}
+                        onChangeText={setChecks}
+                        multiline
+                        placeholder="One condition per line"
+                        error={checksError}
+                        editable={!busy}
+                    />
+                    <View style={styles.actionRow}>
+                        <AppButton
+                            label="Accept visible checks"
+                            disabled={busy || !cited}
+                            onPress={(): void => {
+                                void acceptChecks()
+                            }}
+                        />
+                        <AppButton label="Cancel checks draft" variant="quiet" disabled={busy} onPress={cancelChecks} />
+                    </View>
+                </Stack>
+            ) : null}
+        </Stack>
     )
 }
 

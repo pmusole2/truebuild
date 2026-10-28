@@ -1,6 +1,6 @@
 import { useSyncExternalStore, type ReactElement } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
-import { createDemoManual } from '@truebuild/contracts'
+import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
@@ -18,6 +18,7 @@ import { PRIVACY_COPY } from './privacy-copy'
 
 function setup(entry?: LibraryEntry): { controller: CaptureController; storage: LibraryStorage; kv: KeyValueStorage } {
     const data = new Map<string, string>()
+    let sequence = 0
     const kv: KeyValueStorage = {
         getItem: async (key): Promise<string | null> => data.get(key) ?? null,
         setItem: async (key, value): Promise<void> => {
@@ -36,7 +37,8 @@ function setup(entry?: LibraryEntry): { controller: CaptureController; storage: 
             throw new Error('No camera in this screen test')
         },
         digest: async (): Promise<string> => '0'.repeat(64),
-        id: (): string => 'ui-manual',
+        // Unique per call: each accepted visible check needs its own generated identity.
+        id: (): string => `ui-${++sequence}`,
     })
     if (entry !== undefined) {
         entry.session.pages[0]!.contentHash = '0'.repeat(64)
@@ -49,7 +51,13 @@ function Screens({ controller }: { controller: CaptureController }): ReactElemen
     return state.route === 'pages' && entry !== undefined ? (
         <PagesScreen state={state} controller={controller} entry={entry} choosePages={(): void => undefined} />
     ) : state.route === 'overview' && entry !== undefined ? (
-        <OverviewScreen state={state} controller={controller} entry={entry} />
+        // Matches CaptureWorkflow: a new manual or revision remounts the screen and resets its local drafts.
+        <OverviewScreen
+            key={`${entry.session.manualId}:${entry.session.revision}`}
+            state={state}
+            controller={controller}
+            entry={entry}
+        />
     ) : (
         <LibraryScreen state={state} controller={controller} />
     )
@@ -315,4 +323,232 @@ it('does not invent model provenance for legacy results without model fields', a
     )
     expect(screen.queryByText(/^Model:/)).toBeNull()
     expect(screen.queryByText(/^Model note:/)).toBeNull()
+})
+
+const ORIENTATION_LABEL = 'Orientation cue'
+const CHECKS_LABEL = 'Visible checks, one per line'
+
+/** Unreviewed demo manual with every correction still awaiting review. */
+function unreviewedDemo(): ManualSession {
+    const session = createDemoManual()
+    session.reviewStatus = 'unreviewed'
+    for (const step of session.reviewedSteps) {
+        if (step.correction !== null) {
+            step.correction.reviewed = false
+        }
+    }
+    return session
+}
+
+/**
+ * Step 1 (one part) has an unknown orientation; step 2 (two parts) has no visible checks. Raw extraction keeps the
+ * original readings so tests can prove that drafts and failed accepts never touch it.
+ */
+function partlyResolvedManual(): ManualSession {
+    const session = unreviewedDemo()
+    session.rawExtraction = { parts: session.parts, steps: structuredClone(session.reviewedSteps), unknowns: [] }
+    session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is not visible.' }
+    session.reviewedSteps[1]!.visibleChecks = []
+    return session
+}
+
+async function renderManual(session: ManualSession): Promise<{ controller: CaptureController; kv: KeyValueStorage }> {
+    const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+    const { controller, storage, kv } = setup(entry)
+    controllers.push(controller)
+    await storage.save([entry], [{ assetId: session.pages[0]!.assetId, bytes: new Uint8Array([1]) }])
+    await controller.restore()
+    await controller.open(session.manualId)
+    await render(<Screens controller={controller} />)
+    return { controller, kv }
+}
+
+it('offers a fact editor only under steps whose orientation or visible checks are missing', async () => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    expect(screen.getAllByLabelText(ORIENTATION_LABEL)).toHaveLength(1)
+    expect(screen.getAllByLabelText(CHECKS_LABEL)).toHaveLength(1)
+    // Each step card shows its cited diagram once; the editor adds no diagram block of its own.
+    expect(screen.getAllByTestId('diagram-0')).toHaveLength(2)
+    expect(controller.current?.session.revision).toBe(1)
+})
+
+it('shows no fact editor when every step already has orientation and visible checks', async () => {
+    await renderManual(unreviewedDemo())
+    expect(screen.queryByLabelText(ORIENTATION_LABEL)).toBeNull()
+    expect(screen.queryByLabelText(CHECKS_LABEL)).toBeNull()
+})
+
+it('keeps typed drafts out of the facts and keeps global confirmation blocked', async () => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    const before = structuredClone(controller.current?.session)
+    await fireEvent.changeText(screen.getByLabelText(ORIENTATION_LABEL), 'Groove faces inward.')
+    await fireEvent.changeText(screen.getByLabelText(CHECKS_LABEL), 'Groove is visible.')
+    expect(controller.current?.session).toEqual(before)
+    expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Confirm reviewed facts' }).props.accessibilityState.disabled).toBe(true)
+})
+
+it('accepts orientation for the sole part, then checks one per line; partial resolution stays blocked until both are accepted and the manual is checked', async () => {
+    const session = partlyResolvedManual()
+    const { controller } = await renderManual(session)
+    const orientationCited = session.reviewedSteps[0]!.sourceRefs
+    const checksCited = session.reviewedSteps[1]!.sourceRefs
+    expect(screen.getByText('Part: Side panel (side-panel)')).toBeTruthy()
+
+    await fireEvent.changeText(screen.getByLabelText(ORIENTATION_LABEL), '  Groove faces inward toward the divider.  ')
+    await fireEvent.press(screen.getByRole('button', { name: 'Accept orientation' }))
+    await waitFor(() => expect(controller.current?.session.revision).toBe(2))
+    expect(controller.current?.session.reviewedSteps[0]?.orientation).toEqual({
+        state: 'known',
+        value: { partId: 'side-panel', description: 'Groove faces inward toward the divider.' },
+        sourceRefs: orientationCited,
+    })
+    expect(screen.queryByLabelText(ORIENTATION_LABEL)).toBeNull()
+    expect(screen.getByText('Unresolved critical fact: Step 2: visible checks are missing.')).toBeTruthy()
+    expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(true)
+
+    await fireEvent.changeText(
+        screen.getByLabelText(CHECKS_LABEL),
+        'The groove is visible.\n\n  Divider edge is seated.  \n',
+    )
+    await fireEvent.press(screen.getByRole('button', { name: 'Accept visible checks' }))
+    await waitFor(() => expect(controller.current?.session.revision).toBe(3))
+    const checks = controller.current?.session.reviewedSteps[1]?.visibleChecks ?? []
+    expect(checks.map((check) => check.description)).toEqual([
+        { state: 'known', value: 'The groove is visible.', sourceRefs: checksCited },
+        { state: 'known', value: 'Divider edge is seated.', sourceRefs: checksCited },
+    ])
+    expect(new Set(checks.map((check) => check.checkId)).size).toBe(2)
+    expect(screen.queryByText(/Unresolved critical fact/)).toBeNull()
+
+    // Every fact is resolved, but the whole-manual checkbox must still be ticked explicitly.
+    expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Confirm reviewed facts' }).props.accessibilityState.disabled).toBe(true)
+    await fireEvent.press(screen.getByRole('checkbox'))
+    await fireEvent.press(screen.getByRole('button', { name: 'Confirm reviewed facts' }))
+    expect(await screen.findByText('Facts confirmed by you.')).toBeTruthy()
+})
+
+it('requires an explicit part choice when several parts could carry the orientation cue', async () => {
+    const session = partlyResolvedManual()
+    session.reviewedSteps[1]!.orientation = { state: 'unknown', reason: 'Divider direction is hidden.' }
+    const { controller } = await renderManual(session)
+    // Step 1 (one part) is unknown too, so step 2's editor is the second one on screen.
+    await fireEvent.changeText(screen.getAllByLabelText(ORIENTATION_LABEL)[1]!, 'Divider sits square to the panel.')
+    await fireEvent.press(screen.getAllByRole('button', { name: 'Accept orientation' })[1]!)
+    expect(await screen.findByText('Choose the part this cue applies to.')).toBeTruthy()
+    expect(controller.current?.session.revision).toBe(1)
+    // The part selector requests horizontal scrolling; this test does not prove actual phone layout.
+    expect(screen.getByLabelText('Scroll orientation parts').props.horizontal).toBe(true)
+
+    await fireEvent.press(screen.getByRole('radio', { name: 'Divider shelf (divider)' }))
+    await fireEvent.press(screen.getAllByRole('button', { name: 'Accept orientation' })[1]!)
+    await waitFor(() => expect(controller.current?.session.revision).toBe(2))
+    expect(controller.current?.session.reviewedSteps[1]?.orientation).toMatchObject({
+        state: 'known',
+        value: { partId: 'divider', description: 'Divider sits square to the panel.' },
+    })
+})
+
+it.each([
+    ['Accept orientation', ORIENTATION_LABEL, '   ', 'Describe the visible cue, or leave orientation unknown.'],
+    ['Accept visible checks', CHECKS_LABEL, ' \n  \n', 'Enter at least one visible check, one condition per line.'],
+])('rejects blank input for %s inline without saving anything', async (button, label, draft, message) => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    const before = structuredClone(controller.current?.session)
+    await fireEvent.changeText(screen.getByLabelText(label), draft)
+    await fireEvent.press(screen.getByRole('button', { name: button }))
+    expect(screen.getByText(message)).toBeTruthy()
+    expect(controller.current?.session).toEqual(before)
+    expect(screen.getByLabelText(label).props.value).toBe(draft)
+})
+
+it('Cancel clears unaccepted drafts and leaves facts, revision and raw evidence unchanged', async () => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    const before = structuredClone(controller.current?.session)
+    await fireEvent.changeText(screen.getByLabelText(ORIENTATION_LABEL), 'Groove faces inward.')
+    await fireEvent.changeText(screen.getByLabelText(CHECKS_LABEL), 'Groove is visible.')
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancel orientation draft' }))
+    expect(screen.getByLabelText(ORIENTATION_LABEL).props.value).toBe('')
+    expect(screen.getByLabelText(CHECKS_LABEL).props.value).toBe('Groove is visible.')
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancel checks draft' }))
+    expect(screen.getByLabelText(CHECKS_LABEL).props.value).toBe('')
+    expect(controller.current?.session).toEqual(before)
+})
+
+it('a rejected accept keeps the draft for correction and shows the controller notice', async () => {
+    const { controller } = await renderManual(partlyResolvedManual())
+    const tooLong = 'x'.repeat(501)
+    await fireEvent.changeText(screen.getByLabelText(CHECKS_LABEL), tooLong)
+    await fireEvent.press(screen.getByRole('button', { name: 'Accept visible checks' }))
+    await waitFor(() => expect(controller.getSnapshot().notice).not.toBeNull())
+    expect(screen.getByText(controller.getSnapshot().notice ?? '')).toBeTruthy()
+    expect(screen.getByLabelText(CHECKS_LABEL).props.value).toBe(tooLong)
+    expect(controller.current?.session.revision).toBe(1)
+})
+
+it('a failed save shows the notice, promotes no fact and keeps the draft', async () => {
+    const session = partlyResolvedManual()
+    const { controller, kv } = await renderManual(session)
+    const before = structuredClone(controller.current?.session)
+    kv.setItem = async (): Promise<never> => {
+        throw new Error('Disk full')
+    }
+    await fireEvent.changeText(screen.getByLabelText(ORIENTATION_LABEL), 'Groove faces inward.')
+    await fireEvent.press(screen.getByRole('button', { name: 'Accept orientation' }))
+    await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
+    expect(
+        screen.getByText(
+            'Could not save on this device. Original library data is retained. Retry reading the local library before making changes.',
+        ),
+    ).toBeTruthy()
+    expect(controller.current?.session).toEqual(before)
+    expect(screen.getByLabelText(ORIENTATION_LABEL).props.value).toBe('Groove faces inward.')
+})
+
+it('explains that a step without a cited manual page cannot accept facts', async () => {
+    const session = partlyResolvedManual()
+    session.reviewedSteps[0]!.sourceRefs = []
+    await renderManual(session)
+    expect(screen.getByText(/no cited manual page/u)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Accept orientation' }).props.accessibilityState.disabled).toBe(true)
+})
+
+it('a revision change discards unaccepted drafts from the previous revision', async () => {
+    const session = partlyResolvedManual()
+    const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+    const { controller } = setup(entry)
+    controllers.push(controller)
+    const { rerender } = await render(
+        <OverviewScreen state={controller.getSnapshot()} controller={controller} entry={entry} />,
+    )
+    await fireEvent.changeText(screen.getByLabelText(CHECKS_LABEL), 'Groove is visible.')
+    await rerender(
+        <OverviewScreen
+            state={controller.getSnapshot()}
+            controller={controller}
+            entry={{ ...entry, session: { ...session, revision: 2 } }}
+        />,
+    )
+    expect(screen.getByLabelText(CHECKS_LABEL).props.value).toBe('')
+})
+
+it('a revision change clears a stale whole-manual checkbox', async () => {
+    const session = unreviewedDemo()
+    const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+    const { controller } = setup(entry)
+    controllers.push(controller)
+    const { rerender } = await render(
+        <OverviewScreen state={controller.getSnapshot()} controller={controller} entry={entry} />,
+    )
+    await fireEvent.press(screen.getByRole('checkbox'))
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(true)
+    await rerender(
+        <OverviewScreen
+            state={controller.getSnapshot()}
+            controller={controller}
+            entry={{ ...entry, session: { ...session, revision: 2 } }}
+        />,
+    )
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(false)
 })

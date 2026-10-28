@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createDemoManual, type ApiResult, type CheckResult, type ParsedManual } from '@truebuild/contracts'
+import {
+    createDemoManual,
+    type ApiResult,
+    type CheckResult,
+    type ManualBinding,
+    type ParsedManual,
+} from '@truebuild/contracts'
 import {
     modelCheckMetadataSchema,
     modelParseMetadataSchema,
     modelSecondOpinionMetadataSchema,
 } from '@truebuild/contracts/model'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
-import { CaptureController, reviewedSession, unresolvedCriticalFacts } from './controller'
+import * as temporaryImages from '../../media/owned-temporary-images'
+import { CaptureController, reviewedSession, unresolvedCriticalFacts, type StepFactResolution } from './controller'
 import { LibraryStorage, type KeyValueStorage } from './library'
 
 const fixture = createDemoManual()
@@ -129,8 +136,8 @@ afterEach(() => {
     }
     vi.useRealTimers()
 })
-async function ready(): Promise<ReturnType<typeof setup>> {
-    const runtime = setup()
+async function ready(responder?: ModelFetch): Promise<ReturnType<typeof setup>> {
+    const runtime = setup(responder)
     controllers.push(runtime.controller)
     await runtime.controller.restore()
     await runtime.controller.createManual()
@@ -139,6 +146,456 @@ async function ready(): Promise<ReturnType<typeof setup>> {
     await runtime.controller.confirm()
     return runtime
 }
+
+function manualBinding(controller: CaptureController): ManualBinding {
+    const { manualId, revision } = controller.current!.session
+    return { kind: 'manual', manualId, revision }
+}
+
+async function unresolvedReady(
+    change: (value: ParsedManual) => void = (): void => undefined,
+): Promise<ReturnType<typeof setup>> {
+    return ready(async (_url, init): Promise<Response> => {
+        const meta = modelParseMetadataSchema.parse(JSON.parse(String((init.body as FormData).get('metadata'))))
+        const value = parsed(meta.pages[0]!.pageId)
+        value.steps[0]!.orientation = { state: 'unknown', reason: 'Arrow could not be read.' }
+        value.steps[0]!.visibleChecks = []
+        change(value)
+        return Response.json({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value })
+    })
+}
+
+const orientationResolution = { partId: 'side-panel', description: 'Groove faces inward.' }
+
+describe('explicit acceptance of missing step facts', () => {
+    it('accepts one fact at a time with step citations and still requires whole-manual confirmation', async () => {
+        const { controller, store } = await unresolvedReady()
+        const before = structuredClone(controller.current!)
+        const first = before.session.reviewedSteps[0]!
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), first.stepId, {
+                orientation: orientationResolution,
+            }),
+        ).toBe(true)
+        expect(controller.current!.session.reviewedSteps[0]!.orientation).toEqual({
+            state: 'known',
+            value: orientationResolution,
+            sourceRefs: first.sourceRefs,
+        })
+        expect(controller.current!.session.reviewedSteps[0]!.visibleChecks).toEqual([])
+        expect(controller.current!.session.revision).toBe(before.session.revision + 1)
+        await controller.confirm()
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+        expect(controller.getSnapshot().notice).toMatch(/critical facts/i)
+
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), first.stepId, {
+                visibleChecks: [' Groove is visible. ', 'Panel stands upright.'],
+            }),
+        ).toBe(true)
+        const session = controller.current!.session
+        const checks = session.reviewedSteps[0]!.visibleChecks
+        expect(checks.map((check) => check.description)).toEqual([
+            { state: 'known', value: 'Groove is visible.', sourceRefs: first.sourceRefs },
+            { state: 'known', value: 'Panel stands upright.', sourceRefs: first.sourceRefs },
+        ])
+        expect(new Set(checks.map((check) => check.checkId)).size).toBe(2)
+        expect(checks.every((check) => check.checkId.startsWith('test-'))).toBe(true)
+        expect(session.rawExtraction).toEqual(before.session.rawExtraction)
+        expect(session.reviewStatus).toBe('unreviewed')
+        expect((await store.restore()).entries[0]!.session).toEqual(session)
+        await controller.confirm()
+        expect(controller.current!.session.reviewStatus).toBe('reviewed')
+    })
+
+    it('resolves both fields atomically and cannot overwrite either accepted field', async () => {
+        const { controller } = await unresolvedReady()
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+                visibleChecks: ['Groove is visible.'],
+            }),
+        ).toBe(true)
+        const accepted = structuredClone(controller.current!)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: { ...orientationResolution, description: 'Changed.' },
+                visibleChecks: ['Changed.'],
+            }),
+        ).toBe(false)
+        expect(controller.current).toEqual(accepted)
+        expect(controller.getSnapshot().notice).toMatch(/already|missing|unresolved/i)
+    })
+
+    it.each<{ label: string; resolution: StepFactResolution }>([
+        { label: 'no facts', resolution: {} },
+        { label: 'blank orientation', resolution: { orientation: { ...orientationResolution, description: '  ' } } },
+        {
+            label: 'long orientation',
+            resolution: { orientation: { ...orientationResolution, description: 'x'.repeat(501) } },
+        },
+        { label: 'unknown part', resolution: { orientation: { ...orientationResolution, partId: 'invented' } } },
+        {
+            label: 'part outside this step',
+            resolution: { orientation: { ...orientationResolution, partId: 'divider' } },
+        },
+        { label: 'empty checks', resolution: { visibleChecks: [] } },
+        { label: 'blank check', resolution: { visibleChecks: ['  '] } },
+        { label: 'long check', resolution: { visibleChecks: ['x'.repeat(501)] } },
+        { label: 'too many checks', resolution: { visibleChecks: Array.from({ length: 101 }, () => 'Visible.') } },
+        { label: 'invalid atomic checks', resolution: { orientation: orientationResolution, visibleChecks: [''] } },
+    ])('rejects $label without changing facts or revision', async ({ resolution }) => {
+        const { controller } = await unresolvedReady()
+        const before = structuredClone(controller.current!)
+        expect(await controller.acceptStepFacts(manualBinding(controller), 'step-1', resolution)).toBe(false)
+        expect(controller.current).toEqual(before)
+        expect(controller.getSnapshot().notice).toBeTruthy()
+    })
+
+    it('rejects an uncited step without changing its facts or revision', async () => {
+        const { controller } = await unresolvedReady((value) => {
+            value.steps[0]!.sourceRefs = []
+        })
+        const before = structuredClone(controller.current!)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(false)
+        expect(controller.current).toEqual(before)
+        expect(controller.getSnapshot().notice).toMatch(/citation/i)
+    })
+
+    it('rejects missing steps and stale manual or revision bindings on an otherwise resolvable step', async () => {
+        const { controller } = await unresolvedReady()
+        const before = structuredClone(controller.current!)
+        const binding = manualBinding(controller)
+        for (const [candidate, stepId] of [
+            [binding, 'missing-step'],
+            [{ ...binding, manualId: 'other-manual' }, 'step-1'],
+            [{ ...binding, revision: binding.revision - 1 }, 'step-1'],
+        ] as const) {
+            expect(await controller.acceptStepFacts(candidate, stepId, { orientation: orientationResolution })).toBe(
+                false,
+            )
+            expect(controller.current).toEqual(before)
+            expect(controller.getSnapshot().notice).toBeTruthy()
+        }
+    })
+
+    it('keeps confirmation blocked after checks-only acceptance and after another critical fact remains unresolved', async () => {
+        const { controller } = await unresolvedReady((value) => {
+            value.steps[0]!.connection = { state: 'unknown', reason: 'Connection is unreadable.' }
+        })
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                visibleChecks: ['Groove is visible.'],
+            }),
+        ).toBe(true)
+        expect(controller.current!.session.reviewedSteps[0]!.orientation.state).toBe('unknown')
+        await controller.confirm()
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(true)
+        await controller.confirm()
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+        expect(controller.getSnapshot().notice).toMatch(/critical facts/i)
+    })
+
+    it('preserves nonempty unknown checks during orientation acceptance and cannot replace them through the empty-check editor', async () => {
+        const { controller } = await unresolvedReady((value) => {
+            const check = structuredClone(fixture.reviewedSteps[0]!.visibleChecks[0]!)
+            check.description = { state: 'unknown', reason: 'The visible check is unreadable.' }
+            value.steps[0]!.visibleChecks = [check]
+        })
+        const checks = structuredClone(controller.current!.session.reviewedSteps[0]!.visibleChecks)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(true)
+        expect(controller.current!.session.reviewedSteps[0]!.visibleChecks).toEqual(checks)
+        await controller.confirm()
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+        expect(controller.getSnapshot().notice).toMatch(/critical facts/i)
+        const before = structuredClone(controller.current!)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                visibleChecks: ['Replacement text is not allowed here.'],
+            }),
+        ).toBe(false)
+        expect(controller.current).toEqual(before)
+    })
+
+    it('isolates all nested working facts from the preserved raw extraction after parsing', async () => {
+        const { controller } = await ready()
+        await controller.parse()
+        const session = controller.current!.session
+        const raw = structuredClone(session.rawExtraction)
+        session.parts[0]!.name = { state: 'unknown', reason: 'Working edit.' }
+        const step = session.reviewedSteps[0]!
+        step.parts[0]!.quantity = { state: 'unknown', reason: 'Working edit.' }
+        step.sourceRefs[0]!.region = { x: 0, y: 0, width: 0.5, height: 0.5 }
+        if (step.orientation.state === 'known') step.orientation.value.description = 'Working edit.'
+        if (step.visibleChecks[0]!.description.state === 'known') {
+            step.visibleChecks[0]!.description.value = 'Working edit.'
+        }
+        step.correction!.actions[0]!.instruction = 'Working edit.'
+        expect(session.rawExtraction).toEqual(raw)
+    })
+
+    it('clears saved progress, captures, composition and results when facts are accepted', async () => {
+        const { controller, store } = await unresolvedReady()
+        const entry = controller.current!
+        const before = {
+            ...entry,
+            stepIndex: 1,
+            completedStepIds: ['step-1'],
+            capture: {
+                binding: {
+                    ...manualBinding(controller),
+                    kind: 'capture' as const,
+                    stepId: 'step-2',
+                    captureId: 'old-photo',
+                },
+                page: entry.session.pages[0]!,
+                capturedAt: 100,
+            },
+        }
+        await store.save([before])
+        await controller.restore()
+        await controller.open(entry.session.manualId, 'guide')
+        controller.questionChanged('Which edge?')
+        controller.targetChanged({ kind: 'point', x: 0.5, y: 0.5 })
+        expect(controller.getSnapshot().capture).not.toBeNull()
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(true)
+        expect(controller.current).toMatchObject({ stepIndex: 0, completedStepIds: [], capture: null })
+        expect(controller.getSnapshot()).toMatchObject({
+            capture: null,
+            check: null,
+            answer: null,
+            question: '',
+            target: null,
+        })
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+    })
+
+    it('persists before publishing facts, keeps cancellation atomic, and never restores a departed screen', async () => {
+        const { controller, store } = await unresolvedReady()
+        const old = structuredClone(controller.current!)
+        let finish: (() => Promise<void>) | undefined
+        const save = store.save.bind(store)
+        vi.spyOn(store, 'save').mockImplementationOnce(
+            (entries, writes): Promise<void> =>
+                new Promise((resolve, reject) => {
+                    finish = async (): Promise<void> => {
+                        try {
+                            await save(entries, writes)
+                            resolve()
+                        } catch (error) {
+                            reject(error)
+                        }
+                    }
+                }),
+        )
+        const pending = controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+            orientation: orientationResolution,
+        })
+        expect(controller.current).toEqual(old)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', { visibleChecks: ['Visible.'] }),
+        ).toBe(false)
+        controller.cancel()
+        expect(controller.getSnapshot().pending).not.toBeNull()
+        expect(controller.getSnapshot().notice).toMatch(/finishing.*save/i)
+        controller.home()
+        await finish!()
+        expect(await pending).toBe(true)
+        expect(controller.getSnapshot()).toMatchObject({
+            route: 'library',
+            selectedId: null,
+            pending: null,
+            notice: null,
+        })
+        await controller.open(old.session.manualId)
+        expect(controller.current!.session.revision).toBe(old.session.revision + 1)
+    })
+
+    it('keeps previous facts, revision and progress and locks editing after a failed save', async () => {
+        const { controller, store } = await unresolvedReady()
+        await controller.completeStep()
+        const before = structuredClone(controller.current!)
+        vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('Disk unavailable'))
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(false)
+        expect(controller.current).toEqual(before)
+        expect(controller.getSnapshot().storageReadOnly).toBe(true)
+        expect(controller.getSnapshot().notice).toMatch(/could not save|original library data/i)
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', { visibleChecks: ['Visible.'] }),
+        ).toBe(false)
+        expect(controller.current).toEqual(before)
+        expect((await store.restore()).entries[0]).toEqual(before)
+    })
+
+    it('reports a failed acceptance save and locks storage even after navigating away', async () => {
+        const { controller, store } = await unresolvedReady()
+        const before = structuredClone(controller.current!)
+        let fail: ((error: Error) => void) | undefined
+        vi.spyOn(store, 'save').mockImplementationOnce(
+            () =>
+                new Promise((_resolve, reject) => {
+                    fail = reject
+                }),
+        )
+        const pending = controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+            orientation: orientationResolution,
+        })
+        controller.home()
+        fail!(new Error('Disk unavailable'))
+        expect(await pending).toBe(false)
+        expect(controller.getSnapshot().entries[0]).toEqual(before)
+        expect(controller.getSnapshot()).toMatchObject({ route: 'library', selectedId: null, storageReadOnly: true })
+        expect(controller.getSnapshot().notice).toMatch(/could not save|original library data/i)
+    })
+
+    it('cancels a pending older parse without letting its late result replace accepted facts', async () => {
+        const { controller } = await unresolvedReady()
+        let signal: AbortSignal | undefined
+        let deliver: ((result: ApiResult<ParsedManual>) => void) | undefined
+        // Hold an already-started parse even after abort, as a provider may still complete remotely.
+        const parse = vi
+            .spyOn(ModelApiClient.prototype, 'parse')
+            .mockImplementationOnce((binding, _pages, _images, options) => {
+                signal = options!.signal
+                return new Promise((resolve) => {
+                    deliver = resolve
+                })
+            })
+        // Both operations target R+1, so the epoch must fence this result even though its binding still matches.
+        const oldBinding = { ...manualBinding(controller), revision: controller.current!.session.revision + 1 }
+        const pending = controller.parse()
+        await vi.waitFor(() => expect(deliver).toBeDefined())
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+            }),
+        ).toBe(true)
+        const accepted = structuredClone(controller.current!)
+        expect(signal!.aborted).toBe(true)
+        deliver!({
+            status: 'ok',
+            requestId: 'old-parse',
+            mode: 'model',
+            binding: oldBinding,
+            value: parsed(accepted.session.pages[0]!.pageId),
+        })
+        await pending
+        expect(controller.current).toEqual(accepted)
+        expect(controller.getSnapshot().pending).toBeNull()
+        parse.mockRestore()
+    })
+
+    it('does not let a canceled page import overwrite accepted facts after temporary-image cleanup finishes', async () => {
+        const { controller } = await unresolvedReady()
+        const manualId = controller.current!.session.manualId
+        let finishCleanup: (() => void) | undefined
+        const cleanup = vi.spyOn(temporaryImages, 'releaseTemporaryImage').mockImplementationOnce(
+            () =>
+                new Promise<void>((resolve) => {
+                    finishCleanup = resolve
+                }),
+        )
+        try {
+            const pendingImport = controller.importPages(async () => [photo])
+            await vi.waitFor(() => expect(finishCleanup).toBeDefined())
+            controller.home()
+            await controller.open(manualId)
+            expect(
+                await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                    orientation: orientationResolution,
+                }),
+            ).toBe(true)
+            const accepted = structuredClone(controller.current!)
+            finishCleanup!()
+            await pendingImport
+            expect(controller.current).toEqual(accepted)
+        } finally {
+            finishCleanup?.()
+            cleanup.mockRestore()
+        }
+    })
+
+    it('keeps accepted facts and cleared results when an older check finishes after a new extraction', async () => {
+        const { controller } = await ready()
+        let deliver: ((result: ApiResult<CheckResult>) => void) | undefined
+        let signal: AbortSignal | undefined
+        const oldBinding = {
+            ...manualBinding(controller),
+            kind: 'capture' as const,
+            stepId: 'step-1',
+            captureId: 'old-photo',
+        }
+        vi.spyOn(ModelApiClient.prototype, 'check').mockImplementationOnce(
+            (binding, _session, _ids, _sources, _photo, options) => {
+                Object.assign(oldBinding, binding)
+                signal = options!.signal
+                return new Promise((resolve) => {
+                    deliver = resolve
+                })
+            },
+        )
+        controller.camera({ kind: 'check' })
+        const pendingCheck = controller.shutter(async () => photo)
+        await vi.waitFor(() => expect(deliver).toBeDefined())
+        vi.spyOn(ModelApiClient.prototype, 'parse').mockImplementationOnce(
+            async (binding): Promise<ApiResult<ParsedManual>> => {
+                const value = parsed(controller.current!.session.pages[0]!.pageId)
+                value.steps[0]!.orientation = { state: 'unknown', reason: 'Arrow is unreadable.' }
+                value.steps[0]!.visibleChecks = []
+                return { status: 'ok', mode: 'model', requestId: 'new-parse', binding, value }
+            },
+        )
+        // Navigation cancels the old check; reading again produces unresolved facts for explicit acceptance.
+        controller.navigate('overview')
+        await controller.parse()
+        expect(
+            await controller.acceptStepFacts(manualBinding(controller), 'step-1', {
+                orientation: orientationResolution,
+                visibleChecks: ['Groove is visible.'],
+            }),
+        ).toBe(true)
+        const accepted = structuredClone(controller.current!)
+        deliver!({
+            status: 'ok',
+            mode: 'model',
+            requestId: 'old-check',
+            binding: oldBinding,
+            value: {
+                decision: 'pass',
+                reason: 'Late old verdict.',
+                sourceRefs: accepted.session.reviewedSteps[0]!.sourceRefs,
+                observedRegion: null,
+                missingEvidence: [],
+            },
+        })
+        await pendingCheck
+        await Promise.resolve()
+        expect(signal!.aborted).toBe(true)
+        expect(controller.current).toEqual(accepted)
+        expect(controller.getSnapshot()).toMatchObject({ check: null, answer: null, capture: null, pending: null })
+    })
+})
 
 async function followupReady(
     options: { decision?: CheckResult['decision']; available?: boolean; primaryDelayMs?: number } = {},

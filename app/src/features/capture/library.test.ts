@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoManual } from '@truebuild/contracts'
+import { ModelApiClient } from '../../api/model-client'
+import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage } from './library'
 
 function memory(): KeyValueStorage & { data: Map<string, string> } {
@@ -38,6 +40,63 @@ describe('durable manual library', () => {
         const second = new LibraryStorage(kv, digest)
         expect((await second.restore()).entries).toEqual([manual])
         expect(await second.readAsset(manual.session.pages[0]!)).toEqual(new Uint8Array([1, 4, 9]))
+    })
+
+    it('round-trips explicitly accepted step facts from a legacy session with preserved raw evidence', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        // Sessions saved before extraction-page custody/provenance have neither optional field.
+        expect(manual.session.extractionSourcePageIds).toBeUndefined()
+        expect(manual.session.rawExtraction?.model).toBeUndefined()
+        manual.session.reviewStatus = 'unreviewed'
+        manual.session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is unreadable.' }
+        manual.session.reviewedSteps[0]!.visibleChecks = []
+        manual.session.rawExtraction!.steps[0]!.orientation = { state: 'unknown', reason: 'Arrow is unreadable.' }
+        manual.session.rawExtraction!.steps[0]!.visibleChecks = []
+        const raw = structuredClone(manual.session.rawExtraction)
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }])
+        let id = 0
+        const controller = new CaptureController({
+            storage: store,
+            client: new ModelApiClient({
+                baseUrl: 'http://127.0.0.1:3001',
+                secret: '',
+                fetch: async (): Promise<never> => {
+                    throw new Error('No model requests belong to local fact acceptance.')
+                },
+            }),
+            normalize: async (): Promise<never> => {
+                throw new Error('No image normalization belongs to fact acceptance.')
+            },
+            digest,
+            id: (): string => `accepted-${++id}`,
+        })
+        try {
+            await controller.restore()
+            await controller.open(manual.session.manualId)
+            expect(
+                await controller.acceptStepFacts(
+                    {
+                        kind: 'manual',
+                        manualId: manual.session.manualId,
+                        revision: manual.session.revision,
+                    },
+                    'step-1',
+                    {
+                        orientation: { partId: 'side-panel', description: 'Groove faces inward.' },
+                        visibleChecks: ['Groove is visible.', 'Panel stands upright.'],
+                    },
+                ),
+            ).toBe(true)
+            const restored = await new LibraryStorage(kv, digest).restore()
+            expect(restored.readOnly).toBe(false)
+            expect(restored.entries[0]).toEqual(controller.current)
+            expect(restored.entries[0]!.session.rawExtraction).toEqual(raw)
+            expect(restored.entries[0]!.session.reviewStatus).toBe('unreviewed')
+        } finally {
+            controller.dispose()
+        }
     })
 
     it('chunks a large image and cleans removed assets only after a durable manifest commit', async () => {

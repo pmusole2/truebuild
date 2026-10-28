@@ -4,10 +4,12 @@ import {
     LIMITS,
     manualSessionSchema,
     matchesBinding,
+    parsedManualSchema,
     type ApiResult,
     type CaptureBinding,
     type CheckResult,
     type ManualPage,
+    type ManualBinding,
     type ManualSession,
     type ParsedManual,
     type QuestionResult,
@@ -30,10 +32,16 @@ import type { Digest, LibraryEntry, LibraryStorage } from './library'
 
 const LOCAL_LIBRARY_READ_FAILURE =
     'Local library images could not be read. Original data is retained. Retry reading the local library before making changes.'
+const LOCAL_LIBRARY_SAVE_FAILURE =
+    'Could not save on this device. Original library data is retained. Retry reading the local library before making changes.'
 
 export type ScreenRoute = 'library' | 'pages' | 'overview' | 'guide' | 'camera'
 export type CameraIntent = { kind: 'page'; replaceIndex?: number } | { kind: 'check' | 'question' }
 export type CaptureView = { binding: CaptureBinding; observation: Observation; capturedAt: number; reusable: boolean }
+export type StepFactResolution = {
+    readonly orientation?: { readonly partId: string; readonly description: string }
+    readonly visibleChecks?: readonly string[]
+}
 export type WorkflowState = {
     route: ScreenRoute
     entries: readonly LibraryEntry[]
@@ -355,7 +363,7 @@ export class CaptureController {
         } catch {
             if (token === this.epoch) {
                 this.publish({
-                    notice: 'Could not save on this device. Original library data is retained. Retry reading the local library before making changes.',
+                    notice: LOCAL_LIBRARY_SAVE_FAILURE,
                     storageReadOnly: true,
                 })
             }
@@ -478,6 +486,9 @@ export class CaptureController {
                     await releaseTemporaryImage(image.uri)
                 }
             }
+            if (token !== this.epoch || operation.signal.aborted) {
+                return
+            }
             this.publish({ pending: 'Saving manual pages…' })
             if (await this.persist(this.replacement(this.changedPages(entry, pages)), writes)) {
                 if (token === this.epoch) {
@@ -552,6 +563,9 @@ export class CaptureController {
                 return
             }
             const parsed: ParsedManual = result.value
+            // Contract data is JSON-only. Keep every nested working value separate from the original extraction,
+            // without depending on structuredClone being available in the native runtime.
+            const working = parsedManualSchema.parse(JSON.parse(JSON.stringify(parsed)))
             const next: LibraryEntry = {
                 ...entry,
                 capture: null,
@@ -561,9 +575,9 @@ export class CaptureController {
                     ...entry.session,
                     revision,
                     updatedAt: new Date(this.now()).toISOString(),
-                    parts: parsed.parts,
+                    parts: working.parts,
                     rawExtraction: parsed,
-                    reviewedSteps: [...parsed.steps].sort((a, b) => a.order - b.order),
+                    reviewedSteps: [...working.steps].sort((a, b) => a.order - b.order),
                     reviewStatus: 'unreviewed',
                     extractionSourcePageIds: entry.session.pages.map((p) => p.pageId),
                 },
@@ -592,6 +606,114 @@ export class CaptureController {
                 this.publish({ pending: null })
             }
         }
+    }
+    async acceptStepFacts(binding: ManualBinding, stepId: string, resolution: StepFactResolution): Promise<boolean> {
+        const reject = (notice: string): false => {
+            this.publish({ notice })
+            return false
+        }
+        if (this.saving) {
+            return reject('Finishing the local save. Please wait before accepting step facts.')
+        }
+        if (this.state.storageReadOnly) {
+            return reject('Local library is read-only. Retry reading it before accepting step facts.')
+        }
+        const entry = this.current
+        if (
+            entry === undefined ||
+            !matchesBinding(binding, {
+                kind: 'manual',
+                manualId: entry.session.manualId,
+                revision: entry.session.revision,
+            })
+        ) {
+            return reject('This draft belongs to an older manual or revision. Open the current step and try again.')
+        }
+        const step = entry.session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
+        if (step === undefined) {
+            return reject('This step is no longer available. Open the current manual and try again.')
+        }
+        if (
+            resolution === null ||
+            typeof resolution !== 'object' ||
+            Object.keys(resolution).some((key) => key !== 'orientation' && key !== 'visibleChecks') ||
+            (resolution.visibleChecks !== undefined && !Array.isArray(resolution.visibleChecks))
+        ) {
+            return reject('Enter a valid orientation or visible checks before accepting.')
+        }
+        const hasOrientation = resolution.orientation !== undefined
+        const hasChecks = resolution.visibleChecks !== undefined
+        if (!hasOrientation && !hasChecks) {
+            return reject('Enter a missing orientation or visible checks before accepting.')
+        }
+        if ((hasOrientation && step.orientation.state !== 'unknown') || (hasChecks && step.visibleChecks.length > 0)) {
+            return reject('Only an unresolved orientation or missing visible checks can be accepted.')
+        }
+        if (step.sourceRefs.length === 0) {
+            return reject('This step has no diagram citation. Add clearer pages and read the manual again.')
+        }
+        if (hasChecks && resolution.visibleChecks!.length === 0) {
+            return reject('Enter at least one visible check before accepting.')
+        }
+        const candidate = manualSessionSchema.safeParse({
+            ...entry.session,
+            revision: entry.session.revision + 1,
+            updatedAt: new Date(this.now()).toISOString(),
+            reviewStatus: 'unreviewed',
+            reviewedSteps: entry.session.reviewedSteps.map((current) =>
+                current !== step
+                    ? current
+                    : {
+                          ...step,
+                          orientation:
+                              resolution.orientation === undefined
+                                  ? step.orientation
+                                  : {
+                                        state: 'known',
+                                        value: resolution.orientation,
+                                        sourceRefs: step.sourceRefs,
+                                    },
+                          visibleChecks:
+                              resolution.visibleChecks?.map((description) => ({
+                                  checkId: this.ports.id(),
+                                  description: { state: 'known', value: description, sourceRefs: step.sourceRefs },
+                              })) ?? step.visibleChecks,
+                      },
+            ),
+        })
+        if (!candidate.success) {
+            return reject(
+                'Step facts are invalid. Choose a required part and use 1–500 characters per description, with at most 100 visible checks.',
+            )
+        }
+        const acceptedOrientation = candidate.data.reviewedSteps.find(
+            (current) => current.stepId === stepId,
+        )!.orientation
+        if (
+            hasOrientation &&
+            acceptedOrientation.state === 'known' &&
+            !step.parts.some((part) => part.partId === acceptedOrientation.value.partId)
+        ) {
+            return reject('Choose an existing part required by this step before accepting its orientation.')
+        }
+        const token = this.invalidate()
+        this.publish({ cameraIntent: null, notice: null })
+        const saved = await this.persist(
+            this.replacement({
+                ...entry,
+                session: candidate.data,
+                stepIndex: 0,
+                completedStepIds: [],
+                capture: null,
+            }),
+        )
+        if (!saved) {
+            // A navigation epoch must suppress stale screen updates, but a failed device write still locks the library.
+            this.publish({ notice: LOCAL_LIBRARY_SAVE_FAILURE, storageReadOnly: true })
+        } else if (token === this.epoch && this.current?.session.manualId === binding.manualId) {
+            this.publish({ notice: 'Step facts saved. Review every fact in the manual before confirming.' })
+        }
+        return saved
     }
     async confirm(): Promise<void> {
         const entry = this.current
