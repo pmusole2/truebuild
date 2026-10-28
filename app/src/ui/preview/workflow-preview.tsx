@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react'
-import { Image, ScrollView, StyleSheet, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { CameraStage } from '../../features/capture/camera-stage'
+import { ManualImage } from '../../features/capture/page-media'
 import { SettingsScreen } from '../../features/capture/settings-screen'
 import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
 import { stepAssemblyGuide } from '../../features/capture/step-facts'
@@ -189,11 +190,10 @@ function PreviewFrame({
                             cameraPreviewPresentation(selected) ?? {
                                 status: 'preview',
                                 media: (
-                                    <Image
-                                        source={{ uri: Object.values(state.pageUris)[0] }}
-                                        style={StyleSheet.absoluteFill}
-                                        resizeMode="contain"
-                                        accessibilityLabel="Synthetic camera preview"
+                                    // Fixture pages are SVG, which the native Image cannot draw: ManualImage can.
+                                    <ManualImage
+                                        uri={Object.values(state.pageUris)[0] ?? ''}
+                                        label="Synthetic camera preview"
                                     />
                                 ),
                                 shutter: (

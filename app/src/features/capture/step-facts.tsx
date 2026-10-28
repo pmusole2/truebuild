@@ -111,16 +111,14 @@ export function StepSummary({ session, index }: { session: ManualSession; index:
     )
 }
 
-function quantityText(part: PartRequirement, session?: ManualSession): string {
-    if (part.quantityBasis?.kind === 'carried_over' && part.quantity.state === 'known') {
-        const earlier = session?.reviewedSteps.find((step) => step.stepId === part.quantityBasis?.stepId)
-        const label = earlier?.order ?? part.quantityBasis.stepId
-        return `${part.quantity.value} (carried over from step ${label})`
+function quantityText(part: PartRequirement): string {
+    if (part.quantity.state === 'known') {
+        return String(part.quantity.value)
     }
-    if (part.quantity.state === 'known' || part.quantityBasis == null) {
-        return factText(part.quantity, String)
+    if (part.quantityBasis?.kind === 'user_supplied') {
+        return 'supplied by you'
     }
-    return `Quantity basis: ${part.quantityBasis.kind === 'user_supplied' ? 'supplied by you' : 'not specified by the manual'}`
+    return `the manual does not say how many. ${part.quantity.reason}`
 }
 
 /** Server provenance only. Notes remain bounded plain text and never change a verdict or answer's meaning. */

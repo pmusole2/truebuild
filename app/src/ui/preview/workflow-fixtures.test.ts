@@ -15,7 +15,7 @@ import { WORKFLOW_PREVIEW_CASES, workflowPreviewFixture } from './workflow-fixtu
 
 describe('synthetic workflow preview fixtures', () => {
     it('keeps every selectable workflow state valid and all imagery inline', () => {
-        expect(WORKFLOW_PREVIEW_CASES).toHaveLength(38)
+        expect(WORKFLOW_PREVIEW_CASES).toHaveLength(39)
         for (const preview of WORKFLOW_PREVIEW_CASES) {
             const { state, entry } = workflowPreviewFixture(preview.id)
             expect(manualSessionSchema.safeParse(entry.session).success, preview.id).toBe(true)
