@@ -1,6 +1,7 @@
 import { useMemo, type ReactElement } from 'react'
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useSharedValue } from 'react-native-reanimated'
+import { useCompactTitles } from '../src/features/capture/header-options'
 import { useQuickProgress } from '../src/features/capture/review-screen'
 import { useMoreState } from '../src/features/capture/screen-header'
 import { colorsFor } from '../src/theme/tokens'
@@ -22,6 +23,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
     const scrollY = useSharedValue(0)
     const fixture = useMemo(() => workflowPreviewFixture(id), [id])
     const progress = useQuickProgress(fixture.entry.session)
+    const compactTitles = useCompactTitles()
     if (!__DEV__) {
         return null
     }
@@ -39,6 +41,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
                               more,
                               scrollY,
                               progressLabel: progress.label,
+                              compactTitles,
                           })
                         : { title: 'Synthetic workflow review', headerShown: false }
                 }

@@ -3,6 +3,7 @@ import { Platform } from 'react-native'
 import type { Stack } from 'expo-router'
 import type { SharedValue } from 'react-native-reanimated'
 import type { Colors } from '../../theme/tokens'
+import { useLargeText } from '../../ui/large-text'
 import type { LibraryEntry } from './library'
 import { PinnedTitle } from './library-screen'
 import { HeaderButtons, type MoreControl } from './screen-header'
@@ -17,9 +18,27 @@ export const ADD_TITLE = 'Add manual'
 export const READING_TITLE = 'Reading'
 export const DONE_TITLE = 'Done'
 
-/** "Question 2 of 5" while a question is on screen, else "Quick check". */
-export function checkTitle(progressLabel: string | undefined): string {
-    return progressLabel ?? 'Quick check'
+/**
+ * Android's native title bar truncates at the largest system text size, and its Stack takes only a plain string. So
+ * there the titles lead with what matters and stay short ("1 of 3", "Add"); the full "Question 1 of 3" stays in the
+ * screen's own progress bar and question. Nothing is capped and no custom header is drawn. iOS and normal sizes keep
+ * the full titles, which fit.
+ */
+export function useCompactTitles(): boolean {
+    const large = useLargeText()
+    return Platform.OS === 'android' && large
+}
+
+export function addTitle(compact = false): string {
+    return compact ? 'Add' : ADD_TITLE
+}
+
+/** "Question 2 of 5" while a question is on screen ("2 of 5" when compact), else "Quick check". */
+export function checkTitle(progressLabel: string | undefined, compact = false): string {
+    if (progressLabel === undefined) {
+        return 'Quick check'
+    }
+    return compact ? progressLabel.replace(/^Question /u, '') : progressLabel
 }
 
 /** "Step 2 of 8": where the person is, which is what the header answers. */

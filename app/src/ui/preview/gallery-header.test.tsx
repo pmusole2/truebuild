@@ -64,6 +64,28 @@ describe('gallery native header', () => {
         }
     })
 
+    it('shortens the Android largest-text titles to the count and the verb, and keeps the full ones everywhere else', () => {
+        const { state, entry } = workflowPreviewFixture('review-unresolved')
+        const more = { open: false, mode: 'details' as const, show: jest.fn(), hide: jest.fn() }
+        const args = { id: 'review-unresolved' as const, state, entry, colors: lightColors, more, scrollY }
+        const full = galleryHeaderOptions({ ...args, progressLabel: 'Question 1 of 2' })
+        const compact = galleryHeaderOptions({ ...args, progressLabel: 'Question 1 of 2', compactTitles: true })
+        expect([full.title, compact.title]).toEqual(['Question 1 of 2', '1 of 2'])
+        const add = workflowPreviewFixture('pages-empty')
+        const addArgs = { ...args, id: 'pages-empty' as const, state: add.state, entry: add.entry }
+        expect(galleryHeaderOptions({ ...addArgs, progressLabel: undefined, compactTitles: true }).title).toBe('Add')
+        // No progress to lead with: the title stays the plain words.
+        const none = galleryHeaderOptions({ ...args, progressLabel: undefined, compactTitles: true })
+        expect(none.title).toBe('Quick check')
+    })
+
+    it('has no Back on the Home fixtures, which are production root screens, and keeps it elsewhere', () => {
+        expect(optionsFor('home-empty').options.headerBackVisible).toBe(false)
+        expect(optionsFor('home-populated').options.headerBackVisible).toBe(false)
+        expect(optionsFor('guide-pass').options.headerBackVisible).toBe(true)
+        expect(optionsFor('settings').options.headerBackVisible).toBe(true)
+    })
+
     it.each(WORKFLOW_PREVIEW_CASES.filter((preview) => preview.group === 'Camera').map((preview) => preview.id))(
         'hides the header for the full-bleed camera case %s',
         (id) => {

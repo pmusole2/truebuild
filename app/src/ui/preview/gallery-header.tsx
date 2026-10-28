@@ -3,7 +3,7 @@ import type { SharedValue } from 'react-native-reanimated'
 import type { WorkflowState } from '../../features/capture/controller'
 import type { LibraryEntry } from '../../features/capture/library'
 import {
-    ADD_TITLE,
+    addTitle,
     checkTitle,
     DONE_TITLE,
     guideTitle,
@@ -30,8 +30,10 @@ export function galleryHeaderOptions(args: {
     readonly scrollY: SharedValue<number>
     // "Question 2 of 5", from the same count the Quick check route keeps.
     readonly progressLabel: string | undefined
+    // Android at the largest text size: the same short count-first titles as production.
+    readonly compactTitles?: boolean
 }): ScreenOptions {
-    const { id, state, entry, colors, more, scrollY, progressLabel } = args
+    const { id, state, entry, colors, more, scrollY, progressLabel, compactTitles = false } = args
     // Expo merges options on this one gallery route. Reset Camera/Home overrides when the selected fixture changes.
     const style = {
         ...headerStyleFor(colors),
@@ -51,7 +53,8 @@ export function galleryHeaderOptions(args: {
         return { ...style, title: 'Settings' }
     }
     if (state.route === 'library') {
-        return { ...style, ...homeHeaderOptions({ colors, scrollY, more }) }
+        // Production root Home has no Back; the gallery host's own Back would suggest it does. Hide it for Home only.
+        return { ...style, ...homeHeaderOptions({ colors, scrollY, more }), headerBackVisible: false }
     }
     if (id === 'done-finished') {
         return { ...style, title: DONE_TITLE, headerBackVisible: false, headerRight: trailing }
@@ -59,10 +62,10 @@ export function galleryHeaderOptions(args: {
     if (state.route === 'pages') {
         return state.pending !== null && state.pending.startsWith('Reading')
             ? { ...style, title: READING_TITLE }
-            : { ...style, title: ADD_TITLE, headerRight: trailing }
+            : { ...style, title: addTitle(compactTitles), headerRight: trailing }
     }
     if (state.route === 'overview') {
-        return { ...style, title: checkTitle(progressLabel), headerRight: trailing }
+        return { ...style, title: checkTitle(progressLabel, compactTitles), headerRight: trailing }
     }
     return { ...style, title: guideTitle(entry), headerRight: trailing }
 }

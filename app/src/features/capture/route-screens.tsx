@@ -20,13 +20,14 @@ import { ReadingScreen } from './reading-screen'
 import { OverviewScreen, useQuickProgress } from './review-screen'
 import { HeaderButtons, useMoreState } from './screen-header'
 import {
-    ADD_TITLE,
+    addTitle,
     checkTitle,
     DONE_TITLE,
     guideTitle,
     headerStyleFor,
     homeHeaderOptions,
     READING_TITLE,
+    useCompactTitles,
     type HeaderStyle,
 } from './header-options'
 import { ScreenBody, TextRegion } from './screen-layout'
@@ -194,13 +195,14 @@ export function AddRoute(): ReactElement {
     const { controller } = useWorkflowActions()
     const more = useMoreState()
     const choosePages = useChoosePages(entry)
+    const compact = useCompactTitles()
     if (!state.loading && entry === undefined) {
         return <Redirect href="/" />
     }
     return (
         <>
             <Stack.Screen
-                options={{ title: ADD_TITLE, headerRight: (): ReactElement => <HeaderButtons more={more} /> }}
+                options={{ title: addTitle(compact), headerRight: (): ReactElement => <HeaderButtons more={more} /> }}
             />
             {entry === undefined ? (
                 <Waiting />
@@ -262,6 +264,7 @@ export function CheckRoute(): ReactElement {
     const more = useMoreState()
     // The question count lives here, above the screen, so accepting a fact (a new revision) never restarts it.
     const progress = useQuickProgress(entry?.session)
+    const compact = useCompactTitles()
     if (route.redirect !== null) {
         return <Redirect href={route.redirect as never} />
     }
@@ -269,7 +272,7 @@ export function CheckRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: checkTitle(progress.label),
+                    title: checkTitle(progress.label, compact),
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
