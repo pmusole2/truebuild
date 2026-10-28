@@ -81,39 +81,42 @@ export function PagesScreen({
         close()
         choosePages()
     }
-    const primary =
-        pages.length === 0
-            ? {
-                  label: 'Take photo',
-                  icon: 'camera' as const,
-                  testID: 'take-page-photo',
-                  onPress: takePhoto,
-                  disabled: busy || full,
-              }
-            : {
-                  label: entry.session.rawExtraction === null ? 'Read my manual' : 'Read my manual again',
-                  testID: 'read-manual',
-                  busy: state.pending !== null && state.pending.startsWith('Reading'),
-                  disabled: busy,
-                  onPress: (): void => {
-                      void controller.parse(language)
-                  },
-              }
-    const secondary =
-        pages.length === 0
-            ? {
-                  label: 'Choose from photos',
-                  accessibilityLabel: 'Choose pages from photos',
-                  testID: 'choose-pages',
-                  onPress: choose,
-                  disabled: busy || full,
-              }
-            : {
-                  label: 'Add a page',
-                  testID: 'add-page',
-                  onPress: (): void => open({ kind: 'add' }),
-                  disabled: busy || full,
-              }
+    const primary = saving
+        ? { label: 'Adding photos…', busy: true, onPress: (): void => undefined }
+        : pages.length === 0
+          ? {
+                label: 'Take photo',
+                icon: 'camera' as const,
+                testID: 'take-page-photo',
+                onPress: takePhoto,
+                disabled: busy || full,
+            }
+          : {
+                label: entry.session.rawExtraction === null ? 'Read my manual' : 'Read my manual again',
+                testID: 'read-manual',
+                busy: state.pending !== null && state.pending.startsWith('Reading'),
+                disabled: busy,
+                onPress: (): void => {
+                    setReadingLanguage(entry.session.manualId, language)
+                    void controller.parse(language)
+                },
+            }
+    const secondary = saving
+        ? { label: 'Cancel', testID: 'cancel-page-import', onPress: controller.cancel }
+        : pages.length === 0
+          ? {
+                label: 'Choose from photos',
+                accessibilityLabel: 'Choose pages from photos',
+                testID: 'choose-pages',
+                onPress: choose,
+                disabled: busy || full,
+            }
+          : {
+                label: 'Add a page',
+                testID: 'add-page',
+                onPress: (): void => open({ kind: 'add' }),
+                disabled: busy || full,
+            }
     return (
         <ScreenBody testID="pages-screen">
             {chrome === 'inline' ? (
@@ -205,7 +208,6 @@ export function PagesScreen({
                                 options={LANGUAGES}
                                 value={language}
                                 onChange={(code): void => {
-                                    setReadingLanguage(code)
                                     setLanguage(code)
                                 }}
                             />

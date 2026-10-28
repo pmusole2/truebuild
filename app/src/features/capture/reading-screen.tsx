@@ -37,7 +37,7 @@ export function ReadingScreen({
     const reading = state.pending !== null && state.pending.startsWith('Reading')
     const first = entry.session.pages[0]
     const read = (): void => {
-        void controller.parse(readingLanguage())
+        void controller.parse(readingLanguage(entry.session.manualId))
     }
     const stop = (): void => {
         setConfirming(false)

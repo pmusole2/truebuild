@@ -1,9 +1,9 @@
-// The language picked on Add manual, kept so Try again on Reading reads in the same language. Presentation state only:
-// it is never stored, and the controller still validates whatever it is given.
-let current = 'en'
-export function setReadingLanguage(code: string): void {
-    current = code
+// Keep the language actually submitted for each manual's reading attempt. Picker drafts do not affect another read.
+// This is presentation state only; the controller continues validating the submitted language.
+const submitted = new Map<string, string>()
+export function setReadingLanguage(manualId: string, code: string): void {
+    submitted.set(manualId, code)
 }
-export function readingLanguage(): string {
-    return current
+export function readingLanguage(manualId: string): string {
+    return submitted.get(manualId) ?? 'en'
 }

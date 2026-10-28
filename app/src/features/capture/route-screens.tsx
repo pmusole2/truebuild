@@ -219,6 +219,7 @@ export function AddRoute(): ReactElement {
                             subtitle={pages === 0 ? undefined : `Page ${pages} of up to 20`}
                         />
                     ),
+                    title: 'Add manual',
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
@@ -257,7 +258,10 @@ export function ReadingRoute(): ReactElement {
     return (
         <>
             <Stack.Screen
-                options={{ headerTitle: (): ReactElement => <HeaderTitle title={entry?.session.title ?? 'Reading'} /> }}
+                options={{
+                    title: 'Reading',
+                    headerTitle: (): ReactElement => <HeaderTitle title={entry?.session.title ?? 'Reading'} />,
+                }}
             />
             {status === 'ready' && entry !== undefined ? (
                 <ReadingScreen
@@ -291,6 +295,7 @@ export function CheckRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
+                    title: 'Quick check',
                     headerTitle: (): ReactElement => <HeaderTitle title="Quick check" subtitle={progress.label} />,
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
@@ -329,6 +334,7 @@ export function GuideRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
+                    title: subtitle ?? 'Guide',
                     headerTitle: (): ReactElement => <HeaderTitle title={title} subtitle={subtitle} />,
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
@@ -364,6 +370,7 @@ export function DoneRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
+                    title: 'Done',
                     headerTitle: (): ReactElement => <HeaderTitle title="Done" />,
                     headerBackVisible: false,
                     gestureEnabled: false,

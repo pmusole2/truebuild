@@ -4,6 +4,7 @@ import { Linking } from 'react-native'
 import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { PARSE_SPLIT_MESSAGE } from '@truebuild/contracts/model'
 import { ModelApiClient } from '../../api/model-client'
+import { MEDIA_MESSAGES } from '../../media/media-errors'
 import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
 import {
@@ -81,6 +82,18 @@ afterEach(() => {
 
 const QUESTION = 'What the picture shows'
 const CHECKS = 'What you should see, one per line'
+
+it.each([
+    [MEDIA_MESSAGES.permission, 'Photos are blocked. Allow Photos in Settings or take a photo.'],
+    [MEDIA_MESSAGES.unsupported, 'Use a JPEG, PNG or WebP photo.'],
+    [MEDIA_MESSAGES.unreadable, 'This photo will not open. Save it again as JPEG, PNG or WebP.'],
+    [MEDIA_MESSAGES.oversize, 'This photo is too large. Choose a smaller photo.'],
+    [MEDIA_MESSAGES.pixels, 'This photo is too large. Choose a smaller photo.'],
+    [MEDIA_MESSAGES.generic, 'We could not use that photo. Nothing was sent.'],
+])('keeps an actionable plain recovery for photo import failure: %s', (message, recovery) => {
+    expect(plainNotice(message)).toBe(recovery)
+    expect(isProblemNotice(message)).toBe(true)
+})
 const openMore = async (): Promise<void> => {
     await fireEvent.press(screen.getByRole('button', { name: 'More' }))
 }
@@ -797,6 +810,7 @@ describe('PagesScreen', () => {
     it('while saving pages, shows a skeleton and pauses every page change', async () => {
         const { controller } = setup()
         controllers.push(controller)
+        const cancel = jest.spyOn(controller, 'cancel')
         const entry = pagesEntry(1)
         await render(
             <PagesScreen
@@ -807,8 +821,13 @@ describe('PagesScreen', () => {
             />,
         )
         expect(screen.getAllByTestId('skeleton-block', hidden).length).toBeGreaterThan(0)
-        for (const name of ['Read my manual', 'Add a page']) {
-            expect(screen.getByRole('button', { name }).props.accessibilityState.disabled).toBe(true)
-        }
+        expect(screen.queryByRole('button', { name: 'Read my manual' })).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Add a page' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Adding photos…' }).props.accessibilityState).toMatchObject({
+            disabled: true,
+            busy: true,
+        })
+        await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }))
+        expect(cancel).toHaveBeenCalledTimes(1)
     })
 })

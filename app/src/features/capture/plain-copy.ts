@@ -1,5 +1,6 @@
 import type { CheckResult, ManualSession, ManualStep } from '@truebuild/contracts'
 import { stepPartChoices } from '../assembly/question-state'
+import { MEDIA_MESSAGES } from '../../media/media-errors'
 import { factText } from './fact-text'
 import type { WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
@@ -44,7 +45,7 @@ export function plainWords(text: string): string {
 
 /** Progress notices the header already says (Step N of M). The default Guide never repeats them as a second sentence. */
 export function isProgressNotice(notice: string): boolean {
-    return /^Progress saved as your own completion|^Step facts saved/u.test(notice)
+    return /^Progress saved as your own completion|^Step facts saved|^Review every fact against/u.test(notice)
 }
 
 /** What a request in flight is doing, in words a person would use. Null when nothing is in flight. */
@@ -114,8 +115,21 @@ const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
     [/^Read up to \d+ pages/u, 'We can read 8 pages at a time. Remove a few pages and try again.'],
 ]
 
+const PHOTO_RECOVERY: ReadonlyMap<string, string> = new Map([
+    [MEDIA_MESSAGES.permission, 'Photos are blocked. Allow Photos in Settings or take a photo.'],
+    [MEDIA_MESSAGES.unsupported, 'Use a JPEG, PNG or WebP photo.'],
+    [MEDIA_MESSAGES.unreadable, 'This photo will not open. Save it again as JPEG, PNG or WebP.'],
+    [MEDIA_MESSAGES.oversize, 'This photo is too large. Choose a smaller photo.'],
+    [MEDIA_MESSAGES.pixels, 'This photo is too large. Choose a smaller photo.'],
+    [MEDIA_MESSAGES.generic, 'We could not use that photo. Nothing was sent.'],
+])
+
 /** A controller notice in plain words. Unknown notices fall back to a calm generic line rather than internal text. */
 export function plainNotice(notice: string): string {
+    const photoRecovery = PHOTO_RECOVERY.get(notice)
+    if (photoRecovery !== undefined) {
+        return photoRecovery
+    }
     for (const [pattern, text] of NOTICE_RULES) {
         if (pattern.test(notice)) {
             return text
@@ -126,6 +140,9 @@ export function plainNotice(notice: string): string {
 
 /** A notice that describes a problem rather than progress. Decided on the original text so recovery stays visible. */
 export function isProblemNotice(notice: string): boolean {
+    if (PHOTO_RECOVERY.has(notice)) {
+        return true
+    }
     return /unavailable|timed out|could not|not allowed|cannot|not confirmed|nothing was|read-only|invalid|no longer|older manual/iu.test(
         notice,
     )
