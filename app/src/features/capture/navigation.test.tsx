@@ -15,7 +15,8 @@ import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './libra
 // The production root layout, provider, Stack, route files, screens and controller run unchanged. Only construction
 // at the device/transport boundary is injected; a mocked router or controller would hide the lifetime regressions.
 // Expo's optional animation setup replaces our working native stand-in with an empty object in this installation.
-// Keep this repository's animation stand-in; no router, navigation state or route component is replaced.
+// Keep this repository's animation stand-in. This also omits the optional gesture-handler setup and expo-linking
+// stand-in from that file; neither supplies native gesture/OS deep-link proof here. Router state/components stay real.
 jest.mock('expo-router/build/testing-library/mocks', () => ({}))
 // The installed test-renderer reconciler predates React 19.3's Effect Event dispatcher. Supply its stable latest-commit
 // callback semantics locally; navigation reducers, effects, subscriptions and the remaining React hooks stay real.
@@ -439,7 +440,10 @@ it('does not claim completion when an unfinished manual’s Done URL is opened d
     expect(controller.current?.completedStepIds).toEqual([])
 })
 
-it('retries a manual in its submitted English language after another manual’s picker was set to French', async () => {
+it.each([
+    ['English', 'en'],
+    ['French', 'fr'],
+])('retries a manual in its submitted %s language after another manual’s picker draft', async (name, language) => {
     const { controller, calls, capturedLanguages } = await runtime(
         [entry('french-manual', 'unparsed'), entry('english-manual', 'unparsed')],
         { parseFailureOnce: true },
@@ -458,17 +462,20 @@ it('retries a manual in its submitted English language after another manual’s 
     expect(controller.current?.session.manualId).toBe('english-manual')
     await press('More')
     expect(screen.getByRole('radio', { name: 'English' }).props.accessibilityState.checked).toBe(true)
+    if (language !== 'en') {
+        await fireEvent.press(screen.getByRole('radio', { name }))
+    }
     await press('Close sheet')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Read my manual' })).toBeTruthy())
     await press('Read my manual')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
     expect(view.getPathname()).toBe('/reading/english-manual')
-    expect(capturedLanguages).toEqual(['en'])
+    expect(capturedLanguages).toEqual([language])
     expect(calls).toHaveLength(1)
 
     await press('Try again')
     await waitFor(() => expect(view.getPathname()).toBe('/check/english-manual'))
-    expect(capturedLanguages).toEqual(['en', 'en'])
+    expect(capturedLanguages).toEqual([language, language])
     expect(calls).toEqual([
         'https://navigation.invalid/api/manuals/parse',
         'https://navigation.invalid/api/manuals/parse',

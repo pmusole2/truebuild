@@ -366,14 +366,12 @@ describe('results', () => {
     it('places a new answer before a retained check so the answer reads first in More', async () => {
         const fixture = workflowPreviewFixture('guide-answer')
         fixture.state.check = workflowPreviewFixture('guide-cannot-verify').state.check
-        const { toJSON } = await render(
-            <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />,
-        )
+        await render(<GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />)
         await openMore()
-        const tree = JSON.stringify(toJSON())
-        // The hero sentence is the answer; the check's own text is in More, after the answer's.
-        const answerPosition = tree.indexOf('"Answer"')
-        const checkPosition = tree.indexOf(fixture.state.check!.reason)
+        // Compare the actual sentences within More, excluding both its heading and the hero's copy of the answer.
+        const details = JSON.stringify(screen.getByTestId('more-sheet').toJSON())
+        const answerPosition = details.indexOf(fixture.state.answer!.answer)
+        const checkPosition = details.indexOf(fixture.state.check!.reason)
         expect(answerPosition).toBeGreaterThanOrEqual(0)
         expect(checkPosition).toBeGreaterThanOrEqual(0)
         expect(answerPosition).toBeLessThan(checkPosition)

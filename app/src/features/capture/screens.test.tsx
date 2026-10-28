@@ -807,27 +807,49 @@ describe('PagesScreen', () => {
         expect(screen.queryByTestId('skeleton-block', hidden)).toBeNull()
     })
 
-    it('while saving pages, shows a skeleton and pauses every page change', async () => {
-        const { controller } = setup()
-        controllers.push(controller)
-        const cancel = jest.spyOn(controller, 'cancel')
-        const entry = pagesEntry(1)
-        await render(
-            <PagesScreen
-                state={{ ...controller.getSnapshot(), pending: 'Saving manual pages…' }}
-                controller={controller}
-                entry={entry}
-                choosePages={noop}
-            />,
-        )
-        expect(screen.getAllByTestId('skeleton-block', hidden).length).toBeGreaterThan(0)
-        expect(screen.queryByRole('button', { name: 'Read my manual' })).toBeNull()
-        expect(screen.queryByRole('button', { name: 'Add a page' })).toBeNull()
-        expect(screen.getByRole('button', { name: 'Adding photos…' }).props.accessibilityState).toMatchObject({
-            disabled: true,
-            busy: true,
-        })
-        await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }))
-        expect(cancel).toHaveBeenCalledTimes(1)
-    })
+    it.each(['Choosing manual pages…', 'Preparing page 1 of 2…', 'Saving manual pages…'])(
+        'while importing pages (%s), shows a skeleton and pauses every page change',
+        async (pending) => {
+            const { controller } = setup()
+            controllers.push(controller)
+            const cancel = jest.spyOn(controller, 'cancel')
+            const entry = pagesEntry(1)
+            await render(
+                <PagesScreen
+                    state={{ ...controller.getSnapshot(), pending }}
+                    controller={controller}
+                    entry={entry}
+                    choosePages={noop}
+                />,
+            )
+            expect(screen.getAllByTestId('skeleton-block', hidden).length).toBeGreaterThan(0)
+            expect(screen.queryByRole('button', { name: 'Read my manual' })).toBeNull()
+            expect(screen.queryByRole('button', { name: 'Add a page' })).toBeNull()
+            expect(screen.getByRole('button', { name: 'Adding photos…' }).props.accessibilityState).toMatchObject({
+                disabled: true,
+                busy: true,
+            })
+            await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }))
+            expect(cancel).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it.each(['Checking frozen photo…', 'Asking about frozen photo…', 'Second opinion pending (sample)…'])(
+        'does not present another operation (%s) as a cancellable page import',
+        async (pending) => {
+            const { controller } = setup()
+            controllers.push(controller)
+            await render(
+                <PagesScreen
+                    state={{ ...controller.getSnapshot(), pending }}
+                    controller={controller}
+                    entry={pagesEntry(1)}
+                    choosePages={noop}
+                />,
+            )
+            expect(screen.queryByRole('button', { name: 'Adding photos…' })).toBeNull()
+            expect(screen.queryByTestId('cancel-page-import')).toBeNull()
+            expect(screen.getByRole('button', { name: 'Read my manual' }).props.accessibilityState.disabled).toBe(true)
+        },
+    )
 })

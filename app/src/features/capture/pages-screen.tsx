@@ -57,7 +57,8 @@ export function PagesScreen({
     const { pages } = entry.session
     const busy = state.pending !== null || state.storageReadOnly
     const full = pages.length >= MAX_PAGES
-    const saving = state.pending !== null && !state.pending.startsWith('Reading')
+    const saving =
+        state.pending !== null && /^(Choosing manual pages|Preparing page |Saving manual pages)/u.test(state.pending)
     const previewPage = sheet.kind === 'page' ? pages.find((page) => page.pageId === sheet.pageId) : undefined
     const previewIndex = previewPage === undefined ? -1 : pages.indexOf(previewPage)
     // The header's More button opens the general sheet; a tapped page or "Add a page" asks for its own.
