@@ -2,6 +2,17 @@ import { describe, expect, it } from '@jest/globals'
 import { render, screen } from '@testing-library/react-native'
 import { ProgressBar, StepList, type StepListItem } from './progress'
 
+let mockFontScale = 1
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+    __esModule: true,
+    default: (): { width: number; height: number; scale: number; fontScale: number } => ({
+        width: 390,
+        height: 844,
+        scale: 3,
+        fontScale: mockFontScale,
+    }),
+}))
+
 describe('ProgressBar', () => {
     it('reports its value and total as an accessible progress bar', async () => {
         await render(<ProgressBar label="Steps confirmed" value={2} total={5} />)
@@ -28,6 +39,19 @@ const STEPS: readonly StepListItem[] = [
 ]
 
 describe('StepList', () => {
+    it.each([1, 3.12])('keeps its marker large enough for uncapped text at font scale %s', async (fontScale) => {
+        mockFontScale = fontScale
+        try {
+            await render(<StepList steps={STEPS} />)
+            expect(screen.getByTestId('step-marker-b')).toHaveStyle({
+                width: 28 * fontScale,
+                height: 28 * fontScale,
+            })
+        } finally {
+            mockFontScale = 1
+        }
+    })
+
     it('names every step with its position and state, so state is never a marker alone', async () => {
         await render(<StepList steps={STEPS} />)
         expect(screen.getByLabelText('Step 1, Done: Stand the side panel upright')).toBeTruthy()

@@ -58,7 +58,9 @@ export function StepList({ steps }: { readonly steps: readonly StepListItem[] })
     const { colors } = useTheme()
     const type = typeProps('body')
     const { fontScale } = useWindowDimensions()
-    const markerSize = 28 * Math.min(Math.max(fontScale, 1), type.maxFontSizeMultiplier)
+    const textScale = Math.max(fontScale, 1)
+    const markerScale = type.maxFontSizeMultiplier === 0 ? textScale : Math.min(textScale, type.maxFontSizeMultiplier)
+    const markerSize = 28 * markerScale
     return (
         <View style={styles.list}>
             {steps.map((step, index) => {
@@ -81,6 +83,7 @@ export function StepList({ steps }: { readonly steps: readonly StepListItem[] })
                             />
                         ) : null}
                         <View
+                            testID={`step-marker-${step.id}`}
                             style={[
                                 styles.marker,
                                 { borderColor: colors.borderStrong, width: markerSize, height: markerSize },
