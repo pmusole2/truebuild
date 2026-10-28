@@ -16,7 +16,7 @@ import { reviewedSession, unresolvedCriticalFacts } from './controller'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
-import { firstSentences, isProgressNotice, plainWords } from './plain-copy'
+import { firstSentences, isProgressNotice, plainReason, plainWords } from './plain-copy'
 import { editableQuestions, otherBlockers, type Question } from './quick-check-model'
 import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
@@ -128,10 +128,9 @@ export function OverviewScreen({
         sentence = 'Add photos of your manual and read them first.'
         primary = { label: 'Add photos', compactLabel: 'Add', onPress: nav.editPages }
     } else if (current !== undefined && !unreadable) {
-        sentence =
-            current.kind === 'orientation'
-                ? `Which way should the part face in step ${current.step.order}?`
-                : `What should you see when step ${current.step.order} is done?`
+        // Short enough for one line at the normal size, so the manual's own words beneath it show without scrolling.
+        // The editor in More keeps the full wording with the step number.
+        sentence = current.kind === 'orientation' ? 'Which way should it face?' : 'What should you see?'
     } else if (questions.length > 0 || blockers.length > 0 || current !== undefined) {
         sentence = 'One thing still needs a clearer photo before we can check your work.'
         primary = {
@@ -188,13 +187,14 @@ export function OverviewScreen({
                                 session={session}
                                 pageUris={state.pageUris}
                                 height={heroHeight}
+                                cover
                             />
                         </View>
-                        <TextRegion>
+                        <TextRegion compact>
                             <PlainNotice state={quietState} controller={controller} />
                             <Instruction>{sentence}</Instruction>
                             {current.reason === null ? null : (
-                                <Caption>{`The manual says: ${firstSentences(plainWords(current.reason), 1)}`}</Caption>
+                                <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
                             )}
                         </TextRegion>
                         <FixedBottomBar
@@ -222,6 +222,7 @@ export function OverviewScreen({
                                 session={session}
                                 pageUris={state.pageUris}
                                 height={heroHeight}
+                                cover
                             />
                         </View>
                         <TextRegion>

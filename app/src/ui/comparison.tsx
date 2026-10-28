@@ -16,7 +16,7 @@ import { radius, space } from '../theme/tokens'
 import { regionOnFrame } from './comparison-geometry'
 import { AppButton } from './button'
 import { PaneNotes, type PaneNote } from './pane-notes'
-import { Caption, Label } from './text'
+import { Caption } from './text'
 
 export type ComparisonRegion = {
     readonly id: string
@@ -148,7 +148,7 @@ export function MeasuredPane({
     }
     return (
         <View style={[styles.pane, sideBySide && styles.paneRow]} testID={testID}>
-            <Label>{pane.caption}</Label>
+            <Caption>{pane.caption}</Caption>
             <View style={[styles.border, { borderColor: colors.borderStrong }]}>
                 <View
                     testID={`${testID}-frame`}

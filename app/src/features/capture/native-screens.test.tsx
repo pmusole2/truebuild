@@ -1,12 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import { Dimensions, Platform, StyleSheet } from 'react-native'
+import type { NormalizedBox } from '@truebuild/contracts'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
-import { cropFor, placeCrop } from './step-picture'
+import { cropFor, placeCrop, StepPicture } from './step-picture'
 import { DoneScreen } from './done-screen'
 import { ReadingScreen } from './reading-screen'
 import { editableQuestions, otherBlockers } from './quick-check-model'
-import { allStepsMarked, firstSentences, guideSentence, plainPending, progressLine, stopFor } from './plain-copy'
+import {
+    allStepsMarked,
+    firstSentences,
+    guideSentence,
+    plainPending,
+    plainReason,
+    progressLine,
+    stopFor,
+} from './plain-copy'
 import { heroHeightFor } from './screen-layout'
 import type { ScreenNav } from './screen-nav'
 import type { WorkflowController } from './workflow-types'
@@ -111,7 +120,7 @@ describe('DoneScreen', () => {
 
 describe('plain words for the guide', () => {
     const fixture = workflowPreviewFixture('guide-pass')
-    const base = { check: null, answer: null, pending: null, capture: null, storageReadOnly: false }
+    const base = { check: null, answer: null, pending: null, capture: null, storageReadOnly: false, notice: null }
 
     it('keeps the first sentences of text exactly as returned', () => {
         expect(firstSentences('One. Two! Three? Four.', 2)).toBe('One. Two!')
@@ -136,6 +145,41 @@ describe('plain words for the guide', () => {
         const answer = { answer: 'It faces in. Check the groove. Third sentence.', sourceRefs: [], missingEvidence: [] }
         const sentence = guideSentence({ state: { ...base, answer }, step: undefined, blocked: false })
         expect(sentence).toEqual({ kind: 'answer', text: 'It faces in. Check the groove.' })
+    })
+
+    it('keeps a whole answer sentence of 15 words and adds a second only while the surface stays within 25 words', () => {
+        const fifteen = 'Turn the panel so the groove faces inward toward the divider, as page one shows.'
+        const ask = (text: string): string =>
+            guideSentence({
+                state: { ...base, answer: { answer: text, sourceRefs: [], missingEvidence: [] } },
+                step: undefined,
+                blocked: false,
+            }).text
+        expect(fifteen.split(' ')).toHaveLength(15)
+        expect(ask(`${fifteen} Check it twice.`)).toBe(`${fifteen} Check it twice.`)
+        expect(ask(`${fifteen} ${fifteen}`)).toBe(fifteen)
+        expect(ask('One long sentence with no end')).toBe('One long sentence with no end')
+    })
+
+    it('drops only a fixture provenance prefix from a returned reason, never a factual clause', () => {
+        expect(plainReason('Synthetic result: the groove faces inward.')).toBe('The groove faces inward.')
+        expect(plainReason('Synthetic uncertainty: the groove is hidden.')).toBe('The groove is hidden.')
+        expect(plainReason('The synthetic result was clear.')).toBe('The sample result was clear.')
+        expect(plainReason('Frozen photo shows the groove.')).toBe('Your photo shows the groove.')
+    })
+
+    it('turns a generic failure with a kept photo into one warning sentence, and leaves specific recoveries alone', () => {
+        const capture = fixture.state.capture
+        const failed = { ...base, capture, notice: 'Check unavailable. Synthetic error.' }
+        expect(guideSentence({ state: failed, step: undefined, blocked: false })).toEqual({
+            kind: 'error',
+            text: 'Something went wrong. Take a new photo to check this step.',
+        })
+        const specific = { ...base, capture, notice: 'Manual reading timed out' }
+        expect(guideSentence({ state: specific, step: undefined, blocked: false }).kind).toBe('reference')
+        const readOnly = { ...failed, storageReadOnly: true }
+        expect(guideSentence({ state: readOnly, step: undefined, blocked: false }).kind).toBe('reference')
+        expect(guideSentence({ state: failed, step: undefined, blocked: true }).kind).toBe('blocked')
     })
 
     it('never invents a result for a step that has none: the step name, or a plain blocked line', () => {
@@ -182,6 +226,8 @@ describe('Quick check questions', () => {
     })
 })
 
+const hidden = { includeHiddenElements: true }
+
 describe('step picture and hero', () => {
     it('crops to the cited region with a margin, or shows the whole page when nothing is cited', () => {
         expect(cropFor(null)).toEqual({ x: 0, y: 0, width: 1, height: 1 })
@@ -205,6 +251,41 @@ describe('step picture and hero', () => {
         )
         expect(zoomed.width).toBeCloseTo(600, 6)
         expect(zoomed.left).toBeCloseTo(-300, 6)
+    })
+
+    it('fills a hero frame with the page, centred on the cited area, but keeps a thumbnail whole', async () => {
+        const { entry, state } = workflowPreviewFixture('guide-empty')
+        const { session } = entry
+        const page = session.pages[0]!
+        const imageStyle = (): Record<string, number> =>
+            StyleSheet.flatten(screen.getByLabelText('Picture from your manual', hidden).props.style)
+        const draw = async (props: { cover?: boolean; region: NormalizedBox | null }): Promise<void> => {
+            await render(
+                <StepPicture
+                    reference={{ pageId: page.pageId, region: props.region }}
+                    session={session}
+                    pageUris={state.pageUris}
+                    height={300}
+                    testID="picture"
+                    cover={props.cover}
+                />,
+            )
+            await fireEvent(screen.getByTestId('picture'), 'layout', {
+                nativeEvent: { layout: { width: 300, height: 300 } },
+            })
+        }
+        const scale = Math.max(300 / page.width, 300 / page.height)
+        await draw({ cover: true, region: null })
+        expect(imageStyle()).toMatchObject({ width: page.width * scale, height: page.height * scale })
+        expect(imageStyle().left).toBeCloseTo((300 - page.width * scale) / 2, 6)
+        await screen.unmount()
+        // A cited area on the far right moves the crop there instead of cutting it.
+        await draw({ cover: true, region: { x: 0.8, y: 0.3, width: 0.15, height: 0.3 } })
+        expect(imageStyle().left).toBeCloseTo(300 - page.width * scale, 6)
+        await screen.unmount()
+        // Without cover (the camera thumbnail) the cited area is zoomed to as before.
+        await draw({ region: null })
+        expect(imageStyle().width).toBeCloseTo(Math.min(300, (300 * page.width) / page.height), 6)
     })
 
     it('keeps the hero at 55 percent through accessibility text sizes and makes room only for an active editor keyboard', () => {

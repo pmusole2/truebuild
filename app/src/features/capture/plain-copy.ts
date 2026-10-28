@@ -1,5 +1,4 @@
-import type { CheckResult, ManualSession, ManualStep } from '@truebuild/contracts'
-import { stepPartChoices } from '../assembly/question-state'
+import type { CheckResult, ManualStep } from '@truebuild/contracts'
 import { MEDIA_MESSAGES } from '../../media/media-errors'
 import { factText } from './fact-text'
 import type { WorkflowState } from './controller'
@@ -46,6 +45,35 @@ export function plainWords(text: string): string {
 /** Progress notices the header already says (Step N of M). The default Guide never repeats them as a second sentence. */
 export function isProgressNotice(notice: string): boolean {
     return /^Progress saved as your own completion|^Step facts saved|^Review every fact against/u.test(notice)
+}
+
+// A fixture prefix such as "Synthetic result:" says where a line came from, not what it says about the step.
+const FIXTURE_PREFIX = /^(?:synthetic|sample|simulated)\s+(?:result|refusal|uncertainty|answer)\s*:\s*/iu
+
+/**
+ * A model-written reason or answer for a person: plain words, and no fixture provenance prefix. The sentence itself is
+ * the model's own and is never shortened or reworded; only the swaps in `plainWords` and a leading fixture label go.
+ */
+export function plainReason(text: string): string {
+    const plain = plainWords(text.trim().replace(FIXTURE_PREFIX, ''))
+    return `${plain.charAt(0).toUpperCase()}${plain.slice(1)}`
+}
+
+/**
+ * Whole sentences from the start of a text: always the first, then the next while the total stays within `maxWords`.
+ * No sentence is cut or ended with an ellipsis; whatever is left stays in More.
+ */
+export function leadSentences(text: string, maxWords: number, count = 2): string {
+    const parts = text.trim().split(/(?<=[.!?])\s+/u)
+    let taken = parts[0] ?? ''
+    for (const next of parts.slice(1, count)) {
+        const words = `${taken} ${next}`.split(/\s+/u).length
+        if (words > maxWords) {
+            break
+        }
+        taken = `${taken} ${next}`
+    }
+    return taken
 }
 
 /** What a request in flight is doing, in words a person would use. Null when nothing is in flight. */
@@ -124,6 +152,8 @@ const PHOTO_RECOVERY: ReadonlyMap<string, string> = new Map([
     [MEDIA_MESSAGES.generic, 'We could not use that photo. Nothing was sent.'],
 ])
 
+const GENERIC_NOTICE = 'Something went wrong. Please try again.'
+
 /** A controller notice in plain words. Unknown notices fall back to a calm generic line rather than internal text. */
 export function plainNotice(notice: string): string {
     const photoRecovery = PHOTO_RECOVERY.get(notice)
@@ -135,7 +165,7 @@ export function plainNotice(notice: string): string {
             return text
         }
     }
-    return 'Something went wrong. Please try again.'
+    return GENERIC_NOTICE
 }
 
 /** A notice that describes a problem rather than progress. Decided on the original text so recovery stays visible. */
@@ -148,28 +178,27 @@ export function isProblemNotice(notice: string): boolean {
     )
 }
 
-/** The names of this step's parts with known quantities, for the one supporting line under the instruction. */
-export function partsLine(session: ManualSession, step: ManualStep): string | null {
-    if (step.parts.length === 0) {
-        return null
-    }
-    const labels = new Map(stepPartChoices(session, step).map((choice) => [choice.partId, choice.label]))
-    const items = step.parts.map((part) => {
-        const name = labels.get(part.partId) ?? 'a part'
-        return part.quantity.state === 'known' ? `${name} ×${part.quantity.value}` : name
-    })
-    return `You need: ${items.join(', ')}`
-}
+// The most words the default Guide surface shows for an answer: whole sentences only, the rest is in More.
+const ANSWER_WORDS = 25
 
 export type GuideSentence = {
     readonly kind:
-        'ready' | 'checking' | 'pass' | 'refuse' | 'cannot' | 'answer' | 'blocked' | 'reference' | 'unfinished'
+        | 'ready'
+        | 'checking'
+        | 'pass'
+        | 'refuse'
+        | 'cannot'
+        | 'answer'
+        | 'blocked'
+        | 'reference'
+        | 'unfinished'
+        | 'error'
     readonly text: string
 }
 
 /** The one sentence under the hero. Check and answer text is shown exactly as returned, never invented. */
 export function guideSentence(args: {
-    readonly state: Pick<WorkflowState, 'check' | 'answer' | 'pending' | 'capture' | 'storageReadOnly'>
+    readonly state: Pick<WorkflowState, 'check' | 'answer' | 'pending' | 'capture' | 'storageReadOnly' | 'notice'>
     readonly step: ManualStep | undefined
     readonly blocked: boolean
     // The 1-based position of the first step not yet marked done, when the last step is marked and the person is back on it with nothing to check.
@@ -180,11 +209,11 @@ export function guideSentence(args: {
         return { kind: 'checking', text: 'Asking…' }
     }
     if (state.answer !== null) {
-        return { kind: 'answer', text: firstSentences(plainWords(state.answer.answer), 2) }
+        return { kind: 'answer', text: leadSentences(plainReason(state.answer.answer), ANSWER_WORDS) }
     }
     const check: CheckResult | null = state.check
     if (check !== null) {
-        const reason = firstSentences(plainWords(check.reason), 1)
+        const reason = firstSentences(plainReason(check.reason), 1)
         if (check.decision === 'pass') {
             return { kind: 'pass', text: `Looks right. ${reason}`.trim() }
         }
@@ -203,6 +232,15 @@ export function guideSentence(args: {
         return { kind: 'unfinished', text: `Step ${unfinished} is not marked done yet.` }
     }
     if (state.capture !== null) {
+        // A failed check that has no more specific recovery is one warning sentence; the photo-taking button is the fix.
+        if (
+            state.notice !== null &&
+            !state.storageReadOnly &&
+            isProblemNotice(state.notice) &&
+            plainNotice(state.notice) === GENERIC_NOTICE
+        ) {
+            return { kind: 'error', text: 'Something went wrong. Take a new photo to check this step.' }
+        }
         return { kind: 'reference', text: 'Your last photo. Take a new one to check this step.' }
     }
     return { kind: 'ready', text: step?.title ?? 'Pick up where you left off.' }

@@ -173,7 +173,7 @@ it('asks one honest question at a time: orientation first, then visible checks, 
     const orientationCited = session.reviewedSteps[0]!.sourceRefs
     const checksCited = session.reviewedSteps[1]!.sourceRefs
     expect(screen.getByText('Question 1 of 2', hidden)).toBeTruthy()
-    expect(screen.getByText('Which way should the part face in step 1?')).toBeTruthy()
+    expect(screen.getByText('Which way should it face?')).toBeTruthy()
     expect(screen.getByText('The manual says: Arrow is not visible.')).toBeTruthy()
     // No guessed answer is offered: there is nothing to say Yes to. The default card has no form, picker or text box.
     expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull()
@@ -197,7 +197,7 @@ it('asks one honest question at a time: orientation first, then visible checks, 
     })
     // The next question is the missing visible checks; confirmation is still closed, and the count carries on:
     // accepting a revision does not turn question 2 of 2 into question 1 of 1.
-    expect(await screen.findByText('What should you see when step 2 is done?')).toBeTruthy()
+    expect(await screen.findByText('What should you see?')).toBeTruthy()
     expect(screen.getByText('Question 2 of 2', hidden)).toBeTruthy()
     expect(screen.queryByText('Question 1 of 1', hidden)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start building' })).toBeNull()
@@ -277,13 +277,13 @@ it.each([
 it('skipping keeps the gate closed and can be taken back', async () => {
     const { controller } = await renderManual(partlyResolvedManual())
     await fireEvent.press(screen.getByRole('button', { name: 'Skip for now' }))
-    expect(screen.getByText('What should you see when step 2 is done?')).toBeTruthy()
+    expect(screen.getByText('What should you see?')).toBeTruthy()
     await fireEvent.press(screen.getByRole('button', { name: 'Skip for now' }))
     expect(screen.getByText('One thing still needs a clearer photo before we can check your work.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start building' })).toBeNull()
     expect(controller.current?.session.reviewStatus).toBe('unreviewed')
     await fireEvent.press(screen.getByRole('button', { name: 'Answer skipped questions' }))
-    expect(screen.getByText('Which way should the part face in step 1?')).toBeTruthy()
+    expect(screen.getByText('Which way should it face?')).toBeTruthy()
 })
 
 it('Cancel closes the editor, discards the draft and accepts nothing', async () => {
@@ -430,12 +430,12 @@ it('retains the saved builds during a transient restore failure and offers an ex
         await controller.restore()
     })
     expect(controller.getSnapshot().storageReadOnly).toBe(true)
-    expect(screen.getByRole('button', { name: `Open ${session.title}` })).toBeTruthy()
+    expect(screen.getByText(session.title)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
     kv.getItem = originalGet
     await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(false))
-    expect(screen.getByRole('button', { name: `Open ${session.title}` })).toBeTruthy()
+    expect(screen.getByText(session.title)).toBeTruthy()
 })
 
 it.each([

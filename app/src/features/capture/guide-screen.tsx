@@ -40,7 +40,7 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { DemoControls } from './demo-controls'
 import { AboutThisCheck } from './more-sections'
-import { guideSentence, isProgressNotice, partsLine, plainPending } from './plain-copy'
+import { guideSentence, isProgressNotice, plainPending } from './plain-copy'
 import { PRIVACY_COPY } from './privacy-copy'
 import { EvidencePair } from './evidence-pair'
 import { SourceDiagrams } from './step-facts'
@@ -64,15 +64,16 @@ export function startsAtSystemEdge(startX: number, width: number, rtl: boolean):
 const RESULT_SIZE = 48
 
 const RESULT_LOOK: Readonly<
-    Record<'pass' | 'refuse' | 'cannot', { icon: IconName; surface: ColorToken; ink: ColorToken }>
+    Record<'pass' | 'refuse' | 'cannot' | 'error', { icon: IconName; surface: ColorToken; ink: ColorToken }>
 > = {
     pass: { icon: 'check', surface: 'passSurface', ink: 'pass' },
     refuse: { icon: 'close', surface: 'refuseSurface', ink: 'refuse' },
     cannot: { icon: 'help', surface: 'cautionSurface', ink: 'caution' },
+    error: { icon: 'alert', surface: 'cautionSurface', ink: 'caution' },
 }
 
 /** The verdict as a tinted mark beside the sentence. It says nothing the sentence does not, so it is not an element. */
-function ResultIcon({ kind }: { kind: 'pass' | 'refuse' | 'cannot' }): ReactElement {
+function ResultIcon({ kind }: { kind: 'pass' | 'refuse' | 'cannot' | 'error' }): ReactElement {
     const { colors } = useTheme()
     const look = RESULT_LOOK[kind]
     return (
@@ -144,7 +145,11 @@ export function GuideScreen({
         unfinished: unfinished === null ? undefined : unfinished + 1,
     })
     // Marking a step done already moved the header on; its notice would only be a second sentence under the first.
-    const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
+    // A generic failure is the sentence itself (warning icon and one instruction), so it never gets a second banner.
+    const quietState =
+        state.notice !== null && (isProgressNotice(state.notice) || sentence.kind === 'error')
+            ? { ...state, notice: null }
+            : state
     // Only a pass's own returned region pulses; an answer's region is outlined statically.
     const pulseKey =
         answer === null && check !== null && capture !== null ? passPulseKey(check, capture.binding.captureId) : null
@@ -224,6 +229,8 @@ export function GuideScreen({
         [controller, entry.stepIndex, state.pending, state.storageReadOnly, stepCount, windowWidth],
     )
 
+    // What the hero photo must keep in view: the observed area and the returned next-part and target areas.
+    const heroRegions = [highlight, guidance.next?.box, guidance.target?.box].filter((box) => box != null)
     const frozenPhoto = (observation: Observation, notes?: readonly PaneNote[], fillHeight?: number): ReactElement => (
         <FrozenPhoto
             observation={observation}
@@ -231,6 +238,7 @@ export function GuideScreen({
             onTapPoint={fillHeight === undefined ? pointTap : undefined}
             notes={notes}
             fillHeight={fillHeight}
+            heroRegions={heroRegions}
             heroLabel={fillHeight === undefined ? undefined : (guidance.next?.name ?? guidance.target?.name)}
             flush={fillHeight !== undefined}
             overlay={(displayed): ReactNode => (
@@ -329,6 +337,7 @@ export function GuideScreen({
                     height={heroHeight}
                     testID="guide-hero-picture"
                     flush
+                    cover
                 />
             ) : (
                 frozenPhoto(capture.observation, guideNotes, heroHeight)
@@ -336,12 +345,16 @@ export function GuideScreen({
         </View>
     )
     const reason = state.pending !== null && check !== null ? plainPending(state.pending) : null
-    const parts = step !== undefined && !hasResult && state.pending === null ? partsLine(session, step) : null
     // An answer never carries a verdict, even while a check is retained, so only the check's own sentence gets the mark.
     const verdict =
-        sentence.kind === 'pass' || sentence.kind === 'refuse' || sentence.kind === 'cannot' ? sentence.kind : null
+        sentence.kind === 'pass' ||
+        sentence.kind === 'refuse' ||
+        sentence.kind === 'cannot' ||
+        sentence.kind === 'error'
+            ? sentence.kind
+            : null
     const sentenceNode =
-        check !== null || answer !== null ? (
+        check !== null || answer !== null || sentence.kind === 'error' ? (
             <View accessibilityLiveRegion="polite" style={styles.sentenceRow}>
                 {verdict === null ? null : <ResultIcon kind={verdict} />}
                 <View style={styles.sentenceText}>
@@ -368,7 +381,6 @@ export function GuideScreen({
                 <TextRegion testID="guide-panel">
                     <PlainNotice state={quietState} controller={controller} />
                     {sentenceNode}
-                    {parts === null ? null : <Body tone="muted">{parts}</Body>}
                 </TextRegion>
             </KeyboardAvoidingView>
             <FixedBottomBar primary={primary} reason={reason} />

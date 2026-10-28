@@ -13,6 +13,7 @@ import { ManualImage } from './page-media'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, type PartGuidance } from './part-regions'
+import { plainReason } from './plain-copy'
 import { ModelProvenance, SourceDiagrams } from './step-facts'
 
 /** The verdict for a frozen check, exactly as the backend returned it. Refusals keep their reason and missing evidence. */
@@ -42,7 +43,7 @@ export function CheckPanel({
         >
             <ResultSheet
                 verdict={check.decision}
-                reason={check.reason}
+                reason={plainReason(check.reason)}
                 missing={check.missingEvidence}
                 citedPage={
                     check.decision === 'refuse' || !showSource ? undefined : (
@@ -89,7 +90,7 @@ export function AnswerPanel({
                 <Card tone="result">
                     <Heading>Answer</Heading>
                     <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
-                    <Body>{answer.answer}</Body>
+                    <Body>{plainReason(answer.answer)}</Body>
                     {provenance ? <ModelProvenance result={answer} /> : null}
                     {answer.missingEvidence.map((missing, index) => (
                         <Caption key={index}>{`Missing: ${missing}`}</Caption>

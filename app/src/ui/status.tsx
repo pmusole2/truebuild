@@ -99,8 +99,11 @@ const styles = StyleSheet.create({
         paddingHorizontal: space.sm,
         paddingVertical: space.xxs,
     },
+    // Sentence case, so a verdict reads as a word and not as a shouted label.
     tagText: {
         flexShrink: 1,
+        textTransform: 'none',
+        letterSpacing: 0,
     },
     notice: {
         flexDirection: 'row',

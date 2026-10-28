@@ -46,19 +46,28 @@ export function useHeroHeight(keyboard = false): number {
 export function ScreenBody({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
     const { colors } = useTheme()
     return (
-        <View testID={testID} style={[styles.body, { backgroundColor: colors.canvas }]}>
+        <View testID={testID} collapsable={false} style={[styles.body, { backgroundColor: colors.canvas }]}>
             {children}
         </View>
     )
 }
 
 /** Only text that overflows scrolls. The hero above and the bar below stay put. */
-export function TextRegion({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
+export function TextRegion({
+    children,
+    testID,
+    compact = false,
+}: {
+    children: ReactNode
+    testID?: string
+    // Less padding above and below, for a screen whose question and its supporting line must both show at once.
+    compact?: boolean
+}): ReactElement {
     return (
         <ScrollView
             testID={testID}
             style={styles.region}
-            contentContainerStyle={styles.regionContent}
+            contentContainerStyle={[styles.regionContent, compact && styles.regionCompact]}
             keyboardShouldPersistTaps="handled"
             contentInsetAdjustmentBehavior="never"
         >
@@ -96,5 +105,6 @@ const styles = StyleSheet.create({
     body: { flex: 1 },
     region: { flex: 1, minHeight: 0 },
     regionContent: { padding: space.md, gap: space.sm },
+    regionCompact: { paddingVertical: space.sm },
     notice: { gap: space.xs },
 })

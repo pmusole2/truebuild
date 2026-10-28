@@ -6,6 +6,7 @@ import { FeedbackProvider } from '../../ui/feedback'
 import { spies } from '../../ui/test-support/reanimated-mock'
 import { motion } from '../../theme/tokens'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
+import { plainReason } from './plain-copy'
 import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey } from './result-panels'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
@@ -34,7 +35,7 @@ it.each([
     expect(trigger).toHaveBeenCalledWith(kind)
     await rerender(view(['Provider metadata, same outcome.']))
     expect(trigger).toHaveBeenCalledTimes(1)
-    expect(screen.getByText(state.check!.reason)).toBeTruthy()
+    expect(screen.getByText(plainReason(state.check!.reason))).toBeTruthy()
 })
 
 it('announces a new answer with neutral selection feedback and no verdict', async () => {

@@ -9,7 +9,7 @@ import {
 import { lightColors } from '../../theme/tokens'
 import { GuideScreen } from './guide-screen'
 import { LibraryScreen } from './library-screen'
-import { plainWords } from './plain-copy'
+import { plainReason } from './plain-copy'
 import { OverviewScreen } from './review-screen'
 
 // Synthetic fixtures only. Native text size is mocked through the window-dimensions hook: CSS 2x screenshots do not
@@ -38,7 +38,7 @@ async function guide(id: WorkflowPreviewCase): Promise<string> {
 const openMore = async (): Promise<void> => {
     await fireEvent.press(screen.getByRole('button', { name: 'More' }))
 }
-const DIAGRAM = 'Expected diagram · page 1'
+const DIAGRAM = 'Picture from your manual · Page 1'
 
 describe('the verdict is one sentence under the photo, and the evidence is its own block in More', () => {
     it.each(['guide-pass', 'guide-cannot-verify'] as const)(
@@ -56,7 +56,7 @@ describe('the verdict is one sentence under the photo, and the evidence is its o
     it('keeps the answer as the existing response text on the default surface and its card in More', async () => {
         await guide('guide-answer')
         const answer = workflowPreviewFixture('guide-answer').state.answer!
-        expect(screen.getByText(plainWords(answer.answer))).toBeTruthy()
+        expect(screen.getByText(plainReason(answer.answer))).toBeTruthy()
         expect(screen.queryByText('Answer')).toBeNull()
         await openMore()
         expect(within(screen.getByTestId('more-sheet')).getByText('Answer')).toBeTruthy()
@@ -65,7 +65,7 @@ describe('the verdict is one sentence under the photo, and the evidence is its o
     it('starts a refusal with "Not yet." and keeps the comparison before the explanation in More', async () => {
         const tree = await guide('guide-refuse')
         const check = workflowPreviewFixture('guide-refuse').state.check!
-        expect(screen.getByText(`Not yet. ${plainWords(check.reason)}`)).toBeTruthy()
+        expect(screen.getByText(`Not yet. ${plainReason(check.reason)}`)).toBeTruthy()
         expect(tree).not.toContain('Manual diagram')
         await openMore()
         const more = JSON.stringify(screen.toJSON())
