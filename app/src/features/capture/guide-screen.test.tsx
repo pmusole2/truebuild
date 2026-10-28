@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import type { CheckResult } from '@truebuild/contracts'
+import type { CheckResult, Layout } from '@truebuild/contracts'
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { Keyboard, type KeyboardEvent } from 'react-native'
 import { FeedbackProvider } from '../../ui/feedback'
@@ -408,5 +408,110 @@ describe('grounded region overlay', () => {
         expect(screen.getByTestId('photo-tap')).toBeTruthy()
         expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
         expect(animationSpies.withSequence).not.toHaveBeenCalled()
+    })
+})
+
+describe('step layout and demo controls', () => {
+    // Synthetic layouts and results from the shared preview fixtures: no recorded or live model output.
+    const CHECK_TEXT = 'The inward-facing groove is visible.'
+    const visibleChecks: Layout = {
+        source: 'fallback',
+        components: [{ type: 'visible_checks', checkIds: ['groove-inward'] }],
+    }
+    const staleLayout: Layout = {
+        source: 'model',
+        components: [
+            { type: 'visible_checks', checkIds: ['groove-inward'] },
+            { type: 'part_grid', partIds: ['ghost-part'] },
+        ],
+    }
+    const checkWith = (id: WorkflowPreviewCase, layout: Layout | undefined): CheckResult => ({
+        ...workflowPreviewFixture(id).state.check!,
+        layout,
+    })
+
+    it('replaces the step summary with a valid layout while the verdict and reason stay', async () => {
+        await setup('guide-pass', { state: { check: checkWith('guide-pass', visibleChecks) } })
+        expect(screen.getByText(CHECK_TEXT)).toBeTruthy()
+        expect(screen.queryByText('Parts')).toBeNull()
+        expect(screen.getByText('Synthetic result: the groove faces inward as shown in the manual.')).toBeTruthy()
+    })
+
+    it('keeps the step summary when the layout is absent or any reference is stale', async () => {
+        await setup('guide-pass', { state: { check: checkWith('guide-pass', staleLayout) } })
+        expect(screen.getByText('Parts')).toBeTruthy()
+        expect(screen.queryByText(CHECK_TEXT)).toBeNull()
+        expect(screen.getByText('Synthetic result: the groove faces inward as shown in the manual.')).toBeTruthy()
+    })
+
+    it('reads the layout from the answer when an answer and a check are both present', async () => {
+        const answer = { ...workflowPreviewFixture('guide-answer').state.answer!, layout: visibleChecks }
+        const check = checkWith('guide-pass', {
+            source: 'fallback',
+            components: [{ type: 'part_grid', partIds: ['side-panel'] }],
+        })
+        await setup('guide-photo', { state: { answer, check } })
+        expect(screen.getByText(CHECK_TEXT)).toBeTruthy()
+        expect(screen.queryByText('1 × Side panel')).toBeNull()
+    })
+
+    it('keeps the refusal comparison before the layout, and recovery appears only after a refusal', async () => {
+        const fixture = workflowPreviewFixture('guide-refuse')
+        const check = {
+            ...fixture.state.check!,
+            layout: { source: 'fallback', components: [{ type: 'recovery', actionIds: ['turn-panel'] }] } as Layout,
+        }
+        const { toJSON } = await render(
+            <GuideScreen
+                state={{ ...fixture.state, check }}
+                entry={fixture.entry}
+                controller={INERT_WORKFLOW_CONTROLLER}
+            />,
+        )
+        const tree = JSON.stringify(toJSON())
+        expect(tree.indexOf('Manual diagram')).toBeLessThan(tree.indexOf('Turn the panel so the groove faces inward.'))
+        expect(
+            screen.getByText('Synthetic refusal: turn the panel so the groove faces inward before continuing.'),
+        ).toBeTruthy()
+    })
+
+    it('chooses a known-orientation step through the existing controller', async () => {
+        const spies = await setup('guide-photo', { entry: { stepIndex: 1 } })
+        await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
+        expect(spies.step.mock.calls).toEqual([[2]])
+        expect(screen.getByRole('button', { name: /^Current · Step 2:/u }).props.accessibilityState.disabled).toBe(true)
+    })
+
+    it.each([
+        ['a request is pending', { state: { pending: 'Checking the frozen photo…' } }],
+        ['storage is read-only', { state: { storageReadOnly: true } }],
+        ['the manual is unreviewed', { reviewStatus: 'unreviewed' as const }],
+    ])('does not choose a step when %s', async (_name, options) => {
+        const spies = await setup('guide-photo', { ...options, entry: { stepIndex: 1 } })
+        await fireEvent.press(screen.getByRole('button', { name: /^Step 3:/u }))
+        expect(spies.step).not.toHaveBeenCalled()
+    })
+
+    it('recaps only the saved completions under Earlier progress', async () => {
+        await setup('guide-empty', { entry: { completedStepIds: ['step-2'] } })
+        expect(screen.getByText('Earlier progress')).toBeTruthy()
+        expect(screen.getByText('Marked complete: 2. Seat the divider in the groove')).toBeTruthy()
+        expect(screen.queryByText('Marked complete: 1. Stand the side panel upright')).toBeNull()
+    })
+
+    it('resets the user’s part count when the step changes', async () => {
+        const fixture = workflowPreviewFixture('guide-empty')
+        const view = (stepIndex: number): ReactElement => (
+            <GuideScreen
+                state={fixture.state}
+                entry={{ ...fixture.entry, stepIndex }}
+                controller={INERT_WORKFLOW_CONTROLLER}
+            />
+        )
+        const { rerender } = await render(view(0))
+        await fireEvent.press(screen.getByRole('button', { name: 'Mark one Side panel located' }))
+        expect(screen.getByText('All counted parts located by you')).toBeTruthy()
+        await rerender(view(1))
+        expect(screen.queryByText('All counted parts located by you')).toBeNull()
     })
 })

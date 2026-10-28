@@ -24,7 +24,9 @@ import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey, RefusalComparison } from './result-panels'
 import { WorkflowNotice } from './screen-chrome'
-import { SourceDiagrams, StepFacts, StepSummary } from './step-facts'
+import { DemoControls } from './demo-controls'
+import { SourceDiagrams, StepFacts } from './step-facts'
+import { StepLayout } from './step-layout'
 import type { WorkflowScreenProps } from './workflow-types'
 
 /** The secondary actions may take at most this share of the window and scroll beyond it, so none is ever clipped. */
@@ -80,6 +82,15 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
     const check = state.check
     const hasResult = check !== null || state.answer !== null
     const refusal = check !== null && check.decision === 'refuse' ? check : null
+    // The summary and its layout are one element that shows before or after the photo; the answer's layout wins.
+    const summary = (
+        <StepLayout
+            session={session}
+            index={entry.stepIndex}
+            result={state.answer ?? state.check}
+            pageUris={state.pageUris}
+        />
+    )
     // Only a pass's own returned region pulses; an answer's region is outlined statically.
     const pulseKey =
         state.answer === null && check !== null && state.capture !== null
@@ -194,7 +205,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                         <AnswerPanel answer={state.answer} session={session} pageUris={state.pageUris} />
                     )}
                     {check === null ? null : <CheckPanel check={check} session={session} pageUris={state.pageUris} />}
-                    {hasResult ? null : <StepSummary session={session} index={entry.stepIndex} />}
+                    {hasResult ? null : summary}
                     {state.capture === null ? (
                         <EmptyState
                             title="No photo for this step yet."
@@ -221,7 +232,16 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                             )}
                         />
                     )}
-                    {hasResult ? <StepSummary session={session} index={entry.stepIndex} /> : null}
+                    {hasResult ? summary : null}
+                    <DemoControls
+                        session={session}
+                        stepIndex={entry.stepIndex}
+                        completedStepIds={entry.completedStepIds}
+                        locked={busy || session.reviewStatus !== 'reviewed'}
+                        onSelectStep={(index): void => {
+                            void controller.step(index)
+                        }}
+                    />
                     {state.capture === null ? null : (
                         <Card>
                             <Heading>Ask about this photo</Heading>
