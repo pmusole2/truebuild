@@ -96,6 +96,7 @@ type Metadata = {
     binding: Record<string, unknown>
     pages?: { pageId: string }[]
     sourcePageIds?: string[]
+    language?: string
 }
 
 function parsed(pageId: string): ParsedManual {
@@ -112,23 +113,32 @@ function parsed(pageId: string): ParsedManual {
     return value
 }
 
-function entry(manualId = 'navigation-manual', reviewed = true): LibraryEntry {
+function entry(manualId = 'navigation-manual', stage: 'reviewed' | 'unparsed' = 'reviewed'): LibraryEntry {
     const session = createDemoManual()
     session.manualId = manualId
     session.title = manualId
     session.pages[0]!.contentHash = 'a'.repeat(64)
-    session.reviewStatus = reviewed ? 'reviewed' : 'unreviewed'
-    session.rawExtraction = parsed(session.pages[0]!.pageId)
+    session.reviewStatus = stage === 'reviewed' ? 'reviewed' : 'unreviewed'
+    session.rawExtraction = stage === 'unparsed' ? null : parsed(session.pages[0]!.pageId)
+    if (stage === 'unparsed') {
+        session.reviewedSteps = []
+        session.parts = []
+    }
     return { session, stepIndex: 0, completedStepIds: [], capture: null }
 }
 
 async function runtime(
     entries: LibraryEntry[] = [],
-    gates: { parse?: ReturnType<typeof deferred<void>>; check?: ReturnType<typeof deferred<void>> } = {},
+    gates: {
+        parse?: ReturnType<typeof deferred<void>>
+        check?: ReturnType<typeof deferred<void>>
+        parseFailureOnce?: boolean
+    } = {},
 ): Promise<{
     controller: CaptureController
     storage: LibraryStorage
     calls: string[]
+    capturedLanguages: string[]
     restore: jest.SpyInstance
     dispose: jest.SpyInstance
 }> {
@@ -148,10 +158,18 @@ async function runtime(
         )
     }
     const calls: string[] = []
+    const capturedLanguages: string[] = []
     const fetch: ModelFetch = async (url, init) => {
         calls.push(url)
         const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as Metadata
         if (url.endsWith('/parse')) {
+            if (typeof meta.language !== 'string') {
+                throw new Error('Missing parse language at the fixture transport boundary')
+            }
+            capturedLanguages.push(meta.language)
+            if (gates.parseFailureOnce && capturedLanguages.length === 1) {
+                throw new Error('Synthetic one-time parse transport failure')
+            }
             await gates.parse?.promise
         } else if (url.endsWith('/checks')) {
             await gates.check?.promise
@@ -187,7 +205,7 @@ async function runtime(
     const restore = jest.spyOn(controller, 'restore')
     const dispose = jest.spyOn(controller, 'dispose')
     jest.mocked(createController).mockReturnValue(controller)
-    return { controller, storage, calls, restore, dispose }
+    return { controller, storage, calls, capturedLanguages, restore, dispose }
 }
 
 async function mount(): Promise<Awaited<ReturnType<typeof renderRouter>>> {
@@ -419,4 +437,40 @@ it('does not claim completion when an unfinished manual’s Done URL is opened d
     await waitFor(() => expect(view.getPathname()).toBe('/guide/navigation-manual'))
     expect(screen.queryByTestId('done-screen')).toBeNull()
     expect(controller.current?.completedStepIds).toEqual([])
+})
+
+it('retries a manual in its submitted English language after another manual’s picker was set to French', async () => {
+    const { controller, calls, capturedLanguages } = await runtime(
+        [entry('french-manual', 'unparsed'), entry('english-manual', 'unparsed')],
+        { parseFailureOnce: true },
+    )
+    const view = await mount()
+    await press('Open french-manual')
+    expect(view.getPathname()).toBe('/add')
+    await press('More')
+    await fireEvent.press(screen.getByRole('radio', { name: 'French' }))
+    expect(screen.getByRole('radio', { name: 'French' }).props.accessibilityState.checked).toBe(true)
+    await press('Close sheet')
+    await waitFor(() => expect(screen.queryByRole('radio', { name: 'French' })).toBeNull())
+    await testRouter.back('/')
+
+    await press('Open english-manual')
+    expect(controller.current?.session.manualId).toBe('english-manual')
+    await press('More')
+    expect(screen.getByRole('radio', { name: 'English' }).props.accessibilityState.checked).toBe(true)
+    await press('Close sheet')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Read my manual' })).toBeTruthy())
+    await press('Read my manual')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
+    expect(view.getPathname()).toBe('/reading/english-manual')
+    expect(capturedLanguages).toEqual(['en'])
+    expect(calls).toHaveLength(1)
+
+    await press('Try again')
+    await waitFor(() => expect(view.getPathname()).toBe('/check/english-manual'))
+    expect(capturedLanguages).toEqual(['en', 'en'])
+    expect(calls).toEqual([
+        'https://navigation.invalid/api/manuals/parse',
+        'https://navigation.invalid/api/manuals/parse',
+    ])
 })
