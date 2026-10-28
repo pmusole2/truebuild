@@ -51,12 +51,15 @@ export function StepPicture({
     pageUris,
     height,
     testID = 'guide-hero',
+    flush = false,
 }: {
     reference: SourceRef | undefined
     session: ManualSession
     pageUris: WorkflowState['pageUris']
     height: number
     testID?: string
+    // Edge to edge: no rounded corners, for a hero that runs the full width of the screen.
+    flush?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const [width, setWidth] = useState(0)
@@ -73,7 +76,7 @@ export function StepPicture({
         <View
             testID={testID}
             onLayout={onLayout}
-            style={[styles.frame, { height, backgroundColor: colors.surfaceSunken }]}
+            style={[styles.frame, flush && styles.flush, { height, backgroundColor: colors.surfaceSunken }]}
         >
             {page === undefined ? (
                 <Caption>There is no picture for this step.</Caption>
@@ -95,5 +98,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
+    flush: { borderRadius: 0 },
     image: { position: 'absolute' },
 })

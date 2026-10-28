@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { MoreSheet } from '../../ui/sheet'
@@ -10,6 +10,7 @@ import { SegmentedControl, TextField } from '../../ui/fields'
 import { SkeletonCard } from '../../ui/skeleton'
 import { Icon } from '../../ui/icons'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import { PRIVACY_COPY } from './privacy-copy'
@@ -323,7 +324,7 @@ function PageRow({
     const focus = useFocusRing()
     return (
         <Card tone="raised">
-            <Pressable
+            <PressMotion
                 accessibilityRole="button"
                 accessibilityLabel={`View page ${index + 1}`}
                 onPress={onPress}
@@ -337,7 +338,7 @@ function PageRow({
                     <Heading>{`Page ${index + 1}`}</Heading>
                 </View>
                 <Icon name="chevronRight" color={colors.inkMuted} />
-            </Pressable>
+            </PressMotion>
         </Card>
     )
 }

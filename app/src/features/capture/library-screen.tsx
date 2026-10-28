@@ -1,12 +1,5 @@
 import type { ReactElement } from 'react'
-import {
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    View,
-    type NativeScrollEvent,
-    type NativeSyntheticEvent,
-} from 'react-native'
+import { ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { MoreSheet } from '../../ui/sheet'
@@ -16,6 +9,7 @@ import { LoadingState } from '../../ui/states'
 import { ProgressBar } from '../../ui/progress'
 import { Icon } from '../../ui/icons'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
@@ -201,7 +195,7 @@ function ContinueCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => vo
     const completed = entry.completedStepIds.length
     return (
         <Card tone="raised" testID="manual-card">
-            <Pressable
+            <PressMotion
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
                 {...focus.focusHandlers}
@@ -214,7 +208,7 @@ function ContinueCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => vo
                     <ProgressBar label={`Steps done: ${completed} of ${total}`} value={completed} total={total} />
                 )}
                 <Instruction>Pick up where you left off.</Instruction>
-            </Pressable>
+            </PressMotion>
         </Card>
     )
 }
@@ -224,7 +218,7 @@ function ManualRow({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void 
     const focus = useFocusRing()
     return (
         <Card tone="raised" testID="manual-card">
-            <Pressable
+            <PressMotion
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
                 {...focus.focusHandlers}
@@ -236,7 +230,7 @@ function ManualRow({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void 
                     <Caption>{progressLine(entry)}</Caption>
                 </Stack>
                 <Icon name="chevronRight" color={colors.inkMuted} />
-            </Pressable>
+            </PressMotion>
         </Card>
     )
 }

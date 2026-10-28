@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, type ReactElement, type ReactNode } from 'react'
-import { KeyboardAvoidingView, PanResponder, Platform, StyleSheet, View } from 'react-native'
+import {
+    I18nManager,
+    KeyboardAvoidingView,
+    PanResponder,
+    Platform,
+    StyleSheet,
+    useWindowDimensions,
+    View,
+} from 'react-native'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import type { Observation } from '../assembly/observation'
@@ -13,7 +21,9 @@ import type { PaneNote } from '../../ui/pane-notes'
 import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { AskSheet } from '../../ui/ask-sheet'
 import { useFeedback } from '../../ui/feedback'
-import { space } from '../../theme/tokens'
+import { Icon, type IconName } from '../../ui/icons'
+import { useTheme } from '../../theme/theme'
+import { radius, space, type ColorToken } from '../../theme/tokens'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, partGuidance } from './part-regions'
@@ -42,6 +52,41 @@ import type { WorkflowScreenProps } from './workflow-types'
 // A horizontal drag this long on the hero moves to the neighbouring step.
 const SWIPE_DISTANCE = 56
 
+// iOS goes back when a drag starts at the leading screen edge. The hero's step swipe leaves that strip to the system,
+// so a back swipe is never swallowed; swipes that start anywhere else still browse steps.
+export const EDGE_RESERVE = 28
+
+/** True when a drag that began at `startX` belongs to the system's edge Back and not to the step swipe. */
+export function startsAtSystemEdge(startX: number, width: number, rtl: boolean): boolean {
+    return rtl ? startX > width - EDGE_RESERVE : startX < EDGE_RESERVE
+}
+
+const RESULT_SIZE = 48
+
+const RESULT_LOOK: Readonly<
+    Record<'pass' | 'refuse' | 'cannot', { icon: IconName; surface: ColorToken; ink: ColorToken }>
+> = {
+    pass: { icon: 'check', surface: 'passSurface', ink: 'pass' },
+    refuse: { icon: 'close', surface: 'refuseSurface', ink: 'refuse' },
+    cannot: { icon: 'help', surface: 'cautionSurface', ink: 'caution' },
+}
+
+/** The verdict as a tinted mark beside the sentence. It says nothing the sentence does not, so it is not an element. */
+function ResultIcon({ kind }: { kind: 'pass' | 'refuse' | 'cannot' }): ReactElement {
+    const { colors } = useTheme()
+    const look = RESULT_LOOK[kind]
+    return (
+        <View
+            testID="result-icon"
+            accessibilityElementsHidden={true}
+            importantForAccessibility="no-hide-descendants"
+            style={[styles.resultIcon, { backgroundColor: colors[look.surface] }]}
+        >
+            <Icon name={look.icon} color={colors[look.ink]} />
+        </View>
+    )
+}
+
 type GuideProps = WorkflowScreenProps & ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav }
 
 /**
@@ -63,6 +108,7 @@ export function GuideScreen({
     const more = moreProp ?? internalMore
     const keyboard = useKeyboardVisible()
     const heroHeight = useHeroHeight(keyboard)
+    const { width: windowWidth } = useWindowDimensions()
     const step = session.reviewedSteps[entry.stepIndex]
     const stepCount = session.reviewedSteps.length
     const last = entry.stepIndex >= stepCount - 1
@@ -120,12 +166,18 @@ export function GuideScreen({
         if (check === null) {
             return
         }
-        const identity = `${check.decision}:${check.reason}`
+        // A new photo is a new result even when the checker words it the same, so the photo is part of the identity.
+        // Opening More or coming back to a shown result never changes it, so nothing replays.
+        const captureId = capture?.binding.captureId ?? null
+        if (captureId === null && announced.current.check !== null) {
+            return
+        }
+        const identity = `${captureId ?? ''}:${check.decision}:${check.reason}`
         if (announced.current.check !== identity) {
             announced.current.check = identity
             haptic(check.decision === 'pass' ? 'success' : 'warning')
         }
-    }, [check, haptic])
+    }, [capture, check, haptic])
     useEffect(() => {
         if (answer !== null && announced.current.answer !== answer.answer) {
             announced.current.answer = answer.answer
@@ -146,7 +198,12 @@ export function GuideScreen({
         () =>
             PanResponder.create({
                 onMoveShouldSetPanResponder: (_event, gesture) =>
-                    Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+                    Math.abs(gesture.dx) > 24 &&
+                    Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5 &&
+                    !(
+                        Platform.OS === 'ios' &&
+                        startsAtSystemEdge(gesture.moveX - gesture.dx, windowWidth, I18nManager.isRTL)
+                    ),
                 onPanResponderRelease: (_event, gesture) => {
                     if (state.pending !== null || state.storageReadOnly) {
                         return
@@ -162,7 +219,7 @@ export function GuideScreen({
                     }
                 },
             }),
-        [controller, entry.stepIndex, state.pending, state.storageReadOnly, stepCount],
+        [controller, entry.stepIndex, state.pending, state.storageReadOnly, stepCount, windowWidth],
     )
 
     const frozenPhoto = (observation: Observation, notes?: readonly PaneNote[], fillHeight?: number): ReactElement => (
@@ -172,6 +229,7 @@ export function GuideScreen({
             onTapPoint={fillHeight === undefined ? pointTap : undefined}
             notes={notes}
             fillHeight={fillHeight}
+            flush={fillHeight !== undefined}
             overlay={(displayed): ReactNode => (
                 <>
                     <CheckHighlight
@@ -188,15 +246,23 @@ export function GuideScreen({
     const primary: BarAction = blocked
         ? {
               label: needsQuestions ? 'Answer questions' : 'Add clearer photos',
+              compactLabel: needsQuestions ? 'Answer' : 'Add',
               testID: 'guide-primary',
               disabled: state.pending !== null,
               onPress: (): void => controller.navigate(needsQuestions ? 'overview' : 'pages'),
           }
         : state.pending !== null && check === null
-          ? { label: 'Checking…', testID: 'guide-primary', busy: true, onPress: (): void => undefined }
+          ? {
+                label: 'Checking…',
+                compactLabel: 'Checking',
+                testID: 'guide-primary',
+                busy: true,
+                onPress: (): void => undefined,
+            }
           : check !== null && check.decision === 'pass' && step !== undefined
             ? {
                   label: last ? 'Finish' : 'Next step',
+                  compactLabel: last ? 'Finish' : 'Next',
                   testID: 'guide-primary',
                   disabled: busy,
                   // Tapping after a pass is the person's own confirmation that this step is done: it records that
@@ -212,6 +278,7 @@ export function GuideScreen({
             : unfinished !== null
               ? {
                     label: `Go to step ${unfinished + 1}`,
+                    compactLabel: 'Go',
                     testID: 'guide-primary',
                     disabled: busy,
                     onPress: (): void => {
@@ -220,6 +287,7 @@ export function GuideScreen({
                 }
               : {
                     label: check !== null ? 'Take another photo' : 'Take photo',
+                    compactLabel: check !== null ? 'Retake' : 'Photo',
                     testID: 'guide-primary',
                     icon: 'camera',
                     disabled: cameraBlocked,
@@ -257,6 +325,7 @@ export function GuideScreen({
                     pageUris={state.pageUris}
                     height={heroHeight}
                     testID="guide-hero-picture"
+                    flush
                 />
             ) : (
                 frozenPhoto(capture.observation, guideNotes, heroHeight)
@@ -265,10 +334,16 @@ export function GuideScreen({
     )
     const reason = state.pending !== null && check !== null ? plainPending(state.pending) : null
     const parts = step !== undefined && !hasResult && state.pending === null ? partsLine(session, step) : null
+    // An answer never carries a verdict, even while a check is retained, so only the check's own sentence gets the mark.
+    const verdict =
+        sentence.kind === 'pass' || sentence.kind === 'refuse' || sentence.kind === 'cannot' ? sentence.kind : null
     const sentenceNode =
         check !== null || answer !== null ? (
-            <View accessibilityLiveRegion="polite">
-                <Instruction>{sentence.text}</Instruction>
+            <View accessibilityLiveRegion="polite" style={styles.sentenceRow}>
+                {verdict === null ? null : <ResultIcon kind={verdict} />}
+                <View style={styles.sentenceText}>
+                    <Instruction>{sentence.text}</Instruction>
+                </View>
             </View>
         ) : (
             <Instruction>{sentence.text}</Instruction>
@@ -284,7 +359,7 @@ export function GuideScreen({
                 />
             ) : null}
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-                <View testID="guide-hero-frame" style={styles.hero} {...swipe.panHandlers}>
+                <View testID="guide-hero-frame" {...swipe.panHandlers}>
                     <View style={blocked ? styles.dimmed : undefined}>{heroImage}</View>
                 </View>
                 <TextRegion testID="guide-panel">
@@ -566,7 +641,15 @@ function GuideMore({
 
 const styles = StyleSheet.create({
     flex: { flex: 1 },
-    hero: { paddingHorizontal: space.md, paddingTop: space.xs },
+    sentenceRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+    sentenceText: { flex: 1 },
+    resultIcon: {
+        width: RESULT_SIZE,
+        height: RESULT_SIZE,
+        borderRadius: radius.pill,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     dimmed: { opacity: 0.45 },
     fullStep: { gap: space.xs },
     row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },

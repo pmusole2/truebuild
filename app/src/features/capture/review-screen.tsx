@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactElement } from 'react'
-import { Pressable, StyleSheet, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -9,6 +9,7 @@ import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction } from '../../ui/text'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import { reviewedSession, unresolvedCriticalFacts } from './controller'
@@ -481,7 +482,7 @@ function PageStripItem({
     const { colors } = useTheme()
     const focus = useFocusRing()
     return (
-        <Pressable
+        <PressMotion
             testID="page-strip-item"
             accessibilityRole="button"
             accessibilityLabel={`Manual page ${number}`}
@@ -491,7 +492,7 @@ function PageStripItem({
             style={[styles.stripItem, focusRingStyle(focus.focused, colors)]}
         >
             <PageImage uri={uri} label={`Manual page ${number}`} aspectRatio={aspectRatio} />
-        </Pressable>
+        </PressMotion>
     )
 }
 

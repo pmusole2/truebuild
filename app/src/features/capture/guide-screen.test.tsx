@@ -1,12 +1,12 @@
 import type { ReactElement } from 'react'
 import type { CheckResult, Layout } from '@truebuild/contracts'
 import { act, fireEvent, render as renderScreen, screen, within } from '@testing-library/react-native'
-import { Keyboard, StyleSheet, type KeyboardEvent, type StyleProp } from 'react-native'
+import { Keyboard, PanResponder, Platform, StyleSheet, type KeyboardEvent, type StyleProp } from 'react-native'
 import { FeedbackProvider } from '../../ui/feedback'
 import { spies as animationSpies } from '../../ui/test-support/reanimated-mock'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
-import { GuideScreen } from './guide-screen'
+import { EDGE_RESERVE, GuideScreen, startsAtSystemEdge } from './guide-screen'
 import { plainWords } from './plain-copy'
 import type { WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
@@ -1314,5 +1314,151 @@ describe('full-width result citations', () => {
         })
         const media = StyleSheet.flatten(sheet.getByTestId('diagram-0-media').props.style)
         expect(media).toMatchObject({ left: 0, top: 0, width: 354, height: 531 })
+    })
+})
+
+describe('hero and result mark', () => {
+    it('runs the hero edge to edge with square corners and no side inset', async () => {
+        await setup('guide-empty')
+        const frame = screen.getByTestId('guide-hero-frame')
+        expect(StyleSheet.flatten(frame.props.style) ?? {}).not.toHaveProperty('paddingHorizontal')
+        expect(StyleSheet.flatten(screen.getByTestId('guide-hero-picture').props.style)).toMatchObject({
+            borderRadius: 0,
+        })
+    })
+
+    it('runs a photo hero edge to edge too', async () => {
+        await setup('guide-pass')
+        expect(StyleSheet.flatten(screen.getByTestId('frozen-photo-frame').props.style)).toMatchObject({
+            borderRadius: 0,
+        })
+    })
+
+    it.each([
+        ['guide-pass', 'Looks right.'],
+        ['guide-refuse', 'Not yet.'],
+        ['guide-cannot-verify', "We can't tell from this photo."],
+    ] as const)('puts one decorative tinted mark beside the sentence for %s', async (id, lead) => {
+        await setup(id)
+        const mark = screen.getByTestId('result-icon', behind)
+        expect(mark.props.accessibilityElementsHidden).toBe(true)
+        expect(StyleSheet.flatten(mark.props.style)).toMatchObject({ width: 48, height: 48 })
+        expect(screen.getByText(lead, { exact: false })).toBeTruthy()
+        // A mark is not a control: the primary is still the only button on the surface.
+        expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
+        expect(within(mark).queryByRole('button')).toBeNull()
+    })
+
+    it('draws no verdict mark on the first screen or on an answer, even while a check is retained', async () => {
+        await setup('guide-empty')
+        expect(screen.queryByTestId('result-icon', behind)).toBeNull()
+        const answer = workflowPreviewFixture('guide-answer').state.answer!
+        await setup('guide-pass', { state: { answer } })
+        expect(screen.queryByTestId('result-icon', behind)).toBeNull()
+    })
+})
+
+describe('result haptic identity', () => {
+    const trigger = jest.fn()
+    beforeEach(() => trigger.mockClear())
+    const withCapture = (captureId: string): Partial<WorkflowState> => {
+        const base = workflowPreviewFixture('guide-pass').state
+        return { capture: { ...base.capture!, binding: { ...base.capture!.binding, captureId } } }
+    }
+    const view = (patch: Partial<WorkflowState>): ReactElement => {
+        const fixture = workflowPreviewFixture('guide-pass')
+        return (
+            <FeedbackProvider reduceMotion haptics={{ trigger }}>
+                <GuideScreen
+                    state={{ ...fixture.state, ...patch }}
+                    entry={fixture.entry}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                />
+            </FeedbackProvider>
+        )
+    }
+
+    it('notifies again for a new photo whose result is worded exactly the same', async () => {
+        const { rerender } = await render(view(withCapture('capture-one')))
+        expect(trigger).toHaveBeenCalledTimes(1)
+        expect(trigger).toHaveBeenLastCalledWith('success')
+        await rerender(view(withCapture('capture-two')))
+        expect(trigger).toHaveBeenCalledTimes(2)
+    })
+
+    it('never replays when More opens and closes, or when the same photo is shown again', async () => {
+        const { rerender } = await render(view(withCapture('capture-one')))
+        await openMore()
+        await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 200))
+        })
+        await rerender(view(withCapture('capture-one')))
+        // Pressing More and Close each give their own light selection tick; the result's notification fires once.
+        expect(trigger.mock.calls.filter(([kind]) => kind !== 'selection')).toEqual([['success']])
+    })
+})
+
+describe('step swipe and the system edge', () => {
+    afterEach(() => jest.restoreAllMocks())
+    it('reserves the leading strip, and only that strip, for the system', () => {
+        expect(startsAtSystemEdge(0, 390, false)).toBe(true)
+        expect(startsAtSystemEdge(EDGE_RESERVE - 1, 390, false)).toBe(true)
+        expect(startsAtSystemEdge(EDGE_RESERVE, 390, false)).toBe(false)
+        expect(startsAtSystemEdge(390, 390, false)).toBe(false)
+        expect(startsAtSystemEdge(390 - 1, 390, true)).toBe(true)
+        expect(startsAtSystemEdge(5, 390, true)).toBe(false)
+    })
+
+    it('does not claim a drag that starts at the iOS leading edge, and still claims one from the middle', async () => {
+        const create = jest.spyOn(PanResponder, 'create')
+        await setup('guide-photo')
+        const config = create.mock.calls[0]![0]
+        const move = (dx: number, moveX: number): boolean =>
+            config.onMoveShouldSetPanResponder?.({} as never, { dx, dy: 0, moveX } as never) ?? false
+        // Started at x = 10 and moved right: iOS edge Back owns it.
+        expect(move(70, 80)).toBe(false)
+        // Started mid-screen: browsing steps.
+        expect(move(-70, 130)).toBe(true)
+    })
+
+    it('leaves the edge alone only on iOS', async () => {
+        const platform = jest.replaceProperty(Platform, 'OS', 'android')
+        try {
+            const create = jest.spyOn(PanResponder, 'create')
+            await setup('guide-photo')
+            const config = create.mock.calls[0]![0]
+            expect(config.onMoveShouldSetPanResponder?.({} as never, { dx: 70, dy: 0, moveX: 80 } as never)).toBe(true)
+        } finally {
+            platform.restore()
+        }
+    })
+
+    it('browses with a centre swipe without completing the step', async () => {
+        const create = jest.spyOn(PanResponder, 'create')
+        const spies = await setup('guide-photo', { entry: { stepIndex: 1 } })
+        const config = create.mock.calls[0]![0]
+        await act(async () => config.onPanResponderRelease?.({} as never, { dx: -90, dy: 0 } as never))
+        expect(spies.step).toHaveBeenCalledWith(2)
+        expect(spies.completeStep).not.toHaveBeenCalled()
+    })
+})
+
+describe('the primary at accessibility text sizes', () => {
+    it.each([
+        ['guide-empty', 'Take photo', 'Photo'],
+        ['guide-refuse', 'Take another photo', 'Retake'],
+        ['guide-pass', 'Next step', 'Next'],
+    ] as const)('shows one short verb for %s and keeps %s as the accessible name', async (id, full, short) => {
+        mockWindow.fontScale = 3.4
+        await setup(id)
+        const primary = screen.getByTestId('guide-primary')
+        expect(within(primary).getByText(short)).toBeTruthy()
+        expect(primary).toHaveProp('accessibilityLabel', full)
+        expect(screen.getByRole('button', { name: full })).toBe(primary)
+        // The hero is still 55 percent of the window and the text region is the only thing that scrolls.
+        expect((StyleSheet.flatten(screen.getByTestId('guide-hero').props.style) as { height: number }).height).toBe(
+            464,
+        )
     })
 })

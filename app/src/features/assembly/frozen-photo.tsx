@@ -75,6 +75,8 @@ type FrozenPhotoProps = {
     readonly notes?: readonly PaneNote[]
     // Hero mode: the photo fills a frame of exactly this height, its names sit on the image, and no caption is drawn.
     readonly fillHeight?: number
+    // Edge to edge: square corners, for a hero that runs the full width of the screen.
+    readonly flush?: boolean
 }
 
 /** The one frozen photo of this capture. Nothing here is live; the image does not update after it is taken. */
@@ -85,6 +87,7 @@ export function FrozenPhoto({
     overlay,
     notes,
     fillHeight,
+    flush = false,
 }: FrozenPhotoProps): ReactElement {
     const { colors } = useTheme()
     const [width, setWidth] = useState(0)
@@ -129,7 +132,11 @@ export function FrozenPhoto({
             <View
                 testID="frozen-photo-frame"
                 onLayout={onLayout}
-                style={[styles.frame, { height: boxHeight, backgroundColor: colors.surfaceSunken }]}
+                style={[
+                    styles.frame,
+                    flush && styles.flush,
+                    { height: boxHeight, backgroundColor: colors.surfaceSunken },
+                ]}
             >
                 {width === 0 ? null : (
                     <>
@@ -174,6 +181,7 @@ const styles = StyleSheet.create({
         borderCurve: 'continuous',
         overflow: 'hidden',
     },
+    flush: { borderRadius: 0 },
     image: {
         alignSelf: 'center',
     },
