@@ -5,6 +5,8 @@ import type { ReactElement } from 'react'
 import { AppButton } from './button'
 import { FeedbackProvider, useFeedback, type HapticPort } from './feedback'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 function MotionProbe(): ReactElement {
     const { reduceMotion } = useFeedback()
     return <Text>{reduceMotion ? 'reduced' : 'full'}</Text>

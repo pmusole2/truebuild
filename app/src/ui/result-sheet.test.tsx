@@ -4,6 +4,8 @@ import { Text } from 'react-native'
 import { AppButton } from './button'
 import { ResultSheet } from './result-sheet'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 describe('ResultSheet', () => {
     it.each([
         ['pass', 'Looks right'],

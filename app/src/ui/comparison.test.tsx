@@ -5,6 +5,8 @@ import { Rect as SvgRect } from 'react-native-svg'
 import type { Rect } from '../features/assembly/frame-geometry'
 import { ComparisonFrame, frameHeightFor, MeasuredPane, type ComparisonPane } from './comparison'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 // Font scale and window width are controlled per test; the frame reads them through the window-dimensions hook.
 const mockWindow = { width: 390, fontScale: 1 }
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({

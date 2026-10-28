@@ -54,21 +54,31 @@ export function ReadingScreen({
     const bar = reading
         ? confirming
             ? {
-                  primary: { label: 'Stop reading', testID: 'stop-reading', onPress: stop },
-                  secondary: { label: 'Keep reading', onPress: (): void => setConfirming(false) },
+                  primary: { label: 'Stop reading', compactLabel: 'Stop', testID: 'stop-reading', onPress: stop },
+                  secondary: {
+                      label: 'Keep reading',
+                      icon: 'check' as const,
+                      onPress: (): void => setConfirming(false),
+                  },
               }
             : {
                   primary: null,
-                  secondary: { label: 'Cancel', testID: 'cancel-reading', onPress: (): void => setConfirming(true) },
+                  secondary: {
+                      label: 'Cancel',
+                      icon: 'close' as const,
+                      testID: 'cancel-reading',
+                      onPress: (): void => setConfirming(true),
+                  },
               }
         : {
               primary: {
                   label: state.notice !== null ? 'Try again' : 'Read my manual',
+                  compactLabel: state.notice !== null ? 'Retry' : 'Read',
                   testID: 'retry-reading',
                   onPress: read,
                   disabled: state.pending !== null,
               },
-              secondary: { label: 'Back to pages', onPress: nav.back },
+              secondary: { label: 'Back to pages', icon: 'chevronLeft' as const, onPress: nav.back },
           }
     return (
         <ScreenBody testID="reading-screen">

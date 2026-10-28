@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { Text } from 'react-native'
 import { AskSheet, type AskPart } from './ask-sheet'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 const PARTS: readonly AskPart[] = [
     { id: 'side-panel', label: 'Side panel' },
     { id: 'divider', label: 'Divider shelf' },

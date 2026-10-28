@@ -2,10 +2,19 @@ import { fireEvent, render, screen, within } from '@testing-library/react-native
 import { StyleSheet } from 'react-native'
 import { FixedBottomBar } from './bottom-bar'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 jest.mock(
     'react-native-safe-area-context',
     () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
+
+const mockWindow = { width: 390, height: 844, fontScale: 1 }
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+    __esModule: true,
+    default: (): typeof mockWindow & { scale: number } => ({ ...mockWindow, scale: 3 }),
+}))
+beforeEach(() => Object.assign(mockWindow, { width: 390, height: 844, fontScale: 1 }))
 
 describe('FixedBottomBar', () => {
     it('renders one 56 point accent primary and at most one quiet secondary', async () => {
@@ -43,5 +52,72 @@ describe('FixedBottomBar', () => {
     it('can hold only a quiet control when there is no forward action', async () => {
         await render(<FixedBottomBar primary={null} secondary={{ label: 'Cancel', onPress: (): void => undefined }} />)
         expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
+    })
+})
+
+describe('FixedBottomBar at accessibility text sizes', () => {
+    const actions = {
+        primary: { label: 'Start building', compactLabel: 'Start', testID: 'start', onPress: jest.fn() },
+        secondary: {
+            label: 'Skip for now',
+            icon: 'arrowRight' as const,
+            testID: 'skip',
+            onPress: jest.fn(),
+        },
+    }
+
+    it('keeps the full visible words and a stacked secondary at normal sizes', async () => {
+        await render(<FixedBottomBar {...actions} />)
+        expect(screen.getByText('Start building')).toBeTruthy()
+        expect(screen.getByText('Skip for now')).toBeTruthy()
+        expect(screen.queryByText('Start')).toBeNull()
+    })
+
+    it.each([2, 3.12, 3.6])(
+        'shows one short verb with the full accessible name and test ID at scale %s',
+        async (fontScale) => {
+            mockWindow.fontScale = fontScale
+            await render(<FixedBottomBar {...actions} />)
+            expect(screen.getByText('Start')).toBeTruthy()
+            expect(screen.queryByText('Start building')).toBeNull()
+            expect(screen.getByRole('button', { name: 'Start building' })).toBe(screen.getByTestId('start'))
+        },
+    )
+
+    it('moves the quiet secondary into the primary row as a 44 point icon that keeps its name, test ID and action', async () => {
+        mockWindow.fontScale = 3.12
+        await render(<FixedBottomBar {...actions} />)
+        const secondary = screen.getByRole('button', { name: 'Skip for now' })
+        expect(secondary).toBe(screen.getByTestId('skip'))
+        expect(screen.queryByText('Skip for now')).toBeNull()
+        expect(StyleSheet.flatten(secondary.props.style)).toMatchObject({ width: 44, minHeight: 44 })
+        const primary = screen.getByTestId('start')
+        expect(StyleSheet.flatten(primary.props.style)).toMatchObject({ minHeight: 56 })
+        // Same row: both controls sit in one horizontal container.
+        expect(primary.parent?.parent).toBe(secondary.parent)
+        await fireEvent.press(secondary)
+        await fireEvent.press(primary)
+        expect(actions.secondary.onPress).toHaveBeenCalledTimes(1)
+        expect(actions.primary.onPress).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a text secondary when it has no icon, so no action is lost', async () => {
+        mockWindow.fontScale = 3.12
+        await render(
+            <FixedBottomBar
+                primary={actions.primary}
+                secondary={{ label: 'Add manual', compactLabel: 'Add', onPress: jest.fn() }}
+            />,
+        )
+        expect(screen.getByText('Add')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+    })
+
+    it('lets a long reason scroll inside a bounded region instead of pushing the bar up', async () => {
+        mockWindow.fontScale = 3.12
+        await render(<FixedBottomBar primary={actions.primary} reason={'Wait for the current request. '.repeat(20)} />)
+        const reason = screen.getByText(/Wait for the current request/u)
+        const region = reason.parent?.parent
+        expect(StyleSheet.flatten(region?.props.style)).toMatchObject({ maxHeight: Math.round(844 * 0.2) })
     })
 })

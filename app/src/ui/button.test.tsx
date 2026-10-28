@@ -1,8 +1,13 @@
-import { describe, expect, it, jest } from '@jest/globals'
+import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 import { Platform, StyleSheet } from 'react-native'
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import { lightColors, touchTarget } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
+import { FeedbackProvider } from './feedback'
+import { PRESS_SCALE } from './press-motion'
+import { spies } from './test-support/reanimated-mock'
+
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
 
 describe('AppButton', () => {
     it('exposes a named button with its hint and runs the action once per press', async () => {
@@ -96,5 +101,50 @@ describe('IconButton', () => {
         expect(button).toHaveStyle({ width: touchTarget, minHeight: touchTarget })
         await fireEvent.press(button)
         expect(onPress).not.toHaveBeenCalled()
+    })
+})
+
+describe('press motion', () => {
+    beforeEach(() => {
+        spies.withSpring.mockClear()
+    })
+
+    it('springs an action to 0.97 on press in and back to rest on press out', async () => {
+        await render(<AppButton label="Take photo" onPress={(): void => undefined} />)
+        const button = screen.getByRole('button', { name: 'Take photo' })
+        await fireEvent(button, 'pressIn')
+        expect(spies.withSpring).toHaveBeenLastCalledWith(1, expect.objectContaining({ damping: expect.any(Number) }))
+        await fireEvent(button, 'pressOut')
+        expect(spies.withSpring).toHaveBeenLastCalledWith(0, expect.any(Object))
+        expect(PRESS_SCALE).toBe(0.97)
+    })
+
+    it('gives icon buttons the same press feel', async () => {
+        await render(<IconButton label="Close answer" icon="close" onPress={(): void => undefined} />)
+        await fireEvent(screen.getByRole('button', { name: 'Close answer' }), 'pressIn')
+        expect(spies.withSpring).toHaveBeenCalledWith(1, expect.any(Object))
+    })
+
+    it('does not move a disabled or busy control', async () => {
+        await render(
+            <>
+                <AppButton label="Off" disabled onPress={(): void => undefined} />
+                <AppButton label="Working" busy onPress={(): void => undefined} />
+            </>,
+        )
+        await fireEvent(screen.getByRole('button', { name: 'Off' }), 'pressIn')
+        await fireEvent(screen.getByRole('button', { name: 'Working' }), 'pressIn')
+        expect(spies.withSpring).not.toHaveBeenCalledWith(1, expect.any(Object))
+    })
+
+    it('uses no spring under reduced motion', async () => {
+        await render(
+            <FeedbackProvider reduceMotion={true}>
+                <AppButton label="Take photo" onPress={(): void => undefined} />
+            </FeedbackProvider>,
+        )
+        await fireEvent(screen.getByRole('button', { name: 'Take photo' }), 'pressIn')
+        await fireEvent(screen.getByRole('button', { name: 'Take photo' }), 'pressOut')
+        expect(spies.withSpring).not.toHaveBeenCalled()
     })
 })

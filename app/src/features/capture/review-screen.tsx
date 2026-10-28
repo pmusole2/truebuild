@@ -125,7 +125,7 @@ export function OverviewScreen({
     let secondary: BarAction | undefined
     if (noRead) {
         sentence = 'Add photos of your manual and read them first.'
-        primary = { label: 'Add photos', onPress: nav.editPages }
+        primary = { label: 'Add photos', compactLabel: 'Add', onPress: nav.editPages }
     } else if (current !== undefined && !unreadable) {
         sentence =
             current.kind === 'orientation'
@@ -133,12 +133,21 @@ export function OverviewScreen({
                 : `What should you see when step ${current.step.order} is done?`
     } else if (questions.length > 0 || blockers.length > 0 || current !== undefined) {
         sentence = 'One thing still needs a clearer photo before we can check your work.'
-        primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
-        secondary = skipped.length > 0 ? { label: 'Answer skipped questions', onPress: unskip } : undefined
+        primary = {
+            label: 'Add clearer photos',
+            compactLabel: 'Add',
+            testID: 'quick-check-clearer',
+            onPress: nav.editPages,
+        }
+        secondary =
+            skipped.length > 0
+                ? { label: 'Answer skipped questions', icon: 'refresh' as const, onPress: unskip }
+                : undefined
     } else if (canConfirm || reviewed) {
         sentence = 'Thanks. Your steps are ready.'
         primary = {
             label: reviewed ? 'Keep building' : 'Start building',
+            compactLabel: reviewed ? 'Resume' : 'Start',
             testID: 'quick-check-start',
             busy: state.pending !== null,
             disabled: busy,
@@ -148,7 +157,12 @@ export function OverviewScreen({
         }
     } else {
         sentence = 'One thing still needs a clearer photo before we can check your work.'
-        primary = { label: 'Add clearer photos', testID: 'quick-check-clearer', onPress: nav.editPages }
+        primary = {
+            label: 'Add clearer photos',
+            compactLabel: 'Add',
+            testID: 'quick-check-clearer',
+            onPress: nav.editPages,
+        }
     }
 
     const asking = current !== undefined && !unreadable
@@ -185,12 +199,14 @@ export function OverviewScreen({
                         <FixedBottomBar
                             primary={{
                                 label: 'Let me fix it',
+                                compactLabel: 'Fix',
                                 testID: 'quick-check-fix',
                                 disabled: busy,
                                 onPress: (): void => more.show('fix'),
                             }}
                             secondary={{
                                 label: 'Skip for now',
+                                icon: 'arrowRight',
                                 testID: 'quick-check-skip',
                                 disabled: busy,
                                 onPress: (): void => skip(current.id),

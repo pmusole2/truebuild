@@ -53,7 +53,9 @@ export function DoneScreen({
             <TextRegion>
                 <Instruction>You finished every step. Nice work.</Instruction>
             </TextRegion>
-            <FixedBottomBar primary={{ label: 'Back to Home', testID: 'done-home', onPress: nav.leave }} />
+            <FixedBottomBar
+                primary={{ label: 'Back to Home', compactLabel: 'Home', testID: 'done-home', onPress: nav.leave }}
+            />
             <MoreSheet visible={more.open} title="All steps" onClose={more.hide} detents={['tall', 'full']}>
                 <Stack gap="md">
                     <StepList steps={items} />

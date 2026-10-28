@@ -87,6 +87,9 @@ const PRIMARY_LABEL = {
     done: 'See finished build',
 } as const
 
+// Short visible verbs at accessibility text sizes; the full labels above stay as the accessible names.
+const PRIMARY_COMPACT = { pages: 'Add', overview: 'Answer', guide: 'Resume', done: 'Open' } as const
+
 export function LibraryScreen({
     state,
     controller,
@@ -115,10 +118,11 @@ export function LibraryScreen({
         scrollY.value = event.nativeEvent.contentOffset.y
     }
     const primary = state.loading
-        ? { label: 'Add manual', onPress: addManual, disabled: true }
+        ? { label: 'Add manual', compactLabel: 'Add', onPress: addManual, disabled: true }
         : failed
           ? {
                 label: 'Try again',
+                compactLabel: 'Retry',
                 testID: 'retry-library',
                 onPress: (): void => {
                     void controller.restore()
@@ -127,14 +131,21 @@ export function LibraryScreen({
           : sole !== undefined && !addDisabled
             ? {
                   label: PRIMARY_LABEL[stopFor(sole)],
+                  compactLabel: PRIMARY_COMPACT[stopFor(sole)],
                   testID: 'keep-building',
                   onPress: (): void => nav.openStop(sole),
               }
-            : { label: 'Add manual', icon: 'plus' as const, onPress: addManual, disabled: addDisabled }
+            : {
+                  label: 'Add manual',
+                  compactLabel: 'Add',
+                  icon: 'plus' as const,
+                  onPress: addManual,
+                  disabled: addDisabled,
+              }
     const secondary = empty
-        ? { label: 'How it works', onPress: (): void => more.show() }
+        ? { label: 'How it works', icon: 'help' as const, onPress: (): void => more.show() }
         : sole !== undefined && !addDisabled
-          ? { label: 'Add manual', onPress: addManual }
+          ? { label: 'Add manual', icon: 'plus' as const, onPress: addManual }
           : undefined
     return (
         <ScreenBody testID="library-screen">

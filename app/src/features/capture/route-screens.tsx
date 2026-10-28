@@ -116,7 +116,9 @@ function Waiting({ route }: { route?: ManualRoute }): ReactElement {
                 <TextRegion>
                     <Instruction>We could not open this build.</Instruction>
                 </TextRegion>
-                <FixedBottomBar primary={{ label: 'Try again', testID: 'retry-route', onPress: route.retry }} />
+                <FixedBottomBar
+                    primary={{ label: 'Try again', compactLabel: 'Retry', testID: 'retry-route', onPress: route.retry }}
+                />
             </ScreenBody>
         )
     }

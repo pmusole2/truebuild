@@ -1,13 +1,17 @@
 import type { ReactElement } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { primaryHeight, radius, space, touchTarget, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
 import { focusRingStyle, useFocusRing } from './focus'
+import { MotionPressable, usePressMotion } from './press-motion'
 
 // `accent` marks the single primary task on a screen. Quiet actions use text without competing filled containers.
+// A control that cannot act keeps its place, dimmed. The press motion carries this opacity as its resting value.
+const INACTIVE_OPACITY = 0.38
+
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'quiet' | 'danger'
 
 const VARIANT_TOKENS: Readonly<Record<ButtonVariant, { container: ColorToken; text: ColorToken }>> = {
@@ -52,8 +56,9 @@ export function AppButton({
     const inactive = disabled || busy
     const tokens = VARIANT_TOKENS[variant]
     const type = typeProps('button')
+    const press = usePressMotion(inactive, inactive ? INACTIVE_OPACITY : 1)
     return (
-        <Pressable
+        <MotionPressable
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel ?? label}
             accessibilityHint={hint}
@@ -65,15 +70,16 @@ export function AppButton({
                 haptic('selection')
                 onPress()
             }}
+            onPressIn={press.onPressIn}
+            onPressOut={press.onPressOut}
             testID={testID}
-            style={({ pressed }) => [
+            style={[
                 styles.base,
                 size === 'primary' && styles.primarySize,
                 { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quietText,
                 focusRingStyle(focus.focused, colors),
-                pressed && !inactive && styles.pressed,
-                inactive && styles.inactive,
+                press.style,
             ]}
         >
             <View style={styles.row}>
@@ -86,7 +92,7 @@ export function AppButton({
                     {label}
                 </Text>
             </View>
-        </Pressable>
+        </MotionPressable>
     )
 }
 
@@ -112,8 +118,9 @@ export function IconButton({
     const { haptic } = useFeedback()
     const focus = useFocusRing()
     const tokens = VARIANT_TOKENS[variant]
+    const press = usePressMotion(disabled, disabled ? INACTIVE_OPACITY : 1)
     return (
-        <Pressable
+        <MotionPressable
             accessibilityRole="button"
             accessibilityLabel={label}
             accessibilityState={{ disabled }}
@@ -124,19 +131,20 @@ export function IconButton({
                 haptic('selection')
                 onPress()
             }}
+            onPressIn={press.onPressIn}
+            onPressOut={press.onPressOut}
             testID={testID}
-            style={({ pressed }) => [
+            style={[
                 styles.base,
                 styles.square,
                 { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quiet,
                 focusRingStyle(focus.focused, colors),
-                pressed && !disabled && styles.pressed,
-                disabled && styles.inactive,
+                press.style,
             ]}
         >
             <Icon name={icon} color={colors[tokens.text]} />
-        </Pressable>
+        </MotionPressable>
     )
 }
 
@@ -171,11 +179,5 @@ const styles = StyleSheet.create({
     label: {
         textAlign: 'center',
         flexShrink: 1,
-    },
-    pressed: {
-        opacity: 0.8,
-    },
-    inactive: {
-        opacity: 0.38,
     },
 })

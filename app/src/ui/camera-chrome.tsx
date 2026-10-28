@@ -1,11 +1,12 @@
 import type { ReactElement, ReactNode } from 'react'
-import { Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../theme/theme'
 import { darkColors, radius, shutterSize, space } from '../theme/tokens'
 import { useFeedback } from './feedback'
 import { IconButton } from './button'
 import { focusRingStyle, useFocusRing } from './focus'
+import { MotionPressable, usePressMotion } from './press-motion'
 import { Body } from './text'
 
 // Camera controls are always dark, whatever the system appearance, so the viewfinder reads like a camera.
@@ -49,7 +50,12 @@ export function CameraChrome({
                 </View>
                 <View style={styles.bottomBar}>
                     <Body>{hint}</Body>
-                    <ShutterButton label={shutterLabel} onPress={onShutter} disabled={shutterDisabled || busy} />
+                    <ShutterButton
+                        label={shutterLabel}
+                        onPress={onShutter}
+                        disabled={shutterDisabled || busy}
+                        busy={busy}
+                    />
                 </View>
             </View>
         </ThemeProvider>
@@ -81,41 +87,52 @@ export function ViewfinderCorners(): ReactElement {
     )
 }
 
+// A shutter that is only waiting for the camera dims; one that is working on a photo stays bright and shows progress.
+const WAITING_OPACITY = 0.4
+const BUSY_OPACITY = 0.9
+
 export function ShutterButton({
     label,
     onPress,
     disabled,
+    busy = false,
 }: {
     readonly label: string
     readonly onPress: () => void
     readonly disabled: boolean
+    // True while a photo is being prepared. The ring shows progress, so the wait is visible and not only inert.
+    readonly busy?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
     const focus = useFocusRing()
+    const press = usePressMotion(disabled, !disabled ? 1 : busy ? BUSY_OPACITY : WAITING_OPACITY)
     return (
-        <Pressable
+        <MotionPressable
             testID="camera-shutter"
             accessibilityRole="button"
             accessibilityLabel={label}
-            accessibilityState={{ disabled }}
+            accessibilityState={{ disabled, busy }}
             aria-disabled={disabled}
             disabled={disabled}
             {...focus.focusHandlers}
+            onPressIn={press.onPressIn}
+            onPressOut={press.onPressOut}
             onPress={(): void => {
                 haptic('selection')
                 onPress()
             }}
-            style={({ pressed }) => [
+            style={[
                 focusRingStyle(focus.focused, colors),
                 styles.shutterRing,
                 { borderColor: colors.ink },
-                pressed && !disabled && styles.pressed,
-                disabled && styles.disabled,
+                press.style,
             ]}
         >
-            <View style={[styles.shutterCore, { backgroundColor: colors.ink }]} />
-        </Pressable>
+            <View style={[styles.shutterCore, { backgroundColor: colors.ink }]}>
+                {busy ? <ActivityIndicator testID="shutter-busy" color={colors.inkInverse} size="large" /> : null}
+            </View>
+        </MotionPressable>
     )
 }
 
@@ -217,13 +234,7 @@ const styles = StyleSheet.create({
         width: shutterSize - 16,
         height: shutterSize - 16,
         borderRadius: radius.pill,
-    },
-    // The shutter gives under the finger, so a press reads as a press.
-    pressed: {
-        opacity: 0.85,
-        transform: [{ scale: 0.94 }],
-    },
-    disabled: {
-        opacity: 0.4,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 })

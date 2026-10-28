@@ -82,10 +82,11 @@ export function PagesScreen({
         choosePages()
     }
     const primary = saving
-        ? { label: 'Adding photos…', busy: true, onPress: (): void => undefined }
+        ? { label: 'Adding photos…', compactLabel: 'Adding', busy: true, onPress: (): void => undefined }
         : pages.length === 0
           ? {
                 label: 'Take photo',
+                compactLabel: 'Photo',
                 icon: 'camera' as const,
                 testID: 'take-page-photo',
                 onPress: takePhoto,
@@ -93,6 +94,7 @@ export function PagesScreen({
             }
           : {
                 label: entry.session.rawExtraction === null ? 'Read my manual' : 'Read my manual again',
+                compactLabel: 'Read',
                 testID: 'read-manual',
                 busy: state.pending !== null && state.pending.startsWith('Reading'),
                 disabled: busy,
@@ -102,17 +104,19 @@ export function PagesScreen({
                 },
             }
     const secondary = saving
-        ? { label: 'Cancel', testID: 'cancel-page-import', onPress: controller.cancel }
+        ? { label: 'Cancel', icon: 'close' as const, testID: 'cancel-page-import', onPress: controller.cancel }
         : pages.length === 0
           ? {
                 label: 'Choose from photos',
                 accessibilityLabel: 'Choose pages from photos',
+                icon: 'image' as const,
                 testID: 'choose-pages',
                 onPress: choose,
                 disabled: busy || full,
             }
           : {
                 label: 'Add a page',
+                icon: 'plus' as const,
                 testID: 'add-page',
                 onPress: (): void => open({ kind: 'add' }),
                 disabled: busy || full,
