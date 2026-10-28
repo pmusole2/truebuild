@@ -67,7 +67,7 @@ export function ErrorState({
     const { colors } = useTheme()
     // The message is one accessible group so it is announced as an alert; the retry stays a separate, focusable control.
     return (
-        <Card tone="result" bar="refuse">
+        <Card tone="result">
             <Stack gap="sm">
                 <View accessible={true} accessibilityRole="alert" style={styles.alert}>
                     <View style={styles.titleRow}>

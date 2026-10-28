@@ -1,33 +1,85 @@
-import { useEffect, type ReactElement, type ReactNode } from 'react'
-import { KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ComponentRef,
+    type ReactElement,
+    type ReactNode,
+} from 'react'
+import {
+    AccessibilityInfo,
+    KeyboardAvoidingView,
+    Modal,
+    PanResponder,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    useWindowDimensions,
+    View,
+    type GestureResponderEvent,
+    type PanResponderGestureState,
+} from 'react-native'
 import Animated, {
     cancelAnimation,
     Easing,
-    interpolate,
     useAnimatedStyle,
     useSharedValue,
+    withSpring,
     withTiming,
 } from 'react-native-reanimated'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../theme/theme'
-import { motion, radius, space } from '../theme/tokens'
+import { motion, radius, space, touchTarget } from '../theme/tokens'
 import { IconButton } from './button'
 import { useFeedback } from './feedback'
 import { Body, Heading } from './text'
 
+/** Resting heights as a share of the window: a peek, a tall default and a near-full sheet. */
+export type SheetDetent = 'peek' | 'tall' | 'full'
+export const DETENT_RATIO: Readonly<Record<SheetDetent, number>> = { peek: 0.45, tall: 0.78, full: 0.92 }
+const ORDER: readonly SheetDetent[] = ['peek', 'tall', 'full']
+
 // Long content scrolls inside the sheet; the sheet never grows past this share of the window, so the scrim stays visible.
-export const SHEET_MAX_HEIGHT_RATIO = 0.9
+export const SHEET_MAX_HEIGHT_RATIO = DETENT_RATIO.full
+
+// Spring tuned to settle without a visible bounce; reduced motion skips it and sets the height directly.
+const SPRING = { damping: 26, stiffness: 260, mass: 1 } as const
+// A fling faster than this (points per millisecond) projects the sheet to the detent it points at.
+const FLING_PROJECTION_MS = 160
+
+/** The nearest resting height to `projected`, where 0 means closed. Exported for the drag rule's own test. */
+export function snapHeight(projected: number, heights: readonly number[], closeBelow: number): number {
+    if (projected < closeBelow) {
+        return 0
+    }
+    return heights.reduce(
+        (best, h) => (Math.abs(h - projected) < Math.abs(best - projected) ? h : best),
+        heights[0] ?? 0,
+    )
+}
 
 export function BottomSheet({
     visible,
     title,
     onClose,
     children,
+    detents = ['peek', 'tall'],
+    initialDetent,
+    testID = 'bottom-sheet',
+    scrollTestID = 'bottom-sheet-scroll',
 }: {
     readonly visible: boolean
     readonly title: string
     readonly onClose: () => void
     readonly children: ReactNode
+    // Two or three resting heights. The sheet opens at `initialDetent`, else at the second one (the tall default).
+    readonly detents?: readonly SheetDetent[]
+    readonly initialDetent?: SheetDetent
+    readonly testID?: string
+    readonly scrollTestID?: string
 }): ReactElement {
     return (
         <Modal
@@ -39,7 +91,14 @@ export function BottomSheet({
         >
             {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}
             <SafeAreaProvider>
-                <SheetFrame title={title} onClose={onClose}>
+                <SheetFrame
+                    title={title}
+                    onClose={onClose}
+                    detents={detents}
+                    initialDetent={initialDetent}
+                    testID={testID}
+                    scrollTestID={scrollTestID}
+                >
                     {children}
                 </SheetFrame>
             </SafeAreaProvider>
@@ -47,37 +106,149 @@ export function BottomSheet({
     )
 }
 
+/** The one More sheet: same grabber, detents and close control wherever a screen keeps its details. */
+export function MoreSheet(props: {
+    readonly visible: boolean
+    readonly title?: string
+    readonly onClose: () => void
+    readonly children: ReactNode
+    readonly detents?: readonly SheetDetent[]
+    readonly initialDetent?: SheetDetent
+}): ReactElement {
+    const { title = 'More', ...rest } = props
+    return <BottomSheet {...rest} title={title} testID="more-sheet" scrollTestID="more-sheet-scroll" />
+}
+
 function SheetFrame({
     title,
     onClose,
     children,
+    detents,
+    initialDetent,
+    testID,
+    scrollTestID,
 }: {
     readonly title: string
     readonly onClose: () => void
     readonly children: ReactNode
+    readonly detents: readonly SheetDetent[]
+    readonly initialDetent: SheetDetent | undefined
+    readonly testID: string
+    readonly scrollTestID: string
 }): ReactElement {
     const { colors, scheme } = useTheme()
     const { reduceMotion } = useFeedback()
     const { height } = useWindowDimensions()
     const insets = useSafeAreaInsets()
-    const progress = useSharedValue(0)
+    const heights = useMemo(
+        () =>
+            [...new Set(detents)]
+                .sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b))
+                .map((detent) => Math.round(height * DETENT_RATIO[detent])),
+        [detents, height],
+    )
+    const startIndex = useMemo(() => {
+        const chosen =
+            initialDetent === undefined
+                ? -1
+                : [...new Set(detents)].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)).indexOf(initialDetent)
+        return chosen >= 0 ? chosen : Math.min(1, heights.length - 1)
+    }, [detents, heights.length, initialDetent])
+    const [index, setIndex] = useState(startIndex)
+    const sheetHeight = useSharedValue(heights[startIndex] ?? 0)
+    const entrance = useSharedValue(0)
+    const current = useRef(heights[startIndex] ?? 0)
+    const dragStart = useRef(0)
+    const closing = useRef(false)
+    const titleRef = useRef<ComponentRef<typeof View>>(null)
+
+    const settle = useCallback(
+        (to: number): void => {
+            current.current = to
+            if (reduceMotion) {
+                cancelAnimation(sheetHeight)
+                sheetHeight.value = to
+                return
+            }
+            sheetHeight.value = withSpring(to, SPRING)
+        },
+        [reduceMotion, sheetHeight],
+    )
+
+    const close = useCallback((): void => {
+        if (closing.current) {
+            return
+        }
+        closing.current = true
+        if (reduceMotion) {
+            onClose()
+            return
+        }
+        entrance.value = withTiming(0, { duration: motion.quick, easing: Easing.out(Easing.cubic) })
+        setTimeout(onClose, motion.quick)
+    }, [entrance, onClose, reduceMotion])
 
     useEffect(() => {
         if (reduceMotion) {
-            cancelAnimation(progress)
-            progress.value = 1
-            return undefined
+            cancelAnimation(entrance)
+            entrance.value = 1
+        } else {
+            entrance.value = withSpring(1, SPRING)
         }
-        progress.value = withTiming(1, { duration: motion.sheet, easing: Easing.out(Easing.cubic) })
+        // Screen readers land on the sheet title, the first thing the sheet says.
+        const focusTimer = setTimeout(() => {
+            if (titleRef.current !== null) {
+                AccessibilityInfo.sendAccessibilityEvent(titleRef.current, 'focus')
+            }
+        }, 0)
         return (): void => {
-            cancelAnimation(progress)
+            clearTimeout(focusTimer)
+            cancelAnimation(entrance)
+            cancelAnimation(sheetHeight)
         }
-    }, [progress, reduceMotion])
+    }, [entrance, reduceMotion, sheetHeight])
 
-    const entrance = useAnimatedStyle(() => ({
-        opacity: progress.value,
-        transform: [{ translateY: interpolate(progress.value, [0, 1], [space.lg, 0]) }],
-    }))
+    const moveTo = useCallback(
+        (next: number): void => {
+            const bounded = Math.max(0, Math.min(heights.length - 1, next))
+            setIndex(bounded)
+            settle(heights[bounded] ?? 0)
+        },
+        [heights, settle],
+    )
+
+    const pan = useMemo(
+        () =>
+            PanResponder.create({
+                onStartShouldSetPanResponder: () => true,
+                onMoveShouldSetPanResponder: () => true,
+                onPanResponderGrant: () => {
+                    dragStart.current = current.current
+                },
+                onPanResponderMove: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
+                    const top = heights[heights.length - 1] ?? 0
+                    const next = Math.max(0, Math.min(top, dragStart.current - gesture.dy))
+                    current.current = next
+                    cancelAnimation(sheetHeight)
+                    sheetHeight.value = next
+                },
+                onPanResponderRelease: (_event: GestureResponderEvent, gesture: PanResponderGestureState) => {
+                    const projected = current.current - gesture.vy * FLING_PROJECTION_MS
+                    const target = snapHeight(projected, heights, (heights[0] ?? 0) * 0.6)
+                    if (target === 0) {
+                        close()
+                        return
+                    }
+                    setIndex(Math.max(0, heights.indexOf(target)))
+                    settle(target)
+                },
+                onPanResponderTerminate: () => settle(heights[index] ?? 0),
+            }),
+        [close, heights, index, settle, sheetHeight],
+    )
+
+    const boxStyle = useAnimatedStyle(() => ({ height: sheetHeight.value, opacity: entrance.value }))
+    const slideStyle = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - entrance.value) * space.xl * 2 }] }))
 
     return (
         <KeyboardAvoidingView
@@ -88,36 +259,54 @@ function SheetFrame({
             ]}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
+            <Pressable
+                testID="sheet-dismiss"
+                accessibilityElementsHidden={true}
+                importantForAccessibility="no"
+                style={styles.dismiss}
+                onPress={close}
+            />
             <Animated.View
-                testID="bottom-sheet"
+                testID={testID}
                 style={[
                     styles.sheet,
-                    {
-                        maxHeight: height * SHEET_MAX_HEIGHT_RATIO,
-                        paddingBottom: space.lg + insets.bottom,
-                        backgroundColor: colors.surface,
-                        borderColor: colors.border,
-                    },
-                    entrance,
+                    { backgroundColor: colors.surface, paddingBottom: space.md + insets.bottom },
+                    boxStyle,
+                    slideStyle,
                 ]}
             >
                 <View
                     testID="sheet-handle"
-                    accessibilityElementsHidden={true}
-                    importantForAccessibility="no"
-                    style={[styles.handle, { backgroundColor: colors.borderStrong }]}
-                />
+                    accessible={true}
+                    accessibilityRole="adjustable"
+                    accessibilityLabel="Sheet size"
+                    accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+                    onAccessibilityAction={(event): void => {
+                        if (event.nativeEvent.actionName === 'increment') {
+                            moveTo(index + 1)
+                        } else if (index === 0) {
+                            close()
+                        } else {
+                            moveTo(index - 1)
+                        }
+                    }}
+                    {...pan.panHandlers}
+                    style={styles.grabZone}
+                >
+                    <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
+                </View>
                 <View style={styles.header}>
-                    <View style={styles.titleWrap}>
+                    <View ref={titleRef} accessible={true} style={styles.titleWrap}>
                         <Heading>{title}</Heading>
                     </View>
-                    <IconButton label="Close sheet" icon="close" onPress={onClose} />
+                    <IconButton label="Close sheet" icon="close" onPress={close} />
                 </View>
                 <ScrollView
-                    testID="bottom-sheet-scroll"
+                    testID={scrollTestID}
                     style={styles.scroll}
                     contentContainerStyle={styles.scrollContent}
                     keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled={true}
                 >
                     {children}
                 </ScrollView>
@@ -156,29 +345,32 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'flex-end',
     },
+    dismiss: { ...StyleSheet.absoluteFill },
     sheet: {
         borderTopLeftRadius: radius.sheet,
         borderTopRightRadius: radius.sheet,
-        borderWidth: 1,
-        padding: space.md,
-        gap: space.md,
+        borderCurve: 'continuous',
+        paddingHorizontal: space.md,
+        overflow: 'hidden',
     },
-    handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: radius.pill },
+    // The grab zone is the only drag region, so dragging never fights the content's own scroll.
+    grabZone: { height: touchTarget, alignItems: 'center', justifyContent: 'center' },
+    grabber: { width: 40, height: 5, borderRadius: radius.pill },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: space.sm,
+        paddingBottom: space.xs,
     },
     titleWrap: {
         flex: 1,
     },
     scroll: {
-        flexGrow: 0,
-        flexShrink: 1,
+        flex: 1,
     },
     scrollContent: {
         gap: space.md,
-        paddingBottom: space.xs,
+        paddingBottom: space.md,
     },
     steps: {
         gap: space.sm,

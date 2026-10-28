@@ -9,6 +9,7 @@ import { ComparisonFrame, type ComparisonPane } from '../../ui/comparison'
 import { ResultSheet } from '../../ui/result-sheet'
 import { ResultReveal } from '../../ui/result-reveal'
 import type { WorkflowState } from './controller'
+import { ManualImage } from './page-media'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, type PartGuidance } from './part-regions'
@@ -68,8 +69,8 @@ export function AnswerPanel({
     return (
         <ResultReveal identity={`answer:${answer.answer}`} feedback="selection">
             <View accessibilityLiveRegion="polite">
-                {/* Hero card like a verdict, but with the neutral ink bar a plain notice uses: no verdict colour or tag. */}
-                <Card tone="result" bar="ink">
+                {/* Hero card like a verdict, but neutral: no verdict colour or tag. */}
+                <Card tone="result">
                     <Heading>Answer</Heading>
                     <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
                     <Body>{answer.answer}</Body>
@@ -119,12 +120,7 @@ export function RefusalComparison({
             diagramUri === undefined ? (
                 <Caption>Cited diagram unavailable.</Caption>
             ) : (
-                <Image
-                    source={{ uri: diagramUri }}
-                    accessibilityLabel="Cited manual page"
-                    resizeMode="stretch"
-                    style={StyleSheet.absoluteFill}
-                />
+                <ManualImage uri={diagramUri} label="Cited manual page" />
             ),
         mediaSize: page === undefined ? { width: 1, height: 1 } : { width: page.width, height: page.height },
         regions: cited?.region ? [{ id: 'cited', label: 'Cited area', box: cited.region }] : [],

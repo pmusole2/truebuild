@@ -89,16 +89,24 @@ export const space = {
     xl: 32,
 } as const
 
+// Filled surfaces use 16-20 point continuous corners; sm stays small for outlines drawn on a photo.
 export const radius = {
     sm: 4,
-    md: 8,
-    lg: 12,
-    sheet: 16,
+    md: 16,
+    lg: 16,
+    sheet: 20,
+    hero: 20,
     pill: 999,
 } as const
 
 // Every control, including icon-only buttons and segmented options, keeps at least this interactive size.
 export const touchTarget = 44
+
+// The one primary action of a screen is taller than the floor so it is the obvious thing to press.
+export const primaryHeight = 56
+
+// Camera shutter diameter.
+export const shutterSize = 76
 
 export const iconSize = {
     sm: 20,

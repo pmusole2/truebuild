@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
-import { radius, space, touchTarget, type ColorToken } from '../theme/tokens'
+import { primaryHeight, radius, space, touchTarget, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
 import { focusRingStyle, useFocusRing } from './focus'
@@ -10,14 +10,13 @@ import { focusRingStyle, useFocusRing } from './focus'
 // `accent` marks the single primary task on a screen. Quiet actions use text without competing filled containers.
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'quiet' | 'danger'
 
-const VARIANT_TOKENS: Readonly<Record<ButtonVariant, { container: ColorToken; border: ColorToken; text: ColorToken }>> =
-    {
-        primary: { container: 'fillStrong', border: 'fillStrong', text: 'fillStrongInk' },
-        accent: { container: 'accent', border: 'accent', text: 'accentFillInk' },
-        secondary: { container: 'surfaceRaised', border: 'borderStrong', text: 'ink' },
-        quiet: { container: 'surfaceSunken', border: 'border', text: 'ink' },
-        danger: { container: 'refuseSurface', border: 'refuse', text: 'refuse' },
-    }
+const VARIANT_TOKENS: Readonly<Record<ButtonVariant, { container: ColorToken; text: ColorToken }>> = {
+    primary: { container: 'fillStrong', text: 'fillStrongInk' },
+    accent: { container: 'accent', text: 'accentFillInk' },
+    secondary: { container: 'surfaceRaised', text: 'ink' },
+    quiet: { container: 'surfaceSunken', text: 'ink' },
+    danger: { container: 'refuseSurface', text: 'refuse' },
+}
 
 export type AppButtonProps = {
     readonly label: string
@@ -31,6 +30,8 @@ export type AppButtonProps = {
     readonly accessibilityLabel?: string
     readonly testID?: string
     readonly icon?: IconName
+    // `primary` is the one 56 point action pinned above the safe area; every other button keeps the 44 point floor.
+    readonly size?: 'regular' | 'primary'
 }
 
 export function AppButton({
@@ -43,6 +44,7 @@ export function AppButton({
     accessibilityLabel,
     testID,
     icon,
+    size = 'regular',
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
@@ -66,7 +68,8 @@ export function AppButton({
             testID={testID}
             style={({ pressed }) => [
                 styles.base,
-                { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                size === 'primary' && styles.primarySize,
+                { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quietText,
                 focusRingStyle(focus.focused, colors),
                 pressed && !inactive && styles.pressed,
@@ -125,7 +128,7 @@ export function IconButton({
             style={({ pressed }) => [
                 styles.base,
                 styles.square,
-                { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
+                { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quiet,
                 focusRingStyle(focus.focused, colors),
                 pressed && !disabled && styles.pressed,
@@ -144,14 +147,15 @@ const styles = StyleSheet.create({
         maxWidth: '100%',
         paddingHorizontal: space.md,
         paddingVertical: space.xs,
-        borderWidth: 1,
         borderRadius: radius.md,
+        borderCurve: 'continuous',
         alignItems: 'center',
         justifyContent: 'center',
     },
-    // A quiet text button has no fill but keeps its hairline, so it still reads as a control. Icon-only ones stay bare.
+    primarySize: { minHeight: primaryHeight },
+    // A quiet text button has no fill and no outline: it reads as text with a 44 point target.
     quietText: { backgroundColor: 'transparent' },
-    quiet: { backgroundColor: 'transparent', borderColor: 'transparent' },
+    quiet: { backgroundColor: 'transparent' },
     square: {
         width: touchTarget,
         paddingHorizontal: 0,

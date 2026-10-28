@@ -141,9 +141,9 @@ function Preview(): ReactElement {
             </PreviewSection>
 
             <PreviewSection title="Cards">
-                <Card tone="result" bar="pass">
+                <Card tone="result">
                     <Heading>Result card</Heading>
-                    <Caption>The hero tone: raised, strongly bordered and barred in the verdict colour.</Caption>
+                    <Caption>The hero tone: a raised, lifted fill with no outline.</Caption>
                 </Card>
                 <ThumbnailCard title="Side panel photo" caption="Step 1" selected={true} onPress={noopPreview} />
                 <ThumbnailCard title="Unphotographed step" onPress={noopPreview} />

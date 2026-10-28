@@ -207,7 +207,7 @@ function PageStripItem({
 function BlockerGroup({ issues }: { issues: readonly string[] }): ReactElement {
     const { colors } = useTheme()
     return (
-        <Card tone="result" bar="caution">
+        <Card tone="result">
             <View style={styles.blockerHeader}>
                 <Icon name="alert" size="sm" color={colors.refuse} />
                 <View style={styles.flex}>

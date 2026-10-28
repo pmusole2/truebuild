@@ -56,9 +56,9 @@ describe('AppButton', () => {
         })
     })
 
-    it('scales its label to 200 percent of the system text size', async () => {
+    it('scales its label to 300 percent of the system text size (accessibility sizes stay usable)', async () => {
         await render(<AppButton label="Ask question" onPress={(): void => undefined} />)
-        expect(screen.getByText('Ask question')).toHaveProp('maxFontSizeMultiplier', 2)
+        expect(screen.getByText('Ask question')).toHaveProp('maxFontSizeMultiplier', 3)
     })
 })
 

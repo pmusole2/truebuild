@@ -1,13 +1,13 @@
 import type { ReactElement, ReactNode } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { radius, space, type ColorToken } from '../theme/tokens'
+import { radius, space } from '../theme/tokens'
 import { Icon } from './icons'
 import { useTheme } from '../theme/theme'
 import { VerdictTag, type Verdict } from './status'
 import { Body, Callout, Caption } from './text'
 import { Card, Stack } from './surface'
 
-// The result of one step check. Pass, refuse and cannot-verify differ in tag, icon, colour bar and wording, and the
+// The result of one step check. Pass, refuse and cannot-verify differ in tag, icon, colour and wording, and the
 // reason is always shown in full, so no verdict is conveyed by colour alone.
 export function ResultSheet({
     verdict,
@@ -29,10 +29,9 @@ export function ResultSheet({
     readonly testID?: string
 }): ReactElement {
     const { colors } = useTheme()
-    const bar: ColorToken = verdict === 'pass' ? 'pass' : verdict === 'refuse' ? 'refuse' : 'caution'
     return (
         <View accessibilityLiveRegion="polite" testID={testID} style={styles.wrap}>
-            <Card tone="result" bar={bar}>
+            <Card tone="result">
                 <Stack gap="sm">
                     {provenance === undefined ? null : <Caption>{provenance}</Caption>}
                     <VerdictTag verdict={verdict} />

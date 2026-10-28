@@ -50,6 +50,15 @@ export function Title(props: TypeProps): ReactElement {
     return <Typeset role="title" header {...props} />
 }
 
+export function LargeTitle(props: TypeProps): ReactElement {
+    return <Typeset role="largeTitle" header {...props} />
+}
+
+/** The one sentence a person acts on. Wraps freely; the screen scrolls only this text when it overflows. */
+export function Instruction(props: TypeProps): ReactElement {
+    return <Typeset role="instruction" {...props} />
+}
+
 export function Heading(props: TypeProps): ReactElement {
     return <Typeset role="heading" header {...props} />
 }

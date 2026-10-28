@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context'
 import { elevationStyle, type ElevationLevel } from '../theme/elevation'
 import { useTheme } from '../theme/theme'
-import { radius, space, type ColorToken } from '../theme/tokens'
+import { radius, space } from '../theme/tokens'
 
 // With the native header shown, the header already clears the top inset. With it hidden (full-bleed camera), the shell
 // must clear the top inset itself.
@@ -57,24 +57,19 @@ export function Stack({
     return <View style={{ gap: GAPS[gap] }}>{children}</View>
 }
 
-// `result` is the hero card: raised, strongly bordered and lifted, so a verdict reads before the facts around it.
+// Cards are filled shapes with no outline: `result` is lifted and `raised` sits one step above the canvas, so a verdict
+// reads before the facts around it without borders or accent bars.
 export type CardTone = 'surface' | 'raised' | 'result'
-
-// The status bar width on a hero card. It sits inside the border and follows the rounded corners.
-const CARD_BAR_WIDTH = 4
 
 export function Card({
     children,
     elevation = 0,
     tone = 'surface',
-    bar,
     testID,
 }: {
     readonly children: ReactNode
     readonly elevation?: ElevationLevel
     readonly tone?: CardTone
-    // Status colour drawn as a bar down the left edge, always accompanied by text and an icon inside the card.
-    readonly bar?: ColorToken
     readonly testID?: string
 }): ReactElement {
     const { colors, scheme } = useTheme()
@@ -86,21 +81,10 @@ export function Card({
             testID={testID}
             style={[
                 styles.card,
-                {
-                    backgroundColor: raised ? colors.surfaceRaised : colors.surface,
-                    borderColor: tone === 'result' ? colors.borderStrong : colors.border,
-                },
+                { backgroundColor: raised ? colors.surfaceRaised : colors.surface },
                 elevationStyle(lift),
             ]}
         >
-            {bar === undefined ? null : (
-                <View
-                    testID="card-bar"
-                    accessibilityElementsHidden={true}
-                    importantForAccessibility="no"
-                    style={[styles.bar, { backgroundColor: colors[bar] }]}
-                />
-            )}
             {children}
         </View>
     )
@@ -131,19 +115,9 @@ export function ActionDock({
     readonly children: ReactNode
     readonly testID?: string
 }): ReactElement {
-    const { colors, scheme } = useTheme()
-    // A full rule, strong in light where the canvas is pale, so the dock never melts into the scrolling result.
+    const { colors } = useTheme()
     return (
-        <View
-            testID={testID}
-            style={[
-                styles.dock,
-                {
-                    backgroundColor: colors.surface,
-                    borderColor: scheme === 'light' ? colors.borderStrong : colors.border,
-                },
-            ]}
-        >
+        <View testID={testID} style={[styles.dock, { backgroundColor: colors.surface }]}>
             {children}
         </View>
     )
@@ -163,7 +137,6 @@ const styles = StyleSheet.create({
     padding: { padding: space.md },
     actions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     dock: {
-        borderTopWidth: 1,
         paddingHorizontal: space.md,
         paddingTop: space.sm,
         paddingBottom: space.md,
@@ -171,19 +144,10 @@ const styles = StyleSheet.create({
         flexShrink: 0,
     },
     card: {
-        borderWidth: 1,
         borderRadius: radius.lg,
+        borderCurve: 'continuous',
         padding: space.md,
         gap: space.sm,
-    },
-    bar: {
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: CARD_BAR_WIDTH,
-        borderTopLeftRadius: radius.lg - 1,
-        borderBottomLeftRadius: radius.lg - 1,
     },
     divider: {
         height: StyleSheet.hairlineWidth,

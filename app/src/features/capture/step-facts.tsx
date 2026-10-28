@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Image, StyleSheet, View } from 'react-native'
+import { StyleSheet, View } from 'react-native'
 import {
     stepEvidenceRequirements,
     type Fact,
@@ -15,6 +15,7 @@ import { space } from '../../theme/tokens'
 import { stepPartChoices } from '../assembly/question-state'
 import type { AssemblyGuide } from './camera-stage'
 import type { WorkflowState } from './controller'
+import { ManualImage } from './page-media'
 
 export function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
     return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
@@ -226,12 +227,7 @@ export function SourceDiagram({
             uri === undefined ? (
                 <Caption>Loading page…</Caption>
             ) : (
-                <Image
-                    source={{ uri }}
-                    accessibilityLabel={`Expected diagram page ${pageNumber}`}
-                    resizeMode="stretch"
-                    style={StyleSheet.absoluteFill}
-                />
+                <ManualImage uri={uri} label={`Expected diagram page ${pageNumber}`} />
             ),
         mediaSize: { width: page.width, height: page.height },
         regions:

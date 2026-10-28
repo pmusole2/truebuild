@@ -30,7 +30,7 @@ const inScheme = (scheme: ColorScheme, element: React.ReactElement): React.React
 
 describe('hero result card', () => {
     it.each(['light', 'dark'] as const)(
-        '%s: the result tone is raised, strongly bordered and elevated',
+        '%s: the result tone is raised and elevated, with no outline',
         async (scheme) => {
             await render(
                 inScheme(
@@ -43,7 +43,7 @@ describe('hero result card', () => {
             // The only View with the card chrome is the card itself.
             const card = screen.getByTestId('card')
             const flat = style(card)
-            expect(flat.borderColor).toBe(palette[scheme].borderStrong)
+            expect(flat.borderWidth).toBeUndefined()
             expect(flat.backgroundColor).toBe(palette[scheme].surfaceRaised)
             expect(flat.shadowOpacity ?? flat.boxShadow).toBeTruthy()
         },
@@ -60,17 +60,16 @@ describe('hero result card', () => {
         const { unmount } = await render(plain('light'))
         const light = style(screen.getByTestId('card'))
         expect(light.backgroundColor).toBe(lightColors.surface)
-        expect(light.borderColor).toBe(lightColors.border)
+        expect(light.borderWidth).toBeUndefined()
         expect(light.shadowOpacity).toBeUndefined()
         await unmount()
         await render(plain('dark'))
         expect(style(screen.getByTestId('card')).backgroundColor).toBe(darkColors.surfaceRaised)
     })
 
-    it('draws a 4 point status bar for the verdict and keeps the reason and missing evidence in full', async () => {
+    it('keeps the reason and missing evidence in full, with no accent bar', async () => {
         await render(<ResultSheet verdict="refuse" reason="The panel is reversed." missing={['inward groove']} />)
-        const bar = screen.getByTestId('card-bar', hidden)
-        expect(style(bar)).toMatchObject({ width: 4, backgroundColor: lightColors.refuse })
+        expect(screen.queryByTestId('card-bar', hidden)).toBeNull()
         expect(screen.getByText('The panel is reversed.')).toBeTruthy()
         expect(screen.getByText('Missing: inward groove')).toBeTruthy()
     })
@@ -78,7 +77,7 @@ describe('hero result card', () => {
 
 describe('action dock', () => {
     it.each(['light', 'dark'] as const)(
-        '%s: separates itself from the scroll with a visible full rule',
+        '%s: separates itself from the scroll by its own fill, with no rule',
         async (scheme) => {
             await render(
                 inScheme(
@@ -89,8 +88,8 @@ describe('action dock', () => {
                 ),
             )
             const flat = style(screen.getByTestId('dock'))
-            expect(flat.borderTopWidth).toBe(1)
-            expect(flat.borderColor).toBe(scheme === 'light' ? lightColors.borderStrong : darkColors.border)
+            expect(flat.borderTopWidth).toBeUndefined()
+            expect(flat.backgroundColor).toBe(scheme === 'light' ? lightColors.surface : darkColors.surface)
             expect(flat.paddingHorizontal).toBe(16)
             expect(flat.paddingTop).toBe(12)
         },
@@ -98,17 +97,17 @@ describe('action dock', () => {
 })
 
 describe('buttons', () => {
-    it('a quiet text button keeps a visible hairline so it still reads as a control', async () => {
+    it('a quiet text button has no outline and keeps its 44 point target', async () => {
         await render(<AppButton label="Mark step complete myself" variant="quiet" onPress={(): void => undefined} />)
         const flat = style(screen.getByRole('button', { name: 'Mark step complete myself' }))
-        expect(flat.borderColor).toBe(lightColors.border)
+        expect(flat.borderWidth).toBeUndefined()
         expect(flat.backgroundColor).toBe('transparent')
         expect(flat.minHeight).toBe(44)
     })
 
     it('an icon-only quiet button stays borderless so headers stay calm', async () => {
         await render(<IconButton label="Back" icon="chevronLeft" onPress={(): void => undefined} />)
-        expect(style(screen.getByRole('button', { name: 'Back' })).borderColor).toBe('transparent')
+        expect(style(screen.getByRole('button', { name: 'Back' })).borderWidth).toBeUndefined()
     })
 
     it('a disabled button recedes further than a pressed one yet keeps its label', async () => {
@@ -165,7 +164,7 @@ describe('progress', () => {
 })
 
 describe('states', () => {
-    it('presents an error as a result card with a refusal bar and an accent retry', async () => {
+    it('presents an error as a result card with an accent retry', async () => {
         const retry = jest.fn()
         await render(
             <ErrorState
@@ -174,7 +173,7 @@ describe('states', () => {
                 retry={{ label: 'Retry camera', onPress: retry }}
             />,
         )
-        expect(style(screen.getByTestId('card-bar', hidden)).backgroundColor).toBe(lightColors.refuse)
+        expect(screen.queryByTestId('card-bar', hidden)).toBeNull()
         expect(screen.getByRole('alert')).toBeTruthy()
         const button = screen.getByRole('button', { name: 'Retry camera' })
         expect(style(button).backgroundColor).toBe(lightColors.accent)

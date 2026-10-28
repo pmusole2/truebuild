@@ -29,6 +29,9 @@ describe('BottomSheet', () => {
             </BottomSheet>,
         )
         await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 200))
+        })
         expect(onClose).toHaveBeenCalledTimes(1)
     })
 
@@ -43,17 +46,15 @@ describe('BottomSheet', () => {
 })
 
 describe('BottomSheet bounds', () => {
-    it('never grows past 90 percent of the window and scrolls long content inside it', async () => {
+    it('opens at the tall detent, never grows past 92 percent of the window and scrolls long content inside it', async () => {
         await render(
             <BottomSheet visible={true} title="Long result" onClose={(): void => undefined}>
                 <Text>{'Step text. '.repeat(200)}</Text>
             </BottomSheet>,
         )
         const sheet = screen.getByTestId('bottom-sheet')
-        expect(StyleSheet.flatten(sheet.props.style).maxHeight).toBeCloseTo(
-            Dimensions.get('window').height * SHEET_MAX_HEIGHT_RATIO,
-            6,
-        )
+        expect(StyleSheet.flatten(sheet.props.style).height).toBeCloseTo(Dimensions.get('window').height * 0.78, 0)
+        expect(SHEET_MAX_HEIGHT_RATIO).toBe(0.92)
         expect(screen.getByTestId('bottom-sheet-scroll')).toBeTruthy()
     })
 

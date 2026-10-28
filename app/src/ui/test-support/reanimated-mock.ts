@@ -8,6 +8,7 @@ export const spies = {
     withRepeat: jest.fn((animation: number, _repetitions?: number, _reverse?: boolean): number => animation),
     withTiming: jest.fn((toValue: number, _config?: { duration?: number }): number => toValue),
     withSequence: jest.fn((...values: number[]): number => values[values.length - 1] ?? 0),
+    withSpring: jest.fn((toValue: number, _config?: object): number => toValue),
     cancelAnimation: jest.fn((_value: unknown): void => undefined),
 }
 
@@ -52,6 +53,6 @@ export const Easing = {
     out: <T>(easing: T): T => easing,
 }
 
-export const { withRepeat, withTiming, withSequence, cancelAnimation } = spies
+export const { withRepeat, withTiming, withSequence, withSpring, cancelAnimation } = spies
 
 export default { View, createAnimatedComponent }
