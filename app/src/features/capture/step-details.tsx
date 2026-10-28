@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import { View } from 'react-native'
 import { stepEvidenceRequirements, type ManualSession, type SourceRef } from '@truebuild/contracts'
 import { Stack } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
@@ -47,13 +48,26 @@ export function StepDetails({
                     part.quantity.state === 'known'
                         ? `${part.quantity.value} of these`
                         : plainFact(factText(part.quantity, String))
+                const basis = part.quantityBasis
+                const earlier =
+                    basis?.kind === 'carried_over'
+                        ? session.reviewedSteps.find((candidate) => candidate.stepId === basis.stepId)
+                        : undefined
                 const carried =
-                    part.quantityBasis?.kind === 'carried_over'
-                        ? ` Same count as an earlier step.`
-                        : part.quantityBasis?.kind === 'user_supplied'
-                          ? ' You gave this count.'
+                    basis?.kind === 'carried_over'
+                        ? ` Same count as step ${earlier?.order ?? 'before'}.`
+                        : basis?.kind === 'user_supplied'
+                          ? ' This one is supplied by you.'
                           : ''
-                return <Body key={part.partId}>{`${name}: ${quantity}.${carried}`}</Body>
+                const basisPages = basis === null || basis === undefined ? [] : pageNumbers(session, basis.sourceRefs)
+                return (
+                    <View key={part.partId}>
+                        <Body>{`${name}: ${quantity}.${carried}`}</Body>
+                        {basisPages.length === 0 ? null : (
+                            <Caption>{`Count from ${basisPages.length === 1 ? 'page' : 'pages'} ${basisPages.join(', ')}.`}</Caption>
+                        )}
+                    </View>
+                )
             })}
             {required.orientation || step.orientation.state === 'known' ? (
                 <Body>{`Which way it faces: ${plainFact(factText(step.orientation, (value) => value.description))}`}</Body>
@@ -62,9 +76,10 @@ export function StepDetails({
                 <Body>{`How it joins: ${plainFact(factText(step.connection, (value) => value.description))}`}</Body>
             ) : null}
             {step.alternatives?.map((alternative) => (
-                <Body
-                    key={alternative.alternativeId}
-                >{`${alternative.alternativeId === step.selectedAlternativeId ? 'Your way' : 'Another way'}: ${alternative.title}. ${alternative.description}`}</Body>
+                <View key={alternative.alternativeId}>
+                    <Body>{`${alternative.alternativeId === step.selectedAlternativeId ? 'Chosen way' : 'Another way'}: ${alternative.title}. ${alternative.description}`}</Body>
+                    <Caption>{`From ${pageNumbers(session, alternative.sourceRefs).length === 1 ? 'page' : 'pages'} ${pageNumbers(session, alternative.sourceRefs).join(', ')} of your manual.`}</Caption>
+                </View>
             ))}
             {step.visibleChecks.map((check, position) => (
                 <Body

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
-import { LibraryScreen } from './library-screen'
+import { collapseProgress, COLLAPSE_DISTANCE, LibraryScreen } from './library-screen'
 import type { WorkflowState } from './controller'
 import type { WorkflowController } from './workflow-types'
 
@@ -23,38 +23,39 @@ jest.mock(
 async function setup(
     id: WorkflowPreviewCase,
     patch: Partial<WorkflowState> = {},
-    onOpenSettings?: () => void,
 ): Promise<{ createManual: jest.Mock; open: jest.Mock; restore: jest.Mock }> {
     const { state } = workflowPreviewFixture(id)
     const createManual = jest.fn(async (): Promise<void> => undefined)
     const open = jest.fn(async (): Promise<void> => undefined)
     const restore = jest.fn(async (): Promise<void> => undefined)
     const controller: WorkflowController = { ...INERT_WORKFLOW_CONTROLLER, createManual, open, restore }
-    await render(
-        <LibraryScreen state={{ ...state, ...patch }} controller={controller} onOpenSettings={onOpenSettings} />,
-    )
+    await render(<LibraryScreen state={{ ...state, ...patch }} controller={controller} />)
     return { createManual, open, restore }
 }
 
 describe('first run', () => {
-    it('sets out the three stages without seeding a demo or promising results', async () => {
+    it('says one thing, with Add manual as the one primary, and keeps How it works behind a quiet link', async () => {
         await setup('home-empty')
-        expect(screen.getByText('No manuals yet.')).toBeTruthy()
-        expect(screen.getByLabelText('Step 1, Not started: Photograph your manual pages')).toBeTruthy()
-        expect(screen.getByLabelText('Step 2, Not started: Confirm the facts read from them')).toBeTruthy()
-        expect(screen.getByLabelText('Step 3, Not started: Follow guided assembly and check steps')).toBeTruthy()
-        expect(screen.getByText("Follow one step at a time, with your manual's own pages beside you.")).toBeTruthy()
+        expect(screen.getByText('Build furniture with step-by-step help.')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
         expect(screen.queryByText('Use sample manual')).toBeNull()
+        // The explanation is not on the surface; it opens from the quiet link and from More.
+        expect(screen.queryByText('Scan. Photograph the pages of your paper manual.')).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'How it works' }))
+        const more = within(screen.getByTestId('more-sheet'))
+        for (const verb of ['Scan', 'Look', 'Next', 'Ask']) {
+            expect(more.getByText(new RegExp(`^${verb}\\. `, 'u'))).toBeTruthy()
+        }
     })
 
-    it('does not show the outline over a retained but unreadable library, loading, or saved manuals', async () => {
+    it('does not show the first-run line over a retained but unreadable library, loading, or saved manuals', async () => {
         for (const [id, patch] of [
             ['home-error', {}],
             ['home-loading', {}],
             ['home-populated', {}],
         ] as const) {
             await setup(id, patch)
-            expect(screen.queryByText('How it works')).toBeNull()
+            expect(screen.queryByText('Build furniture with step-by-step help.')).toBeNull()
             await screen.unmount()
         }
     })
@@ -68,31 +69,47 @@ describe('first run', () => {
 })
 
 describe('Add manual placement', () => {
-    it('anchors the action in a dock outside the scroll at a normal height', async () => {
+    it('anchors the action in the fixed bar outside the scroll at a normal height', async () => {
         await setup('home-empty')
-        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        expect(within(screen.getByTestId('bottom-bar')).getByRole('button', { name: 'Add manual' })).toBeTruthy()
         expect(within(screen.getByTestId('library-scroll')).queryByRole('button', { name: 'Add manual' })).toBeNull()
     })
 
     it.each([
         ['a short phone', { width: 320, height: 568, fontScale: 1 }],
         ['large system text', { width: 390, height: 844, fontScale: 2 }],
-    ])('keeps the title, content and action in one reachable scroll with %s', async (_label, dimensions) => {
+    ])('keeps the large title in the scroll and the action in the bar with %s', async (_label, dimensions) => {
         Object.assign(mockWindow, dimensions)
-        await setup('home-empty', {}, (): void => undefined)
-        const scroll = within(screen.getByTestId('library-scroll'))
-        expect(scroll.getByText('Your manuals')).toBeTruthy()
-        expect(scroll.getByText('No manuals yet.')).toBeTruthy()
-        expect(scroll.getByRole('button', { name: 'Settings' })).toBeTruthy()
-        expect(scroll.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        await setup('home-empty')
+        expect(within(screen.getByTestId('library-scroll')).getByText('TrueBuild')).toBeTruthy()
+        expect(within(screen.getByTestId('bottom-bar')).getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'More' })).toBeTruthy()
+    })
+
+    it('draws no large title in the scroll when the native iOS header owns it', async () => {
+        const { state } = workflowPreviewFixture('home-empty')
+        await render(
+            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="native" />,
+        )
+        expect(screen.queryByTestId('collapsing-title')).toBeNull()
+        expect(screen.queryByTestId('inline-header')).toBeNull()
+    })
+})
+
+describe('collapsing title', () => {
+    it('is fully open at rest, fully collapsed after the collapse distance, and proportional between', () => {
+        expect(collapseProgress(0)).toBe(0)
+        expect(collapseProgress(COLLAPSE_DISTANCE / 2)).toBe(0.5)
+        expect(collapseProgress(COLLAPSE_DISTANCE)).toBe(1)
+        expect(collapseProgress(COLLAPSE_DISTANCE * 3)).toBe(1)
+        expect(collapseProgress(-40)).toBe(0)
     })
 })
 
 describe('unavailable states', () => {
     it.each([
-        ['home-loading', {}, 'Available once your library has loaded.'],
-        ['home-error', {}, 'Adding is paused until the saved library is restored.'],
-        ['home-empty', { pending: 'Reading your pages…' }, 'Available when the current request finishes.'],
+        ['home-loading', {}, 'Your builds are opening.'],
+        ['home-empty', { pending: 'Reading your pages…' }, 'Wait for the current request to finish.'],
     ] as const)('%s disables Add manual, says why and never calls a controller', async (id, patch, hint) => {
         const { createManual, open, restore } = await setup(id, patch)
         expect(screen.getByRole('button', { name: 'Add manual' }).props.accessibilityState.disabled).toBe(true)
@@ -103,45 +120,84 @@ describe('unavailable states', () => {
         expect(restore).not.toHaveBeenCalled()
     })
 
-    it('labels the restoring state and reassures that saved data is untouched', async () => {
+    it('labels the restoring state in place', async () => {
         await setup('home-loading')
-        expect(screen.getByLabelText('Restoring local library…')).toBeTruthy()
-        expect(screen.getByText(/not changed while this loads/)).toBeTruthy()
-        expect(screen.queryByText('No manuals yet.')).toBeNull()
+        expect(screen.getByLabelText('Getting your builds ready.')).toBeTruthy()
+        expect(screen.queryByText('Build furniture with step-by-step help.')).toBeNull()
     })
 
-    it('explains an unreadable library plainly and leaves retry to the explicit control', async () => {
-        const { restore } = await setup('home-error')
-        expect(screen.getByText('Saved library unavailable')).toBeTruthy()
-        expect(screen.getByText(/Original local data is retained/)).toBeTruthy()
+    it('explains an unreadable library plainly, with one explicit Try again that is not pressed for the person', async () => {
+        const { restore, createManual } = await setup('home-error')
+        expect(
+            screen.getByText('We could not open your saved builds. Your photos are still on this phone.'),
+        ).toBeTruthy()
         expect(restore).not.toHaveBeenCalled()
+        expect(screen.queryByRole('button', { name: 'Add manual' })).toBeNull()
+        await fireEvent.press(screen.getAllByRole('button', { name: 'Try again' })[0]!)
+        expect(restore).toHaveBeenCalledTimes(1)
+        expect(createManual).not.toHaveBeenCalled()
     })
 })
 
 describe('saved manuals', () => {
-    it('opens a manual and reports progress as marked complete by the user, not as verified', async () => {
+    it('resumes a sole manual from one primary, and reports progress in plain steps, not as verified', async () => {
         const fixture = workflowPreviewFixture('home-populated')
         const total = fixture.entry.session.reviewedSteps.length
         const entry = {
             ...fixture.entry,
+            stepIndex: 1,
             completedStepIds: fixture.entry.session.reviewedSteps.slice(0, 1).map((s) => s.stepId),
         }
         const { open } = await setup('home-populated', { entries: [entry] })
         const title = fixture.entry.session.title
-        expect(screen.getByText(new RegExp(`${total} steps · 1 marked complete by you`))).toBeTruthy()
-        expect(screen.getByRole('progressbar', { name: `Steps you marked complete: 1 of ${total}` })).toBeTruthy()
-        expect(screen.queryByText(/verified/i)).toBeNull()
+        expect(screen.getByText(`Step 2 of ${total}`)).toBeTruthy()
+        expect(screen.getByRole('progressbar', { name: `Steps done: 1 of ${total}` })).toBeTruthy()
+        expect(screen.queryByText(/verified|facts confirmed|marked complete by you/i)).toBeNull()
+        // The primary resumes at the furthest stop; the card does the same.
+        await fireEvent.press(screen.getByRole('button', { name: 'Keep building' }))
+        expect(open).toHaveBeenLastCalledWith(entry.session.manualId, 'guide')
         await fireEvent.press(screen.getByRole('button', { name: `Open ${title}` }))
-        expect(open).toHaveBeenCalledWith(entry.session.manualId)
+        expect(open).toHaveBeenCalledTimes(2)
+        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
     })
 
-    it('invokes the optional settings callback and omits the control without it', async () => {
-        const onOpenSettings = jest.fn()
-        await setup('home-populated', {}, onOpenSettings)
-        await fireEvent.press(screen.getByRole('button', { name: 'Settings' }))
-        expect(onOpenSettings).toHaveBeenCalledTimes(1)
-        await screen.unmount()
+    it.each([
+        [
+            'no photos yet',
+            { pages: [], rawExtraction: null, reviewStatus: 'unreviewed' as const },
+            'Add photos',
+            'pages',
+        ],
+        ['pages not yet read', { rawExtraction: null, reviewStatus: 'unreviewed' as const }, 'Add photos', 'pages'],
+        ['questions left', { reviewStatus: 'unreviewed' as const }, 'Answer a few questions', 'overview'],
+    ])('names the next stop plainly for a manual with %s', async (_name, patch, label, route) => {
+        const fixture = workflowPreviewFixture('home-populated')
+        const entry = {
+            ...fixture.entry,
+            session: { ...fixture.entry.session, ...patch },
+        }
+        const { open } = await setup('home-populated', { entries: [entry] })
+        await fireEvent.press(screen.getByRole('button', { name: label }))
+        expect(open).toHaveBeenCalledWith(entry.session.manualId, route)
+    })
+
+    it('keeps several manuals as rows with Add manual as the one primary', async () => {
+        const fixture = workflowPreviewFixture('home-populated')
+        const second = { ...fixture.entry, session: { ...fixture.entry.session, manualId: 'second', title: 'Second' } }
+        const { open } = await setup('home-populated', { entries: [fixture.entry, second] })
+        expect(screen.getAllByTestId('manual-card')).toHaveLength(2)
+        expect(screen.queryByRole('button', { name: 'Keep building' })).toBeNull()
+        expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
+        await fireEvent.press(screen.getByRole('button', { name: 'Open Second' }))
+        expect(open).toHaveBeenCalledWith('second', 'guide')
+    })
+
+    it('puts settings and the discreet judge entry in More, one tap away', async () => {
         await setup('home-populated')
-        expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull()
+        expect(screen.queryByText('What leaves this phone')).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+        const more = within(screen.getByTestId('more-sheet'))
+        expect(more.getByText('What leaves this phone')).toBeTruthy()
+        expect(more.getByTestId('judge-entry')).toBeTruthy()
     })
 })

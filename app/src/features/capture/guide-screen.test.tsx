@@ -342,11 +342,11 @@ describe('results', () => {
 
     it('keeps model names and notes out of More until About this check is opened', async () => {
         const fixture = workflowPreviewFixture('guide-pass')
-        const check = { ...fixture.state.check!, model: 'synthetic-model-1', modelNotes: ['Synthetic note.'] }
+        const check = { ...fixture.state.check!, model: 'muse-spark-1.3' as const, modelNotes: ['Synthetic note.'] }
         await setup('guide-pass', { state: { check }, more: true })
-        expect(more().queryByText('Model: synthetic-model-1')).toBeNull()
+        expect(more().queryByText('Model: muse-spark-1.3')).toBeNull()
         await fireEvent.press(screen.getByTestId('judge-entry'))
-        expect(screen.getByText('Model: synthetic-model-1')).toBeTruthy()
+        expect(screen.getByText('Model: muse-spark-1.3')).toBeTruthy()
         expect(screen.getByText('Model note: Synthetic note.')).toBeTruthy()
     })
 })

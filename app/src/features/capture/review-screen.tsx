@@ -59,7 +59,8 @@ export function OverviewScreen({
     const canConfirm = reviewedSession(session) !== null
     const busy = state.pending !== null || state.storageReadOnly
     const position = current === undefined ? 0 : total - questions.length + questions.indexOf(current) + 1
-    const noRead = session.rawExtraction === null
+    // Nothing has been read yet: no extraction and no steps. (A session that already carries steps is shown as it is.)
+    const noRead = session.rawExtraction === null && session.reviewedSteps.length === 0
     const unreadable = current !== undefined && current.step.sourceRefs.length === 0
 
     let sentence: string

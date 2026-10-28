@@ -199,7 +199,7 @@ describe('quick check', () => {
     it('opens a tapped page thumbnail full width and closes it, leaving Start building untouched', async () => {
         const { state, entry } = workflowPreviewFixture('review-ready')
         const page = entry.session.pages[0]!
-        entry.session.pages = [page, { ...page, pageId: 'second-page' }]
+        entry.session.pages = [page, { ...page, pageId: 'second-page', assetId: 'second-asset' }]
         state.pageUris = { ...state.pageUris, 'second-page': state.pageUris[page.pageId]! }
         await render(<OverviewScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />)
         const start = (): unknown =>

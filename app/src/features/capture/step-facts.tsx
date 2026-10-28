@@ -22,54 +22,6 @@ import { ManualImage } from './page-media'
 
 export { factText } from './fact-text'
 
-export function StepFacts({
-    session,
-    index,
-    showHeading = true,
-}: {
-    session: ManualSession
-    index: number
-    // A review card already shows the step's order and title above the opened facts.
-    showHeading?: boolean
-}): ReactElement {
-    const step = session.reviewedSteps[index]
-    if (step === undefined) {
-        return <Body tone="muted">No extracted steps yet.</Body>
-    }
-    const required = stepEvidenceRequirements(step)
-    return (
-        <Stack gap="xs">
-            {showHeading ? <Heading>{`${step.order}. ${step.title}`}</Heading> : null}
-            {step.parts.map((part) => (
-                <View key={part.partId}>
-                    <Body>{`${part.partId}: ${quantityText(part, session)}`}</Body>
-                    {part.quantityBasis == null ? null : (
-                        <CitationLabels refs={part.quantityBasis.sourceRefs} session={session} label="Quantity basis" />
-                    )}
-                </View>
-            ))}
-            {required.orientation || step.orientation.state === 'known' ? (
-                <Body>{`Orientation: ${factText(step.orientation, (value) => value.description)}`}</Body>
-            ) : null}
-            {required.connection || step.connection.state === 'known' ? (
-                <Body>{`Connection: ${factText(step.connection, (value) => value.description)}`}</Body>
-            ) : null}
-            {step.alternatives?.map((alternative) => (
-                <View key={alternative.alternativeId}>
-                    <Body>{`${alternative.alternativeId === step.selectedAlternativeId ? 'Chosen path' : 'Other path'}: ${alternative.title} — ${alternative.description}`}</Body>
-                    <CitationLabels refs={alternative.sourceRefs} session={session} label="Alternative" />
-                </View>
-            ))}
-            {step.visibleChecks.map((check) => (
-                <Body key={check.checkId}>{`Visible check: ${factText(check.description, String)}`}</Body>
-            ))}
-            {step.correction?.actions.map((action) => (
-                <Body key={action.actionId}>{`Correction: ${action.instruction}`}</Body>
-            ))}
-        </Stack>
-    )
-}
-
 /**
  * What to show the camera: one line, in the step's own words. The first known visible check leads because it is what the
  * photo is judged against; a known orientation stands in when the step has no known check. Unknown facts are not turned
@@ -170,26 +122,6 @@ function quantityText(part: PartRequirement, session?: ManualSession): string {
         return factText(part.quantity, String)
     }
     return `Quantity basis: ${part.quantityBasis.kind === 'user_supplied' ? 'supplied by you' : 'not specified by the manual'}`
-}
-
-function CitationLabels({
-    refs,
-    session,
-    label,
-}: {
-    refs: readonly SourceRef[]
-    session: ManualSession
-    label: string
-}): ReactElement {
-    return (
-        <>
-            {refs.map((ref, index) => (
-                <Caption
-                    key={index}
-                >{`${label} cited page ${session.pages.findIndex((page) => page.pageId === ref.pageId) + 1}`}</Caption>
-            ))}
-        </>
-    )
 }
 
 /** Server provenance only. Notes remain bounded plain text and never change a verdict or answer's meaning. */

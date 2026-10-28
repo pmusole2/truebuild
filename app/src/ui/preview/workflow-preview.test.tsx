@@ -33,12 +33,12 @@ it('selects actual workflow screens and changes appearance from local controls',
     expect(screen.getByTestId('guide-screen')).toBeTruthy()
 })
 
-it('opens the real guide instructions sheet and keeps every controller action inert', async () => {
+it('opens the real More sheet and keeps every controller action inert', async () => {
     const fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Preview must never fetch'))
     try {
         await render(<WorkflowPreview initialCase="guide-instructions" />)
-        await fireEvent.press(screen.getByRole('button', { name: 'Step instructions' }))
-        expect(screen.getByText('Step 1 instructions')).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+        expect(screen.getByText('More about this step')).toBeTruthy()
         for (const action of Object.values(INERT_WORKFLOW_CONTROLLER)) {
             if (typeof action === 'function') {
                 await action()
@@ -56,8 +56,8 @@ it('renders camera recovery through the pure stage without opening hardware or s
         await render(<WorkflowPreview initialCase="camera-denied" />)
         expect(screen.getByTestId('camera-screen')).toBeTruthy()
         await fireEvent.press(screen.getByRole('button', { name: 'Allow camera' }))
-        await fireEvent.press(screen.getByRole('button', { name: 'Open device settings' }))
-        await fireEvent.press(screen.getByRole('button', { name: 'Back' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Open Settings' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
         expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
         fetchSpy.mockRestore()
@@ -76,23 +76,21 @@ it('keeps settings inspection inert, including the device settings action', asyn
     }
 })
 
-it('wires the camera preview guide exactly as the app does: one cue over the viewfinder, every fact in the sheet', async () => {
+it('wires the camera preview guide exactly as the app does: one cue over the viewfinder, every fact in More', async () => {
     await render(<WorkflowPreview initialCase="camera-check" />)
-    const panel = within(screen.getByTestId('assembly-panel'))
-    // One bounded cue: the first visible check. The orientation, connection and diagram are not repeated in the panel.
-    const cue = panel.getByText('Visible check: The inward-facing groove is visible.')
-    expect(cue.props.numberOfLines).toBe(2)
-    expect(panel.queryByText(/^Orientation: /)).toBeNull()
-    expect(panel.queryByText('Connection: Keep the panel free before seating the divider.')).toBeNull()
-    expect(panel.queryByText('Current step instructions and diagram')).toBeNull()
-    expect(screen.getByLabelText('Current step instructions and diagram')).toBe(screen.getByTestId('assembly-panel'))
-    expect(screen.queryByTestId('diagram')).toBeNull()
-    // The shutter and the whole privacy hint stay readable beneath the viewfinder.
+    // One line to aim by: the first visible check, in the step's own words. Nothing else sits over the viewfinder.
+    const cue = within(screen.getByTestId('camera-cue')).getByText('The inward-facing groove is visible.')
+    expect(cue.props.numberOfLines).toBe(1)
+    expect(screen.queryByTestId('assembly-panel')).toBeNull()
+    expect(screen.queryByText(/^Frame the current assembly step/)).toBeNull()
+    expect(screen.queryByText(/frozen photo/iu)).toBeNull()
+    expect(screen.getByText('Step 1 of 2')).toBeTruthy()
+    expect(screen.getByTestId('camera-thumbnail')).toBeTruthy()
+    // The shutter stays readable beneath the viewfinder; the full step is one tap away.
     expect(screen.getByRole('button', { name: 'Capture photo' })).toBeTruthy()
-    expect(screen.getByText(/^Frame the current assembly step\. A check sends the frozen photo/)).toBeTruthy()
-    await fireEvent.press(panel.getByRole('button', { name: 'All step facts' }))
-    expect(screen.getByText('Orientation: Groove faces inward toward the divider.')).toBeTruthy()
-    expect(screen.getByText('Visible check: The inward-facing groove is visible.')).toBeTruthy()
-    expect(screen.getByText('Connection: Keep the panel free before seating the divider.')).toBeTruthy()
+    await fireEvent.press(screen.getByRole('button', { name: 'Step details' }))
+    expect(screen.getByText(/^Which way it faces: Groove faces inward toward the divider\./u)).toBeTruthy()
+    expect(screen.getByText('1. Look for: The inward-facing groove is visible.')).toBeTruthy()
+    expect(screen.getByText('How it joins: Keep the panel free before seating the divider.')).toBeTruthy()
     expect(screen.getByText('Expected diagram · page 1')).toBeTruthy()
 })
