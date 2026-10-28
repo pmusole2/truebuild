@@ -1,10 +1,12 @@
 import { render, screen } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
+import Svg from 'react-native-svg'
+import type { CheckResult } from '@truebuild/contracts'
 import { FeedbackProvider } from '../../ui/feedback'
 import { spies } from '../../ui/test-support/reanimated-mock'
 import { motion } from '../../theme/tokens'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
-import { AnswerPanel, CheckPanel } from './result-panels'
+import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey } from './result-panels'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 beforeEach(() => {
@@ -90,4 +92,40 @@ it('cancels result motion when the preference changes without replaying notifica
     await rerender(view(true))
     expect(spies.cancelAnimation).toHaveBeenCalled()
     expect(trigger).toHaveBeenCalledTimes(1)
+})
+
+describe('passPulseKey', () => {
+    // Synthetic region: no recorded or live model output backs it.
+    const region = { x: 0.2, y: 0.3, width: 0.4, height: 0.25 }
+    const passWith = (observedRegion: typeof region | null): CheckResult => ({
+        ...workflowPreviewFixture('guide-pass').state.check!,
+        observedRegion,
+    })
+
+    it('keys a pass that returned a grounded region to its capture and region', () => {
+        const key = passPulseKey(passWith(region), 'capture-1')
+        expect(key).toEqual(expect.any(String))
+        expect(passPulseKey(passWith(region), 'capture-2')).not.toBe(key)
+        expect(passPulseKey(passWith({ ...region, x: 0.25 }), 'capture-1')).not.toBe(key)
+        expect(passPulseKey({ ...passWith(region), modelNotes: ['metadata only'] }, 'capture-1')).toBe(key)
+    })
+
+    it('never invents a pulse for a pass without a returned region', () => {
+        expect(passPulseKey(passWith(null), 'capture-1')).toBeNull()
+    })
+
+    it.each(['refuse', 'cannot_verify'] as const)('does not pulse a %s even with a region', (decision) => {
+        expect(passPulseKey({ ...passWith(region), decision }, 'capture-1')).toBeNull()
+    })
+})
+
+it('keeps the grounded highlight on the exact rect it is given', async () => {
+    await render(
+        <FeedbackProvider reduceMotion>
+            <Svg width={300} height={200}>
+                <CheckHighlight rect={{ x: 5, y: 6, width: 70, height: 40 }} pulseKey={null} />
+            </Svg>
+        </FeedbackProvider>,
+    )
+    expect(screen.getByTestId('grounded-outline-line').props).toMatchObject({ x: 5, y: 6, width: 70, height: 40 })
 })

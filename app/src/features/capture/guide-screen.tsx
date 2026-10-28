@@ -22,7 +22,7 @@ import { AskSheet } from '../../ui/ask-sheet'
 import { space } from '../../theme/tokens'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
-import { AnswerPanel, CheckHighlight, CheckPanel, RefusalComparison } from './result-panels'
+import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey, RefusalComparison } from './result-panels'
 import { WorkflowNotice } from './screen-chrome'
 import { SourceDiagrams, StepFacts, StepSummary } from './step-facts'
 import type { WorkflowScreenProps } from './workflow-types'
@@ -80,6 +80,11 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
     const check = state.check
     const hasResult = check !== null || state.answer !== null
     const refusal = check !== null && check.decision === 'refuse' ? check : null
+    // Only a pass's own returned region pulses; an answer's region is outlined statically.
+    const pulseKey =
+        state.answer === null && check !== null && state.capture !== null
+            ? passPulseKey(check, state.capture.binding.captureId)
+            : null
     const target = state.target
     const targetSummary =
         target === null
@@ -208,13 +213,12 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                             observation={state.capture.observation}
                             caption="Frozen photo for this step. New photos clear prior results."
                             onTapPoint={pointTap}
-                            overlay={
-                                highlight === null
-                                    ? undefined
-                                    : (displayed): ReactNode => (
-                                          <CheckHighlight rect={boxOnDisplay(highlight, displayed)} />
-                                      )
-                            }
+                            overlay={(displayed): ReactNode => (
+                                <CheckHighlight
+                                    rect={highlight === null ? null : boxOnDisplay(highlight, displayed)}
+                                    pulseKey={pulseKey}
+                                />
+                            )}
                         />
                     )}
                     {hasResult ? <StepSummary session={session} index={entry.stepIndex} /> : null}

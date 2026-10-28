@@ -1,5 +1,9 @@
+import type { ReactElement } from 'react'
+import type { CheckResult } from '@truebuild/contracts'
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { Keyboard, type KeyboardEvent } from 'react-native'
+import { FeedbackProvider } from '../../ui/feedback'
+import { spies as animationSpies } from '../../ui/test-support/reanimated-mock'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
 import { GuideScreen } from './guide-screen'
@@ -284,5 +288,125 @@ describe('question composer', () => {
     it('stays blocked when the controller cannot compose', async () => {
         await setup('guide-answer', { controller: { canCompose: false } })
         expect(disabled('Send question')).toBe(true)
+    })
+})
+
+describe('grounded region overlay', () => {
+    // Synthetic region: no recorded or live model output backs it.
+    const region = { x: 0.2, y: 0.3, width: 0.4, height: 0.25 }
+    const trigger = jest.fn()
+
+    beforeEach(() => {
+        trigger.mockClear()
+        for (const spy of Object.values(animationSpies)) spy.mockClear()
+    })
+
+    // FrozenPhoto draws its overlay only after its frame is measured. The frame has no test id, so the layout event
+    // goes to the first child of the element that holds the caption, which is the measured frame.
+    async function measurePhoto(): Promise<void> {
+        const caption = screen.getByText('Frozen photo for this step. New photos clear prior results.')
+        const frame = caption.parent?.children[0]
+        if (frame === undefined || typeof frame === 'string') throw new Error('Frozen photo frame not found')
+        await fireEvent(frame, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 200 } } })
+    }
+
+    function view(fixtureId: WorkflowPreviewCase, patch: Partial<WorkflowState>): ReactElement {
+        const fixture = workflowPreviewFixture(fixtureId)
+        const state = { ...fixture.state, ...patch }
+        return (
+            <FeedbackProvider reduceMotion={false} haptics={{ trigger }}>
+                <GuideScreen state={state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />
+            </FeedbackProvider>
+        )
+    }
+
+    function passWith(observedRegion: typeof region | null, patch: Partial<CheckResult> = {}): CheckResult {
+        return { ...workflowPreviewFixture('guide-pass').state.check!, observedRegion, ...patch }
+    }
+
+    it('outlines the returned region on the frozen photo and pulses it once for a pass', async () => {
+        await render(view('guide-pass', { check: passWith(region) }))
+        await measurePhoto()
+        expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+        expect(screen.getByTestId('grounded-outline-pulse')).toBeTruthy()
+        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+    })
+
+    it('draws nothing and pulses nothing for a pass that returned no region', async () => {
+        await render(view('guide-pass', { check: passWith(null) }))
+        await measurePhoto()
+        expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
+    })
+
+    it('does not pulse a region returned with an answer, even beside a passing check', async () => {
+        const answer = { ...workflowPreviewFixture('guide-answer').state.answer!, observedRegion: region }
+        await render(view('guide-photo', { check: passWith(region), answer }))
+        await measurePhoto()
+        expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
+    })
+
+    it('stays static under Reduce Motion', async () => {
+        const fixture = workflowPreviewFixture('guide-pass')
+        const state = { ...fixture.state, check: passWith(region) }
+        await render(
+            <FeedbackProvider reduceMotion haptics={{ trigger }}>
+                <GuideScreen state={state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />
+            </FeedbackProvider>,
+        )
+        await measurePhoto()
+        expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
+    })
+
+    it('neither re-pulses nor re-notifies on a metadata-only rerender of the same result', async () => {
+        const { rerender } = await render(view('guide-pass', { check: passWith(region) }))
+        await measurePhoto()
+        await rerender(view('guide-pass', { check: passWith(region, { modelNotes: ['Metadata only.'] }) }))
+        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(trigger).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not replay the same pass after a regionless answer is cleared', async () => {
+        const check = passWith(region)
+        const answer = { ...workflowPreviewFixture('guide-answer').state.answer!, observedRegion: null }
+        const { rerender } = await render(view('guide-pass', { check }))
+        await measurePhoto()
+        await rerender(view('guide-pass', { check, answer }))
+        expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
+        await rerender(view('guide-pass', { check, answer: null }))
+        expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(trigger.mock.calls.filter(([kind]) => kind === 'success')).toHaveLength(1)
+    })
+
+    it('carries no region into a new capture and pulses the next pass for its own capture', async () => {
+        const first = workflowPreviewFixture('guide-pass').state.capture!
+        const second = { ...first, binding: { ...first.binding, captureId: 'synthetic-capture-2' } }
+        const { rerender } = await render(view('guide-pass', { check: passWith(region), capture: first }))
+        await measurePhoto()
+        await rerender(view('guide-pass', { check: null, capture: second }))
+        expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
+        await rerender(view('guide-pass', { check: passWith(region), capture: second }))
+        await measurePhoto()
+        expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+        expect(animationSpies.withSequence).toHaveBeenCalledTimes(2)
+    })
+
+    it('leaves the refusal comparison and its tappable photo pane alone, with no pulse', async () => {
+        const fixture = workflowPreviewFixture('guide-refuse')
+        await render(
+            <FeedbackProvider reduceMotion={false}>
+                <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />
+            </FeedbackProvider>,
+        )
+        expect(screen.getByTestId('photo-tap')).toBeTruthy()
+        expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
     })
 })

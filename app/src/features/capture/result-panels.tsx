@@ -1,16 +1,15 @@
 import type { ReactElement } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
-import { Rect } from 'react-native-svg'
 import type { CheckResult, ManualSession, QuestionResult } from '@truebuild/contracts'
 import type { Point } from '../assembly/frame-geometry'
+import { GroundedRegionOutline } from '../assembly/grounded-overlays'
 import { Card } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
 import { ComparisonFrame, type ComparisonPane } from '../../ui/comparison'
 import { ResultSheet } from '../../ui/result-sheet'
 import { ResultReveal } from '../../ui/result-reveal'
-import { useTheme } from '../../theme/theme'
-import { radius } from '../../theme/tokens'
 import type { WorkflowState } from './controller'
+import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { ModelProvenance, SourceDiagrams } from './step-facts'
 
@@ -134,23 +133,22 @@ export function RefusalComparison({
     return <ComparisonFrame diagram={diagram} photo={photo} />
 }
 
+/**
+ * Pulse identity for a grounded pass: tied to its capture and the exact returned region, so notes or other metadata
+ * never replay it. Only a pass that actually returned a region is keyed; a pass without one never invents a region.
+ */
+export function passPulseKey(check: CheckResult, captureId: string): string | null {
+    const region = check.decision === 'pass' ? groundedRegion(check) : null
+    return region === null ? null : `pass:${captureId}:${region.x}:${region.y}:${region.width}:${region.height}`
+}
+
 /** The grounded region, drawn as an SVG child because FrozenPhoto places its overlay inside an Svg. */
 export function CheckHighlight({
     rect,
+    pulseKey = null,
 }: {
-    rect: { x: number; y: number; width: number; height: number }
+    rect: { x: number; y: number; width: number; height: number } | null
+    pulseKey?: string | null
 }): ReactElement {
-    const { colors } = useTheme()
-    return (
-        <Rect
-            x={rect.x}
-            y={rect.y}
-            width={rect.width}
-            height={rect.height}
-            rx={radius.sm}
-            fill="none"
-            stroke={colors.accent}
-            strokeWidth={3}
-        />
-    )
+    return <GroundedRegionOutline rect={rect} pulseKey={pulseKey} />
 }
