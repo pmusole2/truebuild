@@ -11,9 +11,24 @@ import {
 import { stepPartChoices } from '../../features/assembly/question-state'
 import { partGuidance } from '../../features/capture/part-regions'
 import { SYNTHETIC_STOOL_LABEL, syntheticStoolManual } from './synthetic-stool-manual'
-import { WORKFLOW_PREVIEW_CASES, workflowPreviewFixture } from './workflow-fixtures'
+import {
+    WORKFLOW_PREVIEW_CASES,
+    WORKFLOW_PREVIEW_CLASSIFICATION,
+    workflowPreviewFixture,
+    workflowPreviewManifest,
+} from './workflow-fixtures'
 
 describe('synthetic workflow preview fixtures', () => {
+    it('classifies every case explicitly as an inert synthetic native fixture and never as production', () => {
+        const manifest = workflowPreviewManifest()
+        expect(manifest.map((entry) => entry.id)).toEqual(WORKFLOW_PREVIEW_CASES.map((preview) => preview.id))
+        for (const entry of manifest) {
+            expect(entry.classification, entry.id).toBe(WORKFLOW_PREVIEW_CLASSIFICATION)
+            expect(entry.production, entry.id).toBe(false)
+        }
+        expect(WORKFLOW_PREVIEW_CLASSIFICATION).toContain('not controller/IO/navigation proof')
+    })
+
     it('keeps every selectable workflow state valid and all imagery inline', () => {
         expect(WORKFLOW_PREVIEW_CASES).toHaveLength(39)
         for (const preview of WORKFLOW_PREVIEW_CASES) {

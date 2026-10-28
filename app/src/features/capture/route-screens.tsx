@@ -13,12 +13,22 @@ import type { WorkflowState } from './controller'
 import { DoneScreen } from './done-screen'
 import { GuideScreen } from './guide-screen'
 import type { LibraryEntry } from './library'
-import { LibraryScreen, PinnedTitle } from './library-screen'
+import { LibraryScreen } from './library-screen'
 import { useWorkflowActions } from './native-routes'
 import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
 import { OverviewScreen, useQuickProgress } from './review-screen'
 import { HeaderButtons, useMoreState } from './screen-header'
+import {
+    ADD_TITLE,
+    checkTitle,
+    DONE_TITLE,
+    guideTitle,
+    headerStyleFor,
+    homeHeaderOptions,
+    READING_TITLE,
+    type HeaderStyle,
+} from './header-options'
 import { ScreenBody, TextRegion } from './screen-layout'
 import { stopFor, type Stop } from './plain-copy'
 import { stepAssemblyGuide } from './step-facts'
@@ -129,37 +139,9 @@ function Waiting({ route }: { route?: ManualRoute }): ReactElement {
     )
 }
 
-// Production headers are the platform's own title string. A custom two-line Text would be drawn, uncapped, inside the
-// fixed-height native bar and clip at the largest system text size; the platform title scales and truncates natively.
-// The title is also the human name the back control announces, in place of the raw route path.
-export const ADD_TITLE = 'Add manual'
-export const READING_TITLE = 'Reading'
-export const DONE_TITLE = 'Done'
-
-/** "Question 2 of 5" while a question is on screen, else "Quick check". */
-export function checkTitle(progressLabel: string | undefined): string {
-    return progressLabel ?? 'Quick check'
-}
-
-/** "Step 2 of 8": where the person is, which is what the header answers. */
-export function guideTitle(entry: LibraryEntry | undefined): string {
-    return entry === undefined ? 'Guide' : `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`
-}
-
-/** Colours the native header from the theme, so light and dark both read as one surface with the canvas. */
-export function useHeaderStyle(): {
-    headerStyle: { backgroundColor: string }
-    headerTintColor: string
-    headerShadowVisible: false
-    contentStyle: { backgroundColor: string }
-} {
-    const { colors } = useTheme()
-    return {
-        headerStyle: { backgroundColor: colors.canvas },
-        headerTintColor: colors.accentInk,
-        headerShadowVisible: false,
-        contentStyle: { backgroundColor: colors.canvas },
-    }
+/** Colours the native header from the theme. */
+export function useHeaderStyle(): HeaderStyle {
+    return headerStyleFor(useTheme().colors)
 }
 
 export function HomeRoute(): ReactElement {
@@ -168,22 +150,10 @@ export function HomeRoute(): ReactElement {
     const more = useMoreState()
     const scrollY = useSharedValue(0)
     const { colors } = useTheme()
-    // iOS draws the real large title and collapses it natively; Android and web collapse the same title with Reanimated.
     const native = Platform.OS === 'ios'
     return (
         <>
-            <Stack.Screen
-                options={{
-                    title: 'TrueBuild',
-                    headerLargeTitleEnabled: native,
-                    headerLargeTitleShadowVisible: false,
-                    headerLargeStyle: { backgroundColor: colors.canvas },
-                    headerTitle: native
-                        ? undefined
-                        : (): ReactElement => <PinnedTitle scrollY={scrollY} title="TrueBuild" />,
-                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
-                }}
-            />
+            <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more })} />
             <LibraryScreen
                 state={state}
                 controller={controller}

@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
-import { INERT_WORKFLOW_CONTROLLER, WorkflowPreview } from './workflow-preview'
+import { INERT_WORKFLOW_CONTROLLER, WorkflowPreview, type NativeChrome } from './workflow-preview'
+import { useMoreState } from '../../features/capture/screen-header'
+import { HeaderButtons } from '../../features/capture/screen-header'
+import type { SharedValue } from 'react-native-reanimated'
+import type { ReactElement } from 'react'
 import { WORKFLOW_PREVIEW_BANNER } from './workflow-fixtures'
 import { Linking } from 'react-native'
 
@@ -96,4 +100,67 @@ it('wires the camera preview guide exactly as the app does: one cue over the vie
     expect(screen.getByText('1. Look for: The inward-facing groove is visible.')).toBeTruthy()
     expect(screen.getByText('How it joins: Keep the panel free before seating the divider.')).toBeTruthy()
     expect(screen.getByText('Expected diagram · page 1')).toBeTruthy()
+})
+
+describe('native chrome for hidden-controls captures', () => {
+    // Stands in for the gallery route: it owns the More control, and its header More opens the same control.
+    function Host({
+        id,
+    }: {
+        id: 'guide-instructions' | 'pages-populated' | 'camera-check' | 'home-populated'
+    }): ReactElement {
+        const more = useMoreState()
+        const native: NativeChrome = {
+            more,
+            scrollY: { value: 0 } as unknown as SharedValue<number>,
+            progress: {
+                questions: [],
+                current: undefined,
+                position: 0,
+                total: 0,
+                skipped: [],
+                skip: (): void => undefined,
+                unskip: (): void => undefined,
+                label: undefined,
+            },
+        }
+        return (
+            <>
+                <HeaderButtons more={more} />
+                <WorkflowPreview initialCase={id} showControls={false} native={native} />
+            </>
+        )
+    }
+
+    it.each(['guide-instructions', 'pages-populated', 'home-populated'] as const)(
+        'draws only the product screen for %s: no banner, no controls, no second header',
+        async (id) => {
+            await render(<Host id={id} />)
+            expect(screen.queryByText(/Synthetic visual preview/u)).toBeNull()
+            expect(screen.queryByRole('radio')).toBeNull()
+            expect(screen.queryByTestId('inline-header')).toBeNull()
+            expect(screen.getByTestId('workflow-preview')).toBeTruthy()
+        },
+    )
+
+    it("opens the screen's own real More sheet from the host header and keeps the state unchanged", async () => {
+        await render(<Host id="guide-instructions" />)
+        expect(screen.queryByTestId('more-sheet')).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+        expect(screen.getByTestId('more-sheet')).toBeTruthy()
+        expect(screen.getByText('More about this step', { exact: false })).toBeTruthy()
+    })
+
+    it('draws the camera full bleed with no gallery chrome around it', async () => {
+        await render(<Host id="camera-check" />)
+        expect(screen.getByTestId('camera-screen')).toBeTruthy()
+        expect(screen.queryByText(/Synthetic visual preview/u)).toBeNull()
+    })
+
+    it('keeps the banner, controls and inline header when the debug controls are visible', async () => {
+        await render(<WorkflowPreview initialCase="guide-pass" />)
+        expect(screen.getByText(WORKFLOW_PREVIEW_BANNER)).toBeTruthy()
+        expect(screen.getAllByRole('radio').length).toBeGreaterThan(0)
+        expect(screen.getByTestId('inline-header')).toBeTruthy()
+    })
 })

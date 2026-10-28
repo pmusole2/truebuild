@@ -55,6 +55,32 @@ export const WORKFLOW_PREVIEW_CASES = [
     { id: 'camera-preparing', label: 'Camera · preparing photo', group: 'Camera' },
 ] as const
 
+/**
+ * How every gallery case is classified in an evidence manifest. Each one renders real screens over canned state with an
+ * inert controller: it proves how a screen looks and lays out on a device, and nothing about the controller, storage,
+ * camera, network or navigation. Those are proven separately, by the production route and controller tests.
+ */
+export const WORKFLOW_PREVIEW_CLASSIFICATION = 'inert synthetic native fixture, not controller/IO/navigation proof'
+
+export type WorkflowPreviewManifestEntry = {
+    readonly id: string
+    readonly group: string
+    readonly label: string
+    readonly classification: typeof WORKFLOW_PREVIEW_CLASSIFICATION
+    readonly production: false
+}
+
+/** One manifest record per gallery case, each explicitly classified as a synthetic fixture and never as production. */
+export function workflowPreviewManifest(): readonly WorkflowPreviewManifestEntry[] {
+    return WORKFLOW_PREVIEW_CASES.map(({ id, group, label }) => ({
+        id,
+        group,
+        label,
+        classification: WORKFLOW_PREVIEW_CLASSIFICATION,
+        production: false,
+    }))
+}
+
 export type WorkflowPreviewCase = (typeof WORKFLOW_PREVIEW_CASES)[number]['id']
 export type WorkflowPreviewGroup = (typeof WORKFLOW_PREVIEW_CASES)[number]['group']
 

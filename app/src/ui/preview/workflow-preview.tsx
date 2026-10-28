@@ -1,7 +1,11 @@
 import { useState, type ReactElement } from 'react'
-import { ScrollView, StyleSheet, View } from 'react-native'
+import { Platform, ScrollView, StyleSheet, View } from 'react-native'
+import { StatusBar } from 'expo-status-bar'
+import type { SharedValue } from 'react-native-reanimated'
 import { CameraStage } from '../../features/capture/camera-stage'
 import { ManualImage } from '../../features/capture/page-media'
+import type { QuickProgress } from '../../features/capture/review-screen'
+import type { MoreControl } from '../../features/capture/screen-header'
 import { SettingsScreen } from '../../features/capture/settings-screen'
 import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
 import { stepAssemblyGuide } from '../../features/capture/step-facts'
@@ -68,14 +72,27 @@ export function workflowPreviewCase(value: unknown): WorkflowPreviewCase {
 }
 
 /** Development visual evidence only. Fixture selection remounts real screens so local drafts never cross states. */
+/**
+ * What a hosting route hands the screens so the gallery can sit under the app's real native Stack header. In this mode
+ * the gallery draws no banner, controls or second header, and the host's header More opens the screen's own More sheet.
+ */
+export type NativeChrome = {
+    readonly more: MoreControl
+    // Home's large-title collapse and Quick check's "Question N of M" live above the screen, as in the production routes.
+    readonly scrollY: SharedValue<number>
+    readonly progress: QuickProgress
+}
+
 export function WorkflowPreview({
     initialCase = 'home-empty',
     initialScheme = 'light',
     showControls = true,
+    native,
 }: {
     readonly initialCase?: WorkflowPreviewCase
     readonly initialScheme?: ColorScheme
     readonly showControls?: boolean
+    readonly native?: NativeChrome
 }): ReactElement {
     const [scheme, setScheme] = useState<ColorScheme>(initialScheme)
     const [selected, setSelected] = useState<WorkflowPreviewCase>(initialCase)
@@ -87,7 +104,8 @@ export function WorkflowPreview({
                     onScheme={setScheme}
                     selected={selected}
                     onSelect={setSelected}
-                    showControls={showControls}
+                    showControls={showControls && native === undefined}
+                    native={native}
                 />
             </ThemeProvider>
         </FeedbackProvider>
@@ -100,12 +118,14 @@ function PreviewFrame({
     selected,
     onSelect,
     showControls,
+    native,
 }: {
     readonly scheme: ColorScheme
     readonly onScheme: (scheme: ColorScheme) => void
     readonly selected: WorkflowPreviewCase
     readonly onSelect: (selected: WorkflowPreviewCase) => void
     readonly showControls: boolean
+    readonly native: NativeChrome | undefined
 }): ReactElement {
     const { colors } = useTheme()
     // The gallery runs inside the app, under the status bar, so its controls clear the top inset themselves.
@@ -117,6 +137,97 @@ function PreviewFrame({
         label: preview.label.split(' · ')[1]!,
     }))
 
+    const chrome = native === undefined ? {} : { chrome: 'native' as const, more: native.more }
+    const screenFor = (): ReactElement => (
+        <>
+            {selected === 'home-unavailable' ? (
+                <AppUnavailableScreen />
+            ) : selected === 'settings' ? (
+                <SettingsScreen state={state} onOpenDeviceSettings={doNothing} />
+            ) : state.route === 'camera' ? (
+                <CameraStage
+                    intent={{
+                        kind:
+                            selected === 'camera-page' ? 'page' : selected === 'camera-question' ? 'question' : 'check',
+                    }}
+                    guide={
+                        selected === 'camera-page'
+                            ? undefined
+                            : stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
+                    }
+                    presentation={
+                        cameraPreviewPresentation(selected) ?? {
+                            status: 'preview',
+                            media: (
+                                // Fixture pages are SVG, which the native Image cannot draw: ManualImage can.
+                                <ManualImage
+                                    uri={Object.values(state.pageUris)[0] ?? ''}
+                                    label="Synthetic camera preview"
+                                />
+                            ),
+                            shutter: (
+                                <ShutterButton
+                                    label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
+                                    disabled={selected === 'camera-preparing'}
+                                    busy={selected === 'camera-preparing'}
+                                    onPress={doNothing}
+                                />
+                            ),
+                        }
+                    }
+                    onCancel={doNothing}
+                    onRequestPermission={doNothing}
+                    onOpenSettings={doNothing}
+                    onRetry={doNothing}
+                />
+            ) : state.route === 'library' ? (
+                <LibraryScreen
+                    state={state}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                    {...chrome}
+                    {...(native === undefined
+                        ? {}
+                        : {
+                              largeTitle: Platform.OS === 'ios' ? ('native' as const) : ('content' as const),
+                              scrollY: native.scrollY,
+                          })}
+                />
+            ) : selected === 'done-finished' ? (
+                <DoneScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} {...chrome} />
+            ) : state.route === 'pages' && state.pending !== null && state.pending.startsWith('Reading') ? (
+                <ReadingScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
+            ) : state.route === 'pages' ? (
+                <PagesScreen
+                    state={state}
+                    entry={entry}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                    choosePages={doNothing}
+                    {...chrome}
+                />
+            ) : state.route === 'overview' ? (
+                <OverviewScreen
+                    state={state}
+                    entry={entry}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                    {...chrome}
+                    progress={native?.progress}
+                />
+            ) : (
+                <GuideScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} {...chrome} />
+            )}
+        </>
+    )
+    if (native !== undefined) {
+        // The camera is dark and full bleed whatever the appearance; every other screen follows the gallery's scheme.
+        return (
+            <View style={[styles.root, { backgroundColor: colors.canvas }]} testID="workflow-preview">
+                <StatusBar style={state.route === 'camera' || scheme === 'dark' ? 'light' : 'dark'} />
+                <View key={selected} style={styles.nativeDevice}>
+                    {screenFor()}
+                </View>
+            </View>
+        )
+    }
     return (
         <View style={[styles.root, { backgroundColor: colors.canvas }]} testID="workflow-preview">
             <View
@@ -167,68 +278,7 @@ function PreviewFrame({
                 ) : null}
             </View>
             <View key={selected} style={[styles.device, { borderColor: colors.border }]}>
-                {selected === 'home-unavailable' ? (
-                    <AppUnavailableScreen />
-                ) : selected === 'settings' ? (
-                    <SettingsScreen state={state} onOpenDeviceSettings={doNothing} />
-                ) : state.route === 'camera' ? (
-                    <CameraStage
-                        intent={{
-                            kind:
-                                selected === 'camera-page'
-                                    ? 'page'
-                                    : selected === 'camera-question'
-                                      ? 'question'
-                                      : 'check',
-                        }}
-                        guide={
-                            selected === 'camera-page'
-                                ? undefined
-                                : stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
-                        }
-                        presentation={
-                            cameraPreviewPresentation(selected) ?? {
-                                status: 'preview',
-                                media: (
-                                    // Fixture pages are SVG, which the native Image cannot draw: ManualImage can.
-                                    <ManualImage
-                                        uri={Object.values(state.pageUris)[0] ?? ''}
-                                        label="Synthetic camera preview"
-                                    />
-                                ),
-                                shutter: (
-                                    <ShutterButton
-                                        label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
-                                        disabled={selected === 'camera-preparing'}
-                                        busy={selected === 'camera-preparing'}
-                                        onPress={doNothing}
-                                    />
-                                ),
-                            }
-                        }
-                        onCancel={doNothing}
-                        onRequestPermission={doNothing}
-                        onOpenSettings={doNothing}
-                        onRetry={doNothing}
-                    />
-                ) : state.route === 'library' ? (
-                    <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} />
-                ) : selected === 'done-finished' ? (
-                    <DoneScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
-                ) : state.route === 'pages' && state.pending !== null && state.pending.startsWith('Reading') ? (
-                    <ReadingScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
-                ) : state.route === 'pages' ? (
-                    <PagesScreen
-                        state={state}
-                        entry={entry}
-                        controller={INERT_WORKFLOW_CONTROLLER}
-                        choosePages={doNothing}
-                    />
-                ) : state.route === 'overview' ? (
-                    <OverviewScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
-                ) : (
-                    <GuideScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
-                )}
+                {screenFor()}
             </View>
         </View>
     )
@@ -238,5 +288,6 @@ const styles = StyleSheet.create({
     root: { flex: 1, minHeight: 0 },
     controls: { paddingHorizontal: 10, paddingBottom: 10, gap: 6, borderBottomWidth: 1 },
     topControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    nativeDevice: { flex: 1, minHeight: 0 },
     device: { flex: 1, width: '100%', maxWidth: 480, alignSelf: 'center', minHeight: 0, borderWidth: 1 },
 })
