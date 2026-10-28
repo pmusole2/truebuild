@@ -43,6 +43,7 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
                 })
             }}
             disabled={!ready || error || busy}
+            busy={busy}
         />
     )
     const presentation: CameraPresentation =

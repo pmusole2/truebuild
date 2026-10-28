@@ -160,6 +160,28 @@ it('a Done or Guide URL for a manual that does not exist goes Home', async () =>
     await waitFor(() => expect(view.getPathname()).toBe('/'))
 })
 
+type HostNode = { type?: string; props?: Record<string, unknown>; children?: unknown[] | null }
+
+/**
+ * The title strings handed to the real native header, outermost screen first. Jest cannot paint UIKit, so it cannot read
+ * the title off a pixel; the header config the native stack receives is the closest actual thing to assert.
+ */
+function nativeHeaderTitles(): string[] {
+    const titles: string[] = []
+    const walk = (node: unknown): void => {
+        if (typeof node !== 'object' || node === null) {
+            return
+        }
+        const host = node as HostNode
+        if (host.type === 'RNSScreenStackHeaderConfig' && typeof host.props?.title === 'string') {
+            titles.push(host.props.title)
+        }
+        host.children?.forEach(walk)
+    }
+    walk(screen.toJSON())
+    return titles
+}
+
 it('keeps “Question 2 of 2” in the header after the first fact is accepted', async () => {
     const item = entry('guard-manual', 'unreviewed')
     item.session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is not visible.' }
@@ -168,13 +190,17 @@ it('keeps “Question 2 of 2” in the header after the first fact is accepted',
     const view = await mount()
     await act(async () => router.push('/check/guard-manual'))
     await waitFor(() => expect(controller.current?.session.manualId).toBe('guard-manual'))
-    expect(await screen.findByText('Question 1 of 2')).toBeTruthy()
+    // The native header carries the position as its plain title; the progress bar on screen carries it too.
+    expect(await screen.findByRole('progressbar', { name: 'Question 1 of 2' })).toBeTruthy()
+    expect(nativeHeaderTitles().at(-1)).toBe('Question 1 of 2')
     await fireEvent.press(screen.getByRole('button', { name: 'Let me fix it' }))
     await fireEvent.changeText(screen.getByLabelText('What the picture shows'), 'Groove faces inward.')
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(controller.current?.session.revision).toBe(2))
-    expect(await screen.findByText('Question 2 of 2')).toBeTruthy()
-    expect(screen.queryByText('Question 1 of 1')).toBeNull()
+    expect(await screen.findByRole('progressbar', { name: 'Question 2 of 2' })).toBeTruthy()
+    expect(nativeHeaderTitles().at(-1)).toBe('Question 2 of 2')
+    expect(nativeHeaderTitles()).not.toContain('Question 1 of 1')
+    expect(screen.queryByRole('progressbar', { name: 'Question 1 of 1' })).toBeNull()
     expect(view.getPathname()).toBe('/check/guard-manual')
 })
 
@@ -191,4 +217,16 @@ it('asks once to open a manual that does not open, then offers one in-place Try 
     await waitFor(() => expect(controller.current?.session.manualId).toBe('second-manual'))
     expect(screen.getByTestId('guide-screen')).toBeTruthy()
     expect(view.getPathname()).toBe('/guide/second-manual')
+})
+
+it('titles each production route with a platform string and never an uncapped custom header', async () => {
+    await runtime([entry('guard-manual')])
+    const view = await mount()
+    expect(nativeHeaderTitles().at(-1)).toBe('TrueBuild')
+    await act(async () => router.push('/guide/guard-manual'))
+    await waitFor(() => expect(view.getPathname()).toBe('/guide/guard-manual'))
+    await screen.findByTestId('guide-screen')
+    expect(nativeHeaderTitles().at(-1)).toBe('Step 1 of 2')
+    // One trailing control only: More. Back is the platform's own chevron.
+    expect(screen.getAllByRole('button', { name: 'More' })).toHaveLength(1)
 })

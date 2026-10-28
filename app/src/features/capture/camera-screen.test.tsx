@@ -52,8 +52,13 @@ it('renders permission checks before camera hardware and offers explicit permiss
     expect(screen.queryByTestId('camera-feed')).toBeNull()
     mockPermission = { granted: false, canAskAgain: false }
     await rerender(<CameraScreen busy={false} intent={{ kind: 'page' }} onCancel={noop} onCapture={noop} />)
+    // A permanent refusal cannot be asked again: Settings is the one recovery, never an Allow that does nothing.
     expect(screen.getByRole('button', { name: 'Open Settings' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Allow camera' })).toBeNull()
     expect(screen.queryByTestId('camera-feed')).toBeNull()
+    mockPermission = { granted: false, canAskAgain: true }
+    await rerender(<CameraScreen busy={false} intent={{ kind: 'page' }} onCancel={noop} onCapture={noop} />)
+    expect(screen.queryByRole('button', { name: 'Open Settings' })).toBeNull()
     await fireEvent.press(screen.getByRole('button', { name: 'Allow camera' }))
     expect(mockRequestPermission).toHaveBeenCalledTimes(1)
 })

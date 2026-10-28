@@ -55,7 +55,8 @@ it('renders camera recovery through the pure stage without opening hardware or s
     try {
         await render(<WorkflowPreview initialCase="camera-denied" />)
         expect(screen.getByTestId('camera-screen')).toBeTruthy()
-        await fireEvent.press(screen.getByRole('button', { name: 'Allow camera' }))
+        // The denied fixture cannot ask again, so Settings is its one recovery and Go back is the fixed close icon.
+        expect(screen.queryByRole('button', { name: 'Allow camera' })).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'Open Settings' }))
         await fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
         expect(fetchSpy).not.toHaveBeenCalled()
@@ -88,7 +89,9 @@ it('wires the camera preview guide exactly as the app does: one cue over the vie
     expect(screen.getByTestId('camera-thumbnail')).toBeTruthy()
     // The shutter stays readable beneath the viewfinder; the full step is one tap away.
     expect(screen.getByRole('button', { name: 'Capture photo' })).toBeTruthy()
-    await fireEvent.press(screen.getByRole('button', { name: 'Step details' }))
+    // The picture opens the details; there is no second info control beside it.
+    expect(screen.queryByRole('button', { name: 'Step details' })).toBeNull()
+    await fireEvent.press(screen.getByRole('button', { name: 'See the step picture' }))
     expect(screen.getByText(/^Which way it faces: Groove faces inward toward the divider\./u)).toBeTruthy()
     expect(screen.getByText('1. Look for: The inward-facing groove is visible.')).toBeTruthy()
     expect(screen.getByText('How it joins: Keep the panel free before seating the divider.')).toBeTruthy()

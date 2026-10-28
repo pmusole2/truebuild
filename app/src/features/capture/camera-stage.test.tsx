@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
 import { Text } from 'react-native'
 import { CameraStage, type CameraPresentation } from './camera-stage'
@@ -207,4 +207,127 @@ it('closes with the floating close control and names loading, permission and err
     await rerender(view({ status: 'preview', media: null, shutter: null }))
     await fireEvent.press(screen.getByTestId('camera-close'))
     expect(cancel).toHaveBeenCalledTimes(1)
+})
+
+describe('camera at accessibility text sizes', () => {
+    const stage = (
+        presentation: CameraPresentation,
+        extra: Partial<Parameters<typeof CameraStage>[0]> = {},
+    ): ReactElement => (
+        <CameraStage
+            intent={{ kind: 'check' }}
+            guide={{
+                progress: 'Step 1 of 2',
+                title: 'Side panel',
+                cue: 'The inward-facing groove is visible.',
+                instructions: <Text>Groove faces inward.</Text>,
+            }}
+            presentation={presentation}
+            onCancel={noop}
+            onRequestPermission={noop}
+            onOpenSettings={noop}
+            onRetry={noop}
+            {...extra}
+        />
+    )
+    const preview: CameraPresentation = {
+        status: 'preview',
+        media: null,
+        shutter: <ShutterButton label="Capture photo" disabled={false} onPress={noop} />,
+    }
+
+    it.each([2, 3.12, 3.6])(
+        'shows a short truthful cue and compact progress at scale %s, with the full names kept',
+        async (fontScale) => {
+            mockWindow.fontScale = fontScale
+            await render(stage(preview))
+            expect(screen.getByText('Your step.')).toBeTruthy()
+            expect(screen.getByTestId('camera-cue')).toHaveProp(
+                'accessibilityLabel',
+                'The inward-facing groove is visible.',
+            )
+            // Never cut off with an ellipsis: the cue wraps instead.
+            expect(screen.getByText('Your step.').props.numberOfLines).toBeUndefined()
+            expect(screen.getByText('1/2')).toBeTruthy()
+            expect(screen.getByLabelText('Step 1 of 2')).toBeTruthy()
+            expect(screen.queryByText('Step 1 of 2')).toBeNull()
+        },
+    )
+
+    it.each([
+        ['page', { kind: 'page' as const }, 'One page.', 'Page'],
+        ['question', { kind: 'question' as const }, 'The part.', '1/2 · Ask'],
+    ])('keeps a short generic cue and pill for a %s photo', async (_name, intent, cue, pill) => {
+        mockWindow.fontScale = 3.12
+        await render(stage(preview, { intent }))
+        expect(screen.getByText(cue)).toBeTruthy()
+        expect(screen.getByText(pill)).toBeTruthy()
+    })
+
+    it('has one way to the step details: the picture, and no second info control beside it', async () => {
+        await render(
+            stage(preview, {
+                guide: {
+                    progress: 'Step 1 of 2',
+                    title: 'Side panel',
+                    thumbnail: <Text>pic</Text>,
+                    instructions: <Text>All facts.</Text>,
+                },
+            }),
+        )
+        expect(screen.queryByRole('button', { name: 'Step details' })).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'See the step picture' }))
+        expect(screen.getByText('All facts.')).toBeTruthy()
+    })
+
+    it.each([
+        ['loading', { status: 'checking-access' } as CameraPresentation, undefined],
+        ['permission', { status: 'permission', canAskAgain: true, error: false } as CameraPresentation, 'Allow'],
+        ['denied', { status: 'permission', canAskAgain: false, error: false } as CameraPresentation, 'Settings'],
+        ['unavailable', { status: 'error' } as CameraPresentation, 'Retry'],
+    ])('keeps a close control outside the scroll and one fixed recovery for %s', async (_name, presentation, verb) => {
+        mockWindow.fontScale = 3.6
+        const cancel = jest.fn()
+        await render(stage(presentation, { onCancel: cancel }))
+        const close = screen.getByTestId('camera-close')
+        expect(close).toHaveProp('accessibilityLabel', 'Go back')
+        // The close control is in the header, outside the explanation that scrolls.
+        const scroll = screen.queryByTestId('camera-permission') ?? screen.queryByTestId('camera-error')
+        if (scroll !== null) {
+            expect(within(scroll).queryByTestId('camera-close')).toBeNull()
+        }
+        const bar = screen.queryByTestId('bottom-bar')
+        if (verb === undefined) {
+            expect(bar).toBeNull()
+        } else {
+            expect(within(bar!).getAllByRole('button')).toHaveLength(1)
+            expect(within(bar!).getByText(verb)).toBeTruthy()
+        }
+        await fireEvent.press(close)
+        expect(cancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('says plainly that Settings is the way in after a permanent refusal', async () => {
+        await render(stage({ status: 'permission', canAskAgain: false, error: false }))
+        expect(screen.getByText('Turn on Camera for TrueBuild in Settings.')).toBeTruthy()
+        expect(screen.queryByRole('button', { name: 'Allow camera' })).toBeNull()
+    })
+})
+
+it('shows visible progress on the shutter while a photo is being prepared', async () => {
+    await render(
+        <CameraStage
+            intent={{ kind: 'page' }}
+            presentation={{
+                status: 'preview',
+                media: null,
+                shutter: <ShutterButton label="Preparing photo…" disabled busy onPress={noop} />,
+            }}
+            onCancel={noop}
+            onRequestPermission={noop}
+            onOpenSettings={noop}
+            onRetry={noop}
+        />,
+    )
+    expect(screen.getByTestId('shutter-busy')).toBeTruthy()
 })

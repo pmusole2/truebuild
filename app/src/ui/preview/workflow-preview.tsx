@@ -200,6 +200,7 @@ function PreviewFrame({
                                     <ShutterButton
                                         label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
                                         disabled={selected === 'camera-preparing'}
+                                        busy={selected === 'camera-preparing'}
                                         onPress={doNothing}
                                     />
                                 ),

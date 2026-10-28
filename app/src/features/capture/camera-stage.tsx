@@ -1,9 +1,13 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
-import { Pressable, StyleSheet, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
+import { StatusBar } from 'expo-status-bar'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { CameraIntent } from './controller'
-import { AppButton, IconButton } from '../../ui/button'
+import { IconButton } from '../../ui/button'
+import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
 import { ViewfinderCorners } from '../../ui/camera-chrome'
+import { useLargeText } from '../../ui/large-text'
+import { PressMotion } from '../../ui/press-motion'
 import { Body, Callout, Caption, Instruction } from '../../ui/text'
 import { LoadingState } from '../../ui/states'
 import { MoreSheet } from '../../ui/sheet'
@@ -26,29 +30,44 @@ export type AssemblyGuide = {
 const GLASS = 'rgba(15, 17, 19, 0.62)'
 const THUMBNAIL_SIZE = 56
 
-/** The single line shown at the bottom of the preview. Never more than one line. */
-export function cameraCue(intent: CameraIntent | null, guide?: AssemblyGuide): string {
-    if (intent === null) {
-        return 'Fill the frame.'
-    }
-    if (intent.kind === 'page') {
-        return 'Fill the frame with one page.'
-    }
-    if (intent.kind === 'question') {
-        return 'Show the part you are asking about.'
-    }
-    return guide?.cue ?? 'Show the step you just built.'
+/** "2/8" from "Step 2 of 8": the compact progress at accessibility text sizes. Null when the text is not that shape. */
+function compactProgress(progress: string): string | null {
+    const match = /(\d+) of (\d+)/u.exec(progress)
+    return match === null ? null : `${match[1]}/${match[2]}`
 }
 
-/** What the pill at the top says: the step, or what the photo is for. */
-export function cameraPill(intent: CameraIntent | null, guide?: AssemblyGuide): string {
+/**
+ * The single line shown at the bottom of the preview. Never more than one idea. At accessibility text sizes a short,
+ * generic and still truthful cue replaces the step's own words, so the line fits without being cut off; the full cue
+ * stays as the accessible name.
+ */
+export function cameraCue(intent: CameraIntent | null, guide?: AssemblyGuide, compact = false): string {
+    if (intent === null) {
+        return compact ? 'Fill frame.' : 'Fill the frame.'
+    }
+    if (intent.kind === 'page') {
+        return compact ? 'One page.' : 'Fill the frame with one page.'
+    }
+    if (intent.kind === 'question') {
+        return compact ? 'The part.' : 'Show the part you are asking about.'
+    }
+    return compact ? 'Your step.' : (guide?.cue ?? 'Show the step you just built.')
+}
+
+/** What the pill at the top says: the step, or what the photo is for. Compact form: "2/8", "Page", "Ask". */
+export function cameraPill(intent: CameraIntent | null, guide?: AssemblyGuide, compact = false): string {
+    const count = guide === undefined ? null : compactProgress(guide.progress)
     if (intent?.kind === 'page') {
-        return 'Page photo'
+        return compact ? 'Page' : 'Page photo'
     }
     if (intent?.kind === 'question') {
-        return guide === undefined ? 'Ask photo' : `${guide.progress} · Ask`
+        return guide === undefined
+            ? compact
+                ? 'Ask'
+                : 'Ask photo'
+            : `${compact ? (count ?? 'Step') : guide.progress} · Ask`
     }
-    return guide?.progress ?? 'Photo'
+    return compact ? (count ?? 'Photo') : (guide?.progress ?? 'Photo')
 }
 
 export type CameraPresentation =
@@ -76,6 +95,7 @@ export function CameraStage({
     readonly onRetry: () => void
 }): ReactElement {
     const insets = useSafeAreaInsets()
+    const large = useLargeText()
     const [instructionsOpen, setInstructionsOpen] = useState(false)
     useEffect(() => {
         if (presentation.status !== 'preview') {
@@ -83,32 +103,61 @@ export function CameraStage({
         }
     }, [presentation.status])
     const assembly = guide !== undefined && intent !== null && intent.kind !== 'page'
+    const openDetails = (): void => setInstructionsOpen(true)
+    // The explanation scrolls, the close control stays in the header and the one recovery action sits in the fixed bar.
+    const recovery: { readonly body: ReactNode; readonly action: BarAction | null; readonly testID?: string } | null =
+        presentation.status === 'permission'
+            ? {
+                  testID: 'camera-permission',
+                  body: (
+                      <>
+                          <Instruction>We need the camera to take photos of your manual and your work.</Instruction>
+                          {presentation.canAskAgain ? null : (
+                              <Body tone="muted">Turn on Camera for TrueBuild in Settings.</Body>
+                          )}
+                          {presentation.error ? (
+                              <Body tone="muted">
+                                  {presentation.canAskAgain
+                                      ? 'We could not turn the camera on. Try again.'
+                                      : 'We could not open Settings. Try again.'}
+                              </Body>
+                          ) : null}
+                      </>
+                  ),
+                  // A permanent refusal cannot be asked again, so the one useful action is Settings, never a dead Allow.
+                  action: presentation.canAskAgain
+                      ? { label: 'Allow camera', compactLabel: 'Allow', onPress: onRequestPermission }
+                      : { label: 'Open Settings', compactLabel: 'Settings', onPress: onOpenSettings },
+              }
+            : presentation.status === 'error'
+              ? {
+                    testID: 'camera-error',
+                    body: <Instruction>The camera is not working. Close other apps and try again.</Instruction>,
+                    action: { label: 'Try again', compactLabel: 'Retry', onPress: onRetry },
+                }
+              : presentation.status === 'checking-access'
+                ? { body: <LoadingState label="Getting the camera ready." />, action: null }
+                : null
     return (
         <ThemeProvider scheme="dark">
             <View testID="camera-screen" style={styles.full}>
-                {presentation.status === 'checking-access' ? (
-                    <View style={styles.centered}>
-                        <LoadingState label="Getting the camera ready." />
-                    </View>
-                ) : presentation.status === 'permission' ? (
-                    <View testID="camera-permission" style={styles.centered}>
-                        <Instruction>We need the camera to take photos of your manual and your work.</Instruction>
-                        {presentation.error ? (
-                            <Body tone="muted">We could not turn the camera on. Try again or open Settings.</Body>
-                        ) : null}
-                        <AppButton label="Allow camera" variant="accent" size="primary" onPress={onRequestPermission} />
-                        {!presentation.canAskAgain ? (
-                            <AppButton label="Open Settings" onPress={onOpenSettings} />
-                        ) : null}
-                        <AppButton label="Go back" variant="quiet" onPress={onCancel} />
-                    </View>
-                ) : presentation.status === 'error' ? (
-                    <View testID="camera-error" style={styles.centered}>
-                        <Instruction>The camera is not working. Close other apps and try again.</Instruction>
-                        <AppButton label="Try again" variant="accent" size="primary" onPress={onRetry} />
-                        <AppButton label="Go back" variant="quiet" onPress={onCancel} />
-                    </View>
-                ) : (
+                {/* The camera is dark and full bleed in both appearances, so its status bar text is always light. */}
+                <StatusBar style="light" />
+                {recovery !== null ? (
+                    <>
+                        <View style={[styles.stateHeader, { paddingTop: insets.top + space.xs }]}>
+                            <IconButton label="Go back" icon="close" testID="camera-close" onPress={onCancel} />
+                        </View>
+                        <ScrollView
+                            testID={recovery.testID}
+                            style={styles.stateScroll}
+                            contentContainerStyle={styles.stateContent}
+                        >
+                            {recovery.body}
+                        </ScrollView>
+                        {recovery.action === null ? null : <FixedBottomBar primary={recovery.action} />}
+                    </>
+                ) : presentation.status === 'preview' ? (
                     <>
                         {presentation.media}
                         <View
@@ -133,43 +182,48 @@ export function CameraStage({
                                     accessible={true}
                                     accessibilityLabel={cameraPill(intent, guide)}
                                 >
-                                    <Caption tone="default">{cameraPill(intent, guide)}</Caption>
+                                    <Caption tone="default">{cameraPill(intent, guide, large)}</Caption>
                                 </View>
-                                {assembly ? (
-                                    <View style={styles.glassButton}>
-                                        <IconButton
-                                            label="Step details"
-                                            icon="info"
-                                            onPress={(): void => setInstructionsOpen(true)}
-                                        />
-                                    </View>
-                                ) : (
-                                    <View style={styles.glassSpacer} />
-                                )}
+                                <View style={styles.glassSpacer} />
                             </View>
                             <View
                                 style={[styles.bottom, { paddingBottom: insets.bottom + space.md }]}
                                 pointerEvents="box-none"
                             >
-                                {assembly && guide.thumbnail !== undefined ? (
-                                    <Pressable
-                                        testID="camera-thumbnail"
-                                        accessibilityRole="button"
-                                        accessibilityLabel="See the step picture"
-                                        onPress={(): void => setInstructionsOpen(true)}
-                                        style={styles.thumbnail}
-                                    >
-                                        {guide.thumbnail}
-                                    </Pressable>
+                                {assembly ? (
+                                    guide.thumbnail !== undefined ? (
+                                        // The picture opens the step's details, so no second info control is needed.
+                                        <PressMotion
+                                            testID="camera-thumbnail"
+                                            accessibilityRole="button"
+                                            accessibilityLabel="See the step picture"
+                                            onPress={openDetails}
+                                            style={styles.thumbnail}
+                                        >
+                                            {guide.thumbnail}
+                                        </PressMotion>
+                                    ) : (
+                                        // With no picture to tap, the details keep one way in.
+                                        <View style={[styles.glassButton, styles.detailsButton]}>
+                                            <IconButton label="Step details" icon="info" onPress={openDetails} />
+                                        </View>
+                                    )
                                 ) : null}
-                                <View style={styles.cue} testID="camera-cue">
-                                    <Callout numberOfLines={1}>{cameraCue(intent, guide)}</Callout>
+                                <View
+                                    style={styles.cue}
+                                    testID="camera-cue"
+                                    accessible={true}
+                                    accessibilityLabel={cameraCue(intent, guide)}
+                                >
+                                    <Callout numberOfLines={large ? undefined : 1}>
+                                        {cameraCue(intent, guide, large)}
+                                    </Callout>
                                 </View>
                                 {presentation.shutter}
                             </View>
                         </View>
                     </>
-                )}
+                ) : null}
                 <MoreSheet
                     visible={instructionsOpen && assembly && presentation.status === 'preview'}
                     title={guide?.progress ?? 'This step'}
@@ -185,7 +239,9 @@ export function CameraStage({
 
 const styles = StyleSheet.create({
     full: { flex: 1, backgroundColor: darkColors.canvas },
-    centered: { flex: 1, justifyContent: 'center', padding: space.lg, gap: space.md },
+    stateHeader: { flexDirection: 'row', paddingHorizontal: space.md },
+    stateScroll: { flex: 1, minHeight: 0 },
+    stateContent: { flexGrow: 1, justifyContent: 'center', padding: space.lg, gap: space.md },
     viewfinder: { ...StyleSheet.absoluteFill, margin: space.md },
     top: {
         position: 'absolute',
@@ -220,6 +276,7 @@ const styles = StyleSheet.create({
         paddingVertical: space.xs,
         maxWidth: '100%',
     },
+    detailsButton: { alignSelf: 'flex-start' },
     thumbnail: {
         alignSelf: 'flex-start',
         width: THUMBNAIL_SIZE,

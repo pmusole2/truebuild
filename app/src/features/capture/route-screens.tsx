@@ -18,7 +18,7 @@ import { useWorkflowActions } from './native-routes'
 import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
 import { OverviewScreen, useQuickProgress } from './review-screen'
-import { HeaderButtons, HeaderTitle, useMoreState } from './screen-header'
+import { HeaderButtons, useMoreState } from './screen-header'
 import { ScreenBody, TextRegion } from './screen-layout'
 import { stopFor, type Stop } from './plain-copy'
 import { stepAssemblyGuide } from './step-facts'
@@ -129,6 +129,23 @@ function Waiting({ route }: { route?: ManualRoute }): ReactElement {
     )
 }
 
+// Production headers are the platform's own title string. A custom two-line Text would be drawn, uncapped, inside the
+// fixed-height native bar and clip at the largest system text size; the platform title scales and truncates natively.
+// The title is also the human name the back control announces, in place of the raw route path.
+export const ADD_TITLE = 'Add manual'
+export const READING_TITLE = 'Reading'
+export const DONE_TITLE = 'Done'
+
+/** "Question 2 of 5" while a question is on screen, else "Quick check". */
+export function checkTitle(progressLabel: string | undefined): string {
+    return progressLabel ?? 'Quick check'
+}
+
+/** "Step 2 of 8": where the person is, which is what the header answers. */
+export function guideTitle(entry: LibraryEntry | undefined): string {
+    return entry === undefined ? 'Guide' : `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`
+}
+
 /** Colours the native header from the theme, so light and dark both read as one surface with the canvas. */
 export function useHeaderStyle(): {
     headerStyle: { backgroundColor: string }
@@ -207,23 +224,13 @@ export function AddRoute(): ReactElement {
     const { controller } = useWorkflowActions()
     const more = useMoreState()
     const choosePages = useChoosePages(entry)
-    const pages = entry?.session.pages.length ?? 0
     if (!state.loading && entry === undefined) {
         return <Redirect href="/" />
     }
     return (
         <>
             <Stack.Screen
-                options={{
-                    headerTitle: (): ReactElement => (
-                        <HeaderTitle
-                            title="Add manual"
-                            subtitle={pages === 0 ? undefined : `Page ${pages} of up to 20`}
-                        />
-                    ),
-                    title: 'Add manual',
-                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
-                }}
+                options={{ title: ADD_TITLE, headerRight: (): ReactElement => <HeaderButtons more={more} /> }}
             />
             {entry === undefined ? (
                 <Waiting />
@@ -259,12 +266,7 @@ export function ReadingRoute(): ReactElement {
     }
     return (
         <>
-            <Stack.Screen
-                options={{
-                    title: 'Reading',
-                    headerTitle: (): ReactElement => <HeaderTitle title={entry?.session.title ?? 'Reading'} />,
-                }}
-            />
+            <Stack.Screen options={{ title: READING_TITLE }} />
             {status === 'ready' && entry !== undefined ? (
                 <ReadingScreen
                     state={state}
@@ -297,8 +299,7 @@ export function CheckRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: 'Quick check',
-                    headerTitle: (): ReactElement => <HeaderTitle title="Quick check" subtitle={progress.label} />,
+                    title: checkTitle(progress.label),
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
@@ -329,15 +330,11 @@ export function GuideRoute(): ReactElement {
     if (route.redirect !== null) {
         return <Redirect href={route.redirect as never} />
     }
-    const title = entry?.session.title ?? 'Guide'
-    const subtitle =
-        entry === undefined ? undefined : `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`
     return (
         <>
             <Stack.Screen
                 options={{
-                    title: subtitle ?? 'Guide',
-                    headerTitle: (): ReactElement => <HeaderTitle title={title} subtitle={subtitle} />,
+                    title: guideTitle(entry),
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
@@ -372,8 +369,7 @@ export function DoneRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: 'Done',
-                    headerTitle: (): ReactElement => <HeaderTitle title="Done" />,
+                    title: DONE_TITLE,
                     headerBackVisible: false,
                     gestureEnabled: false,
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
