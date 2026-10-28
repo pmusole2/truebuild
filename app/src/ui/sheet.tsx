@@ -13,7 +13,7 @@ import { useTheme } from '../theme/theme'
 import { motion, radius, space } from '../theme/tokens'
 import { IconButton } from './button'
 import { useFeedback } from './feedback'
-import { Body, Title } from './text'
+import { Body, Heading } from './text'
 
 // Long content scrolls inside the sheet; the sheet never grows past this share of the window, so the scrim stays visible.
 export const SHEET_MAX_HEIGHT_RATIO = 0.9
@@ -56,7 +56,7 @@ function SheetFrame({
     readonly onClose: () => void
     readonly children: ReactNode
 }): ReactElement {
-    const { colors } = useTheme()
+    const { colors, scheme } = useTheme()
     const { reduceMotion } = useFeedback()
     const { height } = useWindowDimensions()
     const insets = useSafeAreaInsets()
@@ -81,7 +81,11 @@ function SheetFrame({
 
     return (
         <KeyboardAvoidingView
-            style={[styles.scrim, { backgroundColor: 'rgba(0, 0, 0, 0.35)' }]}
+            testID="sheet-scrim"
+            style={[
+                styles.scrim,
+                { backgroundColor: scheme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.35)' },
+            ]}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
             <Animated.View
@@ -97,9 +101,15 @@ function SheetFrame({
                     entrance,
                 ]}
             >
+                <View
+                    testID="sheet-handle"
+                    accessibilityElementsHidden={true}
+                    importantForAccessibility="no"
+                    style={[styles.handle, { backgroundColor: colors.borderStrong }]}
+                />
                 <View style={styles.header}>
                     <View style={styles.titleWrap}>
-                        <Title>{title}</Title>
+                        <Heading>{title}</Heading>
                     </View>
                     <IconButton label="Close sheet" icon="close" onPress={onClose} />
                 </View>
@@ -153,6 +163,7 @@ const styles = StyleSheet.create({
         padding: space.md,
         gap: space.md,
     },
+    handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: radius.pill },
     header: {
         flexDirection: 'row',
         alignItems: 'center',

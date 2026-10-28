@@ -5,8 +5,8 @@ import { radius, space } from '../theme/tokens'
 import { AppButton } from './button'
 import { Body, Heading } from './text'
 import { Icon } from './icons'
-import { SkeletonLines } from './skeleton'
-import { Stack } from './surface'
+import { SkeletonCard, SkeletonLines } from './skeleton'
+import { Card, Stack } from './surface'
 
 export type StateAction = {
     readonly label: string
@@ -16,13 +16,20 @@ export type StateAction = {
 // Each state is a complete message: a heading, what happened, and at most two actions. Nothing is shown as a result.
 
 /** Announced once as "loading"; the placeholder lines beneath it are hidden from assistive tech. */
-export function LoadingState({ label }: { readonly label: string }): ReactElement {
+export function LoadingState({
+    label,
+    shape = 'lines',
+}: {
+    readonly label: string
+    // `card` shows a card-shaped silhouette, so a screen that will become a card predicts its own layout.
+    readonly shape?: 'lines' | 'card'
+}): ReactElement {
     return (
         <Stack gap="sm">
             <View accessibilityRole="text" accessibilityLiveRegion="polite" accessibilityLabel={label}>
                 <Body>{label}</Body>
             </View>
-            <SkeletonLines />
+            {shape === 'card' ? <SkeletonCard /> : <SkeletonLines />}
         </Stack>
     )
 }
@@ -60,20 +67,22 @@ export function ErrorState({
     const { colors } = useTheme()
     // The message is one accessible group so it is announced as an alert; the retry stays a separate, focusable control.
     return (
-        <Stack gap="sm">
-            <View accessible={true} accessibilityRole="alert" style={styles.alert}>
-                <View style={styles.titleRow}>
-                    <Icon name="alert" color={colors.refuse} />
-                    <View style={styles.stateTitle}>
-                        <Heading>{title}</Heading>
+        <Card tone="result" bar="refuse">
+            <Stack gap="sm">
+                <View accessible={true} accessibilityRole="alert" style={styles.alert}>
+                    <View style={styles.titleRow}>
+                        <Icon name="alert" color={colors.refuse} />
+                        <View style={styles.stateTitle}>
+                            <Heading>{title}</Heading>
+                        </View>
                     </View>
+                    <Body>{body}</Body>
                 </View>
-                <Body>{body}</Body>
-            </View>
-            {retry === undefined ? null : (
-                <AppButton label={retry.label} icon="refresh" variant="secondary" onPress={retry.onPress} />
-            )}
-        </Stack>
+                {retry === undefined ? null : (
+                    <AppButton label={retry.label} icon="refresh" variant="accent" onPress={retry.onPress} />
+                )}
+            </Stack>
+        </Card>
     )
 }
 

@@ -55,14 +55,27 @@ export function CameraChrome({
     )
 }
 
+// Each corner is drawn twice: a wider contrast halo under the accent stroke, so the frame reads on bright scenes too.
+const CORNERS = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'] as const
+
 export function ViewfinderCorners(): ReactElement {
     const { colors } = useTheme()
     return (
         <View accessibilityElementsHidden={true} importantForAccessibility="no" style={StyleSheet.absoluteFill}>
-            <View style={[styles.corner, styles.topLeft, { borderColor: colors.accent }]} />
-            <View style={[styles.corner, styles.topRight, { borderColor: colors.accent }]} />
-            <View style={[styles.corner, styles.bottomLeft, { borderColor: colors.accent }]} />
-            <View style={[styles.corner, styles.bottomRight, { borderColor: colors.accent }]} />
+            {CORNERS.map((corner) => (
+                <View key={corner} style={StyleSheet.absoluteFill}>
+                    <View
+                        testID="viewfinder-halo"
+                        style={[
+                            styles.corner,
+                            styles[corner],
+                            styles[`${corner}Halo`],
+                            { borderColor: colors.inkInverse },
+                        ]}
+                    />
+                    <View style={[styles.corner, styles[corner], { borderColor: colors.accent }]} />
+                </View>
+            ))}
         </View>
     )
 }
@@ -148,6 +161,39 @@ const styles = StyleSheet.create({
         right: space.sm,
         borderBottomWidth: 3,
         borderRightWidth: 3,
+    },
+    // The halo is one point larger on every side, with a wider stroke, so the accent line sits on a contrast edge.
+    topLeftHalo: {
+        top: space.sm - 1,
+        left: space.sm - 1,
+        borderTopWidth: 5,
+        borderLeftWidth: 5,
+        width: CORNER + 2,
+        height: CORNER + 2,
+    },
+    topRightHalo: {
+        top: space.sm - 1,
+        right: space.sm - 1,
+        borderTopWidth: 5,
+        borderRightWidth: 5,
+        width: CORNER + 2,
+        height: CORNER + 2,
+    },
+    bottomLeftHalo: {
+        bottom: space.sm - 1,
+        left: space.sm - 1,
+        borderBottomWidth: 5,
+        borderLeftWidth: 5,
+        width: CORNER + 2,
+        height: CORNER + 2,
+    },
+    bottomRightHalo: {
+        bottom: space.sm - 1,
+        right: space.sm - 1,
+        borderBottomWidth: 5,
+        borderRightWidth: 5,
+        width: CORNER + 2,
+        height: CORNER + 2,
     },
     bottomBar: {
         alignItems: 'center',

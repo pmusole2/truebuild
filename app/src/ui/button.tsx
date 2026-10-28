@@ -67,7 +67,7 @@ export function AppButton({
             style={({ pressed }) => [
                 styles.base,
                 { backgroundColor: colors[tokens.container], borderColor: colors[tokens.border] },
-                variant === 'quiet' && styles.quiet,
+                variant === 'quiet' && styles.quietText,
                 focusRingStyle(focus.focused, colors),
                 pressed && !inactive && styles.pressed,
                 inactive && styles.inactive,
@@ -149,6 +149,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
+    // A quiet text button has no fill but keeps its hairline, so it still reads as a control. Icon-only ones stay bare.
+    quietText: { backgroundColor: 'transparent' },
     quiet: { backgroundColor: 'transparent', borderColor: 'transparent' },
     square: {
         width: touchTarget,
@@ -170,6 +172,6 @@ const styles = StyleSheet.create({
         opacity: 0.8,
     },
     inactive: {
-        opacity: 0.5,
+        opacity: 0.38,
     },
 })

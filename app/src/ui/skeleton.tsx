@@ -10,7 +10,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated'
 import { useTheme } from '../theme/theme'
-import { motion, radius, space } from '../theme/tokens'
+import { motion, radius, space, touchTarget } from '../theme/tokens'
 import { useFeedback } from './feedback'
 
 // A placeholder block that pulses while content loads. Under reduced motion it stays still at full strength. The loop
@@ -48,6 +48,7 @@ export function Skeleton({
     const pulse = useAnimatedStyle(() => ({ opacity: opacity.value }))
     return (
         <Animated.View
+            testID="skeleton-block"
             accessibilityElementsHidden={true}
             importantForAccessibility="no"
             style={[styles.block, { width, height, backgroundColor: colors.surfaceSunken }, pulse]}
@@ -67,7 +68,21 @@ export function SkeletonLines({ lines = 3 }: { readonly lines?: number }): React
     )
 }
 
+/** Placeholder silhouette of a result card: a title line, a short paragraph and an action bar. */
+export function SkeletonCard(): ReactElement {
+    return (
+        <View style={styles.card}>
+            <Skeleton width="55%" height={space.lg} />
+            <SkeletonLines />
+            <Skeleton width="40%" height={touchTarget} />
+        </View>
+    )
+}
+
 const styles = StyleSheet.create({
+    card: {
+        gap: space.sm,
+    },
     block: {
         borderRadius: radius.sm,
     },

@@ -3,7 +3,7 @@ import { Image, ScrollView, StyleSheet, View } from 'react-native'
 import { CameraStage } from '../../features/capture/camera-stage'
 import { SettingsScreen } from '../../features/capture/settings-screen'
 import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
-import { SourceDiagrams, StepFacts } from '../../features/capture/step-facts'
+import { stepAssemblyGuide } from '../../features/capture/step-facts'
 import { ShutterButton } from '../camera-chrome'
 import {
     GuideScreen,
@@ -175,20 +175,7 @@ function PreviewFrame({
                         guide={
                             selected === 'camera-page'
                                 ? undefined
-                                : {
-                                      progress: 'Step 1 of 2',
-                                      title: entry.session.reviewedSteps[0]!.title,
-                                      instructions: (
-                                          <>
-                                              <StepFacts session={entry.session} index={0} />
-                                              <SourceDiagrams
-                                                  refs={entry.session.reviewedSteps[0]!.sourceRefs}
-                                                  session={entry.session}
-                                                  pageUris={state.pageUris}
-                                              />
-                                          </>
-                                      ),
-                                  }
+                                : stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
                         }
                         presentation={
                             cameraPreviewPresentation(selected) ?? {

@@ -3,10 +3,11 @@ import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import type { CameraIntent } from './controller'
 import { AppButton, IconButton } from '../../ui/button'
 import { ViewfinderCorners } from '../../ui/camera-chrome'
-import { Caption, Heading, Label } from '../../ui/text'
+import { Callout, Caption, Heading } from '../../ui/text'
 import { ErrorState, LoadingState, PermissionState } from '../../ui/states'
 import { Notice } from '../../ui/status'
-import { Screen } from '../../ui/surface'
+import { Card, Screen } from '../../ui/surface'
+import { elevationStyle } from '../../theme/elevation'
 import { BottomSheet } from '../../ui/sheet'
 import { ThemeProvider } from '../../theme/theme'
 import { darkColors, radius, space } from '../../theme/tokens'
@@ -16,6 +17,9 @@ import { PRIVACY_COPY } from './privacy-copy'
 export type AssemblyGuide = {
     readonly progress: string
     readonly title: string
+    // A short reading of the step shown over the viewfinder. When present the full instructions stay one press away
+    // in the sheet; without it the panel falls back to the full instructions.
+    readonly summary?: ReactNode
     readonly instructions: ReactNode
 }
 
@@ -79,22 +83,24 @@ export function CameraStage({
                         </ScrollView>
                     ) : presentation.status === 'permission' ? (
                         <ScrollView contentContainerStyle={styles.centered}>
-                            <PermissionState
-                                title="Camera is off"
-                                body="Camera permission is needed to photograph manual pages or assembly steps."
-                                primary={{
-                                    label: 'Allow camera',
-                                    onPress: onRequestPermission,
-                                }}
-                                secondary={
-                                    !presentation.canAskAgain
-                                        ? {
-                                              label: 'Open device settings',
-                                              onPress: onOpenSettings,
-                                          }
-                                        : undefined
-                                }
-                            />
+                            <Card tone="result">
+                                <PermissionState
+                                    title="Camera is off"
+                                    body="Camera permission is needed to photograph manual pages or assembly steps."
+                                    primary={{
+                                        label: 'Allow camera',
+                                        onPress: onRequestPermission,
+                                    }}
+                                    secondary={
+                                        !presentation.canAskAgain
+                                            ? {
+                                                  label: 'Open device settings',
+                                                  onPress: onOpenSettings,
+                                              }
+                                            : undefined
+                                    }
+                                />
+                            </Card>
                             {presentation.error ? (
                                 <Notice
                                     tone="error"
@@ -124,7 +130,7 @@ export function CameraStage({
                                     <View style={styles.title}>
                                         {assembly ? (
                                             <>
-                                                <Label>{guide.progress}</Label>
+                                                <Caption>{guide.progress}</Caption>
                                                 <Heading>{guide.title}</Heading>
                                             </>
                                         ) : (
@@ -154,11 +160,31 @@ export function CameraStage({
                                     <ScrollView
                                         testID="assembly-panel"
                                         accessibilityLabel="Current step instructions and diagram"
-                                        style={[styles.panel, { maxHeight: height * PANEL_MAX_RATIO }]}
-                                        contentContainerStyle={styles.panelContent}
+                                        style={[
+                                            styles.panel,
+                                            elevationStyle(2),
+                                            { maxHeight: height * PANEL_MAX_RATIO },
+                                        ]}
+                                        contentContainerStyle={[
+                                            styles.panelContent,
+                                            guide.summary !== undefined && styles.panelRow,
+                                        ]}
                                     >
-                                        <Caption>Current step instructions and diagram</Caption>
-                                        {guide.instructions}
+                                        {guide.summary === undefined ? (
+                                            <>
+                                                <Caption>Current step instructions and diagram</Caption>
+                                                {guide.instructions}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <View style={styles.cue}>{guide.summary}</View>
+                                                <AppButton
+                                                    label="All step facts"
+                                                    variant="quiet"
+                                                    onPress={(): void => setInstructionsOpen(true)}
+                                                />
+                                            </>
+                                        )}
                                     </ScrollView>
                                 ) : null}
                                 <View style={styles.bottomBar}>
@@ -166,7 +192,7 @@ export function CameraStage({
                                         style={[styles.captionScroll, { maxHeight: height * 0.2 }]}
                                         contentContainerStyle={styles.caption}
                                     >
-                                        <Caption>{cameraCaption(intent)}</Caption>
+                                        <Callout>{cameraCaption(intent)}</Callout>
                                     </ScrollView>
                                     {shutter}
                                 </View>
@@ -198,16 +224,28 @@ const styles = StyleSheet.create({
         backgroundColor: darkColors.surface,
     },
     title: { flex: 1 },
-    viewfinder: { flex: 1, minHeight: 0, margin: space.lg },
-    bottomBar: { alignItems: 'center', gap: space.sm, padding: space.md, backgroundColor: darkColors.canvas },
+    // A tight frame margin keeps the viewfinder as large as the controls around it allow.
+    viewfinder: { flex: 1, minHeight: 0, marginHorizontal: space.md, marginVertical: space.xs },
+    bottomBar: {
+        alignItems: 'center',
+        gap: space.sm,
+        paddingHorizontal: space.md,
+        paddingVertical: space.sm,
+        backgroundColor: darkColors.canvas,
+    },
     caption: { width: '100%' },
     captionScroll: { alignSelf: 'stretch' },
+    // The panel hugs its content (up to its maximum height) so the viewfinder keeps the rest of the screen.
     panel: {
+        flexGrow: 0,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderColor: darkColors.border,
         borderTopLeftRadius: radius.sheet,
         borderTopRightRadius: radius.sheet,
-        backgroundColor: darkColors.surface,
+        backgroundColor: darkColors.surfaceRaised,
     },
-    panelContent: { padding: space.md, gap: space.xs },
+    panelContent: { padding: space.sm, gap: space.xs },
+    // One cue beside the "All step facts" action, so the panel is a single row tall.
+    panelRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+    cue: { flex: 1, minWidth: 0 },
 })

@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context'
 import { elevationStyle, type ElevationLevel } from '../theme/elevation'
 import { useTheme } from '../theme/theme'
-import { radius, space } from '../theme/tokens'
+import { radius, space, type ColorToken } from '../theme/tokens'
 
 // With the native header shown, the header already clears the top inset. With it hidden (full-bleed camera), the shell
 // must clear the top inset itself.
@@ -57,36 +57,60 @@ export function Stack({
     return <View style={{ gap: GAPS[gap] }}>{children}</View>
 }
 
+// `result` is the hero card: raised, strongly bordered and lifted, so a verdict reads before the facts around it.
+export type CardTone = 'surface' | 'raised' | 'result'
+
+// The status bar width on a hero card. It sits inside the border and follows the rounded corners.
+const CARD_BAR_WIDTH = 4
+
 export function Card({
     children,
     elevation = 0,
     tone = 'surface',
+    bar,
+    testID,
 }: {
     readonly children: ReactNode
     readonly elevation?: ElevationLevel
-    readonly tone?: 'surface' | 'raised'
+    readonly tone?: CardTone
+    // Status colour drawn as a bar down the left edge, always accompanied by text and an icon inside the card.
+    readonly bar?: ColorToken
+    readonly testID?: string
 }): ReactElement {
-    const { colors } = useTheme()
+    const { colors, scheme } = useTheme()
+    // In the dark scheme the plain surface sits too close to the canvas, so every card uses the raised surface.
+    const raised = tone !== 'surface' || scheme === 'dark'
+    const lift: ElevationLevel = tone === 'result' ? (Math.max(elevation, 1) as ElevationLevel) : elevation
     return (
         <View
+            testID={testID}
             style={[
                 styles.card,
                 {
-                    backgroundColor: tone === 'raised' ? colors.surfaceRaised : colors.surface,
-                    borderColor: colors.border,
+                    backgroundColor: raised ? colors.surfaceRaised : colors.surface,
+                    borderColor: tone === 'result' ? colors.borderStrong : colors.border,
                 },
-                elevationStyle(elevation),
+                elevationStyle(lift),
             ]}
         >
+            {bar === undefined ? null : (
+                <View
+                    testID="card-bar"
+                    accessibilityElementsHidden={true}
+                    importantForAccessibility="no"
+                    style={[styles.bar, { backgroundColor: colors[bar] }]}
+                />
+            )}
             {children}
         </View>
     )
 }
 
-export function Divider(): ReactElement {
+export function Divider({ testID }: { readonly testID?: string }): ReactElement {
     const { colors } = useTheme()
     return (
         <View
+            testID={testID}
             accessibilityElementsHidden
             importantForAccessibility="no"
             style={[styles.divider, { backgroundColor: colors.border }]}
@@ -100,10 +124,28 @@ export function ActionGroup({ children }: { readonly children: ReactNode }): Rea
 }
 
 /** Kept outside a screen's scroll content so its primary action remains available beside a long result. */
-export function ActionDock({ children }: { readonly children: ReactNode }): ReactElement {
-    const { colors } = useTheme()
+export function ActionDock({
+    children,
+    testID,
+}: {
+    readonly children: ReactNode
+    readonly testID?: string
+}): ReactElement {
+    const { colors, scheme } = useTheme()
+    // A full rule, strong in light where the canvas is pale, so the dock never melts into the scrolling result.
     return (
-        <View style={[styles.dock, { backgroundColor: colors.surface, borderColor: colors.border }]}>{children}</View>
+        <View
+            testID={testID}
+            style={[
+                styles.dock,
+                {
+                    backgroundColor: colors.surface,
+                    borderColor: scheme === 'light' ? colors.borderStrong : colors.border,
+                },
+            ]}
+        >
+            {children}
+        </View>
     )
 }
 
@@ -120,12 +162,28 @@ const styles = StyleSheet.create({
     },
     padding: { padding: space.md },
     actions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    dock: { borderTopWidth: StyleSheet.hairlineWidth, padding: space.md, gap: space.xs, flexShrink: 0 },
+    dock: {
+        borderTopWidth: 1,
+        paddingHorizontal: space.md,
+        paddingTop: space.sm,
+        paddingBottom: space.md,
+        gap: space.xs,
+        flexShrink: 0,
+    },
     card: {
         borderWidth: 1,
         borderRadius: radius.lg,
         padding: space.md,
         gap: space.sm,
+    },
+    bar: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: CARD_BAR_WIDTH,
+        borderTopLeftRadius: radius.lg - 1,
+        borderBottomLeftRadius: radius.lg - 1,
     },
     divider: {
         height: StyleSheet.hairlineWidth,

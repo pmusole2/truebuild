@@ -7,6 +7,7 @@ import { Caption, Heading, Title } from '../../ui/text'
 import { EmptyState, ErrorState, LoadingState } from '../../ui/states'
 import { StatusTag } from '../../ui/status'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { Icon } from '../../ui/icons'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
@@ -45,6 +46,8 @@ export function LibraryScreen({
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     const hint = addHint(state)
     const firstRun = !state.loading && !state.storageReadOnly && state.entries.length === 0
+    // With nothing saved the first-run content sits in the middle of the scroll, not above a blank lower half.
+    const contentStyle = firstRun ? [styles.content, styles.centred] : styles.content
     const header = (
         <View style={styles.topBar}>
             <View style={styles.titleWrap}>
@@ -60,7 +63,7 @@ export function LibraryScreen({
             <WorkflowNotice state={state} controller={controller} />
             {state.loading ? (
                 <Card>
-                    <LoadingState label="Restoring local library…" />
+                    <LoadingState label="Restoring local library…" shape="card" />
                     <Caption>Your saved manuals stay on this device and are not changed while this loads.</Caption>
                 </Card>
             ) : state.entries.length === 0 ? (
@@ -84,6 +87,7 @@ export function LibraryScreen({
                 <ManualSummary
                     key={entry.session.manualId}
                     entry={entry}
+                    sole={state.entries.length === 1}
                     onOpen={(): void => {
                         void controller.open(entry.session.manualId)
                     }}
@@ -110,7 +114,7 @@ export function LibraryScreen({
             {compact ? (
                 <ScrollView
                     testID="library-scroll"
-                    contentContainerStyle={styles.content}
+                    contentContainerStyle={contentStyle}
                     keyboardShouldPersistTaps="handled"
                 >
                     {header}
@@ -122,7 +126,7 @@ export function LibraryScreen({
                     <View style={styles.fixedHeader}>{header}</View>
                     <ScrollView
                         testID="library-scroll"
-                        contentContainerStyle={styles.content}
+                        contentContainerStyle={contentStyle}
                         keyboardShouldPersistTaps="handled"
                     >
                         {body}
@@ -134,7 +138,16 @@ export function LibraryScreen({
     )
 }
 
-function ManualSummary({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => void }): ReactElement {
+// A sole manual is the continuation hero, so it takes the raised result card; several stay a flat list.
+function ManualSummary({
+    entry,
+    sole,
+    onOpen,
+}: {
+    entry: LibraryEntry
+    sole: boolean
+    onOpen: () => void
+}): ReactElement {
     const confirmed = entry.session.reviewStatus === 'reviewed'
     const { colors } = useTheme()
     const focus = useFocusRing()
@@ -142,7 +155,7 @@ function ManualSummary({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => v
     const pages = entry.session.pages.length
     const completed = entry.completedStepIds.length
     return (
-        <Card>
+        <Card tone={sole ? 'result' : 'surface'} testID="manual-card">
             <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
@@ -150,7 +163,13 @@ function ManualSummary({ entry, onOpen }: { entry: LibraryEntry; onOpen: () => v
                 onPress={onOpen}
                 style={[styles.manualPress, focusRingStyle(focus.focused, colors)]}
             >
-                <Heading>{entry.session.title}</Heading>
+                <View style={styles.manualTitle}>
+                    <View style={styles.titleWrap}>
+                        <Heading>{entry.session.title}</Heading>
+                    </View>
+                    {/* Decorative: the whole card is the control, named "Open <title>". The chevron says it continues. */}
+                    <Icon name="chevronRight" color={colors.inkMuted} />
+                </View>
                 <Caption>
                     {`${pages} ${pages === 1 ? 'page' : 'pages'} · ${steps} ${steps === 1 ? 'step' : 'steps'} · ${completed} marked complete by you`}
                 </Caption>
@@ -176,5 +195,7 @@ const styles = StyleSheet.create({
     titleWrap: { flex: 1 },
     fixedHeader: { paddingHorizontal: space.md, paddingTop: space.md, paddingBottom: space.sm },
     content: { padding: space.md, gap: space.md },
+    centred: { flexGrow: 1, justifyContent: 'center' },
     manualPress: { gap: space.xs, minHeight: touchTarget },
+    manualTitle: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
 })

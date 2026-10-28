@@ -11,10 +11,10 @@ export {
     type HapticPort,
 } from './feedback'
 export { Body, Callout, Caption, Heading, Label, Title, type TextTone } from './text'
-export { ActionDock, ActionGroup, Card, Divider, Screen, Stack } from './surface'
+export { ActionDock, ActionGroup, Card, Divider, Screen, Stack, type CardTone } from './surface'
 export { Notice, StatusTag, VerdictTag, type NoticeTone, type StatusTone, type Verdict } from './status'
 export { ProgressBar, StepList, type StepListItem, type StepState } from './progress'
-export { Skeleton, SkeletonLines } from './skeleton'
+export { Skeleton, SkeletonCard, SkeletonLines } from './skeleton'
 export { EmptyState, ErrorState, LoadingState, PermissionState, type StateAction } from './states'
 export { SegmentedControl, SettingRow, TextField, type SegmentOption, type TextFieldProps } from './fields'
 export { ThumbnailCard, ManualCard } from './cards'

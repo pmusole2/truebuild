@@ -121,12 +121,12 @@ function PartChip({
                 disabled && styles.disabled,
                 {
                     borderColor: colors.borderStrong,
-                    backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised,
+                    backgroundColor: selected ? colors.accent : colors.surfaceRaised,
                 },
                 focusRingStyle(focus.focused, colors),
             ]}
         >
-            <Caption tone={selected ? 'inverse' : 'default'}>{label}</Caption>
+            <Caption tone={selected ? 'onAccent' : 'default'}>{label}</Caption>
         </Pressable>
     )
 }

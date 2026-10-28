@@ -4,12 +4,14 @@ import { useTheme } from '../theme/theme'
 import { typeProps, type TypeRole } from '../theme/typography'
 import type { Colors } from '../theme/tokens'
 
-export type TextTone = 'default' | 'muted' | 'inverse' | 'accent' | 'pass' | 'refuse' | 'caution'
+// `onAccent` is the label ink for text drawn on a filled accent surface (a selected segment or chip).
+export type TextTone = 'default' | 'muted' | 'inverse' | 'onAccent' | 'accent' | 'pass' | 'refuse' | 'caution'
 
 const TONE_TOKEN: Readonly<Record<TextTone, keyof Colors>> = {
     default: 'ink',
     muted: 'inkMuted',
     inverse: 'inkInverse',
+    onAccent: 'accentFillInk',
     accent: 'accentInk',
     pass: 'pass',
     refuse: 'refuse',

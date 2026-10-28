@@ -2,7 +2,8 @@ import { useState, type ReactElement } from 'react'
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { stepEvidenceRequirements, type ManualBinding, type ManualSession, type ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
-import { Card, Stack } from '../../ui/surface'
+import { Card, Divider, Stack } from '../../ui/surface'
+import { BottomSheet } from '../../ui/sheet'
 import { Body, Callout, Caption, Heading } from '../../ui/text'
 import { Notice, StatusTag, type StatusTone } from '../../ui/status'
 import { Icon, type IconName } from '../../ui/icons'
@@ -34,6 +35,9 @@ export function OverviewScreen({
         open: {},
     })
     const manualToggles = toggled.revision === session.revision ? toggled.open : {}
+    // The page opened full width from the strip, by position. Local view state only: no navigation, model or storage.
+    const [openPage, setOpenPage] = useState<number | null>(null)
+    const enlarged = openPage === null ? undefined : session.pages[openPage]
     const canConfirm = reviewedSession(session) !== null
     const unresolved = unresolvedCriticalFacts(session)
     const reviewed = session.reviewStatus === 'reviewed'
@@ -45,22 +49,23 @@ export function OverviewScreen({
                 Review extracted facts against your original diagrams. Unknown critical facts block verified checks.
             </Caption>
             {session.rawExtraction === null ? null : <ModelProvenance result={session.rawExtraction} />}
+            {session.pages.length === 0 ? null : <Caption>Tap a page to see it full width.</Caption>}
             <View style={styles.pageStrip}>
                 {session.pages.map((page, index) => (
-                    <View key={page.pageId} style={styles.stripItem}>
-                        <PageImage
-                            uri={state.pageUris[page.pageId]}
-                            label={`Manual page ${index + 1}`}
-                            aspectRatio={page.width / page.height}
-                        />
-                    </View>
+                    <PageStripItem
+                        key={page.pageId}
+                        number={index + 1}
+                        page={page}
+                        uri={state.pageUris[page.pageId]}
+                        onOpen={(): void => setOpenPage(index)}
+                    />
                 ))}
             </View>
             {session.parts.length === 0 ? null : (
                 <Card>
                     <Heading>Parts</Heading>
                     {session.parts.map((part) => (
-                        <Body key={part.partId}>{`Part ${part.partId}: ${factText(part.name, String)}`}</Body>
+                        <PartRow key={part.partId} partId={part.partId} name={factText(part.name, String)} />
                     ))}
                 </Card>
             )}
@@ -110,6 +115,7 @@ export function OverviewScreen({
                 </Card>
             ) : (
                 <Card>
+                    <Divider testID="confirm-divider" />
                     <ConfirmRow
                         label="I checked all facts and corrections against the manual"
                         checked={confirmed}
@@ -138,7 +144,62 @@ export function OverviewScreen({
                 disabled={state.pending !== null}
                 onPress={(): void => controller.navigate('pages')}
             />
+            <BottomSheet
+                visible={enlarged !== undefined}
+                title={`Manual page ${(openPage ?? 0) + 1}`}
+                onClose={(): void => setOpenPage(null)}
+            >
+                {enlarged === undefined ? null : (
+                    <PageImage
+                        uri={state.pageUris[enlarged.pageId]}
+                        label={`Manual page ${(openPage ?? 0) + 1}`}
+                        aspectRatio={enlarged.width / enlarged.height}
+                    />
+                )}
+            </BottomSheet>
         </Screen>
+    )
+}
+
+/**
+ * A part, name first. The manual's own name is the row; the raw part id is secondary metadata beneath it. The whole row
+ * keeps its earlier full name for assistive tech ("Part side-panel: Side panel"), so nothing is lost in either channel.
+ */
+function PartRow({ partId, name }: { partId: string; name: string }): ReactElement {
+    return (
+        <View accessible={true} accessibilityLabel={`Part ${partId}: ${name}`} style={styles.partRow}>
+            <Body>{name}</Body>
+            <Caption>{`Part ID: ${partId}`}</Caption>
+        </View>
+    )
+}
+
+/** A page thumbnail that opens the page full width. The 96 by 64 strip item is the target, above the 44 point floor. */
+function PageStripItem({
+    number,
+    page,
+    uri,
+    onOpen,
+}: {
+    number: number
+    page: ManualSession['pages'][number]
+    uri: string | undefined
+    onOpen: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const focus = useFocusRing()
+    return (
+        <Pressable
+            testID="page-strip-item"
+            accessibilityRole="button"
+            accessibilityLabel={`Manual page ${number}`}
+            accessibilityHint="Opens the page full width"
+            {...focus.focusHandlers}
+            onPress={onOpen}
+            style={[styles.stripItem, focusRingStyle(focus.focused, colors)]}
+        >
+            <PageImage uri={uri} label={`Manual page ${number}`} aspectRatio={page.width / page.height} />
+        </Pressable>
     )
 }
 
@@ -146,7 +207,7 @@ export function OverviewScreen({
 function BlockerGroup({ issues }: { issues: readonly string[] }): ReactElement {
     const { colors } = useTheme()
     return (
-        <Card>
+        <Card tone="result" bar="caution">
             <View style={styles.blockerHeader}>
                 <Icon name="alert" size="sm" color={colors.refuse} />
                 <View style={styles.flex}>
@@ -277,7 +338,7 @@ function StepCard({
         </View>
     )
     return (
-        <Card>
+        <Card tone="result" testID="step-card">
             {locked ? (
                 heading
             ) : (
@@ -485,7 +546,9 @@ const styles = StyleSheet.create({
     flex: { flex: 1 },
     actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     pageStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    stripItem: { width: 96 },
+    // Large enough that a diagram is recognisable at a glance; the page image keeps its own aspect ratio inside.
+    stripItem: { width: 96, minHeight: 64 },
+    partRow: { gap: space.xxs },
     blockerHeader: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     headerPress: { minHeight: touchTarget, justifyContent: 'center' },

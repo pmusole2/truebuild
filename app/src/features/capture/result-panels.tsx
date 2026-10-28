@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
 import type { CheckResult, ManualSession, QuestionResult } from '@truebuild/contracts'
-import type { Point } from '../assembly/frame-geometry'
-import { GroundedRegionOutline } from '../assembly/grounded-overlays'
+import { boxOnDisplay, type Point, type Rect } from '../assembly/frame-geometry'
+import { GroundedRegionOutline, PartRegionOverlays } from '../assembly/grounded-overlays'
 import { Card } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
 import { ComparisonFrame, type ComparisonPane } from '../../ui/comparison'
@@ -11,6 +11,7 @@ import { ResultReveal } from '../../ui/result-reveal'
 import type { WorkflowState } from './controller'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
+import { guidanceNotes, type PartGuidance } from './part-regions'
 import { ModelProvenance, SourceDiagrams } from './step-facts'
 
 /** The verdict for a frozen check, exactly as the backend returned it. Refusals keep their reason and missing evidence. */
@@ -18,10 +19,13 @@ export function CheckPanel({
     check,
     session,
     pageUris,
+    showSource = true,
 }: {
     check: CheckResult
     session: ManualSession
     pageUris: WorkflowState['pageUris']
+    // The guide shows the cited diagram as its own evidence block beside the photo, so the verdict card stays short.
+    showSource?: boolean
 }): ReactElement {
     return (
         <ResultReveal
@@ -33,7 +37,7 @@ export function CheckPanel({
                 reason={check.reason}
                 missing={check.missingEvidence}
                 citedPage={
-                    check.decision === 'refuse' ? undefined : (
+                    check.decision === 'refuse' || !showSource ? undefined : (
                         <SourceDiagrams refs={check.sourceRefs} session={session} pageUris={pageUris} />
                     )
                 }
@@ -54,15 +58,18 @@ export function AnswerPanel({
     answer,
     session,
     pageUris,
+    showSource = true,
 }: {
     answer: QuestionResult
     session: ManualSession
     pageUris: WorkflowState['pageUris']
+    showSource?: boolean
 }): ReactElement {
     return (
         <ResultReveal identity={`answer:${answer.answer}`} feedback="selection">
             <View accessibilityLiveRegion="polite">
-                <Card>
+                {/* Hero card like a verdict, but with the neutral ink bar a plain notice uses: no verdict colour or tag. */}
+                <Card tone="result" bar="ink">
                     <Heading>Answer</Heading>
                     <Caption>Answer to your question from the manual pages. It is not a step check.</Caption>
                     <Body>{answer.answer}</Body>
@@ -70,7 +77,9 @@ export function AnswerPanel({
                     {answer.missingEvidence.map((missing, index) => (
                         <Caption key={index}>{`Missing: ${missing}`}</Caption>
                     ))}
-                    <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
+                    {showSource ? (
+                        <SourceDiagrams refs={answer.sourceRefs} session={session} pageUris={pageUris} />
+                    ) : null}
                 </Card>
             </View>
         </ResultReveal>
@@ -79,7 +88,8 @@ export function AnswerPanel({
 
 /**
  * A refusal shows the expected diagram and the frozen photo side by side, with the observed region measured on each.
- * The photo pane stays tappable, so a point can be chosen after a refusal without retaking the photo.
+ * The photo pane stays tappable, so a point can be chosen after a refusal without retaking the photo. Located next-part
+ * and target regions are drawn on the photo pane only, through the pane's overlay, and are named in text beneath it.
  */
 export function RefusalComparison({
     refusal,
@@ -87,12 +97,17 @@ export function RefusalComparison({
     entry,
     pageUris,
     onTapPoint,
+    guidance,
+    onViewDiagram,
 }: {
     refusal: CheckResult
     observation: { uri: string; width: number; height: number }
     entry: LibraryEntry
     pageUris: WorkflowState['pageUris']
     onTapPoint: ((point: Point) => void) | undefined
+    guidance?: PartGuidance | undefined
+    // Opens the full-width diagram while the half-width comparison is shown.
+    onViewDiagram?: () => void
 }): ReactElement {
     const cited = refusal.sourceRefs[0]
     const page =
@@ -129,8 +144,13 @@ export function RefusalComparison({
             ? [{ id: 'observed', label: 'Observed part', box: refusal.observedRegion }]
             : [],
         onTapPoint,
+        overlay:
+            guidance === undefined || (guidance.next === null && guidance.target === null)
+                ? undefined
+                : (displayed): ReactElement => <PartGuidanceOverlay guidance={guidance} displayed={displayed} />,
+        notes: guidance === undefined ? undefined : guidanceNotes(guidance),
     }
-    return <ComparisonFrame diagram={diagram} photo={photo} />
+    return <ComparisonFrame diagram={diagram} photo={photo} onViewDiagram={onViewDiagram} />
 }
 
 /**
@@ -151,4 +171,21 @@ export function CheckHighlight({
     pulseKey?: string | null
 }): ReactElement {
     return <GroundedRegionOutline rect={rect} pulseKey={pulseKey} />
+}
+
+/** Next part, target and the paired arrow, placed on the displayed photo rect. Draws only what `guidance` carries. */
+export function PartGuidanceOverlay({
+    guidance,
+    displayed,
+}: {
+    guidance: PartGuidance
+    displayed: Rect
+}): ReactElement {
+    return (
+        <PartRegionOverlays
+            next={guidance.next === null ? null : boxOnDisplay(guidance.next.box, displayed)}
+            target={guidance.target === null ? null : boxOnDisplay(guidance.target.box, displayed)}
+            arrow={guidance.arrow}
+        />
+    )
 }

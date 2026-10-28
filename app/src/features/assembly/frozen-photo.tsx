@@ -3,6 +3,7 @@ import { Image, Pressable, StyleSheet, View, type GestureResponderEvent, type La
 import Svg from 'react-native-svg'
 import { useTheme } from '../../theme/theme'
 import { radius, space } from '../../theme/tokens'
+import { PaneNotes, type PaneNote } from '../../ui/pane-notes'
 import { Caption } from '../../ui/text'
 import { bytesToDataUri } from '../../media/image-source'
 import { containRect, normalizedPointFromTap, type Point, type Rect } from './frame-geometry'
@@ -70,10 +71,12 @@ type FrozenPhotoProps = {
     readonly onTapPoint?: (point: Point) => void
     // Overlays are drawn on the displayed photo rect, so normalized boxes always land on the visible image.
     readonly overlay?: (displayed: Rect) => ReactNode
+    // Plain-text names for anything the overlay draws, shown under the caption.
+    readonly notes?: readonly PaneNote[]
 }
 
 /** The one frozen photo of this capture. Nothing here is live; the image does not update after it is taken. */
-export function FrozenPhoto({ observation, caption, onTapPoint, overlay }: FrozenPhotoProps): ReactElement {
+export function FrozenPhoto({ observation, caption, onTapPoint, overlay, notes }: FrozenPhotoProps): ReactElement {
     const { colors } = useTheme()
     const [width, setWidth] = useState(0)
     const dataUri = useMemo(() => bytesToDataUri(observation.bytes, observation.mimeType), [observation])
@@ -135,6 +138,7 @@ export function FrozenPhoto({ observation, caption, onTapPoint, overlay }: Froze
                 )}
             </View>
             <Caption>{caption}</Caption>
+            <PaneNotes notes={notes} />
         </View>
     )
 }

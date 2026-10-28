@@ -7,7 +7,7 @@ import { Caption, Heading } from '../../ui/text'
 import { EmptyState } from '../../ui/states'
 import { StatusTag } from '../../ui/status'
 import { TextField } from '../../ui/fields'
-import { SkeletonLines } from '../../ui/skeleton'
+import { SkeletonCard } from '../../ui/skeleton'
 import { Icon } from '../../ui/icons'
 import { BottomSheet } from '../../ui/sheet'
 import { useTheme } from '../../theme/theme'
@@ -149,7 +149,7 @@ export function PagesScreen({ state, controller, entry, choosePages }: PagesScre
             {reading ? (
                 <Card>
                     <Caption>Reading your pages. Page changes are paused until it finishes.</Caption>
-                    <SkeletonLines />
+                    <SkeletonCard />
                 </Card>
             ) : null}
             <Stack gap="xs">

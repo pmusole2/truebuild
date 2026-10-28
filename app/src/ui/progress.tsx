@@ -24,7 +24,14 @@ export function ProgressBar({
             accessibilityRole="progressbar"
             accessibilityLabel={label}
             accessibilityValue={{ min: 0, max: safeTotal, now: safeValue, text: `${safeValue} of ${safeTotal}` }}
-            style={[styles.track, { backgroundColor: colors.surfaceSunken, borderColor: colors.border }]}
+            // At zero the track gets the stronger rule, so a step not started never looks like a missing bar.
+            style={[
+                styles.track,
+                {
+                    backgroundColor: colors.surfaceSunken,
+                    borderColor: safeValue === 0 ? colors.borderStrong : colors.border,
+                },
+            ]}
         >
             <View style={[styles.fill, { width: `${fraction * 100}%`, backgroundColor: colors.accent }]} />
         </View>
@@ -65,6 +72,14 @@ export function StepList({ steps }: { readonly steps: readonly StepListItem[] })
                         accessibilityState={{ selected: current }}
                         style={[styles.row, current && { backgroundColor: colors.surfaceRaised }]}
                     >
+                        {current ? (
+                            <View
+                                testID="step-current-bar"
+                                accessibilityElementsHidden={true}
+                                importantForAccessibility="no"
+                                style={[styles.currentBar, { backgroundColor: colors.accent }]}
+                            />
+                        ) : null}
                         <View
                             style={[
                                 styles.marker,
@@ -113,9 +128,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: space.sm,
+        paddingLeft: space.xs,
         minHeight: touchTarget,
         borderRadius: radius.sm,
+        overflow: 'hidden',
     },
+    currentBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
     marker: {
         width: 28,
         height: 28,

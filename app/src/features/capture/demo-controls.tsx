@@ -2,7 +2,7 @@ import { useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import type { ManualSession } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
-import { Card } from '../../ui/surface'
+import { Card, Divider } from '../../ui/surface'
 import { Body, Caption, Label } from '../../ui/text'
 import { space } from '../../theme/tokens'
 import { stepPartChoices } from '../assembly/question-state'
@@ -153,7 +153,9 @@ export function DemoControls({
     return (
         <Card>
             <InventoryConfirmation key={identity} session={session} stepIndex={stepIndex} />
+            <Divider testID="demo-divider" />
             <JudgeChoice session={session} stepIndex={stepIndex} locked={locked} onSelectStep={onSelectStep} />
+            <Divider testID="demo-divider" />
             <EarlierProgress session={session} completedStepIds={completedStepIds} />
         </Card>
     )

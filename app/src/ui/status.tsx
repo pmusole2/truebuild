@@ -12,7 +12,8 @@ export type StatusTone = 'neutral' | 'simulated' | 'accent' | 'pass' | 'refuse' 
 
 const TONE: Readonly<Record<StatusTone, { surface: ColorToken; border: ColorToken; text: ColorToken }>> = {
     neutral: { surface: 'surfaceSunken', border: 'border', text: 'ink' },
-    simulated: { surface: 'fillStrong', border: 'fillStrong', text: 'fillStrongInk' },
+    // A labelled marker, not a verdict: raised and outlined, so it never outshines Pass, Refuse or Cannot verify.
+    simulated: { surface: 'surfaceRaised', border: 'borderStrong', text: 'ink' },
     accent: { surface: 'accent', border: 'accent', text: 'accentFillInk' },
     pass: { surface: 'passSurface', border: 'pass', text: 'pass' },
     refuse: { surface: 'refuseSurface', border: 'refuse', text: 'refuse' },
@@ -74,8 +75,14 @@ export function Notice({ text, tone = 'info' }: { readonly text: string; readonl
         <View
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
-            style={[styles.notice, { backgroundColor: colors.surfaceSunken, borderColor: colors.border }]}
+            style={[styles.notice, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}
         >
+            <View
+                testID="notice-bar"
+                accessibilityElementsHidden={true}
+                importantForAccessibility="no"
+                style={[styles.noticeBar, { backgroundColor: colors[NOTICE_BAR[tone]] }]}
+            />
             <Icon name={tone === 'info' ? 'info' : 'alert'} size="sm" color={colors[NOTICE_BAR[tone]]} />
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
@@ -87,6 +94,8 @@ export function Notice({ text, tone = 'info' }: { readonly text: string; readonl
     )
 }
 
+const NOTICE_BAR_WIDTH = 3
+
 const styles = StyleSheet.create({
     tag: {
         alignSelf: 'flex-start',
@@ -95,7 +104,8 @@ const styles = StyleSheet.create({
         gap: space.xs,
         borderWidth: 1,
         borderRadius: radius.pill,
-        paddingHorizontal: space.xs,
+        minHeight: 28,
+        paddingHorizontal: space.sm,
         paddingVertical: space.xxs,
     },
     tagText: {
@@ -105,9 +115,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: space.xs,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: 1,
         borderRadius: radius.md,
         padding: space.sm,
+        paddingLeft: space.sm + NOTICE_BAR_WIDTH,
+        overflow: 'hidden',
     },
+    noticeBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: NOTICE_BAR_WIDTH },
     noticeText: { flex: 1 },
 })

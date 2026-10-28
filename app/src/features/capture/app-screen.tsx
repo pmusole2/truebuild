@@ -10,15 +10,7 @@ import { normalizeImage } from '../../media/normalize-image'
 import { CameraScreen } from './camera-screen'
 import { CaptureController, type WorkflowState } from './controller'
 import { LibraryStorage, type Digest, type LibraryEntry } from './library'
-import {
-    GuideScreen,
-    LibraryScreen,
-    OverviewScreen,
-    PagesScreen,
-    SettingsScreen,
-    SourceDiagrams,
-    StepFacts,
-} from './screens'
+import { GuideScreen, LibraryScreen, OverviewScreen, PagesScreen, SettingsScreen, stepAssemblyGuide } from './screens'
 import { testRestoreDelayMs } from './test-controls'
 import type { AssemblyGuide } from './camera-screen'
 import { AppUnavailableScreen } from './app-unavailable'
@@ -52,20 +44,7 @@ function assemblyGuide(entry: LibraryEntry | undefined, state: WorkflowState): A
     if (entry === undefined || state.cameraIntent === null || state.cameraIntent.kind === 'page') {
         return undefined
     }
-    const step = entry.session.reviewedSteps[entry.stepIndex]
-    if (step === undefined) {
-        return undefined
-    }
-    return {
-        progress: `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`,
-        title: step.title,
-        instructions: (
-            <>
-                <StepFacts session={entry.session} index={entry.stepIndex} />
-                <SourceDiagrams refs={step.sourceRefs} session={entry.session} pageUris={state.pageUris} />
-            </>
-        ),
-    }
+    return stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
 }
 
 export function CaptureWorkflow({ controller }: { controller: CaptureController }): ReactElement {

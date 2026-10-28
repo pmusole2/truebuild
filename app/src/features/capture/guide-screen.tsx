@@ -10,27 +10,41 @@ import {
 } from 'react-native'
 import { FrozenPhoto } from '../assembly/frozen-photo'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
+import type { Observation } from '../assembly/observation'
 import { stepPartChoices } from '../assembly/question-state'
 import { AppButton, IconButton } from '../../ui/button'
 import { BottomSheet } from '../../ui/sheet'
-import { ActionDock, ActionGroup, Card, Screen as ScreenShell } from '../../ui/surface'
-import { Heading, Label } from '../../ui/text'
+import { ActionDock, Card, Screen as ScreenShell } from '../../ui/surface'
+import { Caption, Heading } from '../../ui/text'
 import { EmptyState } from '../../ui/states'
+import type { PaneNote } from '../../ui/pane-notes'
 import { Notice } from '../../ui/status'
 import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { AskSheet } from '../../ui/ask-sheet'
 import { space } from '../../theme/tokens'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
-import { AnswerPanel, CheckHighlight, CheckPanel, passPulseKey, RefusalComparison } from './result-panels'
+import { guidanceNotes, partGuidance } from './part-regions'
+import {
+    AnswerPanel,
+    CheckHighlight,
+    CheckPanel,
+    PartGuidanceOverlay,
+    passPulseKey,
+    RefusalComparison,
+} from './result-panels'
 import { WorkflowNotice } from './screen-chrome'
 import { DemoControls } from './demo-controls'
+import { EvidencePair } from './evidence-pair'
 import { SourceDiagrams, StepFacts } from './step-facts'
 import { StepLayout } from './step-layout'
 import type { WorkflowScreenProps } from './workflow-types'
 
 /** The secondary actions may take at most this share of the window and scroll beyond it, so none is ever clipped. */
 export const PANEL_MAX_RATIO = 0.4
+
+// Two dock cells fit side by side on a 390 point phone; narrower rows or larger labels wrap instead of squeezing.
+const DOCK_CELL_MIN_WIDTH = 150
 
 /**
  * Assembly guide. One scroll holds the current step summary, the frozen photo or comparison, the result and the
@@ -73,6 +87,8 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
         }
     }, [state.answer])
     const choices = step === undefined ? [] : stepPartChoices(session, step)
+    // Only the current step's own part names can label a located region; anything else is dropped, never guessed.
+    const guidance = partGuidance(state.answer ?? state.check, new Map(choices.map((c) => [c.partId, c.label])))
     const completed = new Set(entry.completedStepIds)
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
         id: item.stepId,
@@ -80,8 +96,20 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
         state: completed.has(item.stepId) ? 'done' : index === entry.stepIndex ? 'current' : 'upcoming',
     }))
     const check = state.check
+    const capture = state.capture
     const hasResult = check !== null || state.answer !== null
     const refusal = check !== null && check.decision === 'refuse' ? check : null
+    // Start the full-width view with the displayed result's actual citations, then retain the rest of the step.
+    const instructionRefs = [
+        ...new Map(
+            [
+                ...(refusal?.sourceRefs ?? state.answer?.sourceRefs ?? check?.sourceRefs ?? []),
+                ...(state.answer?.sourceRefs ?? []),
+                ...(check?.sourceRefs ?? []),
+                ...(step?.sourceRefs ?? []),
+            ].map((ref) => [JSON.stringify([ref.pageId, ref.region]), ref] as const),
+        ).values(),
+    ]
     // The summary and its layout are one element that shows before or after the photo; the answer's layout wins.
     const summary = (
         <StepLayout
@@ -107,41 +135,81 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
     const onPoint = (point: Point): void => controller.targetChanged({ kind: 'point', ...point })
     const pointTap = editable && state.capture !== null ? onPoint : undefined
     const stepTitle = step === undefined ? session.title : `${step.order}. ${step.title}`
+    // The first cited page of a pass, cannot-verify or answer sits beside the photo. A refusal has its own comparison.
+    const pairedFrom = state.capture === null || refusal !== null ? null : state.answer !== null ? 'answer' : 'check'
+    const pairedRefs =
+        pairedFrom === 'answer'
+            ? (state.answer?.sourceRefs ?? [])
+            : pairedFrom === 'check'
+              ? (check?.sourceRefs ?? [])
+              : []
+    const guideNotes = guidanceNotes(guidance)
+    const frozenPhoto = (observation: Observation, notes?: readonly PaneNote[]): ReactElement => (
+        <FrozenPhoto
+            observation={observation}
+            caption="Frozen photo for this step. New photos clear prior results."
+            onTapPoint={pointTap}
+            notes={notes}
+            overlay={(displayed): ReactNode => (
+                <>
+                    <CheckHighlight
+                        rect={highlight === null ? null : boxOnDisplay(highlight, displayed)}
+                        pulseKey={pulseKey}
+                    />
+                    <PartGuidanceOverlay guidance={guidance} displayed={displayed} />
+                </>
+            )}
+        />
+    )
+    const openInstructions = (): void => setInstructionsOpen(true)
     const unavailable = busy || blocked !== null || session.reviewStatus !== 'reviewed'
+    // Secondary actions sit in two short rows beneath the one filled action: moving between steps, then the two
+    // quieter ones. Every label stays visible and every control keeps its 44 point height; a row only wraps.
     const secondaryActions = (
         <>
-            <ActionGroup>
-                <AppButton
-                    label="Take photo to ask"
-                    icon="help"
-                    disabled={unavailable}
-                    onPress={(): void => controller.camera({ kind: 'question' })}
-                />
-                <AppButton
-                    label="Previous step"
-                    icon="chevronLeft"
-                    disabled={busy || entry.stepIndex === 0}
-                    onPress={(): void => {
-                        void controller.step(entry.stepIndex - 1)
-                    }}
-                />
-                <AppButton
-                    label="Next step"
-                    icon="chevronRight"
-                    disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
-                    onPress={(): void => {
-                        void controller.step(entry.stepIndex + 1)
-                    }}
-                />
-            </ActionGroup>
-            <AppButton
-                label="Mark step complete myself"
-                variant="quiet"
-                disabled={busy}
-                onPress={(): void => {
-                    void controller.completeStep()
-                }}
-            />
+            <View testID="dock-step-row" style={styles.dockRow}>
+                <View style={styles.dockCell}>
+                    <AppButton
+                        label="Previous step"
+                        icon="chevronLeft"
+                        disabled={busy || entry.stepIndex === 0}
+                        onPress={(): void => {
+                            void controller.step(entry.stepIndex - 1)
+                        }}
+                    />
+                </View>
+                <View style={styles.dockCell}>
+                    <AppButton
+                        label="Next step"
+                        icon="chevronRight"
+                        disabled={busy || entry.stepIndex >= session.reviewedSteps.length - 1}
+                        onPress={(): void => {
+                            void controller.step(entry.stepIndex + 1)
+                        }}
+                    />
+                </View>
+            </View>
+            <View testID="dock-support-row" style={styles.dockRow}>
+                <View style={styles.dockCell}>
+                    <AppButton
+                        label="Take photo to ask"
+                        icon="help"
+                        variant="quiet"
+                        disabled={unavailable}
+                        onPress={(): void => controller.camera({ kind: 'question' })}
+                    />
+                </View>
+                <View style={styles.dockCell}>
+                    <AppButton
+                        label="Mark step complete myself"
+                        variant="quiet"
+                        disabled={busy}
+                        onPress={(): void => {
+                            void controller.completeStep()
+                        }}
+                    />
+                </View>
+            </View>
         </>
     )
     const actions = (
@@ -174,10 +242,10 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
             <View style={styles.guideTop}>
                 <IconButton label="Back" icon="chevronLeft" onPress={(): void => controller.navigate('overview')} />
                 <View style={styles.titleWrap}>
-                    <Label>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Label>
+                    <Caption>{`Step ${entry.stepIndex + 1} of ${session.reviewedSteps.length}`}</Caption>
                     <Heading>{stepTitle}</Heading>
                 </View>
-                <IconButton label="Step instructions" icon="info" onPress={(): void => setInstructionsOpen(true)} />
+                <IconButton label="Step instructions" icon="info" onPress={openInstructions} />
             </View>
             <ProgressBar
                 label="Guide progress"
@@ -202,11 +270,18 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                     <WorkflowNotice state={state} controller={controller} />
                     {blocked === null ? null : <Notice tone="caution" text={blocked} />}
                     {state.answer === null ? null : (
-                        <AnswerPanel answer={state.answer} session={session} pageUris={state.pageUris} />
+                        <AnswerPanel
+                            answer={state.answer}
+                            session={session}
+                            pageUris={state.pageUris}
+                            showSource={false}
+                        />
                     )}
-                    {check === null ? null : <CheckPanel check={check} session={session} pageUris={state.pageUris} />}
+                    {check === null ? null : (
+                        <CheckPanel check={check} session={session} pageUris={state.pageUris} showSource={false} />
+                    )}
                     {hasResult ? null : summary}
-                    {state.capture === null ? (
+                    {capture === null ? (
                         <EmptyState
                             title="No photo for this step yet."
                             body="Take a photo of this step to check or ask about it."
@@ -214,22 +289,39 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                     ) : refusal !== null ? (
                         <RefusalComparison
                             refusal={refusal}
-                            observation={state.capture.observation}
+                            observation={capture.observation}
                             entry={entry}
                             pageUris={state.pageUris}
                             onTapPoint={pointTap}
+                            guidance={guidance}
+                            onViewDiagram={openInstructions}
+                        />
+                    ) : pairedRefs.length > 0 ? (
+                        <EvidencePair
+                            photo={(photoNotes): ReactElement => frozenPhoto(capture.observation, photoNotes)}
+                            notes={guideNotes}
+                            reference={pairedRefs[0]!}
+                            session={session}
+                            pageUris={state.pageUris}
+                            onViewDiagram={openInstructions}
                         />
                     ) : (
-                        <FrozenPhoto
-                            observation={state.capture.observation}
-                            caption="Frozen photo for this step. New photos clear prior results."
-                            onTapPoint={pointTap}
-                            overlay={(displayed): ReactNode => (
-                                <CheckHighlight
-                                    rect={highlight === null ? null : boxOnDisplay(highlight, displayed)}
-                                    pulseKey={pulseKey}
-                                />
-                            )}
+                        frozenPhoto(capture.observation, guideNotes)
+                    )}
+                    {state.answer === null ? null : (
+                        <SourceDiagrams
+                            refs={state.answer.sourceRefs}
+                            session={session}
+                            pageUris={state.pageUris}
+                            skip={pairedFrom === 'answer' ? 1 : 0}
+                        />
+                    )}
+                    {check === null || check.decision === 'refuse' ? null : (
+                        <SourceDiagrams
+                            refs={check.sourceRefs}
+                            session={session}
+                            pageUris={state.pageUris}
+                            skip={pairedFrom === 'check' ? 1 : 0}
                         />
                     )}
                     {hasResult ? summary : null}
@@ -272,7 +364,7 @@ export function GuideScreen({ state, controller, entry }: WorkflowScreenProps & 
                 onClose={(): void => setInstructionsOpen(false)}
             >
                 <StepFacts session={session} index={entry.stepIndex} />
-                <SourceDiagrams refs={step?.sourceRefs ?? []} session={session} pageUris={state.pageUris} />
+                <SourceDiagrams refs={instructionRefs} session={session} pageUris={state.pageUris} fit="page" />
                 <ProgressBar
                     label="Steps marked complete"
                     value={entry.completedStepIds.length}
@@ -293,4 +385,6 @@ const styles = StyleSheet.create({
     main: { flex: 1 },
     mainContent: { padding: space.md, gap: space.md },
     actions: { gap: space.xs },
+    dockRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+    dockCell: { flexGrow: 1, flexBasis: 0, minWidth: DOCK_CELL_MIN_WIDTH },
 })

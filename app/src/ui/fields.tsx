@@ -4,6 +4,7 @@ import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, touchTarget } from '../theme/tokens'
 import { focusRingStyle, useFocusRing } from './focus'
+import { Icon } from './icons'
 import { Caption, Label } from './text'
 
 export type TextFieldProps = {
@@ -81,7 +82,16 @@ export function TextField({
                     },
                 ]}
             />
-            {error === undefined ? null : <Caption tone="refuse">{error}</Caption>}
+            {error === undefined ? null : (
+                <View style={styles.error}>
+                    <View testID="field-error-icon" accessibilityElementsHidden={true} importantForAccessibility="no">
+                        <Icon name="alert" size="sm" color={colors.refuse} />
+                    </View>
+                    <View style={styles.errorText}>
+                        <Caption tone="refuse">{error}</Caption>
+                    </View>
+                </View>
+            )}
             {error !== undefined || hint === undefined ? null : <Caption>{hint}</Caption>}
         </View>
     )
@@ -141,11 +151,11 @@ function SegmentChoice<T extends string>({
             onPress={(): void => onChange(option.value)}
             style={[
                 styles.segment,
-                { backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised },
+                { backgroundColor: selected ? colors.accent : colors.surfaceRaised },
                 focusRingStyle(focus.focused, colors),
             ]}
         >
-            <Caption tone={selected ? 'inverse' : 'default'}>{option.label}</Caption>
+            <Caption tone={selected ? 'onAccent' : 'default'}>{option.label}</Caption>
         </Pressable>
     )
 }
@@ -191,6 +201,8 @@ const styles = StyleSheet.create({
     field: {
         gap: space.xs,
     },
+    error: { flexDirection: 'row', alignItems: 'flex-start', gap: space.xs },
+    errorText: { flex: 1 },
     input: {
         minHeight: touchTarget,
         borderWidth: 1,

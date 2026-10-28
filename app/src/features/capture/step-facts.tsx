@@ -9,10 +9,11 @@ import {
     type PartRequirement,
 } from '@truebuild/contracts'
 import { Card, Stack } from '../../ui/surface'
-import { Body, Caption, Heading, Label } from '../../ui/text'
-import { MeasuredPane, type ComparisonPane } from '../../ui/comparison'
+import { Body, Callout, Caption, Heading, Label } from '../../ui/text'
+import { MeasuredPane, type ComparisonFit, type ComparisonPane } from '../../ui/comparison'
 import { space } from '../../theme/tokens'
 import { stepPartChoices } from '../assembly/question-state'
+import type { AssemblyGuide } from './camera-stage'
 import type { WorkflowState } from './controller'
 
 export function factText<T>(fact: Fact<T>, display: (value: T) => string): string {
@@ -65,6 +66,54 @@ export function StepFacts({
             ))}
         </Stack>
     )
+}
+
+/**
+ * What to look for while the camera is open: one cue, in the step's own words. The first visible check leads because it
+ * is what the photo is judged against; the orientation stands in when the step has no known check. Unknown facts keep
+ * their stated reason, the line is bounded to two lines, and every fact stays in the full instructions.
+ */
+export function StepGlance({ session, index }: { session: ManualSession; index: number }): ReactElement | null {
+    const step = session.reviewedSteps[index]
+    if (step === undefined) {
+        return null
+    }
+    const required = stepEvidenceRequirements(step)
+    const firstCheck = step.visibleChecks[0]
+    const orientation =
+        required.orientation || step.orientation.state === 'known'
+            ? `Orientation: ${factText(step.orientation, (value) => value.description)}`
+            : undefined
+    const check = firstCheck === undefined ? undefined : `Visible check: ${factText(firstCheck.description, String)}`
+    const cue = firstCheck?.description.state === 'known' ? check : (orientation ?? check)
+    return cue === undefined ? null : <Callout numberOfLines={2}>{cue}</Callout>
+}
+
+/**
+ * The step guide shown over the assembly camera. One builder serves the production camera route and the inert visual
+ * preview, so the preview cannot drift from what the app wires: only the cue to look for sits over the viewfinder, and
+ * every fact and cited diagram stays in the sheet.
+ */
+export function stepAssemblyGuide(
+    session: ManualSession,
+    index: number,
+    pageUris: WorkflowState['pageUris'],
+): AssemblyGuide | undefined {
+    const step = session.reviewedSteps[index]
+    if (step === undefined) {
+        return undefined
+    }
+    return {
+        progress: `Step ${index + 1} of ${session.reviewedSteps.length}`,
+        title: step.title,
+        summary: <StepGlance session={session} index={index} />,
+        instructions: (
+            <>
+                <StepFacts session={session} index={index} />
+                <SourceDiagrams refs={step.sourceRefs} session={session} pageUris={pageUris} fit="page" />
+            </>
+        ),
+    }
 }
 
 /**
@@ -148,51 +197,80 @@ export function ModelProvenance({ result }: { result: Pick<ParsedManual, 'model'
     )
 }
 
-/** Expected diagrams for cited pages. Highlights are measured against each page's own size, so letterboxing is correct. */
+/** One expected diagram for a cited page, measured against the page's own size so letterboxing is correct. */
+export function SourceDiagram({
+    reference,
+    index,
+    session,
+    pageUris,
+    sideBySide = false,
+    fit = 'frame',
+}: {
+    reference: SourceRef
+    // Position in the cited list. It names the pane (diagram-0, diagram-1) wherever the pane is drawn.
+    index: number
+    session: ManualSession
+    pageUris: WorkflowState['pageUris']
+    sideBySide?: boolean
+    fit?: ComparisonFit
+}): ReactElement {
+    const page = session.pages.find((candidate) => candidate.pageId === reference.pageId)
+    if (page === undefined) {
+        return <Caption>Cited diagram unavailable.</Caption>
+    }
+    const pageNumber = session.pages.indexOf(page) + 1
+    const uri = pageUris[page.pageId]
+    const pane: ComparisonPane = {
+        caption: `Expected diagram · page ${pageNumber}`,
+        media:
+            uri === undefined ? (
+                <Caption>Loading page…</Caption>
+            ) : (
+                <Image
+                    source={{ uri }}
+                    accessibilityLabel={`Expected diagram page ${pageNumber}`}
+                    resizeMode="stretch"
+                    style={StyleSheet.absoluteFill}
+                />
+            ),
+        mediaSize: { width: page.width, height: page.height },
+        regions:
+            reference.region === null ? [] : [{ id: `cited-${index}`, label: 'Cited area', box: reference.region }],
+    }
+    return <MeasuredPane pane={pane} testID={`diagram-${index}`} sideBySide={sideBySide} fit={fit} />
+}
+
+/**
+ * Expected diagrams for cited pages. `skip` leaves out the first pages when the guide has already drawn them beside the
+ * photo; the remaining panes keep the index they have in the full list.
+ */
 export function SourceDiagrams({
     refs,
     session,
     pageUris,
+    skip = 0,
+    fit = 'frame',
 }: {
     refs: readonly SourceRef[]
     session: ManualSession
     pageUris: WorkflowState['pageUris']
+    skip?: number
+    fit?: ComparisonFit
 }): ReactElement {
     return (
         <Stack gap="sm">
-            {refs.map((ref, index) => {
-                const page = session.pages.find((candidate) => candidate.pageId === ref.pageId)
-                if (page === undefined) {
-                    return <Caption key={index}>Cited diagram unavailable.</Caption>
-                }
-                const pageNumber = session.pages.indexOf(page) + 1
-                const uri = pageUris[page.pageId]
-                const pane: ComparisonPane = {
-                    caption: `Expected diagram · page ${pageNumber}`,
-                    media:
-                        uri === undefined ? (
-                            <Caption>Loading page…</Caption>
-                        ) : (
-                            <Image
-                                source={{ uri }}
-                                accessibilityLabel={`Expected diagram page ${pageNumber}`}
-                                resizeMode="stretch"
-                                style={StyleSheet.absoluteFill}
-                            />
-                        ),
-                    mediaSize: { width: page.width, height: page.height },
-                    regions:
-                        ref.region === null ? [] : [{ id: `cited-${index}`, label: 'Cited area', box: ref.region }],
-                }
-                return (
-                    <MeasuredPane
-                        key={`${ref.pageId}-${index}`}
-                        pane={pane}
-                        testID={`diagram-${index}`}
-                        sideBySide={false}
+            {refs.map((reference, index) =>
+                index < skip ? null : (
+                    <SourceDiagram
+                        key={`${reference.pageId}-${index}`}
+                        reference={reference}
+                        index={index}
+                        session={session}
+                        pageUris={pageUris}
+                        fit={fit}
                     />
-                )
-            })}
+                ),
+            )}
         </Stack>
     )
 }
