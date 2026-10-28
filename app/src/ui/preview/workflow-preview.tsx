@@ -1,5 +1,8 @@
 import { useState, type ReactElement } from 'react'
-import { ScrollView, StyleSheet, View } from 'react-native'
+import { Image, ScrollView, StyleSheet, View } from 'react-native'
+import { CameraStage } from '../../features/capture/camera-stage'
+import { SourceDiagrams, StepFacts } from '../../features/capture/step-facts'
+import { ShutterButton } from '../camera-chrome'
 import {
     GuideScreen,
     LibraryScreen,
@@ -14,6 +17,7 @@ import { Caption } from '../text'
 import {
     WORKFLOW_PREVIEW_BANNER,
     WORKFLOW_PREVIEW_CASES,
+    cameraPreviewPresentation,
     workflowPreviewFixture,
     type WorkflowPreviewCase,
     type WorkflowPreviewGroup,
@@ -45,7 +49,7 @@ export const INERT_WORKFLOW_CONTROLLER = Object.freeze({
     targetChanged: doNothing,
 } satisfies WorkflowController)
 
-const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide']
+const GROUPS: readonly WorkflowPreviewGroup[] = ['Home', 'Pages', 'Review', 'Guide', 'Camera']
 const GROUP_OPTIONS = GROUPS.map((value) => ({ value, label: value }))
 const SCHEME_OPTIONS = [
     { value: 'light', label: 'Light' },
@@ -149,7 +153,60 @@ function PreviewFrame({
                 ) : null}
             </View>
             <View key={selected} style={[styles.device, { borderColor: colors.border }]}>
-                {state.route === 'library' ? (
+                {state.route === 'camera' ? (
+                    <CameraStage
+                        intent={{
+                            kind:
+                                selected === 'camera-page'
+                                    ? 'page'
+                                    : selected === 'camera-question'
+                                      ? 'question'
+                                      : 'check',
+                        }}
+                        guide={
+                            selected === 'camera-page'
+                                ? undefined
+                                : {
+                                      progress: 'Step 1 of 2',
+                                      title: entry.session.reviewedSteps[0]!.title,
+                                      instructions: (
+                                          <>
+                                              <StepFacts session={entry.session} index={0} />
+                                              <SourceDiagrams
+                                                  refs={entry.session.reviewedSteps[0]!.sourceRefs}
+                                                  session={entry.session}
+                                                  pageUris={state.pageUris}
+                                              />
+                                          </>
+                                      ),
+                                  }
+                        }
+                        presentation={
+                            cameraPreviewPresentation(selected) ?? {
+                                status: 'preview',
+                                media: (
+                                    <Image
+                                        source={{ uri: Object.values(state.pageUris)[0] }}
+                                        style={StyleSheet.absoluteFill}
+                                        resizeMode="contain"
+                                        accessibilityLabel="Synthetic camera preview"
+                                    />
+                                ),
+                                shutter: (
+                                    <ShutterButton
+                                        label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
+                                        disabled={selected === 'camera-preparing'}
+                                        onPress={doNothing}
+                                    />
+                                ),
+                            }
+                        }
+                        onCancel={doNothing}
+                        onRequestPermission={doNothing}
+                        onOpenSettings={doNothing}
+                        onRetry={doNothing}
+                    />
+                ) : state.route === 'library' ? (
                     <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} />
                 ) : state.route === 'pages' ? (
                     <PagesScreen

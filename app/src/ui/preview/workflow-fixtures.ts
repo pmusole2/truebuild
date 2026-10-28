@@ -3,6 +3,7 @@ import { HERO_DIAGRAM_PNG_BASE64, HERO_DIAGRAM_SVG } from '@truebuild/contracts/
 import { decodeBase64, sampleManual } from '../../demo/sample-manual'
 import type { WorkflowState } from '../../features/capture/controller'
 import type { LibraryEntry } from '../../features/capture/library'
+import type { CameraPresentation } from '../../features/capture/camera-stage'
 
 export const WORKFLOW_PREVIEW_BANNER =
     'Synthetic visual preview · local fixtures only · no camera, storage or model requests'
@@ -27,6 +28,15 @@ export const WORKFLOW_PREVIEW_CASES = [
     { id: 'guide-pending', label: 'Guide · pending', group: 'Guide' },
     { id: 'guide-error', label: 'Guide · error', group: 'Guide' },
     { id: 'guide-instructions', label: 'Guide · instructions', group: 'Guide' },
+    { id: 'camera-loading', label: 'Camera · checking access', group: 'Camera' },
+    { id: 'camera-permission', label: 'Camera · permission', group: 'Camera' },
+    { id: 'camera-denied', label: 'Camera · denied', group: 'Camera' },
+    { id: 'camera-permission-error', label: 'Camera · permission error', group: 'Camera' },
+    { id: 'camera-error', label: 'Camera · unavailable', group: 'Camera' },
+    { id: 'camera-page', label: 'Camera · scan manual', group: 'Camera' },
+    { id: 'camera-check', label: 'Camera · check step', group: 'Camera' },
+    { id: 'camera-question', label: 'Camera · ask about step', group: 'Camera' },
+    { id: 'camera-preparing', label: 'Camera · preparing photo', group: 'Camera' },
 ] as const
 
 export type WorkflowPreviewCase = (typeof WORKFLOW_PREVIEW_CASES)[number]['id']
@@ -47,7 +57,9 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
               ? 'pages'
               : id.startsWith('review')
                 ? 'overview'
-                : 'guide',
+                : id.startsWith('camera')
+                  ? 'camera'
+                  : 'guide',
         entries: [entry],
         selectedId: session.manualId,
         pending: null,
@@ -164,4 +176,20 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
     }
 
     return { state, entry }
+}
+
+/** Hardware-free camera branch data. Preview media and shutter are provided by the gallery, never a CameraView. */
+export function cameraPreviewPresentation(
+    id: WorkflowPreviewCase,
+): Exclude<CameraPresentation, { status: 'preview' }> | null {
+    if (id === 'camera-loading') return { status: 'checking-access' }
+    if (id === 'camera-error') return { status: 'error' }
+    if (id === 'camera-permission' || id === 'camera-denied' || id === 'camera-permission-error') {
+        return {
+            status: 'permission',
+            canAskAgain: id === 'camera-permission',
+            error: id === 'camera-permission-error',
+        }
+    }
+    return null
 }

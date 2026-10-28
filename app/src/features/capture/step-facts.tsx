@@ -12,14 +12,23 @@ export function factText<T>(fact: Fact<T>, display: (value: T) => string): strin
     return fact.state === 'known' ? display(fact.value) : `Unknown: ${fact.reason}`
 }
 
-export function StepFacts({ session, index }: { session: ManualSession; index: number }): ReactElement {
+export function StepFacts({
+    session,
+    index,
+    showHeading = true,
+}: {
+    session: ManualSession
+    index: number
+    // A review card already shows the step's order and title above the opened facts.
+    showHeading?: boolean
+}): ReactElement {
     const step = session.reviewedSteps[index]
     if (step === undefined) {
         return <Body tone="muted">No extracted steps yet.</Body>
     }
     return (
         <Stack gap="xs">
-            <Heading>{`${step.order}. ${step.title}`}</Heading>
+            {showHeading ? <Heading>{`${step.order}. ${step.title}`}</Heading> : null}
             {step.parts.map((part) => (
                 <Body key={part.partId}>{`${part.partId}: ${factText(part.quantity, String)}`}</Body>
             ))}

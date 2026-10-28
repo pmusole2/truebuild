@@ -64,6 +64,10 @@ function Screens({ controller }: { controller: CaptureController }): ReactElemen
 }
 // Reanimated's native runtime is not loaded under Jest; the ui stand-in records the animation intent instead.
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
+)
 
 const controllers: CaptureController[] = []
 afterEach(() => {
@@ -551,4 +555,232 @@ it('a revision change clears a stale whole-manual checkbox', async () => {
         />,
     )
     expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(false)
+})
+
+function entryFor(session: ManualSession): LibraryEntry {
+    return { session, stepIndex: 0, completedStepIds: [], capture: null }
+}
+
+it('lists confirmed steps as collapsed cards with chips, and expanding one shows its facts and cited diagram', async () => {
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(
+        <OverviewScreen
+            state={controller.getSnapshot()}
+            controller={controller}
+            entry={entryFor(createDemoManual())}
+        />,
+    )
+    expect(screen.getByText('1. Stand the side panel upright')).toBeTruthy()
+    expect(screen.getByText('2. Seat the divider in the groove')).toBeTruthy()
+    expect(screen.getAllByText('Orientation known')).toHaveLength(2)
+    expect(screen.getAllByText('Cited page 1').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/^Orientation: /)).toBeNull()
+    expect(screen.queryByTestId('diagram-0')).toBeNull()
+    // Guiding a step never needs an expansion first.
+    expect(screen.getByRole('button', { name: 'Guide step 1' })).toBeTruthy()
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Step 1 details' }))
+    expect(screen.getByRole('button', { name: 'Step 1 details' }).props.accessibilityState.expanded).toBe(true)
+    expect(screen.getAllByText(/^Orientation: /)).toHaveLength(1)
+    expect(screen.getAllByText(/^Visible check: /).length).toBeGreaterThan(0)
+    expect(screen.getAllByTestId('diagram-0')).toHaveLength(1)
+    expect(screen.getByText('Expected diagram · page 1')).toBeTruthy()
+    // The card title is shown once; the opened facts do not repeat it.
+    expect(screen.getAllByText('1. Stand the side panel upright')).toHaveLength(1)
+    expect(screen.queryByLabelText(ORIENTATION_LABEL)).toBeNull()
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Step 1 details' }))
+    expect(screen.queryByText(/^Orientation: /)).toBeNull()
+    expect(screen.queryByTestId('diagram-0')).toBeNull()
+})
+
+it('groups every unresolved critical fact once and keeps each step that needs the editors open and unclosable', async () => {
+    const session = partlyResolvedManual()
+    session.rawExtraction = {
+        parts: session.parts,
+        steps: session.reviewedSteps,
+        unknowns: ['Packaging colour could not be read.'],
+    }
+    await renderManual(session)
+    expect(screen.getByText('2 facts need you')).toBeTruthy()
+    expect(screen.getAllByText(/^Unresolved critical fact: /)).toHaveLength(2)
+    expect(screen.getByText('Unresolved critical fact: Step 1 orientation: Arrow is not visible.')).toBeTruthy()
+    expect(screen.getByText('Notes from reading')).toBeTruthy()
+    expect(screen.getByText('Extraction note: Packaging colour could not be read.')).toBeTruthy()
+    expect(screen.getAllByText('Needs your input')).toHaveLength(2)
+    expect(screen.getAllByLabelText(ORIENTATION_LABEL)).toHaveLength(1)
+    expect(screen.getAllByLabelText(CHECKS_LABEL)).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Step 1 details' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Step 2 details' })).toBeNull()
+    expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(true)
+})
+
+it('marks a step as needing input when one of its required part names is unknown', async () => {
+    const session = unreviewedDemo()
+    session.parts[0]!.name = { state: 'unknown', reason: 'The part name is not readable.' }
+    await renderManual(session)
+    expect(screen.getAllByText('Needs your input').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Step 1 details' }).props.accessibilityState.expanded).toBe(true)
+    expect(screen.getByRole('checkbox').props.accessibilityState.disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Confirm reviewed facts' }).props.accessibilityState.disabled).toBe(true)
+})
+
+it('opens a step with an unknown fact, states its reason once while collapsed, and restarts on a new revision', async () => {
+    const session = unreviewedDemo()
+    session.reviewedSteps[0]!.connection = { state: 'unknown', reason: 'Connector is not drawn.' }
+    const entry = entryFor(session)
+    const { controller } = setup(entry)
+    controllers.push(controller)
+    const view = (revision: number): ReactElement => (
+        <OverviewScreen
+            state={controller.getSnapshot()}
+            controller={controller}
+            entry={{ ...entry, session: { ...session, revision } }}
+        />
+    )
+    const { rerender } = await render(view(1))
+    // Open by default: the step's full facts carry the reason, and so does the grouped list.
+    expect(screen.getAllByText(/Connector is not drawn/)).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: 'Step 2 details' })?.props.accessibilityState.expanded).toBe(false)
+    expect(screen.queryByLabelText(ORIENTATION_LABEL)).toBeNull()
+
+    await fireEvent.press(screen.getByRole('button', { name: 'Step 1 details' }))
+    expect(screen.getAllByText(/Connector is not drawn/)).toHaveLength(1)
+    expect(screen.getByText('Unresolved critical fact: Step 1 connection: Connector is not drawn.')).toBeTruthy()
+
+    await rerender(view(2))
+    expect(screen.getAllByText(/Connector is not drawn/)).toHaveLength(2)
+})
+
+describe('PagesScreen', () => {
+    function pagesEntry(count: number): LibraryEntry {
+        const session = createDemoManual()
+        session.pages = Array.from({ length: count }, (_, index) => ({
+            ...createDemoManual().pages[0]!,
+            pageId: `page-${index + 1}`,
+            assetId: `asset-${index + 1}`,
+        }))
+        session.rawExtraction = null
+        return entryFor(session)
+    }
+    const noop = (): void => undefined
+
+    it('lets a person inspect a thumbnail at full width before reading the manual', async () => {
+        const entry = pagesEntry(1)
+        const { controller } = setup()
+        controllers.push(controller)
+        await render(
+            <PagesScreen state={controller.getSnapshot()} entry={entry} controller={controller} choosePages={noop} />,
+        )
+        expect(screen.queryByTestId('bottom-sheet')).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'View page 1' }))
+        expect(screen.getByTestId('bottom-sheet')).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
+        expect(screen.queryByTestId('bottom-sheet')).toBeNull()
+    })
+
+    it('shows the page count and index, and routes each page action with its original label', async () => {
+        const { controller } = setup()
+        controllers.push(controller)
+        const editPage = jest.spyOn(controller, 'editPage').mockResolvedValue(undefined as never)
+        const camera = jest.spyOn(controller, 'camera').mockImplementation(noop)
+        const parse = jest.spyOn(controller, 'parse').mockResolvedValue(undefined as never)
+        const choosePages = jest.fn()
+        await render(
+            <PagesScreen
+                state={controller.getSnapshot()}
+                controller={controller}
+                entry={pagesEntry(2)}
+                choosePages={choosePages}
+            />,
+        )
+        expect(screen.getByText('2 of 20')).toBeTruthy()
+        expect(screen.getByText('Page 2')).toBeTruthy()
+        expect(screen.getByText('2 of 2')).toBeTruthy()
+        expect(screen.getByText(PRIVACY_COPY.stayOnDevice)).toBeTruthy()
+        expect(screen.getByText(PRIVACY_COPY.read)).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Move page 1 up' }).props.accessibilityState.disabled).toBe(true)
+        expect(screen.getByRole('button', { name: 'Move page 2 down' }).props.accessibilityState.disabled).toBe(true)
+
+        await fireEvent.press(screen.getByRole('button', { name: 'Move page 2 up' }))
+        expect(editPage).toHaveBeenLastCalledWith(1, 'up')
+        await fireEvent.press(screen.getByRole('button', { name: 'Move page 1 down' }))
+        expect(editPage).toHaveBeenLastCalledWith(0, 'down')
+        await fireEvent.press(screen.getByRole('button', { name: 'Remove page 2' }))
+        expect(editPage).toHaveBeenLastCalledWith(1, 'remove')
+        await fireEvent.press(screen.getByRole('button', { name: 'Retake page 1' }))
+        expect(camera).toHaveBeenLastCalledWith({ kind: 'page', replaceIndex: 0 })
+        await fireEvent.press(screen.getByRole('button', { name: 'Replace page 2 from photos' }))
+        expect(choosePages).toHaveBeenLastCalledWith(1)
+        await fireEvent.press(screen.getByRole('button', { name: 'Scan a page' }))
+        expect(camera).toHaveBeenLastCalledWith({ kind: 'page' })
+        await fireEvent.press(screen.getByRole('button', { name: 'Choose pages from photos' }))
+        expect(choosePages).toHaveBeenLastCalledWith()
+        await fireEvent.press(screen.getByRole('button', { name: 'Read manual' }))
+        expect(parse).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops adding at 20 pages but keeps replace and reading available', async () => {
+        const { controller } = setup()
+        controllers.push(controller)
+        await render(
+            <PagesScreen
+                state={controller.getSnapshot()}
+                controller={controller}
+                entry={pagesEntry(20)}
+                choosePages={noop}
+            />,
+        )
+        // The count tag and the last page's own index both read "20 of 20".
+        expect(screen.getAllByText('20 of 20')).toHaveLength(2)
+        expect(screen.getByRole('button', { name: 'Scan a page' }).props.accessibilityState.disabled).toBe(true)
+        expect(screen.getByRole('button', { name: 'Choose pages from photos' }).props.accessibilityState.disabled).toBe(
+            true,
+        )
+        expect(
+            screen.getByRole('button', { name: 'Replace page 20 from photos' }).props.accessibilityState.disabled,
+        ).toBe(false)
+        expect(screen.getByRole('button', { name: 'Read manual' }).props.accessibilityState.disabled).toBe(false)
+    })
+
+    it('shows a local empty state with reading unavailable, and no skeleton until a read is pending', async () => {
+        const { controller } = setup()
+        controllers.push(controller)
+        await render(
+            <PagesScreen
+                state={controller.getSnapshot()}
+                controller={controller}
+                entry={pagesEntry(0)}
+                choosePages={noop}
+            />,
+        )
+        expect(screen.getByText('No pages yet.')).toBeTruthy()
+        expect(screen.getByText('0 of 20')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Read manual' }).props.accessibilityState.disabled).toBe(true)
+        expect(screen.queryByText(/Reading your pages/)).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Review extracted facts' })).toBeNull()
+    })
+
+    it('while reading, shows a skeleton, marks Read manual busy and pauses every page change', async () => {
+        const { controller } = setup()
+        controllers.push(controller)
+        const entry = pagesEntry(1)
+        entry.session.rawExtraction = { parts: [], steps: [], unknowns: [] }
+        await render(
+            <PagesScreen
+                state={{ ...controller.getSnapshot(), pending: 'Reading manual pages…' }}
+                controller={controller}
+                entry={entry}
+                choosePages={noop}
+            />,
+        )
+        expect(screen.getByText('Reading manual pages…')).toBeTruthy()
+        expect(screen.getByText('Reading your pages. Page changes are paused until it finishes.')).toBeTruthy()
+        const read = screen.getByRole('button', { name: 'Read manual again' })
+        expect(read.props.accessibilityState.busy).toBe(true)
+        for (const name of ['Scan a page', 'Choose pages from photos', 'Remove page 1', 'Review extracted facts']) {
+            expect(screen.getByRole('button', { name }).props.accessibilityState.disabled).toBe(true)
+        }
+    })
 })

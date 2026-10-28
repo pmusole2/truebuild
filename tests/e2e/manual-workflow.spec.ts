@@ -221,7 +221,7 @@ test('keyboard focus is visible on a control on web', async ({ page }) => {
     const add = page.getByRole('button', { name: 'Add manual', exact: true })
     await add.focus()
     const shadow = await add.evaluate((element) => getComputedStyle(element).boxShadow)
-    expect(shadow).toContain('154, 75, 7')
+    expect(shadow).toContain('0, 87, 194')
 })
 
 if (SECOND_OPINION !== undefined) {

@@ -38,3 +38,17 @@ it('opens the real guide instructions sheet and keeps every controller action in
         fetchSpy.mockRestore()
     }
 })
+
+it('renders camera recovery through the pure stage without opening hardware or sending a request', async () => {
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Preview must never fetch'))
+    try {
+        await render(<WorkflowPreview initialCase="camera-denied" />)
+        expect(screen.getByTestId('camera-screen')).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'Allow camera' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Open device settings' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Back' }))
+        expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+        fetchSpy.mockRestore()
+    }
+})
