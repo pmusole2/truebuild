@@ -16,11 +16,16 @@ export const noopHaptics: HapticPort = {
 
 type FeedbackContextValue = {
     readonly haptics: HapticPort
+    readonly announced: Set<string>
     // null means "follow the system setting"; a boolean is an explicit override for previews and tests.
     readonly reduceMotionOverride: boolean | null
 }
 
-const FeedbackContext = createContext<FeedbackContextValue>({ haptics: noopHaptics, reduceMotionOverride: null })
+const FeedbackContext = createContext<FeedbackContextValue>({
+    haptics: noopHaptics,
+    announced: new Set(),
+    reduceMotionOverride: null,
+})
 
 /**
  * Tracks the system reduce-motion setting. Until the system answers, motion counts as reduced, so no animation starts
@@ -62,20 +67,23 @@ export function FeedbackProvider({
     readonly reduceMotion?: boolean | null
     readonly children: ReactNode
 }): ReactElement {
+    // This provider outlives route screens. Returning to a retained result must not announce it a second time.
+    const announced = useMemo(() => new Set<string>(), [])
     const value = useMemo(
-        (): FeedbackContextValue => ({ haptics, reduceMotionOverride: reduceMotion }),
-        [haptics, reduceMotion],
+        (): FeedbackContextValue => ({ haptics, announced, reduceMotionOverride: reduceMotion }),
+        [haptics, announced, reduceMotion],
     )
     return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>
 }
 
 export type Feedback = {
     readonly haptic: (kind: HapticKind) => void
+    readonly hapticOnce: (identity: string, kind: HapticKind) => void
     readonly reduceMotion: boolean
 }
 
 export function useFeedback(): Feedback {
-    const { haptics, reduceMotionOverride } = useContext(FeedbackContext)
+    const { haptics, announced, reduceMotionOverride } = useContext(FeedbackContext)
     const system = useSystemReduceMotion()
     return useMemo((): Feedback => {
         const haptic = (kind: HapticKind): void => {
@@ -86,6 +94,12 @@ export function useFeedback(): Feedback {
                 return
             }
         }
-        return { haptic, reduceMotion: reduceMotionOverride ?? system }
-    }, [haptics, reduceMotionOverride, system])
+        const hapticOnce = (identity: string, kind: HapticKind): void => {
+            if (!announced.has(identity)) {
+                announced.add(identity)
+                haptic(kind)
+            }
+        }
+        return { haptic, hapticOnce, reduceMotion: reduceMotionOverride ?? system }
+    }, [haptics, announced, reduceMotionOverride, system])
 }

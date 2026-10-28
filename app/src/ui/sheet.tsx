@@ -195,7 +195,7 @@ function SheetFrame({
     // The tallest container height seen for this window: the reference for a window the platform already resized.
     const [measured, setMeasured] = useState<{ window: number; tallest: number; layout: number }>({
         window: height,
-        tallest: 0,
+        tallest: height,
         layout: 0,
     })
     const layout = measured.window === height && measured.layout > 0 ? measured.layout : height
@@ -204,7 +204,9 @@ function SheetFrame({
     const onContainerLayout = (event: LayoutChangeEvent): void => {
         const next = Math.round(event.nativeEvent.layout.height)
         setMeasured((now) => {
-            const fresh = now.window === height ? now : { window: height, tallest: 0, layout: 0 }
+            // A newly sized window may first report an already keyboard-resized layout. Seed its unoccluded baseline
+            // from the new window bounds, rather than treating that shortened layout as the full viewport.
+            const fresh = now.window === height ? now : { window: height, tallest: height, layout: 0 }
             return fresh.layout === next && fresh.tallest >= next
                 ? fresh
                 : { window: height, tallest: Math.max(fresh.tallest, next), layout: next }

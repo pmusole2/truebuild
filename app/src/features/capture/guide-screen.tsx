@@ -160,8 +160,7 @@ export function GuideScreen({
 
     // One notification per new result, announced once however often it is shown again. An answer never changes how a
     // retained check was announced.
-    const { haptic } = useFeedback()
-    const announced = useRef<{ check: string | null; answer: string | null }>({ check: null, answer: null })
+    const { hapticOnce } = useFeedback()
     useEffect(() => {
         if (check === null) {
             return
@@ -169,21 +168,24 @@ export function GuideScreen({
         // A new photo is a new result even when the checker words it the same, so the photo is part of the identity.
         // Opening More or coming back to a shown result never changes it, so nothing replays.
         const captureId = capture?.binding.captureId ?? null
-        if (captureId === null && announced.current.check !== null) {
-            return
-        }
-        const identity = `${captureId ?? ''}:${check.decision}:${check.reason}`
-        if (announced.current.check !== identity) {
-            announced.current.check = identity
-            haptic(check.decision === 'pass' ? 'success' : 'warning')
-        }
-    }, [capture, check, haptic])
+        const identity = JSON.stringify([
+            'check',
+            session.manualId,
+            step?.stepId,
+            captureId,
+            check.decision,
+            check.reason,
+        ])
+        hapticOnce(identity, check.decision === 'pass' ? 'success' : 'warning')
+    }, [capture, check, hapticOnce, session.manualId, step?.stepId])
     useEffect(() => {
-        if (answer !== null && announced.current.answer !== answer.answer) {
-            announced.current.answer = answer.answer
-            haptic('selection')
+        if (answer !== null) {
+            hapticOnce(
+                JSON.stringify(['answer', session.manualId, capture?.binding.captureId, answer.answer]),
+                'selection',
+            )
         }
-    }, [answer, haptic])
+    }, [answer, capture, hapticOnce, session.manualId])
 
     // A reply to a question closes the composer so the answer reads on the hero.
     const previousAnswer = useRef(answer)

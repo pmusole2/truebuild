@@ -1395,6 +1395,22 @@ describe('result haptic identity', () => {
         // Pressing More and Close each give their own light selection tick; the result's notification fires once.
         expect(trigger.mock.calls.filter(([kind]) => kind !== 'selection')).toEqual([['success']])
     })
+
+    it('does not replay a retained result after Guide is popped and mounted again under the root feedback provider', async () => {
+        const fixture = workflowPreviewFixture('guide-pass')
+        const page = (visible: boolean): ReactElement => (
+            <FeedbackProvider reduceMotion haptics={{ trigger }}>
+                {visible ? (
+                    <GuideScreen state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />
+                ) : null}
+            </FeedbackProvider>
+        )
+        const { rerender } = await render(page(true))
+        expect(trigger).toHaveBeenCalledTimes(1)
+        await rerender(page(false))
+        await rerender(page(true))
+        expect(trigger).toHaveBeenCalledTimes(1)
+    })
 })
 
 describe('step swipe and the system edge', () => {

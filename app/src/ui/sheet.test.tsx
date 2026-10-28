@@ -272,6 +272,30 @@ describe('keyboard-fitted sheet', () => {
         expect(heightOf()).toBeGreaterThan(window() - 500 - 80)
     })
 
+    it('keeps a usable viewport when the window changes with the keyboard still open', async () => {
+        const original = Dimensions.get('window')
+        const view = await render(sheet())
+        await keyboard(300)
+        try {
+            await act(async () => Dimensions.set({ window: { ...original, height: 600 } }))
+            await fireEvent(screen.getByTestId('sheet-scrim'), 'layout', {
+                nativeEvent: { layout: { height: 300 } },
+            })
+            await view.rerender(sheet())
+            expect(StyleSheet.flatten(screen.getByTestId('sheet-scrim').props.style).paddingBottom).toBe(0)
+            expect(heightOf()).toBeGreaterThan(250)
+            expect(heightOf()).toBeLessThanOrEqual(300)
+            await hideKeyboard()
+            await fireEvent(screen.getByTestId('sheet-scrim'), 'layout', {
+                nativeEvent: { layout: { height: 600 } },
+            })
+            await view.rerender(sheet())
+            expect(heightOf()).toBeCloseTo(600 * DETENT_RATIO.full, 0)
+        } finally {
+            await act(async () => Dimensions.set({ window: original }))
+        }
+    })
+
     it.each([
         [false, true],
         [true, false],
