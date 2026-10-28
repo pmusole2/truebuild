@@ -173,21 +173,18 @@ describe('the hero stays large and pinned', () => {
         ['a standard phone', { width: 390, height: 844, fontScale: 1 }, 464],
         ['a short phone', { width: 320, height: 568, fontScale: 1 }, 312],
         [
-            'large system text, which gives some hero back to the sentence and primary',
+            'large system text, with only overflowing instructions scrolling',
             { width: 390, height: 844, fontScale: 2 },
-            338,
+            464,
         ],
-    ])(
-        'takes 55 percent of the window on %s (at least 40 at the largest text)',
-        async (_label, dimensions, expected) => {
-            Object.assign(mockWindow, dimensions)
-            await setup('guide-empty')
-            expect(heroHeight()).toBe(expected)
-            // Only the text region scrolls; the primary is outside it.
-            expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()
-            expect(screen.getByRole('button', { name: PRIMARY })).toBeTruthy()
-        },
-    )
+    ])('takes 55 percent of the window on %s', async (_label, dimensions, expected) => {
+        Object.assign(mockWindow, dimensions)
+        await setup('guide-empty')
+        expect(heroHeight()).toBe(expected)
+        // Only the text region scrolls; the primary is outside it.
+        expect(within(screen.getByTestId('guide-panel')).queryByRole('button', { name: PRIMARY })).toBeNull()
+        expect(screen.getByRole('button', { name: PRIMARY })).toBeTruthy()
+    })
 
     it('shrinks the hero while the keyboard is open, then restores it', async () => {
         let show: (() => void) | undefined
@@ -297,10 +294,11 @@ describe('results', () => {
         await openMore()
         const tree = JSON.stringify(toJSON())
         // The hero sentence is the answer; the check's own text is in More, after the answer's.
-        const answerPosition = tree.lastIndexOf(fixture.state.answer!.answer.slice(0, 20))
+        const answerPosition = tree.indexOf('"Answer"')
         const checkPosition = tree.indexOf(fixture.state.check!.reason)
         expect(answerPosition).toBeGreaterThanOrEqual(0)
         expect(checkPosition).toBeGreaterThanOrEqual(0)
+        expect(answerPosition).toBeLessThan(checkPosition)
         expect(more().getByText('Can’t tell')).toBeTruthy()
     })
 

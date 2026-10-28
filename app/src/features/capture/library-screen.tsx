@@ -32,6 +32,7 @@ export const COLLAPSE_DISTANCE = 56
 
 /** 0 at rest, 1 once the large title has scrolled away. Pure so the header and the title share one rule. */
 export function collapseProgress(offset: number): number {
+    'worklet'
     return Math.max(0, Math.min(1, offset / COLLAPSE_DISTANCE))
 }
 

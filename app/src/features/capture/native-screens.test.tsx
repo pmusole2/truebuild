@@ -207,10 +207,11 @@ describe('step picture and hero', () => {
         expect(zoomed.left).toBeCloseTo(-300, 6)
     })
 
-    it('gives the hero at least 55 percent of the window, and gives some back only at the largest text or with the keyboard', () => {
+    it('keeps the hero at 55 percent through accessibility text sizes and makes room only for an active editor keyboard', () => {
         expect(heroHeightFor(844, 1, false)).toBe(Math.round(844 * 0.55))
         expect(heroHeightFor(844, 1.5, false)).toBeGreaterThanOrEqual(Math.round(844 * 0.55))
-        expect(heroHeightFor(844, 2, false)).toBe(Math.round(844 * 0.4))
+        expect(heroHeightFor(844, 2, false)).toBe(Math.round(844 * 0.55))
+        expect(heroHeightFor(844, 3.12, false)).toBe(Math.round(844 * 0.55))
         expect(heroHeightFor(844, 1, true)).toBeLessThan(Math.round(844 * 0.4))
     })
 

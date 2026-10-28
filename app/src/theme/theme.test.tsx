@@ -71,8 +71,8 @@ describe('type scale', () => {
         expect(style.lineHeight).toBeGreaterThanOrEqual(style.fontSize * 1.25)
     })
 
-    it.each(ROLES)('%s still scales to at least 300 percent of the system text size', (role) => {
-        expect(typeScale[role].maxFontSizeMultiplier).toBeGreaterThanOrEqual(3)
+    it.each(ROLES)('%s honours the complete system text-size range without a cap', (role) => {
+        expect(typeScale[role].maxFontSizeMultiplier).toBe(0)
     })
 
     it('uses the platform system sans consistently for every type role', () => {

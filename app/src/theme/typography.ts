@@ -12,12 +12,12 @@ export type TypeStyle = {
     readonly fontWeight: '400' | '600' | '700'
     readonly letterSpacing?: number
     readonly textTransform?: 'uppercase'
-    // Dynamic Type is honoured up to this multiplier, which reaches the accessibility sizes. Containers grow, never clip.
+    // Zero explicitly honours every system text size without inheriting a parent cap.
     readonly maxFontSizeMultiplier: number
 }
 
-// Largest Dynamic Type stays usable: no role is capped at 2x. 3x covers the accessibility sizes.
-export const MAX_FONT_MULTIPLIER = 3
+// React Native defines zero as no maximum, including the largest accessibility category.
+export const MAX_FONT_MULTIPLIER = 0
 
 export const typeScale: Readonly<Record<TypeRole, TypeStyle>> = {
     largeTitle: { fontSize: 34, lineHeight: 43, fontWeight: '700', maxFontSizeMultiplier: MAX_FONT_MULTIPLIER },

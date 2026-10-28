@@ -9,9 +9,6 @@ import type { WorkflowScreenProps } from './workflow-types'
 
 /** The hero takes at least this share of the full window height on Guide and Quick check. */
 export const HERO_RATIO = 0.55
-// At accessibility text sizes the sentence and the primary need the room, so the hero gives some back.
-const LARGE_TEXT_SCALE = 2
-const LARGE_TEXT_HERO_RATIO = 0.4
 
 export function useKeyboardVisible(): boolean {
     const [visible, setVisible] = useState(false)
@@ -29,12 +26,12 @@ export function useKeyboardVisible(): boolean {
     return visible
 }
 
-/** Hero height in points: 55% of the window, 40% at the largest text sizes, small while the keyboard is up. */
-export function heroHeightFor(windowHeight: number, fontScale: number, keyboard: boolean): number {
+/** The picture stays pinned at 55%; overflowing text has its own scroll region. Editors can make room for a keyboard. */
+export function heroHeightFor(windowHeight: number, _fontScale: number, keyboard: boolean): number {
     if (keyboard) {
         return Math.round(windowHeight * 0.22)
     }
-    return Math.round(windowHeight * (fontScale >= LARGE_TEXT_SCALE ? LARGE_TEXT_HERO_RATIO : HERO_RATIO))
+    return Math.round(windowHeight * HERO_RATIO)
 }
 
 export function useHeroHeight(keyboard = false): number {

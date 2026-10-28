@@ -24,8 +24,8 @@ describe('typography primitives', () => {
                 <Label>Part 1 of 2</Label>
             </>,
         )
-        expect(screen.getByText('Groove faces inward')).toHaveProp('maxFontSizeMultiplier', 3)
-        expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 3)
+        expect(screen.getByText('Groove faces inward')).toHaveProp('maxFontSizeMultiplier', 0)
+        expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 0)
     })
 
     it('captions and labels are muted, and labels retain their uppercase hierarchy', async () => {
