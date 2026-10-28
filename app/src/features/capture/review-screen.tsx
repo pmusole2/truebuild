@@ -184,6 +184,7 @@ export function OverviewScreen({
                         <View style={styles.hero}>
                             <StepPicture
                                 reference={current.step.sourceRefs[0]}
+                                references={current.step.sourceRefs}
                                 session={session}
                                 pageUris={state.pageUris}
                                 height={heroHeight}
@@ -219,6 +220,7 @@ export function OverviewScreen({
                         <View style={styles.hero}>
                             <StepPicture
                                 reference={session.reviewedSteps[0]?.sourceRefs[0]}
+                                references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
                                 session={session}
                                 pageUris={state.pageUris}
                                 height={heroHeight}

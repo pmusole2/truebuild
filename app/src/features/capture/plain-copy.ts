@@ -7,9 +7,28 @@ import type { LibraryEntry } from './library'
 // Plain, short wording for every default surface. Controller notices and pending text keep their meaning (including
 // the recovery they offer) but never leak internal vocabulary. Raw controller strings are only matched here, never shown.
 
+// Keep reference abbreviations and dotted initials attached to their following clause. Splitting at "Fig." or "p."
+// would drop factual page/position instructions when the surface chooses the first sentence or applies its word budget.
+const ABBREVIATION_END =
+    /(?:\b(?:figs?|pp?|e\.g|i\.e|vs|approx|dr|mr|mrs|ms|prof|vol|rev)\.|(?:\b\p{L}\.){2,})$/iu
+
+function sentenceParts(text: string): string[] {
+    const complete: string[] = []
+    let current = ''
+    for (const chunk of text.trim().split(/(?<=[.!?])\s+/u)) {
+        current = current === '' ? chunk : `${current} ${chunk}`
+        if (!ABBREVIATION_END.test(current)) {
+            complete.push(current)
+            current = ''
+        }
+    }
+    if (current !== '') complete.push(current)
+    return complete
+}
+
 /** The first `count` sentences of a model- or manual-written text. The rest stays available in More. */
 export function firstSentences(text: string, count: number): string {
-    const parts = text.trim().split(/(?<=[.!?])\s+/u)
+    const parts = sentenceParts(text)
     return parts.slice(0, count).join(' ')
 }
 
@@ -64,7 +83,7 @@ export function plainReason(text: string): string {
  * No sentence is cut or ended with an ellipsis; whatever is left stays in More.
  */
 export function leadSentences(text: string, maxWords: number, count = 2): string {
-    const parts = text.trim().split(/(?<=[.!?])\s+/u)
+    const parts = sentenceParts(text)
     let taken = parts[0] ?? ''
     for (const next of parts.slice(1, count)) {
         const words = `${taken} ${next}`.split(/\s+/u).length

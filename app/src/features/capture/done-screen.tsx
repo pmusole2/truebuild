@@ -44,6 +44,7 @@ export function DoneScreen({
             <View style={styles.hero}>
                 <StepPicture
                     reference={last?.sourceRefs[0]}
+                    references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
                     session={session}
                     pageUris={state.pageUris}
                     height={heroHeight}

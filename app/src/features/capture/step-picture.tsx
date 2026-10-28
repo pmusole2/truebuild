@@ -55,6 +55,7 @@ function placeRect(rect: Rect): { left: number; top: number; width: number; heig
  */
 export function StepPicture({
     reference,
+    references = [],
     session,
     pageUris,
     height,
@@ -63,6 +64,8 @@ export function StepPicture({
     cover = false,
 }: {
     reference: SourceRef | undefined
+    // Every citation on this displayed page must remain visible, even when only the first selects the page.
+    references?: readonly SourceRef[]
     session: ManualSession
     pageUris: WorkflowState['pageUris']
     height: number
@@ -79,11 +82,14 @@ export function StepPicture({
     const uri = page === undefined ? undefined : pageUris[page.pageId]
     const onLayout = (event: LayoutChangeEvent): void => setWidth(event.nativeEvent.layout.width)
     const region = reference?.region ?? null
+    const protectedRegions = [reference, ...references].flatMap((item) =>
+        item?.pageId === page?.pageId && item?.region != null ? [item.region] : [],
+    )
     const placed =
         page === undefined || width === 0
             ? null
             : cover
-              ? placeRect(heroImageRect({ width, height }, page, region === null ? [] : [region]))
+              ? placeRect(heroImageRect({ width, height }, page, protectedRegions))
               : placeCrop({ width, height }, page, cropFor(region))
     return (
         <View

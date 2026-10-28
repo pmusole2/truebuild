@@ -5,6 +5,8 @@ import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
 import { cropFor, placeCrop, StepPicture } from './step-picture'
 import { DoneScreen } from './done-screen'
+import { GuideScreen } from './guide-screen'
+import { OverviewScreen } from './review-screen'
 import { ReadingScreen } from './reading-screen'
 import { editableQuestions, otherBlockers } from './quick-check-model'
 import {
@@ -127,6 +129,21 @@ describe('plain words for the guide', () => {
         expect(firstSentences('Only one', 3)).toBe('Only one')
     })
 
+    it.each([
+        'Use Fig. 2 on p. 3 for the correct position.',
+        'Use the narrow edge, e.g. the face beside the short slot, while you carefully align every remaining pin with its matching opening before moving the top piece.',
+    ])('keeps an instruction containing abbreviations whole: %s', (answer) => {
+        const state = workflowPreviewFixture('guide-answer').state
+        expect(
+            guideSentence({
+                state: { ...state, answer: { ...state.answer!, answer } },
+                step: fixture.entry.session.reviewedSteps[0],
+                blocked: false,
+            }).text,
+        ).toBe(answer)
+        expect(firstSentences(`${answer} Another sentence.`, 1)).toBe(answer)
+    })
+
     it('says the verdict word first and then the first reason sentence, for every decision', () => {
         const step = fixture.entry.session.reviewedSteps[0]
         const check = fixture.state.check!
@@ -229,6 +246,30 @@ describe('Quick check questions', () => {
 const hidden = { includeHiddenElements: true }
 
 describe('step picture and hero', () => {
+    it.each([
+        ['Guide', GuideScreen, 'guide-empty', 'guide-hero-picture'],
+        ['Quick check', OverviewScreen, 'review-unresolved', 'guide-hero'],
+        ['Done', DoneScreen, 'done-finished', 'done-hero'],
+    ] as const)('keeps every same-page citation visible in %s', async (_name, Component, id, hero) => {
+        const fixture = workflowPreviewFixture(id)
+        const page = fixture.entry.session.pages[0]!
+        const refs = [
+            { pageId: page.pageId, region: { x: 0.05, y: 0.2, width: 0.1, height: 0.2 } },
+            { pageId: page.pageId, region: { x: 0.85, y: 0.6, width: 0.1, height: 0.2 } },
+        ]
+        for (const step of fixture.entry.session.reviewedSteps) step.sourceRefs = refs
+        await render(<Component state={fixture.state} entry={fixture.entry} controller={INERT_WORKFLOW_CONTROLLER} />)
+        await fireEvent(screen.getByTestId(hero), 'layout', {
+            nativeEvent: { layout: { width: 300, height: 464 } },
+        })
+        const picture = StyleSheet.flatten(
+            screen.getByLabelText('Picture from your manual', { includeHiddenElements: true }).props.style,
+        )
+        // The regions span most of this landscape page: protect the second citation rather than filling by cropping it.
+        expect(picture.width).toBe(300)
+        expect(picture.height).toBeCloseTo((300 * page.height) / page.width, 6)
+        expect(picture.left).toBe(0)
+    })
     it('crops to the cited region with a margin, or shows the whole page when nothing is cited', () => {
         expect(cropFor(null)).toEqual({ x: 0, y: 0, width: 1, height: 1 })
         const crop = cropFor({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 })

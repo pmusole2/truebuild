@@ -332,6 +332,7 @@ export function GuideScreen({
             {capture === null ? (
                 <StepPicture
                     reference={step?.sourceRefs[0]}
+                    references={step?.sourceRefs}
                     session={session}
                     pageUris={state.pageUris}
                     height={heroHeight}
