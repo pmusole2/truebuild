@@ -124,8 +124,8 @@ describe('default production factory with the real provider and the documented l
         expect(report.models.wonder?.costUsd).toBe(0.00061)
         expect(mock.failures).toEqual([])
         expect(mock.wireRequests.map((request) => [request.model, request.reasoning?.effort]).sort()).toEqual([
-            [SPARK, 'low'],
-            [WONDER, 'high'],
+            [SPARK, 'max'],
+            [WONDER, 'max'],
         ])
         expect(await readFile(join(cwd, 'docs/gate-results.md'), 'utf8')).not.toContain(MOCK_PROVIDER_KEY)
     }, 30_000)

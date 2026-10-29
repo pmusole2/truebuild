@@ -236,7 +236,8 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
 
     it('turns the Wonder layout flag on only for 1 and only with MODEL_LAYOUT=1', (): void => {
         expect(createRuntimeFromEnvironment({ MODEL_LAYOUT: '1', MODEL_LAYOUT_WONDER: '1' }).layoutWonder).toBe(true)
-        expect(() => createRuntimeFromEnvironment({ MODEL_LAYOUT_WONDER: '1' })).toThrow('invalid_model_layout_wonder')
+        // Alone it only enables the asynchronous overlay offer; in-call Wonder layout still needs MODEL_LAYOUT=1.
+        expect(createRuntimeFromEnvironment({ MODEL_LAYOUT_WONDER: '1' }).layoutWonder).toBe(false)
     })
 
     it.each(['true', 'yes', '2', ' 1', 'TRUE'])('rejects invalid Wonder layout value %j', (value): void => {
@@ -263,6 +264,7 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
             const outbound = vi.fn<typeof fetch>(async (): Promise<Response> =>
                 Response.json({
                     status: 'completed',
+                    model: 'muse-spark-1.3',
                     output: [
                         {
                             type: 'message',
@@ -280,6 +282,9 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
                     MODEL_API_KEY: '<synthetic>',
                     API_SHARED_SECRET: key,
                     MODEL_CALL_LIMIT: '3',
+                    // No Wonder overlay stage is offered, so the Spark call is not verdict-only (that is covered in
+                    // follow-ups.test.ts): this is the in-call layout composition these cases describe.
+                    MODEL_LAYOUT_WONDER: '0',
                     ...(flag === undefined ? {} : { MODEL_LAYOUT: flag }),
                 },
                 outbound,

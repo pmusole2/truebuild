@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
 import { Text } from 'react-native'
-import { CameraStage, type CameraPresentation } from './camera-stage'
+import { CameraStage, cameraCue, cameraPill, type CameraPresentation, type CameraWording } from './camera-stage'
 import { ShutterButton } from '../../ui/camera-chrome'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
@@ -327,4 +327,77 @@ it('shows visible progress on the shutter while a photo is being prepared', asyn
         />,
     )
     expect(screen.getByTestId('shutter-busy')).toBeTruthy()
+})
+
+describe('camera wording from the step guide', () => {
+    const wording: CameraWording = {
+        cue: { text: 'Line the groove up with the rail.', nativeID: 'truebuild-render-origin:generated' },
+        pill: { text: 'Side panel', nativeID: 'truebuild-render-origin:generated' },
+        tips: new Map(),
+    }
+    const guide = { progress: 'Step 1 of 2', title: 'Side panel', instructions: <Text>Groove faces inward.</Text> }
+
+    it('marks compact native progress as shell while retaining the full generated accessibility label', async () => {
+        mockWindow.fontScale = 2
+        await render(stage({ intent: 'check' }))
+        expect(screen.getByLabelText('Side panel').props.nativeID).toBe('truebuild-render-origin:shell')
+        expect(screen.getByText('1/2')).toBeTruthy()
+    })
+
+    function stage(options: { intent: 'check' | 'page'; busy?: boolean; capture?: () => void }): ReactElement {
+        return (
+            <CameraStage
+                intent={{ kind: options.intent }}
+                guide={options.intent === 'page' ? undefined : guide}
+                wording={wording}
+                presentation={{
+                    status: 'preview',
+                    media: <Text>Synthetic viewfinder</Text>,
+                    shutter: (
+                        <ShutterButton
+                            label="Capture photo"
+                            disabled={options.busy === true}
+                            onPress={options.capture ?? noop}
+                        />
+                    ),
+                }}
+                busy={options.busy}
+                onCancel={noop}
+                onRequestPermission={noop}
+                onOpenSettings={noop}
+                onRetry={noop}
+            />
+        )
+    }
+
+    it("shows the guide's cue and pill on its existing roots, and the shutter still captures", async () => {
+        const capture = jest.fn()
+        await render(stage({ intent: 'check', capture }))
+        expect(screen.getByText('Line the groove up with the rail.')).toBeTruthy()
+        expect(screen.getByText('Side panel')).toBeTruthy()
+        expect(screen.queryByText('Show the part.')).toBeNull()
+        expect(screen.getByTestId('camera-cue').props.nativeID).toBe('truebuild-render-origin:generated')
+        await fireEvent.press(screen.getByRole('button', { name: 'Capture photo' }))
+        expect(capture).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the native cue for a page photo and never lets wording enable a busy shutter', async () => {
+        const first = await render(stage({ intent: 'page' }))
+        expect(screen.getByText('Show a page.')).toBeTruthy()
+        expect(screen.queryByText('Line the groove up with the rail.')).toBeNull()
+        await first.unmount()
+        const capture = jest.fn()
+        await render(stage({ intent: 'check', busy: true, capture }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Capture photo' }))
+        expect(capture).not.toHaveBeenCalled()
+    })
+
+    it('replaces words only: the compact pill for the largest text and the defaults are unchanged', () => {
+        expect(cameraCue({ kind: 'check' }, wording)).toBe('Line the groove up with the rail.')
+        expect(cameraCue({ kind: 'page' }, wording)).toBe('Show a page.')
+        expect(cameraCue({ kind: 'check' })).toBe('Show the part.')
+        expect(cameraPill({ kind: 'check' }, guide, false, wording)).toBe('Side panel')
+        expect(cameraPill({ kind: 'check' }, guide, true, wording)).toBe('1/2')
+        expect(cameraPill({ kind: 'check' }, guide)).toBe('Step 1 of 2')
+    })
 })

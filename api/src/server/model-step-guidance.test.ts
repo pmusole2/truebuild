@@ -63,6 +63,7 @@ function runtime(
     const outbound = vi.fn<typeof fetch>(async (): Promise<Response> =>
         Response.json({
             status: 'completed',
+            model: 'muse-spark-1.3',
             output: [
                 {
                     type: 'message',
@@ -80,6 +81,9 @@ function runtime(
             MODEL_API_KEY: '<synthetic>',
             API_SHARED_SECRET: secret,
             MODEL_CALL_LIMIT: '3',
+            // The pre-change public shape is what GENERATIVE_UI=off with no second-opinion offer must keep.
+            GENERATIVE_UI: 'off',
+            MODEL_SECOND_OPINION: 'off',
             ...(layout ? { MODEL_LAYOUT: '1' } : {}),
         },
         outbound,
@@ -164,6 +168,8 @@ describe.each(stepFixtures())('MOCKED public check/ask regions on the $name manu
                 'orientationAssessment',
                 'reason',
                 'sourceRefs',
+                // The only addition: the server-observed telemetry of the call (never layout or regions here).
+                'telemetry',
             ].sort(),
         )
         const sent = JSON.parse(String(outbound.mock.calls[0]?.[1]?.body))

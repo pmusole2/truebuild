@@ -13,6 +13,7 @@ const UNKNOWN = { state: 'unknown' as const, reason: 'The manual does not state 
 function envelope(value: unknown): Record<string, unknown> {
     return {
         status: 'completed',
+        model: 'muse-spark-1.3',
         output: [
             {
                 type: 'message',

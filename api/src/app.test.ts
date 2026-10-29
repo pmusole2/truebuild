@@ -152,6 +152,9 @@ describe('Hono HTTP boundary', (): void => {
             parseModel: 'muse-spark-1.3',
             samModel: 'sam-3.1',
             checkContext: 'full',
+            secondOpinionModel: 'muse-wonder-1.0',
+            aiPolicy: expect.objectContaining({ generativeUi: 'full' }),
+            followUps: { overlay: true, segments: true },
         })
         expect(second).toEqual(first)
         expect((await app({ API_SHARED_SECRET: undefined }).request('/api/session')).status).toBe(401)

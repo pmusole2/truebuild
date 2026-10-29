@@ -33,7 +33,7 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('./controller-factory', () => ({ createController: jest.fn() }))
+jest.mock('./controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn(() => null) }))
 jest.unmock('react-native/Libraries/AppState/AppState')
 // Use real AppState subscriptions/currentState updates over the native OS bridge, rather than Jest's inert AppState.
 jest.mock('react-native/Libraries/AppState/NativeAppState', () => ({

@@ -52,6 +52,13 @@ async function local(
 ): Promise<{ fetchImpl: typeof fetch; dispatches: () => number }> {
     let calls = 0
     const server = createServer(async (request, response): Promise<void> => {
+        // Only the provider dispatch counts; a stray loopback probe from another process is not a model request.
+        if (request.method !== 'POST') {
+            request.resume()
+            response.statusCode = 404
+            response.end()
+            return
+        }
         const chunks: Buffer[] = []
         for await (const chunk of request) {
             if (Buffer.isBuffer(chunk)) {
@@ -372,5 +379,78 @@ describe('inactive SAM transport over controlled local HTTP', (): void => {
         )
         expect(result).toEqual([{ type: 'unavailable', code: 'timeout' }])
         expect(transport.dispatches()).toBe(1)
+    })
+})
+
+describe('SAM stage identity comes from the provider response', (): void => {
+    const progress = (response: unknown, type = 'response.created'): string => event({ type, response })
+    const body = (opening: string, terminal: unknown = {}): string =>
+        opening +
+        event({ type: 'response.output_text.delta', ...lane, delta: grammar }) +
+        event({ type: 'response.output_text.done', ...lane, text: grammar }) +
+        event({ type: 'response.completed', response: terminal })
+
+    async function run(wire: string): Promise<SegmentEvent[]> {
+        const transport = await local((response): void => {
+            response.end(wire)
+        })
+        return collect(
+            createSamProvider({ apiKey: 'synthetic-test-token', fetchImpl: transport.fetchImpl }).segment(
+                await input(),
+                new AbortController().signal,
+            ),
+        )
+    }
+
+    it('stamps the stage once ResponseCreated reported the requested model', async (): Promise<void> => {
+        const events = await run(body(progress({ model: 'sam-3.1', status: 'in_progress' }), { model: 'sam-3.1' }))
+        expect(events.map((entry) => entry.type)).toEqual(['snapshot', 'completed'])
+        const first = events[0]
+        if (first?.type !== 'snapshot') throw new Error('missing_snapshot')
+        expect(first.snapshot.stage).toEqual({ model: 'sam-3.1', elapsedMs: expect.any(Number) })
+        // The real parser and mask path are unchanged by identity handling.
+        expect(first.snapshot.records[0]?.mask).toMatchObject({ width: 5, height: 5 })
+    })
+
+    it('omits the stage rather than fabricating one when the response never names a model', async (): Promise<void> => {
+        const events = await run(body(progress({ status: 'in_progress' })))
+        expect(events.map((entry) => entry.type)).toEqual(['snapshot', 'completed'])
+        const first = events[0]
+        if (first?.type !== 'snapshot') throw new Error('missing_snapshot')
+        expect(first.snapshot).not.toHaveProperty('stage')
+        expect(first.snapshot.records).toHaveLength(1)
+    })
+
+    it('does not retroactively credit a snapshot published before any identity was observed', async (): Promise<void> => {
+        const events = await run(body('', { model: 'sam-3.1' }))
+        expect(events.map((entry) => entry.type)).toEqual(['snapshot', 'completed'])
+        const first = events[0]
+        if (first?.type !== 'snapshot') throw new Error('missing_snapshot')
+        expect(first.snapshot).not.toHaveProperty('stage')
+    })
+
+    it.each(['muse-spark-1.3', 'sam-3.0', 'sam-3.1-preview', '', null, 7])(
+        'stops with invalid output and publishes nothing when ResponseCreated reports %j',
+        async (model): Promise<void> => {
+            expect(await run(body(progress({ model }), { model: 'sam-3.1' }))).toEqual([
+                { type: 'unavailable', code: 'invalid_output' },
+            ])
+        },
+    )
+
+    it.each(['muse-spark-1.3', 'sam-3.0', null, 7])(
+        'stops with invalid output and never completes when the completed response reports %j',
+        async (model): Promise<void> => {
+            const events = await run(body(progress({ model: 'sam-3.1' }), { model }))
+            expect(events.at(-1)).toEqual({ type: 'unavailable', code: 'invalid_output' })
+            expect(events.map((entry) => entry.type)).not.toContain('completed')
+        },
+    )
+
+    it('rejects a mismatched in-progress identity after a matching created one', async (): Promise<void> => {
+        const events = await run(
+            body(progress({ model: 'sam-3.1' }) + progress({ model: 'muse-wonder-1.0' }, 'response.in_progress')),
+        )
+        expect(events).toEqual([{ type: 'unavailable', code: 'invalid_output' }])
     })
 })

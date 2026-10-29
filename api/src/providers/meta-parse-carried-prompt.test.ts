@@ -56,6 +56,7 @@ function queued(values: unknown[]): {
 
         return Response.json({
             status: 'completed',
+            model: 'muse-spark-1.3',
             output: [
                 {
                     type: 'message',
@@ -96,7 +97,7 @@ describe('parse prompt: carry a known quantity when a part is placed or connecte
         expect(instructions).toContain('Selected parse language: en')
         expect(instructions).toMatch(/mutually exclusive or optional methods/u)
         expect(instructions).toMatch(/Set kind to assembly for placing or mounting parts/u)
-        expect(body.max_output_tokens).toBe(24000)
+        expect(body.max_output_tokens).toBe(48000)
     })
 
     it('keeps the added carry wording free of brand or manual specific strings', async (): Promise<void> => {

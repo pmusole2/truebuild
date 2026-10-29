@@ -207,7 +207,8 @@ describe('plain words for the guide', () => {
 
     it('maps what is in flight to plain words without model names or request wording', () => {
         expect(plainPending('Reading manual pages…')).toBe('Reading your manual. This can take a minute.')
-        expect(plainPending('Second opinion pending (muse-wonder-1.0)…')).toBe('Taking a second look…')
+        expect(plainPending('Second opinion pending (muse-wonder-1.0)…')).toBe('Taking a closer look…')
+        expect(plainPending('Still thinking about your question…')).toBe('Still thinking…')
         expect(plainPending('Checking frozen photo…')).toBe('Checking your photo…')
         expect(plainPending(null)).toBeNull()
     })

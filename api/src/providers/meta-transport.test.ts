@@ -37,6 +37,34 @@ describe('absolute retry and model pacing boundaries', () => {
             deadline.dispose()
         }
     })
+    it('separates pacing and retry backoff from time on the network, and observes nothing when not asked', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        const delays = [40, 30]
+        let call = 0
+        const transport = new MetaTransport(async () => {
+            const index = call++
+            await new Promise((resolve) => setTimeout(resolve, delays[index]))
+            return index === 0
+                ? new Response('busy', { status: 429, headers: { 'retry-after': '1' } })
+                : Response.json({})
+        })
+        const observation = { paceWaitMs: 0, networkMs: 0 }
+        const deadline = createDeadline(20_000)
+        try {
+            const pending = transport.send('muse-spark-1.3', {}, deadline, undefined, 3, observation)
+            await vi.advanceTimersByTimeAsync(3_000)
+            expect((await pending).status).toBe(200)
+            // 40 ms + 30 ms on the network; the one-second Retry-After wait is pacing, not provider time.
+            expect(observation.networkMs).toBeCloseTo(70, -1)
+            expect(observation.paceWaitMs).toBeGreaterThanOrEqual(1_000)
+            expect(observation.paceWaitMs).toBeLessThan(1_300)
+            const unobserved = transport.send('muse-wonder-1.0', {}, deadline)
+            await vi.advanceTimersByTimeAsync(3_000)
+            expect((await unobserved).status).toBeGreaterThan(0)
+        } finally {
+            deadline.dispose()
+        }
+    })
     it('paces exhausted token/request headers per model without delaying SAM', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
         let calls = 0

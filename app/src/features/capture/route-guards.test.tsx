@@ -31,7 +31,7 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('./controller-factory', () => ({ createController: jest.fn() }))
+jest.mock('./controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn(() => null) }))
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',

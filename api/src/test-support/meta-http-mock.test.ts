@@ -33,7 +33,13 @@ describe('documented loopback mock with real API composition', () => {
         const mock = await startMetaMock({ scenario: 'reversed' })
         try {
             const runtime = createRuntimeFromEnvironment(
-                { PROVIDER_MODE: 'meta', MODEL_API_KEY: '<synthetic>', API_SHARED_SECRET: 'synthetic' },
+                {
+                    PROVIDER_MODE: 'meta',
+                    MODEL_API_KEY: '<synthetic>',
+                    API_SHARED_SECRET: 'synthetic',
+                    // The still-highlight composition: no Wonder overlay stage, so the Spark verdict carries the region.
+                    MODEL_LAYOUT_WONDER: '0',
+                },
                 mock.transport,
             )
             const app = createApp({ runtime, onDuration: () => {} })
@@ -184,7 +190,11 @@ describe('documented loopback mock with real API composition', () => {
                 expect(events.at(-1)?.type).toBe(
                     scenario === 'correct' || scenario === 'zero' ? 'completed' : 'unavailable',
                 )
-                if (scenario === 'correct') expect(events[0]?.type).toBe('snapshot')
+                if (scenario === 'correct') {
+                    expect(events[0]?.type).toBe('snapshot')
+                    // The documented stream opens with ResponseCreated naming the model, so the first snapshot is credited.
+                    expect(events[0]).toMatchObject({ snapshot: { stage: { model: 'sam-3.1' } } })
+                }
                 if (scenario === 'zero') expect(events).toEqual([{ type: 'completed' }])
                 if (scenario !== 'truncated') expect(metrics.some((metric) => metric.imagesProcessed === 1)).toBe(true)
                 expect(JSON.stringify(metrics)).not.toContain('Synthetic provider failure')
@@ -377,9 +387,15 @@ it.each(['image', 'video'] as const)(
             expect(events.filter((event) => event.type === 'response.output_text.delta')).toHaveLength(
                 kind === 'video' ? 2 : 1,
             )
+            // ResponseCreated opens the stream with the Response, which already names the requested model.
+            expect(events[0]).toMatchObject({
+                type: 'response.created',
+                sequence_number: 0,
+                response: { object: 'response', status: 'in_progress', model: 'sam-3.1' },
+            })
             expect(events.at(-1)).toMatchObject({
                 type: 'response.completed',
-                sequence_number: kind === 'video' ? 3 : 2,
+                sequence_number: kind === 'video' ? 4 : 3,
                 response: {
                     object: 'response',
                     status: 'completed',
@@ -486,7 +502,7 @@ it.each(['correct', 'reversed', 'uncertain', 'failed'] as const)(
             expect(mock.requests.map((r) => r.operation)).toEqual(['check', 'second_opinion'])
             expect(mock.wireRequests.map((r) => [r.model, r.reasoning?.effort])).toEqual([
                 ['muse-spark-1.3', 'low'],
-                ['muse-wonder-1.0', 'high'],
+                ['muse-wonder-1.0', 'max'],
             ])
             expect(mock.failures).toEqual([])
             expect(runtime.counter.used).toBe(2)

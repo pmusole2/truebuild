@@ -67,7 +67,12 @@ it.each([
                 headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
             })
             expect(metadata.status).toBe(200)
-            expect(await metadata.json()).toMatchObject({ providerMode: 'meta', checkContext: 'full' })
+            // The accepted regression stack keeps the still-highlight verdict: no overlay or SAM stage unless asked for.
+            expect(await metadata.json()).toMatchObject({
+                providerMode: 'meta',
+                checkContext: 'full',
+                followUps: { overlay: false, segments: false },
+            })
             const bytes = new Uint8Array(
                 await sharp({ create: { width: 20, height: 16, channels: 3, background: 'red' } })
                     .png()
@@ -129,6 +134,9 @@ it.each([
                 expect(await followup.json()).toMatchObject({
                     value: { decision: 'refuse', model: 'muse-wonder-1.0', secondOpinion: { status: 'completed' } },
                 })
+            } else if (scenario === 'uncertain') {
+                // The stronger second opinion is on by default: an uncertain Spark verdict gets an offer.
+                expect(result.value.secondOpinion).toMatchObject({ model: 'muse-wonder-1.0', status: 'available' })
             } else expect(result.value.secondOpinion).toBeUndefined()
         } finally {
             child.kill('SIGTERM')
@@ -144,6 +152,11 @@ it.each([
     { args: ['--test-only', '--second-opinion=unsupported'], key: undefined },
     { args: ['--test-only', '--second-opinion-delay-ms=100'], key: undefined },
     { args: ['--test-only', '--second-opinion=correct', '--second-opinion-delay-ms=60001'], key: undefined },
+    { args: ['--test-only', '--follow-ups=maybe'], key: undefined },
+    { args: ['--test-only', '--follow-ups=on', '--follow-ups=off'], key: undefined },
+    { args: ['--test-only', '--question-delay-ms=60001'], key: undefined },
+    { args: ['--test-only', '--question-delay-ms=slow'], key: undefined },
+    { args: ['--test-only', '--question-delay-ms=1', '--question-delay-ms=2'], key: undefined },
 ])('refuses unsafe launcher configuration before opening a listener: %j', async ({ args, key }) => {
     const child = spawn(process.execPath, ['--import', 'tsx', 'api/scripts/mock-server.ts', ...args], {
         env: { PATH: process.env.PATH, ...(key ? { MODEL_API_KEY: key } : {}) },

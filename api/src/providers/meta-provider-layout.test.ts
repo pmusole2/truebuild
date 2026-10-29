@@ -38,9 +38,11 @@ const answer = {
     observedRegion: null,
 }
 
-function envelope(value: unknown): Response {
+/** `model` is what the response reports; a real response echoes the model it was asked for. */
+function envelope(value: unknown, model = 'muse-spark-1.3'): Response {
     return Response.json({
         status: 'completed',
+        model,
         output: [
             {
                 type: 'message',
@@ -70,8 +72,9 @@ function mocked(
 } {
     const bodies: Body[] = []
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
-        bodies.push(JSON.parse(String(init?.body)) as Body)
-        return envelope(reply)
+        const body = JSON.parse(String(init?.body)) as Body
+        bodies.push(body)
+        return envelope(reply, String(body.model))
     })
     return { provider: createMetaProvider({ apiKey: '<synthetic>', fetchImpl, ...options }), bodies, fetchImpl }
 }
@@ -108,7 +111,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             expect(Object.keys(body)).toEqual(CF2260D.keys)
             expect(sha(body.instructions)).toBe(CF2260D.instructionsSha)
             expect(sha(JSON.stringify(body.text.format.schema))).toBe(CF2260D.questionSchemaSha)
-            expect(body.max_output_tokens).toBe(1500)
+            expect(body.max_output_tokens).toBe(8000)
         })
 
         it('returns no layout or region even if a stray reply carried them', async (): Promise<void> => {
@@ -152,7 +155,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             await provider.answerQuestion(await askInput(), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(1)
             expect(bodies[0]!.text.format.schema).toEqual(metaLayoutOutputSchemas.question)
-            expect(bodies[0]!.max_output_tokens).toBe(1500)
+            expect(bodies[0]!.max_output_tokens).toBe(8000)
             expect(bodies[0]!.instructions).toContain('nextPartRegion')
         })
 
@@ -279,8 +282,8 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             const body = bodies[0]!
             expect(sha(body.instructions)).toBe(CF2260D.instructionsSha)
             expect(sha(JSON.stringify(body.text.format.schema))).toBe(CF2260D.checkSchemaSha)
-            expect(body.max_output_tokens).toBe(16000)
-            expect(body.reasoning).toEqual({ effort: 'high' })
+            expect(body.max_output_tokens).toBe(32000)
+            expect(body.reasoning).toEqual({ effort: 'max' })
         })
 
         it('adds layout and regions only when both MODEL_LAYOUT and MODEL_LAYOUT_WONDER are on', async (): Promise<void> => {
@@ -289,7 +292,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             expect(fetchImpl).toHaveBeenCalledTimes(1)
             expect(bodies[0]!.text.format.schema).toEqual(metaLayoutOutputSchemas.check)
             expect(bodies[0]!.instructions).toContain('nextPartRegion')
-            expect(bodies[0]!.max_output_tokens).toBe(16000)
+            expect(bodies[0]!.max_output_tokens).toBe(32000)
         })
     })
 })

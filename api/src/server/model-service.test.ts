@@ -459,6 +459,7 @@ describe('protected model composition', (): void => {
                 response.end(
                     JSON.stringify({
                         status: 'completed',
+                        model: 'muse-spark-1.3',
                         output: [
                             {
                                 type: 'message',
@@ -591,6 +592,7 @@ describe('per-attempt accounting for documented status retries', () => {
                     ? new Response('private', { status: 429 })
                     : Response.json({
                           status: 'completed',
+                          model: 'muse-spark-1.3',
                           output: [
                               {
                                   type: 'message',
@@ -812,6 +814,8 @@ describe('separate authenticated second opinion', () => {
                     secondOpinionModel: 'muse-wonder-1.0',
                 })
                 const primary = await (await handlers.check(request(state))).json()
+                // The primary request has its own outcome line; this case is about the second opinion's one line.
+                log.mockClear()
                 const response = await handlers.secondOpinion(
                     secondaryRequest(state, primary.value.secondOpinion.token),
                 )
@@ -1030,6 +1034,7 @@ function unresolvedParsed(): ParsedManual {
 function completed(value: unknown): unknown {
     return {
         status: 'completed',
+        model: 'muse-spark-1.3',
         output: [
             {
                 type: 'message',

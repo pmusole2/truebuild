@@ -3,14 +3,17 @@ import { describe, expect, it } from 'vitest'
 import { ModelCallCounter } from './budget'
 
 describe('process model-call counter', (): void => {
-    it('defaults to 200 and never refunds admitted attempts', (): void => {
-        const counter = new ModelCallCounter()
+    it('has no default cap, and an explicit cap never refunds admitted attempts', (): void => {
+        const unlimited = new ModelCallCounter()
+        for (let i = 0; i < 5_000; i += 1) unlimited.claim()
+        expect(unlimited.used).toBe(5_000)
+        const capped = new ModelCallCounter(200)
         for (let i = 0; i < 200; i += 1) {
-            counter.claim()
+            capped.claim()
         }
-        expect(counter.used).toBe(200)
-        expect(() => counter.claim()).toThrow('budget_exhausted')
-        expect(counter.used).toBe(200)
+        expect(capped.used).toBe(200)
+        expect(() => capped.claim()).toThrow('budget_exhausted')
+        expect(capped.used).toBe(200)
     })
 
     it('admits at most the configured cap across competing asynchronous requests', async (): Promise<void> => {
@@ -25,7 +28,7 @@ describe('process model-call counter', (): void => {
         expect(counter.used).toBe(2)
     })
 
-    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])('rejects an invalid cap %s', (cap): void => {
+    it.each([0, -1, 1.5, Number.NaN, Number.NEGATIVE_INFINITY])('rejects an invalid cap %s', (cap): void => {
         expect(() => new ModelCallCounter(cap)).toThrow('invalid_model_call_limit')
     })
 })

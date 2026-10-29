@@ -12,6 +12,7 @@ import {
     OUTLINE_LINE_WIDTH,
     PartRegionOverlays,
     PART_DASH,
+    SegmentMasks,
 } from './grounded-overlays'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
@@ -216,5 +217,36 @@ describe('next part and target overlays', () => {
         expect(spies.withSequence).not.toHaveBeenCalled()
         expect(spies.withTiming).not.toHaveBeenCalled()
         expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
+    })
+})
+
+describe('SAM masks', () => {
+    const DISPLAYED = { x: 10, y: 20, width: 200, height: 100 }
+    const marks = [
+        { box: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 }, mask: { width: 10, height: 8, path: 'M0 0H10V8H0Z' } },
+        // A box with no mask is not drawn as one.
+        { box: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } },
+    ]
+    const masks = (reduceMotion: boolean): ReactElement => (
+        <FeedbackProvider reduceMotion={reduceMotion}>
+            <Svg width={300} height={200}>
+                <SegmentMasks marks={marks} displayed={DISPLAYED} reduceMotion={reduceMotion} />
+            </Svg>
+        </FeedbackProvider>
+    )
+
+    it('draws a mask only where the server returned one, scaled from its raster grid onto its box on the displayed photo', async () => {
+        await render(masks(false))
+        expect(screen.getAllByTestId('segment-mask')).toHaveLength(1)
+        expect(screen.getByTestId('segment-mask').props.d).toBe('M0 0H10V8H0Z')
+    })
+
+    it('fades in once with the one gentle timing, and not at all under Reduce Motion', async () => {
+        await render(masks(false))
+        expect(spies.withTiming).toHaveBeenCalledTimes(1)
+        expect(spies.withTiming.mock.calls[0]?.[1]).toMatchObject({ duration: 250 })
+        spies.withTiming.mockClear()
+        await render(masks(true))
+        expect(spies.withTiming).not.toHaveBeenCalled()
     })
 })

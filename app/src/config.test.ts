@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { developmentHost, resolveProviderMode } from './config'
+import { developmentHost, resolveGenerativeUi, resolveProviderMode } from './config'
 import { parseBaseUrl } from './api/transport'
 
 const originalNodeEnv = process.env.NODE_ENV
@@ -49,5 +49,20 @@ describe('development host badge', () => {
             'api.example.com',
         )
         expect(developmentHost('invalid')).toBe('unconfigured')
+    })
+})
+
+describe('generative UI mode', () => {
+    it('defaults to full and accepts exactly off, steps and full', () => {
+        expect(resolveGenerativeUi(undefined)).toBe('full')
+        expect(resolveGenerativeUi('full')).toBe('full')
+        expect(resolveGenerativeUi('steps')).toBe('steps')
+        expect(resolveGenerativeUi('off')).toBe('off')
+    })
+
+    it('fails closed on anything else', () => {
+        for (const value of ['', 'on', 'FULL', 'true', 'guide']) {
+            expect(() => resolveGenerativeUi(value)).toThrow(/"off", "steps" or "full"/)
+        }
     })
 })

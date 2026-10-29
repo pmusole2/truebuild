@@ -29,8 +29,13 @@ describe('provider runtime configuration', (): void => {
             { MODEL_CALL_LIMIT: '0' },
             { MODEL_CALL_LIMIT: '2.5' },
             { CHECK_TIMEOUT_MS: '0' },
-            { CHECK_TIMEOUT_MS: '8001' },
-            { CHECK_TIMEOUT_MS: '30001' },
+            { CHECK_TIMEOUT_MS: '105001' },
+            { GENERATIVE_UI: 'partial' },
+            { AI_EFFORT_PARSE: 'none' },
+            { AI_EFFORT_SCREENS: 'ultra' },
+            { AI_MAX_OUTPUT_QUESTIONS: '8' },
+            { AI_DEADLINE_OVERLAY_MS: '500' },
+            { AI_MODEL_VERDICT: 'muse-wonder-1.0' },
         ]) {
             expect(() => createRuntimeFromEnvironment(env)).toThrow()
         }

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { metaOutputSchemas } from './meta-schemas'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
+import { observed } from '../test-support/telemetry'
 
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const signal = (): AbortSignal => new AbortController().signal
@@ -59,9 +60,11 @@ function providerValue(value: unknown): unknown {
     return data
 }
 
-function responseBody(value: unknown): Record<string, unknown> {
+/** `model` is the model the response reports; a real response echoes the one requested. */
+function responseBody(value: unknown, model = 'muse-spark-1.3'): Record<string, unknown> {
     return {
         status: 'completed',
+        model,
         output: [
             {
                 type: 'message',
@@ -116,10 +119,19 @@ async function localServer(
     respond: Responder,
     run: (transport: LocalTransport) => Promise<void>,
     observeResponse?: (response: Response) => void,
+    providerOptions: Partial<Parameters<typeof createMetaProvider>[0]> = {},
 ): Promise<void> {
     const bodies: unknown[] = []
     let dispatches = 0
     const server = createServer((request: IncomingMessage, response: ServerResponse): void => {
+        // Only the provider dispatch counts. Anything else is not the provider: a loopback port probe from another
+        // process on the machine (observed: a traced Node fetch of `GET /`) must neither count as a model call nor crash.
+        if (request.method !== 'POST' || request.url !== '/responses') {
+            request.resume()
+            response.statusCode = 404
+            response.end()
+            return
+        }
         dispatches += 1
         const chunks: Buffer[] = []
         request.on('data', (chunk: Buffer): void => {
@@ -151,7 +163,7 @@ async function localServer(
 
     try {
         await run({
-            provider: createMetaProvider({ apiKey: 'synthetic-test-key', fetchImpl }),
+            provider: createMetaProvider({ apiKey: 'synthetic-test-key', fetchImpl, ...providerOptions }),
             bodies,
             dispatches: (): number => dispatches,
         })
@@ -176,10 +188,12 @@ describe('inactive direct Meta transport', (): void => {
         async (orientation) => {
             const value = createHeroResponse(orientation)
             await localServer(jsonResponder(responseBody(value)), async (transport) => {
-                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual({
-                    ...value,
-                    model: 'muse-spark-1.3',
-                })
+                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual(
+                    observed({
+                        ...value,
+                        model: 'muse-spark-1.3',
+                    }),
+                )
                 expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
             })
         },
@@ -262,9 +276,10 @@ describe('inactive direct Meta transport', (): void => {
         })
     })
 
-    it('accepts only a positive check budget at or below eight seconds', () => {
+    it('accepts a positive check budget up to the trusted deadline ceiling, not just eight seconds', () => {
         expect(() => createMetaProvider({ checkTimeoutMs: 500 })).not.toThrow()
-        for (const checkTimeoutMs of [0, -1, NaN, Infinity, 8001]) {
+        expect(() => createMetaProvider({ checkTimeoutMs: 20_000 })).not.toThrow()
+        for (const checkTimeoutMs of [0, -1, NaN, Infinity, 105_001]) {
             expect(() => createMetaProvider({ checkTimeoutMs })).toThrow(MetaProviderError)
         }
     })
@@ -321,7 +336,9 @@ describe('inactive direct Meta transport', (): void => {
     it('sends one fixed Standard-model request with inline normalized media and strict schema', async (): Promise<void> => {
         await localServer(jsonResponder(responseBody(result)), async (transport): Promise<void> => {
             const input = await validInput()
-            expect(await transport.provider.checkStep(input, signal())).toEqual({ ...result, model: 'muse-spark-1.3' })
+            expect(await transport.provider.checkStep(input, signal())).toEqual(
+                observed({ ...result, model: 'muse-spark-1.3' }),
+            )
             expect(transport.dispatches()).toBe(1)
             expect(transport.bodies[0]).toMatchObject({
                 model: 'muse-spark-1.3',
@@ -378,7 +395,7 @@ describe('inactive direct Meta transport', (): void => {
                     },
                     signal(),
                 ),
-            ).toEqual({ ...parsed, model: 'muse-spark-1.3' })
+            ).toEqual(observed({ ...parsed, model: 'muse-spark-1.3' }))
             expect(transport.dispatches()).toBe(1)
         })
     })
@@ -453,7 +470,7 @@ describe('inactive direct Meta transport', (): void => {
                     },
                     signal(),
                 ),
-            ).toEqual({ ...answer, observedRegion: null, model: 'muse-spark-1.3' })
+            ).toEqual(observed({ ...answer, observedRegion: null, model: 'muse-spark-1.3' }))
             expect(transport.dispatches()).toBe(1)
         })
     })
@@ -540,6 +557,7 @@ describe('inactive direct Meta transport', (): void => {
         { status: 'completed', output: [{ type: 'function_call', name: 'unsafe' }] },
         {
             status: 'completed',
+            model: 'muse-spark-1.3',
             output: [
                 {
                     type: 'message',
@@ -566,6 +584,7 @@ describe('inactive direct Meta transport', (): void => {
         for (const texts of [[JSON.stringify(result), JSON.stringify(result)], ['private malformed JSON']]) {
             const body = {
                 status: 'completed',
+                model: 'muse-spark-1.3',
                 output: [
                     {
                         type: 'message',
@@ -727,10 +746,12 @@ describe('documented Meta conformance', () => {
         const envelope = responseBody(result)
         envelope.output = [{ type: 'reasoning', id: 'r-1', summary: [] }, ...(envelope.output as unknown[])]
         await localServer(jsonResponder(envelope), async ({ provider }) => {
-            expect(await provider.checkStep(await validInput(), signal())).toEqual({
-                ...result,
-                model: 'muse-spark-1.3',
-            })
+            expect(await provider.checkStep(await validInput(), signal())).toEqual(
+                observed({
+                    ...result,
+                    model: 'muse-spark-1.3',
+                }),
+            )
         })
     })
 
@@ -805,7 +826,7 @@ describe('documented Meta conformance', () => {
                     { requestId: 'parse-many', binding: { kind: 'manual', manualId: 'many', revision: 1 }, pages },
                     signal(),
                 )
-                expect(bodies[0]).toMatchObject({ max_output_tokens: 24000, reasoning: { effort: 'low' } })
+                expect(bodies[0]).toMatchObject({ max_output_tokens: 48000, reasoning: { effort: 'max' } })
             },
         )
     })
@@ -819,6 +840,92 @@ describe('documented Meta conformance', () => {
                 width: 0.2,
                 height: 0.65,
             })
+        })
+    })
+
+    describe('verdict-only primary call', (): void => {
+        const verdictOnly = { verdictOnly: true }
+        const withoutGeometry = (value: object): object => {
+            const { observedRegion: _region, ...rest } = providerValue(value) as Record<string, unknown>
+            return rest
+        }
+
+        it('sends a schema with no geometry property and accepts a grounded refusal without a region', async () => {
+            const refusal = createHeroResponse('reversed')
+            await localServer(
+                (response) => jsonResponder(responseBody(withoutGeometry(refusal)))(response),
+                async ({ provider, bodies }) => {
+                    const value = await provider.checkStep(await validInput(), signal())
+                    expect(value).toMatchObject({ decision: 'refuse', observedRegion: null, model: 'muse-spark-1.3' })
+                    expect(value.sourceRefs.length).toBeGreaterThan(0)
+                    const schema = (bodies[0] as { text: { format: { schema: { properties: object } } } }).text.format
+                        .schema
+                    expect(Object.keys(schema.properties).sort()).toEqual(
+                        [
+                            'checks',
+                            'connectionAssessment',
+                            'decision',
+                            'missingEvidence',
+                            'orientationAssessment',
+                            'partsAssessment',
+                            'reason',
+                            'sourceRefs',
+                        ].sort(),
+                    )
+                },
+                undefined,
+                verdictOnly,
+            )
+        })
+
+        it('keeps the evidence rules: no pass without every observable check, and a refusal still needs a mismatch and a citation', async () => {
+            const noChecks = { ...(withoutGeometry(createHeroResponse('correct')) as object), checks: [] }
+            const noMismatch = {
+                ...(withoutGeometry(createHeroResponse('reversed')) as Record<string, unknown>),
+                partsAssessment: 'matches',
+                connectionAssessment: 'matches',
+                orientationAssessment: 'uncertain',
+                checks: [
+                    {
+                        checkId: 'groove-inward',
+                        assessment: 'matches',
+                        sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                    },
+                ],
+            }
+            const noCitation = { ...(withoutGeometry(createHeroResponse('reversed')) as object), sourceRefs: [] }
+            for (const value of [noChecks, noMismatch, noCitation]) {
+                await localServer(
+                    jsonResponder(responseBody(value)),
+                    async ({ provider }) => {
+                        await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                            code: 'invalid_output',
+                        })
+                    },
+                    undefined,
+                    verdictOnly,
+                )
+            }
+        })
+
+        it('never applies to the second opinion, which keeps its geometry and stricter refusal rule', async () => {
+            const refusal = createHeroResponse('reversed')
+            await localServer(
+                jsonResponder(responseBody(refusal, 'muse-wonder-1.0')),
+                async ({ provider, bodies }) => {
+                    const value = await provider.secondOpinion!(await validInput(), signal())
+                    expect(value).toMatchObject({ decision: 'refuse', model: 'muse-wonder-1.0' })
+                    expect(value.observedRegion).not.toBeNull()
+                    expect(
+                        Object.keys(
+                            (bodies[0] as { text: { format: { schema: { properties: object } } } }).text.format.schema
+                                .properties,
+                        ),
+                    ).toContain('observedRegion')
+                },
+                undefined,
+                { ...verdictOnly, secondOpinionModel: 'muse-wonder-1.0' },
+            )
         })
     })
 
@@ -848,10 +955,12 @@ describe('status-only bounded Meta retries', () => {
                 jsonResponder(responseBody(result))(response)
             },
             async ({ provider, dispatches }) => {
-                expect(await provider.checkStep(await validInput(), signal())).toEqual({
-                    ...result,
-                    model: 'muse-spark-1.3',
-                })
+                expect(await provider.checkStep(await validInput(), signal())).toEqual(
+                    observed({
+                        ...result,
+                        model: 'muse-spark-1.3',
+                    }),
+                )
                 expect(dispatches()).toBe(2)
             },
         )
@@ -926,6 +1035,7 @@ describe('server-only task routing and provenance', () => {
                         : format === 'truebuild_question'
                           ? { answer: 'Uncertain', sourceRefs: [], missingEvidence: ['Need view'] }
                           : result,
+                    String(body.model),
                 ),
             )
         })
@@ -952,9 +1062,9 @@ describe('server-only task routing and provenance', () => {
             ),
         ).toMatchObject({ model: 'muse-spark-1.3' })
         expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
-            ['muse-wonder-1.0', { effort: 'high' }],
+            ['muse-wonder-1.0', { effort: 'max' }],
             ['muse-spark-1.3', { effort: 'low' }],
-            ['muse-spark-1.3', { effort: 'low' }],
+            ['muse-spark-1.3', { effort: 'max' }],
         ])
     })
     it('does not fall back from an explicit Wonder parse or trust model-authored provenance', async () => {
@@ -996,8 +1106,8 @@ describe('server-only task routing and provenance', () => {
             expect(transport).toHaveBeenCalledTimes(1)
             expect(JSON.parse(String(transport.mock.calls[0]![1]?.body))).toMatchObject({
                 model: 'muse-wonder-1.0',
-                reasoning: { effort: 'high' },
-                max_output_tokens: 16000,
+                reasoning: { effort: 'max' },
+                max_output_tokens: 32000,
             })
             expect(metrics).toHaveBeenCalledWith(
                 expect.objectContaining({ operation: 'second_opinion', model: 'muse-wonder-1.0', status }),
