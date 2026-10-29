@@ -1,6 +1,12 @@
 import { describe, expect, it } from '@jest/globals'
 import { render, screen } from '@testing-library/react-native'
+import type { ReactElement } from 'react'
+import { StyleSheet } from 'react-native'
+import { FeedbackProvider } from './feedback'
 import { ProgressBar, StepList, type StepListItem } from './progress'
+import { spies } from './test-support/reanimated-mock'
+
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
 
 let mockFontScale = 1
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
@@ -12,6 +18,47 @@ jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
         fontScale: mockFontScale,
     }),
 }))
+
+describe('ProgressBar fill', () => {
+    const bar = (value: number, reduced = false): ReactElement => (
+        <FeedbackProvider reduceMotion={reduced}>
+            <ProgressBar label="Steps" value={value} total={4} />
+        </FeedbackProvider>
+    )
+    beforeEach(() => {
+        spies.withTiming.mockClear()
+        spies.cancelAnimation.mockClear()
+    })
+
+    it('starts at its true value and never grows from zero on mount', async () => {
+        await render(bar(2))
+        expect(spies.withTiming).not.toHaveBeenCalled()
+        expect(StyleSheet.flatten(screen.getByTestId('progress-fill').props.style).width).toBe('50%')
+    })
+
+    it('eases the fill to a new value at the standard duration, and reports the target to assistive tech at once', async () => {
+        const { rerender } = await render(bar(1))
+        await rerender(bar(3))
+        expect(spies.withTiming).toHaveBeenCalledWith(0.75, expect.objectContaining({ duration: 250 }))
+        expect(screen.getByRole('progressbar', { name: 'Steps' }).props.accessibilityValue).toMatchObject({ now: 3 })
+    })
+
+    it('sets the fill instantly under reduced motion', async () => {
+        const { rerender } = await render(bar(1, true))
+        await rerender(bar(3, true))
+        expect(spies.withTiming).not.toHaveBeenCalled()
+    })
+
+    it('is a thin decorative cue when slim, hidden from assistive tech', async () => {
+        await render(
+            <FeedbackProvider reduceMotion>
+                <ProgressBar slim label="Steps" value={1} total={4} />
+            </FeedbackProvider>,
+        )
+        expect(screen.queryByRole('progressbar')).toBeNull()
+        expect(StyleSheet.flatten(screen.getByTestId('progress-track', { hidden: true }).props.style).height).toBe(4)
+    })
+})
 
 describe('ProgressBar', () => {
     it('reports its value and total as an accessible progress bar', async () => {
