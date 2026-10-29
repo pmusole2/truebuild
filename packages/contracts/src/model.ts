@@ -1,6 +1,18 @@
 import {
+    aiEffortSchema,
+    callTelemetrySchema,
     captureBindingSchema,
     carriedQuantitySourceRefs,
+    checkResultSchema,
+    fixtureEvidenceSchema,
+    layoutSchema,
+    normalizedBoxSchema,
+    partRegionSchema,
+    questionResultSchema,
+    screenKindSchema,
+    screenUiStateSchema,
+    SCREEN_FAILURES,
+    standardModelSchema,
     hasValidQuantityEvidence,
     LIMITS,
     manualBindingSchema,
@@ -10,6 +22,7 @@ import {
     type Fact,
     type ManualStep,
     type ManualSession,
+    type ScreenContextInputs,
     type SourceRef,
 } from '@truebuild/contracts'
 import { z } from 'zod'
@@ -51,12 +64,22 @@ export const modelParseMetadataSchema = z
         }
     })
 
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/u)
+/**
+ * Optional identity of the generated step screen the person is looking at. The server recomputes the expected
+ * context key from the supplied session and step itself and rejects a mismatch; it never trusts any text the client
+ * could attach, only the facts it resolves from the validated manual. Absent keeps the previous behavior.
+ */
+export const screenContextSchema = z.strictObject({ screenId: sha256, contextKey: sha256 })
+export type ScreenContext = z.infer<typeof screenContextSchema>
+
 const checkFields = {
     ...common,
     binding: captureBindingSchema,
     session: manualSessionSchema,
     sourcePageIds: z.array(requestId).min(1).max(LIMITS.manualPages),
     observation: imageMetadata,
+    screen: screenContextSchema.optional(),
 }
 const baseCheck = z.strictObject(checkFields)
 type CheckContext = z.infer<typeof baseCheck>
@@ -83,6 +106,7 @@ function checkCitations(step: ManualStep, session: ManualSession): SourceRef[] {
         ...refs(step.orientation),
         ...refs(step.connection),
         ...step.visibleChecks.flatMap((check) => refs(check.description)),
+        ...(step.safetyNotes ?? []).flatMap((note) => refs(note.note)),
         ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ...session.parts.filter((part) => parts.has(part.partId)).flatMap((part) => refs(part.name)),
     ]
@@ -158,6 +182,12 @@ export function unresolvedCriticalFacts(session: Pick<ManualSession, 'parts' | '
         for (const check of step.visibleChecks) {
             if (check.description.state === 'unknown') {
                 issues.push(`${label}, visible check ${check.checkId}: ${check.description.reason}`)
+            }
+        }
+        // An unreadable safety note is never dropped or invented: it stays unresolved until a clearer page is read.
+        for (const note of step.safetyNotes ?? []) {
+            if (note.note.state === 'unknown') {
+                issues.push(`${label}, safety note ${note.noteId}: ${note.note.reason}`)
             }
         }
     }
@@ -238,3 +268,180 @@ export type ModelSecondOpinionMetadata = z.infer<typeof modelSecondOpinionMetada
 export type ModelCheckMetadata = z.infer<typeof modelCheckMetadataSchema>
 export type ModelQuestionMetadata = z.infer<typeof modelQuestionMetadataSchema>
 export type ModelSegmentMetadata = z.infer<typeof modelSegmentMetadataSchema>
+
+export const modelOverlayMetadataSchema = z
+    .strictObject({ ...checkFields, overlayToken: z.string().min(1).max(128) })
+    .superRefine(validateCheck)
+export type ModelOverlayMetadata = z.infer<typeof modelOverlayMetadataSchema>
+
+/**
+ * Presentation-only addition for one published verdict. It has no decision field, so it cannot change one. A region
+ * survives only for a real part of the bound step and only inside the image; absence stays absent.
+ */
+export const overlayResultSchema = z
+    .strictObject({
+        /** Required for a live overlay; absent from a fixture overlay, which ran no model. */
+        model: standardModelSchema.optional(),
+        effort: aiEffortSchema.optional(),
+        /** Server-stamped: an isolated fixture runtime produced this without a model call (see `FIXTURE_EVIDENCE`). */
+        evidence: fixtureEvidenceSchema.optional(),
+        observedRegion: normalizedBoxSchema.nullable(),
+        nextPartRegion: partRegionSchema.optional(),
+        targetRegion: partRegionSchema.optional(),
+        layout: layoutSchema.optional(),
+        /** Server-observed facts about the overlay call. Absent when none is attributable; null values are unknown. */
+        telemetry: callTelemetrySchema.optional(),
+    })
+    .superRefine((value, ctx): void => {
+        if (value.evidence === undefined) {
+            if (value.model === undefined || value.effort === undefined) {
+                ctx.addIssue({ code: 'custom', message: 'A live overlay names its model and effort' })
+            }
+        } else if (value.model !== undefined || value.effort !== undefined || value.telemetry !== undefined) {
+            ctx.addIssue({
+                code: 'custom',
+                message: 'A synthetic fixture overlay claims no model, effort or telemetry',
+            })
+        }
+    })
+export type OverlayResult = z.infer<typeof overlayResultSchema>
+
+/** Slow-question job handle. 202 means "still working": poll with the ticket; never resend the question. */
+export const QUESTION_JOB_ACTIONS = ['result', 'cancel'] as const
+export const modelQuestionJobMetadataSchema = z.strictObject({
+    ...common,
+    binding: captureBindingSchema,
+    ticket: z.string().trim().min(1).max(128),
+})
+export type ModelQuestionJobMetadata = z.infer<typeof modelQuestionJobMetadataSchema>
+export const pendingResultSchema = z.strictObject({
+    status: z.literal('pending'),
+    requestId,
+    binding: captureBindingSchema,
+    ticket: z.string().min(1).max(128),
+    retryAfterMs: z.number().int().positive(),
+    /** Server-side horizon: after this the job is cancelled and reported as a timeout, never a 504 mid-request. */
+    expiresInMs: z.number().int().positive(),
+})
+export type PendingResult = z.infer<typeof pendingResultSchema>
+
+const checkOrQuestion = z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('check'), value: checkResultSchema }),
+    z.strictObject({
+        kind: z.literal('question'),
+        question: z.string().trim().min(1).max(500),
+        value: questionResultSchema,
+    }),
+])
+
+const SESSIONLESS_SCREENS = new Set<string>(['home', 'add', 'pages', 'more', 'error'])
+const STEP_SCREENS = new Set<string>(['guide', 'result', 'questions', 'answer', 'recovery'])
+
+/**
+ * `/api/screens` input: the current ManualSession/revision/step and optionally the current result, product-agnostic.
+ * Zero image files. Home, add, pages, more and error work before any manual exists (`session: null`).
+ */
+export const modelScreensMetadataSchema = z
+    .strictObject({
+        ...common,
+        op: z.enum(['generate', 'precompute', 'progress', 'cancel']),
+        kind: screenKindSchema.nullable(),
+        binding: manualBindingSchema.nullable(),
+        session: manualSessionSchema.nullable(),
+        stepId: z.string().trim().min(1).max(128).nullable(),
+        captureId: z.string().trim().min(1).max(128).nullable(),
+        result: checkOrQuestion.nullable(),
+        /** Closed failure class for error/recovery composition. Never a message, stack or provider text. */
+        failure: z.enum(SCREEN_FAILURES).nullable(),
+        /** progress/precompute: step to generate or return first, and finished documents to include. */
+        focusStepId: z.string().trim().min(1).max(128).nullable(),
+        want: z.array(z.string().trim().min(1).max(128)).max(8),
+        /**
+         * Completion screen only: step ids the app has saved as completed. The server states that the build is
+         * finished only if this contains every reviewed step of the supplied session; absent or partial keeps the
+         * completion document neutral. It is a witness for wording, not authority: the native guard owns completion.
+         */
+        completedStepIds: z.array(z.string().trim().min(1).max(128)).max(200).optional(),
+        /**
+         * Optional live app state a composition may bind to (library summaries, the current review question, pages,
+         * the held capture, available sections). Presence flags and ids only; never raw drafts, photos or tickets.
+         */
+        uiState: screenUiStateSchema.nullable().optional(),
+    })
+    .superRefine((value, ctx): void => {
+        const issue = (message: string): void => {
+            ctx.addIssue({ code: 'custom', message })
+        }
+        const { session, binding } = value
+        if (
+            session !== null &&
+            (binding === null || binding.manualId !== session.manualId || binding.revision !== session.revision)
+        ) {
+            issue('Binding must name the supplied session revision')
+        }
+        if (value.op === 'progress' || value.op === 'cancel') {
+            if (binding === null) issue('Binding required')
+            return
+        }
+        if (value.op === 'precompute') {
+            // A reviewed session, or a fresh parse whose known raw steps are prepared before Quick check confirms them.
+            if (
+                session === null ||
+                (session.reviewStatus !== 'reviewed' && (session.rawExtraction?.steps.length ?? 0) === 0)
+            ) {
+                issue('Session with steps required')
+            }
+            return
+        }
+        const kind = value.kind
+        if (kind === null) {
+            issue('Screen kind required')
+            return
+        }
+        if (!SESSIONLESS_SCREENS.has(kind) && session === null) issue('Session required')
+        const step = value.stepId === null ? undefined : session?.reviewedSteps.find((s) => s.stepId === value.stepId)
+        if (STEP_SCREENS.has(kind) && (session?.reviewStatus !== 'reviewed' || step === undefined)) {
+            issue('Current reviewed step required')
+        }
+        if (!STEP_SCREENS.has(kind) && value.stepId !== null) issue('This screen is not step-bound')
+        if (kind === 'completion' && session?.reviewStatus !== 'reviewed') issue('Reviewed session required')
+        if (value.completedStepIds !== undefined && kind !== 'completion')
+            issue('Only completion takes completed steps')
+        const needsResult = kind === 'result' || kind === 'answer'
+        if (needsResult && (value.result === null || value.captureId === null)) issue('Current result required')
+        if (!needsResult && kind !== 'recovery' && kind !== 'questions' && value.result !== null) {
+            issue('This screen takes no result')
+        }
+        if (kind === 'result' && value.result?.kind !== 'check' && value.result !== null) issue('Check result required')
+        if (kind === 'answer' && value.result?.kind !== 'question' && value.result !== null) {
+            issue('Question result required')
+        }
+        if (value.result !== null && value.captureId === null) issue('Result requires its capture identity')
+        if (kind === 'error' && value.failure === null) issue('Failure class required')
+    })
+export type ModelScreensMetadata = z.infer<typeof modelScreensMetadataSchema>
+
+/**
+ * The generate request for one screen, built from the same inputs the context key is computed from
+ * (`screenContextJson`), so the request and the key cannot drift. A one-use follow-up token inside a result is not
+ * part of the key and should be removed by the caller before sending.
+ */
+export function screensGenerateRequest(requestId: string, inputs: ScreenContextInputs): ModelScreensMetadata {
+    const { session } = inputs
+    return {
+        mode: 'model',
+        requestId,
+        op: 'generate',
+        kind: inputs.kind,
+        binding: session === null ? null : { kind: 'manual', manualId: session.manualId, revision: session.revision },
+        session,
+        stepId: inputs.stepId,
+        captureId: inputs.captureId,
+        result: inputs.result,
+        failure: inputs.failure,
+        focusStepId: null,
+        want: [],
+        ...(inputs.completedStepIds === undefined ? {} : { completedStepIds: [...inputs.completedStepIds] }),
+        ...(inputs.uiState === undefined ? {} : { uiState: inputs.uiState }),
+    }
+}

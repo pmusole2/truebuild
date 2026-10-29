@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { layoutSchema } from './layout'
+import { callTelemetrySchema, FIXTURE_EVIDENCE, fixtureEvidenceSchema, standardModelSchema } from './telemetry'
 
 export const LIMITS = {
     manualPages: 20,
@@ -121,7 +122,15 @@ const correctionPlanSchema = z
         )
     })
 
+/**
+ * A safety statement the manual itself makes for a step (a warning, caution or prohibition), read verbatim with the
+ * pages that print it. A note the extraction could not read is `unknown`: it stays unresolved and blocks a reviewed
+ * manual (it is never invented and never shown as a fact), so a person adds a clearer page.
+ */
+const safetyNoteSchema = z.strictObject({ noteId: idSchema, note: factSchema(descriptionSchema) })
+
 export type ManualPart = z.infer<typeof manualPartSchema>
+export type SafetyNote = z.infer<typeof safetyNoteSchema>
 export type PartRequirement = z.infer<typeof partRequirementSchema>
 export type VisibleCheck = z.infer<typeof visibleCheckSchema>
 export type CorrectionAction = z.infer<typeof correctionActionSchema>
@@ -161,8 +170,19 @@ export const manualStepSchema = z
         visibleChecks: z.array(visibleCheckSchema).max(100),
         sourceRefs: sourceRefsSchema,
         correction: correctionPlanSchema.nullable(),
+        /**
+         * Explicit safety classification. Absent/null = the step was never classified (older data): every known
+         * physical direction of the step is then conservatively treated as potentially safety-bearing (see
+         * `requiredManualFacts`). An array, even an empty one, means the extraction read the step's safety text.
+         */
+        safetyNotes: z.array(safetyNoteSchema).max(100).nullable().optional(),
     })
     .superRefine((step, ctx) => {
+        rejectDuplicates(
+            (step.safetyNotes ?? []).map((note) => note.noteId),
+            'safety note',
+            ctx,
+        )
         const alternatives = step.alternatives ?? []
         rejectDuplicates(
             alternatives.map((alternative) => alternative.alternativeId),
@@ -338,17 +358,44 @@ function validateRegistry(parts: ManualPart[], steps: ManualStep[], ctx: z.Refin
     }
 }
 
-export const standardModelSchema = z.enum(['muse-spark-1.3', 'muse-wonder-1.0'])
-export type StandardModel = z.infer<typeof standardModelSchema>
 const modelProvenance = {
     model: standardModelSchema.optional(),
     modelNotes: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
+    /** Server-observed facts about the one provider call behind this result. Absent when no call is attributable. */
+    telemetry: callTelemetrySchema.optional(),
 }
 const secondOpinionSchema = z.discriminatedUnion('status', [
     z.strictObject({ model: standardModelSchema, status: z.literal('available'), token: z.string().min(1).max(128) }),
     z.strictObject({ model: standardModelSchema, status: z.literal('completed') }),
     z.strictObject({ model: standardModelSchema, status: z.literal('unavailable') }),
 ])
+
+/**
+ * Optional follow-up work offered after the verdict is published. Neither can change the decision. Absent unless the
+ * server enables them (GENERATIVE_UI other than off), so an old client sees the exact previous shape.
+ */
+export const SEGMENT_PROMPT_LIMIT = 8
+export const checkFollowUpsSchema = z.strictObject({
+    overlay: z
+        .discriminatedUnion('status', [
+            z.strictObject({
+                status: z.literal('available'),
+                model: standardModelSchema,
+                token: z.string().min(1).max(128),
+            }),
+            z.strictObject({ status: z.literal('unavailable') }),
+        ])
+        .optional(),
+    segments: z
+        .strictObject({
+            status: z.literal('available'),
+            model: z.literal('sam-3.1'),
+            /** Noun phrases built by the server from validated part names of the current step only. */
+            prompts: z.array(z.string().trim().min(1).max(100)).min(1).max(SEGMENT_PROMPT_LIMIT),
+        })
+        .optional(),
+})
+export type CheckFollowUps = z.infer<typeof checkFollowUpsSchema>
 
 export const parsedManualSchema = z
     .strictObject({
@@ -380,6 +427,7 @@ function allSourceRefs(parts: ManualPart[], steps: ManualStep[]): SourceRef[] {
             ...factRefs(step.orientation),
             ...factRefs(step.connection),
             ...step.visibleChecks.flatMap((check) => factRefs(check.description)),
+            ...(step.safetyNotes ?? []).flatMap((note) => factRefs(note.note)),
             ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ]),
     ]
@@ -442,6 +490,7 @@ export const manualSessionSchema = z
                         (required.connection && step.connection.state === 'unknown') ||
                         (required.visibleChecks && step.visibleChecks.length === 0) ||
                         step.visibleChecks.some((check) => check.description.state === 'unknown') ||
+                        (step.safetyNotes ?? []).some((note) => note.note.state === 'unknown') ||
                         (step.correction !== null && !step.correction.reviewed)
                     )
                 })
@@ -479,6 +528,9 @@ export const checkResultSchema = z
     .strictObject({
         ...modelProvenance,
         secondOpinion: secondOpinionSchema.optional(),
+        followUps: checkFollowUpsSchema.optional(),
+        /** Server-stamped: an isolated fixture runtime produced this without a model call (see `FIXTURE_EVIDENCE`). */
+        evidence: fixtureEvidenceSchema.optional(),
         decision: z.enum(['pass', 'refuse', 'cannot_verify']),
         orientationAssessment: z.enum(['correct', 'reversed', 'uncertain']).optional(),
         reason: descriptionSchema,
@@ -492,9 +544,14 @@ export const checkResultSchema = z
         targetRegion: partRegionSchema.optional(),
     })
     .superRefine((result, ctx) => {
+        // A fixture result observed no model call: nothing may claim one, and its offer needs no Spark identity.
+        const fixture = result.evidence === FIXTURE_EVIDENCE
+        if (fixture && (result.model !== undefined || result.telemetry !== undefined)) {
+            ctx.addIssue({ code: 'custom', message: 'A synthetic fixture result claims no model or telemetry' })
+        }
         if (
             result.secondOpinion?.status === 'available' &&
-            (result.decision !== 'cannot_verify' || result.model !== 'muse-spark-1.3')
+            (result.decision !== 'cannot_verify' || (result.model !== 'muse-spark-1.3' && !fixture))
         ) {
             ctx.addIssue({ code: 'custom', message: 'Only an uncertain Spark result can offer a second opinion' })
         }
@@ -539,7 +596,26 @@ export const questionResultSchema = z.strictObject({
 export type QuestionTarget = z.infer<typeof questionTargetSchema>
 export type QuestionResult = z.infer<typeof questionResultSchema>
 
-const trackRecordSchema = z.strictObject({ objectId: idSchema, label: titleSchema, box: normalizedBoxSchema })
+/** Longest accepted SVG path for one mask; a longer mask is omitted (the box remains), never truncated. */
+export const MAX_MASK_PATH_CHARS = 12_000
+export const trackMaskSchema = z.strictObject({
+    /** The path lives on this width x height raster grid, which maps onto the record's `box` in the image. */
+    width: positiveIntegerSchema.max(16_384),
+    height: positiveIntegerSchema.max(16_384),
+    /** SVG path data only: absolute/relative path commands and numbers. No markup, script, URL or other command text. */
+    path: z
+        .string()
+        .min(1)
+        .max(MAX_MASK_PATH_CHARS)
+        .regex(/^[Mm][MmLlHhVvCcSsQqTtAaZz0-9eE+\-., \t\r\n]*$/u),
+})
+const trackRecordSchema = z.strictObject({
+    objectId: idSchema,
+    label: titleSchema,
+    box: normalizedBoxSchema,
+    /** Optional: older servers and the frozen demo omit it. Present only when a validated mask fits its bound. */
+    mask: trackMaskSchema.optional(),
+})
 
 export type TrackRecord = z.infer<typeof trackRecordSchema>
 
@@ -551,6 +627,8 @@ export const trackSnapshotSchema = z
         capturedAt: z.iso.datetime(),
         records: z.array(trackRecordSchema).max(256),
         complete: z.boolean(),
+        /** Server-observed stage facts; absent for the frozen demo and older servers. */
+        stage: z.strictObject({ model: z.literal('sam-3.1'), elapsedMs: z.number().min(0) }).optional(),
     })
     .superRefine((snapshot, ctx) => {
         rejectDuplicates(
@@ -635,3 +713,7 @@ export function isCurrentResult<T>(result: ApiResult<T>, currentBinding: ManualB
 
 export { createDemoManual } from './demo'
 export * from './layout'
+export * from './screen'
+export * from './screen-context'
+export * from './screen-facts'
+export * from './telemetry'
