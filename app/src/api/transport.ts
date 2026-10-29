@@ -201,10 +201,12 @@ export async function readBoundedText(
     response: Response,
     signal: AbortSignal,
     checkpoint: () => void,
+    maxBytes: number = MAX_RESPONSE_BYTES,
 ): Promise<string> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new InvalidResponseError('Invalid response limit')
     const declared = response.headers.get('content-length')
 
-    if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
+    if (declared !== null && Number(declared) > maxBytes) {
         discardResponse(response)
         throw new InvalidResponseError('Response exceeds the size limit')
     }
@@ -235,7 +237,7 @@ export async function readBoundedText(
 
             total += next.value.byteLength
 
-            if (total > MAX_RESPONSE_BYTES) {
+            if (total > maxBytes) {
                 onAbort()
                 throw new InvalidResponseError('Response exceeds the size limit')
             }

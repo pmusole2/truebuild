@@ -37,8 +37,8 @@ export function developmentHost(baseUrl: string): string {
 export type GenerativeUiMode = 'off' | 'steps' | 'full'
 
 /**
- * Public generative-UI selection; it must agree with the backend GENERATIVE_UI. `off` keeps every original native screen
- * byte for byte, `steps` generates only the Guide step screens, `full` (the default) generates every screen. Anything
+ * Public generative-UI selection; it must agree with the backend GENERATIVE_UI. Every mode uses complete v2 documents.
+ * `off` composes local fallback documents, `steps` generates Guide documents, and `full` (the default) generates all kinds. Anything
  * else is a configuration error and never silently enables or disables generation.
  */
 export function resolveGenerativeUi(value: string | undefined): GenerativeUiMode {

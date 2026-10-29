@@ -316,12 +316,12 @@ describe('ModelApiClient request validation (zero dispatch when invalid)', () =>
         expect(calls).toHaveLength(0)
     })
 
-    it('sends nothing when the metadata JSON exceeds the 512KiB app/server limit', async () => {
+    it('sends nothing when the metadata JSON exceeds the 1MiB app/server limit', async () => {
         const { fetch, calls } = scripted(() => jsonResponse(200, okCheck()))
         const first = session.reviewedSteps[0]!
         const oversized: ManualSession = {
             ...session,
-            reviewedSteps: Array.from({ length: 100 }, (_, index) => ({
+            reviewedSteps: Array.from({ length: 200 }, (_, index) => ({
                 ...first,
                 stepId: index === 0 ? first.stepId : `large-step-${index}`,
                 order: index + 1,

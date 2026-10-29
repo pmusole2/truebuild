@@ -294,3 +294,292 @@ describe('checkpoint state and summaries', () => {
         expect(meter.sample(point)).toMatchObject({ status: 'unavailable', reason: 'disposed' })
     })
 })
+
+describe('coverage denominators and exclusions', () => {
+    it('keeps capability internals in all-host totals, excludes development, and audits inherited source and raw leaves', () => {
+        const root = element('', [
+            element('truebuild-render-origin:generated', [
+                element('', [text()], 'Text'),
+                element('truebuild-capability-internals:CameraView', [
+                    element('', [text()]),
+                    element('truebuild-capability-internals:ManualPage', [element('', [text()], 'Text')]),
+                ]),
+                element('truebuild-meter-exclude:development', [
+                    element('truebuild-render-origin:fallback', [text()]),
+                    element('truebuild-capability-internals:CoachMark', [element('', [text()], 'Text')]),
+                ]),
+                element('truebuild-render-origin:shell', [], 'RN:RNSScreenStackHeaderConfig'),
+            ]),
+        ])
+        const meter = new NativeHostMeter()
+        meter.registerRoot(documentRoot(root))
+        const sample = meter.sample(point)
+        expect(sample).toMatchObject({
+            metricsVersion: 2,
+            status: 'measured',
+            counts: { generated: 6, fallback: 0, shell: 2, total: 8 },
+            rawTextCounts: { generated: 3, fallback: 0, shell: 0, total: 3 },
+            strictStatus: 'measured',
+            strictCounts: { generated: 2, fallback: 0, shell: 2, total: 4 },
+            strictRawTextCounts: { generated: 1, fallback: 0, shell: 0, total: 1 },
+            generatedShare: 6 / 8,
+            strictGeneratedShare: 2 / 4,
+            exclusions: {
+                development: {
+                    counts: { generated: 3, fallback: 1, shell: 0, total: 4 },
+                    rawTextCounts: { generated: 1, fallback: 1, shell: 0, total: 2 },
+                },
+                capabilityInternals: {
+                    counts: { generated: 4, fallback: 0, shell: 0, total: 4 },
+                    rawTextCounts: { generated: 2, fallback: 0, shell: 0, total: 2 },
+                },
+                byCapability: {
+                    CameraView: {
+                        counts: { generated: 4, fallback: 0, shell: 0, total: 4 },
+                        rawTextCounts: { generated: 2, fallback: 0, shell: 0, total: 2 },
+                    },
+                },
+            },
+        })
+        expect(Object.keys(sample.exclusions?.byCapability ?? {})).toEqual(['CameraView'])
+        expect(sample.strictByHostType?.Text).toEqual({ generated: 1, fallback: 0, shell: 0, total: 1 })
+        expect(sample.strictByHostType?.['RN:RNSScreenStackHeaderConfig']?.shell).toBe(1)
+    })
+
+    it('partitions development inside capability internals without double-counting nested boundaries', () => {
+        const meter = new NativeHostMeter()
+        meter.registerRoot(
+            documentRoot(
+                element('truebuild-render-origin:generated', [
+                    element('truebuild-capability-internals:CameraView', [
+                        element('truebuild-meter-exclude:development', [
+                            element('truebuild-capability-internals:ManualPage', [text()]),
+                        ]),
+                    ]),
+                ]),
+            ),
+        )
+        const sample = meter.sample(point)
+        expect(sample.counts).toEqual({ generated: 2, fallback: 0, shell: 0, total: 2 })
+        expect(sample.strictCounts).toEqual({ generated: 1, fallback: 0, shell: 0, total: 1 })
+        expect(sample.exclusions?.development.counts.total).toBe(2)
+        expect(sample.exclusions?.development.rawTextCounts.total).toBe(1)
+        expect(sample.exclusions?.capabilityInternals.counts.total).toBe(1)
+        expect(Object.keys(sample.exclusions?.byCapability ?? {})).toEqual(['CameraView'])
+    })
+
+    it('audits source overrides inside native internals without reading or retaining private content', () => {
+        const raw = Object.defineProperties(text(), {
+            textContent: {
+                get: (): never => {
+                    throw new Error('must not read text')
+                },
+            },
+            nodeValue: {
+                get: (): never => {
+                    throw new Error('must not read text')
+                },
+            },
+        })
+        const meter = new NativeHostMeter()
+        meter.registerRoot(
+            documentRoot(
+                element('truebuild-render-origin:generated', [
+                    element('truebuild-capability-internals:PieceTile', [
+                        element('truebuild-render-origin:fallback', [
+                            element('private-unrelated-native-id', [raw], 'Text'),
+                        ]),
+                    ]),
+                ]),
+            ),
+        )
+        const sample = meter.sample(point)
+        expect(sample.status).toBe('measured')
+        expect(sample.counts).toEqual({ generated: 2, fallback: 2, shell: 0, total: 4 })
+        expect(sample.strictCounts).toEqual({ generated: 1, fallback: 0, shell: 0, total: 1 })
+        expect(sample.exclusions?.byCapability.PieceTile).toEqual({
+            counts: { generated: 1, fallback: 2, shell: 0, total: 3 },
+            rawTextCounts: { generated: 0, fallback: 1, shell: 0, total: 1 },
+        })
+        expect(JSON.stringify(sample)).not.toContain('private-unrelated-native-id')
+    })
+
+    it.each([
+        'truebuild-capability-internals',
+        'truebuild-capability-internals:',
+        'truebuild-capability-internals:Unknown',
+        'truebuild-capability-internals:NavigationHeader',
+        'truebuild-meter-exclude',
+        'truebuild-meter-exclude:',
+        'truebuild-meter-exclude:production',
+        'truebuild-render-origin:invented',
+    ])('fails closed for reserved marker %s even inside a development exclusion', (id) => {
+        const meter = new NativeHostMeter()
+        meter.registerRoot(
+            documentRoot(
+                element('', [
+                    element('truebuild-render-origin:generated'),
+                    element('truebuild-meter-exclude:development', [element(id)]),
+                ]),
+            ),
+        )
+        expect(meter.sample(point)).toMatchObject({
+            status: 'unavailable',
+            reason: 'invalid-marker',
+            counts: null,
+            generatedShare: null,
+            strictStatus: 'unavailable',
+            strictCounts: null,
+            strictGeneratedShare: null,
+            exclusions: null,
+        })
+    })
+
+    it.each(['truebuild-meter-exclude:development', 'truebuild-capability-internals:CameraView'])(
+        'never hides navigation chrome beneath %s',
+        (id) => {
+            const meter = new NativeHostMeter()
+            meter.registerRoot(
+                documentRoot(element('', [element(id, [element('', [], 'RN:RNSScreenStackHeaderSubview')])])),
+            )
+            expect(meter.sample(point)).toMatchObject({
+                status: 'unavailable',
+                reason: 'invalid-marker',
+                counts: null,
+                strictCounts: null,
+                exclusions: null,
+            })
+        },
+    )
+
+    it('retains the complete exclusion census at a zero denominator and never turns it into a percentage', () => {
+        const meter = new NativeHostMeter()
+        const remove = meter.registerRoot(documentRoot(element('truebuild-meter-exclude:development', [text()])))
+        expect(meter.sample(point)).toMatchObject({
+            status: 'unavailable',
+            reason: 'empty-tree',
+            counts: null,
+            generatedShare: null,
+            strictStatus: 'unavailable',
+            strictReason: 'empty-tree',
+            strictCounts: null,
+            strictGeneratedShare: null,
+            exclusions: { development: { counts: { shell: 1, total: 1 }, rawTextCounts: { shell: 1, total: 1 } } },
+        })
+        remove()
+        meter.registerRoot(documentRoot(element('truebuild-capability-internals:ManualPage')))
+        expect(meter.sample(point)).toMatchObject({
+            status: 'measured',
+            counts: { shell: 1, total: 1 },
+            generatedShare: 0,
+            strictStatus: 'unavailable',
+            strictCounts: null,
+            strictGeneratedShare: null,
+            strictReason: 'empty-tree',
+            exclusions: { capabilityInternals: { counts: { shell: 1, total: 1 } } },
+        })
+        expect(meter.summarizeSession(point.sessionId, point.platform)).toMatchObject({
+            status: 'measured',
+            generatedShare: 0,
+            strictStatus: 'unavailable',
+            strictGeneratedShare: null,
+            meanRouteGeneratedShare: 0,
+            meanRouteStrictGeneratedShare: null,
+        })
+    })
+
+    it('still checks connectivity and traversal bounds within excluded native internals', () => {
+        const excluded = element('truebuild-capability-internals:CameraView', [element()])
+        const disconnected = Object.defineProperty(excluded.childNodes[0]!, 'isConnected', { value: false })
+        const meter = new NativeHostMeter()
+        const remove = meter.registerRoot(documentRoot(element('', [excluded])))
+        expect(meter.sample(point)).toMatchObject({ status: 'unavailable', reason: 'disconnected', exclusions: null })
+        remove()
+        const bounded = new NativeHostMeter({ maxNodes: 2 })
+        bounded.registerRoot(
+            documentRoot(element('truebuild-meter-exclude:development', [element('', [disconnected])])),
+        )
+        expect(bounded.sample(point)).toMatchObject({
+            status: 'unavailable',
+            reason: 'traversal-limit',
+            exclusions: null,
+        })
+    })
+})
+
+describe('route-balanced coverage', () => {
+    it('averages weighted route shares without overweighting large routes or replayed checkpoints', () => {
+        const meter = new NativeHostMeter()
+        const home = { ...point, screen: 'home' }
+        const stopHome = meter.registerRoot(documentRoot(element('truebuild-render-origin:generated')))
+        meter.sample(home)
+        meter.sample(home)
+        meter.sample({ ...home, checkpointId: 'other-state' })
+        stopHome()
+        const stopGuide = meter.registerRoot(
+            documentRoot(
+                element('', [
+                    element('truebuild-render-origin:generated', [
+                        element('truebuild-capability-internals:CameraView', [element()]),
+                    ]),
+                ]),
+            ),
+        )
+        meter.sample(point)
+        const session = meter.summarizeSession(point.sessionId, point.platform)
+        expect(session).toMatchObject({
+            metricsVersion: 2,
+            sampleCount: 3,
+            counts: { generated: 5, fallback: 0, shell: 1, total: 6 },
+            generatedShare: 5 / 6,
+            strictCounts: { generated: 3, fallback: 0, shell: 1, total: 4 },
+            strictGeneratedShare: 3 / 4,
+            meanRouteGeneratedShare: (1 + 3 / 4) / 2,
+            meanRouteStrictGeneratedShare: (1 + 1 / 2) / 2,
+        })
+        expect(
+            session.routes.map((route) => [
+                route.route,
+                route.sampleCount,
+                route.counts?.total,
+                route.generatedShare,
+                route.strictGeneratedShare,
+            ]),
+        ).toEqual([
+            ['home', 2, 2, 1, 1],
+            ['guide', 1, 4, 3 / 4, 1 / 2],
+        ])
+        expect(session.exclusions?.byCapability.CameraView?.counts.total).toBe(2)
+        stopGuide()
+        meter.registerRoot(documentRoot(element('truebuild-render-origin:fallback')))
+        meter.sample(home)
+        const replacement = meter.summarizeSession(point.sessionId, point.platform)
+        expect(replacement.sampleCount).toBe(3)
+        expect(replacement.meanRouteGeneratedShare).toBe((1 / 2 + 3 / 4) / 2)
+        expect(replacement.meanRouteStrictGeneratedShare).toBe((1 / 2 + 1 / 2) / 2)
+    })
+
+    it('keeps failed routes in the matrix and makes every dependent mean unavailable', () => {
+        const meter = new NativeHostMeter()
+        meter.registerRoot(documentRoot(element('truebuild-render-origin:generated')))
+        meter.sample({ ...point, screen: 'home' })
+        meter.registerRoot(null)
+        meter.sample(point)
+        const session = meter.summarizeSession(point.sessionId, point.platform)
+        expect(session).toMatchObject({
+            status: 'unavailable',
+            counts: null,
+            generatedShare: null,
+            strictStatus: 'unavailable',
+            strictCounts: null,
+            strictGeneratedShare: null,
+            meanRouteGeneratedShare: null,
+            meanRouteStrictGeneratedShare: null,
+            exclusions: null,
+        })
+        expect(session.routes.map((route) => [route.route, route.status])).toEqual([
+            ['home', 'measured'],
+            ['guide', 'unavailable'],
+        ])
+    })
+})

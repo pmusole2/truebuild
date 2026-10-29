@@ -1,4 +1,5 @@
 import { requestFetch } from './request-fetch'
+import { postDocuments } from './document-client'
 import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
 import {
     checkResultSchema,
@@ -27,6 +28,8 @@ import {
     MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
     modelOverlayMetadataSchema,
+    modelOverlayJobMetadataSchema,
+    OVERLAY_JOB_PATHS,
     modelParseMetadataSchema,
     modelQuestionJobMetadataSchema,
     modelQuestionMetadataSchema,
@@ -39,6 +42,8 @@ import {
     type OverlayResult,
     type PendingResult,
     type ScreenContext,
+    type ModelScreensV2Metadata,
+    type ScreensV2Result,
 } from '@truebuild/contracts/model'
 import type { z } from 'zod'
 import { sameIdentity } from '../features/screens/screen-spec'
@@ -75,7 +80,10 @@ export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
 export const MODEL_SCREEN_TIMEOUT_MS = 30_000
 export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
 export const MODEL_SCREEN_CONTROL_TIMEOUT_MS = 10_000
-export const MODEL_OVERLAY_TIMEOUT_MS = 70_000
+export const MODEL_OVERLAY_TIMEOUT_MS = 75_000
+export const MODEL_OVERLAY_FIRST_TIMEOUT_MS = 12_000
+export const MODEL_OVERLAY_COLLECT_TIMEOUT_MS = 10_000
+export const MODEL_OVERLAY_CANCEL_TIMEOUT_MS = 5_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
 const MAX_SSE_EVENT_BYTES = 262_144
@@ -214,6 +222,10 @@ export class ModelApiClient {
         this.secret = options.secret
         this.fetchImpl = options.fetch ?? requestFetch
         this.streamImpl = options.streamFetch ?? defaultStreamFetch
+    }
+
+    async screensV2(metadata: ModelScreensV2Metadata, ctx: ModelRequestContext): Promise<ScreensV2Result> {
+        return postDocuments({ metadata, ctx, baseUrl: this.baseUrl, secret: this.secret, fetch: this.fetchImpl })
     }
 
     async parse(
@@ -485,17 +497,102 @@ export class ModelApiClient {
         if (form === null) {
             return invalidInputResult(ctx.requestId)
         }
-        return this.post({
-            path: '/api/checks/overlay',
-            requestId: ctx.requestId,
-            binding,
-            form,
-            timeoutMs: MODEL_OVERLAY_TIMEOUT_MS,
-            valueSchema: overlayResultSchema,
-            accepts: (): boolean => true,
-            signal: ctx.signal,
-            checkpoint: ctx.checkpoint,
-        })
+        const guard = createCallGuard(MODEL_OVERLAY_TIMEOUT_MS, ctx.signal)
+        let ticket: string | null = null
+        let cancelled = false
+        const cancel = (): void => {
+            if (ticket === null || cancelled) return
+            cancelled = true
+            void this.cancelOverlay(binding, ticket, ctx.requestId)
+        }
+        guard.signal.addEventListener('abort', cancel, { once: true })
+        let horizon = performance.now() + MODEL_OVERLAY_TIMEOUT_MS
+        const checkpoint = (): void => {
+            guard.checkpoint()
+            ctx.checkpoint?.()
+            if (performance.now() >= horizon) throw new Error('overlay_expired')
+        }
+        const pending = (value: unknown): PendingResult | null => {
+            const parsed = pendingFor(ctx.requestId, binding)(value)
+            return parsed !== null && (ticket === null || parsed.ticket === ticket) ? parsed : null
+        }
+        const post = (
+            path: string,
+            body: FormData | string,
+            timeoutMs: number,
+        ): Promise<ApiResult<OverlayResult> | PendingResult> =>
+            this.post<OverlayResult, PendingResult>({
+                path,
+                requestId: ctx.requestId,
+                binding,
+                form: body,
+                timeoutMs,
+                valueSchema: overlayResultSchema,
+                accepts: (): boolean => true,
+                signal: guard.signal,
+                checkpoint,
+                pending,
+                acceptSyntheticFixture: (value): boolean => value.evidence === 'synthetic-fixture',
+            })
+        try {
+            checkpoint()
+            let result = await post('/api/checks/overlay', form, MODEL_OVERLAY_FIRST_TIMEOUT_MS)
+            while (result.status === 'pending') {
+                ticket ??= result.ticket
+                horizon = Math.min(horizon, performance.now() + result.expiresInMs + 5_000)
+                checkpoint()
+                await waitForOverlay(
+                    Math.min(result.retryAfterMs, Math.max(0, horizon - performance.now())),
+                    guard.signal,
+                )
+                checkpoint()
+                // Result/cancel share the questions' authenticated JSON job protocol. Only the original effect
+                // is multipart; collection never resends its images or one-use overlay token.
+                const body = JSON.stringify({ mode: 'model', requestId: ctx.requestId, binding, ticket })
+                result = await post(
+                    OVERLAY_JOB_PATHS.result,
+                    body,
+                    Math.max(1, Math.min(MODEL_OVERLAY_COLLECT_TIMEOUT_MS, horizon - performance.now())),
+                )
+            }
+            checkpoint()
+            if (result.status === 'ok' && result.mode === 'model' && result.value.evidence === 'synthetic-fixture') {
+                cancel()
+                return unavailableResult(ctx.requestId, binding, 'invalid_output', false)
+            }
+            if (result.status === 'unavailable' && result.code === 'invalid_output') cancel()
+            return result
+        } catch {
+            cancel()
+            return unavailableResult(ctx.requestId, binding, ctx.signal?.aborted ? 'invalid_input' : 'timeout', false)
+        } finally {
+            guard.signal.removeEventListener('abort', cancel)
+            guard.dispose()
+            releaseMultipartImages(form)
+        }
+    }
+
+    private async cancelOverlay(binding: CaptureBinding, ticket: string, requestId: string): Promise<void> {
+        const metadata = modelOverlayJobMetadataSchema.safeParse({ mode: 'model', requestId, binding, ticket })
+        if (!metadata.success) return
+        const guard = createCallGuard(MODEL_OVERLAY_CANCEL_TIMEOUT_MS, undefined)
+        let response: Response | undefined
+        try {
+            guard.checkpoint()
+            response = await awaitStopped(
+                this.fetchImpl(
+                    new URL(OVERLAY_JOB_PATHS.cancel, this.baseUrl).toString(),
+                    this.init(JSON.stringify(metadata.data), guard.signal),
+                ),
+                guard.signal,
+                discardResponse,
+            )
+        } catch {
+            // Best effort with the original owned ticket; never retry a cancellation or resend the effect.
+        } finally {
+            if (response !== undefined) discardResponse(response)
+            guard.dispose()
+        }
     }
 
     /**
@@ -623,6 +720,8 @@ export class ModelApiClient {
         checkpoint: (() => void) | undefined
         /** A 202 carries this shape instead of an envelope (slow questions). Only the requested binding may match. */
         pending?: (value: unknown) => P | null
+        /** Overlay fixtures explicitly identify synthetic IO; other model APIs retain their original strict mode. */
+        acceptSyntheticFixture?: (value: T) => boolean
     }): Promise<ApiResult<T> | P> {
         const { requestId, binding, signal } = spec
         const release = (): void => {
@@ -672,6 +771,17 @@ export class ModelApiClient {
                 return pending
             }
             const result = interpretEnvelope(call, owned.status, text, 'model', modelStatusResult)
+            if (
+                result.status === 'unavailable' &&
+                result.code === 'invalid_output' &&
+                spec.acceptSyntheticFixture !== undefined
+            ) {
+                const fixture = interpretEnvelope(call, owned.status, text, 'fixture', modelStatusResult)
+                if (fixture.status === 'ok' && spec.acceptSyntheticFixture(fixture.value)) {
+                    checkpoint()
+                    return fixture
+                }
+            }
             checkpoint()
 
             return result
@@ -963,6 +1073,24 @@ function pendingFor(requestId: string, binding: CaptureBinding): (value: unknown
             ? parsed.data
             : null
     }
+}
+
+function waitForOverlay(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject): void => {
+        const finish = (): void => {
+            clearTimeout(timer)
+            signal.removeEventListener('abort', abort)
+            resolve()
+        }
+        const abort = (): void => {
+            clearTimeout(timer)
+            signal.removeEventListener('abort', abort)
+            reject(new Error('overlay_stopped'))
+        }
+        const timer = setTimeout(finish, ms)
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+    })
 }
 
 function statusToScreensCode(status: number): Extract<ScreensResult, { status: 'unavailable' }>['code'] {
