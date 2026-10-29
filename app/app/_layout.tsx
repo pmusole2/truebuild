@@ -7,6 +7,8 @@ import { useHeaderStyle } from '../src/features/capture/route-screens'
 import { WorkflowProvider } from '../src/features/capture/workflow-provider'
 import { ThemeProvider, useTheme } from '../src/theme/theme'
 import { statusBarStyleFor } from '../src/features/capture/header-options'
+import { AppCoachProvider } from '../src/features/onboarding/coach-root'
+import { ColdStartProvider } from '../src/ui/cold-start'
 import { FeedbackProvider } from '../src/ui/feedback'
 import { nativeHaptics } from '../src/ui/haptics'
 
@@ -40,7 +42,11 @@ export default function RootLayout(): ReactElement {
             <ThemeProvider>
                 <FeedbackProvider haptics={nativeHaptics}>
                     <WorkflowProvider>
-                        <ThemedStack />
+                        <ColdStartProvider>
+                            <AppCoachProvider>
+                                <ThemedStack />
+                            </AppCoachProvider>
+                        </ColdStartProvider>
                         <NativeRouteSync />
                     </WorkflowProvider>
                 </FeedbackProvider>

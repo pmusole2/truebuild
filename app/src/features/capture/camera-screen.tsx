@@ -4,6 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import { ownTemporaryImage } from '../../media/owned-temporary-images'
 import type { SourceImageAsset } from '../../media/normalize-image'
 import { ShutterButton } from '../../ui/camera-chrome'
+import { CoachTarget } from '../onboarding/coach-provider'
 import type { CameraIntent } from './controller'
 import { CameraStage, type AssemblyGuide, type CameraPresentation } from './camera-stage'
 
@@ -24,27 +25,37 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
     const [ready, setReady] = useState(false)
     const [error, setError] = useState(false)
     const [attempt, setAttempt] = useState(0)
+    const capture = (): void => {
+        const view = camera.current
+        if (view === null) {
+            return
+        }
+        onCapture(async (): Promise<SourceImageAsset> => {
+            const picture = await view.takePictureAsync({
+                quality: 1,
+                skipProcessing: false,
+                exif: false,
+            })
+            ownTemporaryImage(picture.uri)
+            return { uri: picture.uri, width: picture.width, height: picture.height }
+        })
+    }
+    const shutterDisabled = !ready || error || busy
     const shutter = (
-        <ShutterButton
-            label={busy ? 'Preparing photo…' : 'Capture photo'}
-            onPress={(): void => {
-                const view = camera.current
-                if (view === null) {
-                    return
-                }
-                onCapture(async (): Promise<SourceImageAsset> => {
-                    const picture = await view.takePictureAsync({
-                        quality: 1,
-                        skipProcessing: false,
-                        exif: false,
-                    })
-                    ownTemporaryImage(picture.uri)
-                    return { uri: picture.uri, width: picture.width, height: picture.height }
-                })
-            }}
-            disabled={!ready || error || busy}
-            busy={busy}
-        />
+        // The tip's target runs this same capture, and only while the shutter itself could.
+        <CoachTarget
+            id="camera-shutter"
+            screen="camera"
+            label="Capture photo"
+            onPress={shutterDisabled ? undefined : capture}
+        >
+            <ShutterButton
+                label={busy ? 'Preparing photo…' : 'Capture photo'}
+                onPress={capture}
+                disabled={shutterDisabled}
+                busy={busy}
+            />
+        </CoachTarget>
     )
     const presentation: CameraPresentation =
         permission === null
@@ -77,6 +88,8 @@ export function CameraScreen({ busy, intent, guide, onCancel, onCapture }: Camer
             guide={guide}
             presentation={presentation}
             onCancel={onCancel}
+            shutterReady={ready && !error}
+            busy={busy}
             onRequestPermission={(): void => {
                 void requestPermission().catch((): void => setError(true))
             }}

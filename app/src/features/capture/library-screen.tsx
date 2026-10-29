@@ -8,6 +8,11 @@ import {
     type NativeSyntheticEvent,
 } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
+import { useColdEntrance } from '../../ui/cold-start'
+import { useEntranceGroup, useEntranceTimeline } from '../../ui/motion'
+import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
+import { homeCandidates } from '../onboarding/coach-inventory'
+import { ShowTipsAgainRow } from '../onboarding/tips-rows'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { useFeedback } from '../../ui/feedback'
 import { MoreSheet } from '../../ui/sheet'
@@ -233,6 +238,7 @@ export function LibraryScreen({
                   label: 'Add manual',
                   compactLabel: 'Add',
                   icon: 'plus' as const,
+                  testID: 'home-add',
                   onPress: addManual,
                   disabled: addDisabled,
               }
@@ -241,6 +247,26 @@ export function LibraryScreen({
         sole !== undefined && !addDisabled
             ? { label: 'Add manual', icon: 'plus' as const, onPress: addManual }
             : undefined
+    // First-run tips: the real Add or resume primary, and the native header's More. Anything working or covering the
+    // screen holds them back; the screen's own state is the only source of what to teach.
+    const scope = useCoachScope()
+    useCoachScreen('home', {
+        suppressed: state.loading || state.pending !== null || state.storageReadOnly || failed || more.open,
+        candidates: homeCandidates({
+            add: !failed && !addDisabled && sole === undefined,
+            resume: !failed && !addDisabled && sole !== undefined,
+            more: chrome === 'native',
+        }),
+    })
+    // The launch entrance plays once, for the first cold start only, after the content is ready. The heading and the
+    // content share one timeline; the header and the bottom bar never move.
+    const attention = useCoachAttention()
+    const motionEnabled =
+        !state.loading && !state.storageReadOnly && state.pending === null && !more.open && !attention && scope.active
+    const cold = useColdEntrance(!state.loading, !motionEnabled)
+    const timeline = useEntranceTimeline(cold, motionEnabled)
+    const headingEntrance = useEntranceGroup(timeline, 0, 0.6, true)
+    const contentEntrance = useEntranceGroup(timeline, 0.3, 1, true)
     return (
         <ScreenBody testID="library-screen">
             {chrome === 'inline' ? <InlineHeader title="Your builds" more={more} /> : null}
@@ -258,34 +284,38 @@ export function LibraryScreen({
                 scrollEventThrottle={16}
                 onScroll={onScroll}
             >
-                {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
-                {overlay ? <HomeHeading scrollY={scrollY} distance={distance} onHeight={setHeadingHeight} /> : null}
-                {state.storageReadOnly ? null : <PlainNotice state={state} controller={controller} />}
-                {state.loading ? (
-                    <Card>
-                        <LoadingState label="Getting your builds ready." shape="card" />
-                    </Card>
-                ) : failed ? (
-                    <Instruction>{recoveryCopy}</Instruction>
-                ) : empty ? (
-                    <View style={[styles.hero, overlay && styles.heroCentred]}>
-                        <Icon name="image" />
-                        <Instruction>Build furniture with step-by-step help.</Instruction>
-                    </View>
-                ) : null}
-                {sole === undefined ? null : (
-                    <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
-                )}
-                {entries.length > 1
-                    ? entries.map((entry) => (
-                          <ManualRow
-                              key={entry.session.manualId}
-                              entry={entry}
-                              pageUris={state.pageUris}
-                              onOpen={(): void => nav.openStop(entry)}
-                          />
-                      ))
-                    : null}
+                <Animated.View style={headingEntrance}>
+                    {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
+                    {overlay ? <HomeHeading scrollY={scrollY} distance={distance} onHeight={setHeadingHeight} /> : null}
+                </Animated.View>
+                <Animated.View style={[styles.group, empty && overlay && styles.groupFill, contentEntrance]}>
+                    {state.storageReadOnly ? null : <PlainNotice state={state} controller={controller} />}
+                    {state.loading ? (
+                        <Card>
+                            <LoadingState label="Getting your builds ready." shape="card" />
+                        </Card>
+                    ) : failed ? (
+                        <Instruction>{recoveryCopy}</Instruction>
+                    ) : empty ? (
+                        <View style={[styles.hero, overlay && styles.heroCentred]}>
+                            <Icon name="image" />
+                            <Instruction>Build furniture with step-by-step help.</Instruction>
+                        </View>
+                    ) : null}
+                    {sole === undefined ? null : (
+                        <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
+                    )}
+                    {entries.length > 1
+                        ? entries.map((entry) => (
+                              <ManualRow
+                                  key={entry.session.manualId}
+                                  entry={entry}
+                                  pageUris={state.pageUris}
+                                  onOpen={(): void => nav.openStop(entry)}
+                              />
+                          ))
+                        : null}
+                </Animated.View>
             </ScrollView>
             <FixedBottomBar
                 primary={primary}
@@ -297,6 +327,7 @@ export function LibraryScreen({
             <MoreSheet visible={more.open} title="More" onClose={more.hide}>
                 <HowItWorks />
                 <SettingsSections state={state} />
+                <ShowTipsAgainRow onClose={more.hide} />
                 <AboutThisCheck />
             </MoreSheet>
         </ScreenBody>
@@ -413,6 +444,8 @@ const styles = StyleSheet.create({
     centred: { flexGrow: 1, justifyContent: 'center' },
     fill: { flexGrow: 1 },
     heroCentred: { flex: 1, justifyContent: 'center' },
+    group: { gap: space.md },
+    groupFill: { flexGrow: 1 },
     hero: { gap: space.sm, alignItems: 'flex-start' },
     collapsing: { transformOrigin: 'left center' },
     summary: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },

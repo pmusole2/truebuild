@@ -6,6 +6,7 @@ import { darkColors, type Colors } from '../../theme/tokens'
 import { useLargeText } from '../../ui/large-text'
 import type { LibraryEntry } from './library'
 import { PinnedTitle } from './library-screen'
+import type { CoachContextValue } from '../onboarding/coach-provider'
 import { HeaderButtons, type MoreControl } from './screen-header'
 
 // Native header options only: titles, colours and the one trailing control. No controller, router or gate logic lives
@@ -84,6 +85,7 @@ export function homeHeaderOptions(args: {
     readonly scrollY: SharedValue<number>
     readonly more: MoreControl | null
     readonly collapsed?: boolean
+    readonly coachRegistry?: Pick<CoachContextValue, 'registerTarget'> | null
 }): ScreenOptions {
     const ios = Platform.OS === 'ios'
     return {
@@ -91,6 +93,9 @@ export function homeHeaderOptions(args: {
         headerLargeTitleEnabled: false,
         headerTitle: ios ? undefined : (): ReactElement => <PinnedTitle scrollY={args.scrollY} title="TrueBuild" />,
         headerTitleStyle: ios ? { color: args.collapsed === true ? args.colors.ink : 'transparent' } : undefined,
-        headerRight: args.more === null ? undefined : (): ReactElement => <HeaderButtons more={args.more!} />,
+        headerRight:
+            args.more === null
+                ? undefined
+                : (): ReactElement => <HeaderButtons more={args.more!} coach="home" registry={args.coachRegistry} />,
     }
 }

@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
+import Animated from 'react-native-reanimated'
 import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -9,11 +10,14 @@ import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction } from '../../ui/text'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { useStepTransition } from '../../ui/motion'
 import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
 import { reviewedSession, unresolvedCriticalFacts } from './controller'
 import type { LibraryEntry } from './library'
+import { quickCheckCandidates } from '../onboarding/coach-inventory'
+import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
 import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
 import { firstSentences, isProgressNotice, plainReason, plainWords } from './plain-copy'
@@ -166,6 +170,31 @@ export function OverviewScreen({
     }
 
     const asking = current !== undefined && !unreadable
+    // A new question moves its picture and sentence together; nothing moves while work, a sheet or a tip holds the screen.
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const previousPosition = useRef(position)
+    const direction = position >= previousPosition.current ? 1 : -1
+    useEffect(() => {
+        previousPosition.current = position
+    }, [position])
+    const questionMotion = useStepTransition(
+        current?.id ?? 'none',
+        direction,
+        scope.active && !attention && !more.open && state.pending === null,
+    )
+    useCoachScreen('quick-check', {
+        suppressed: busy || more.open,
+        candidates: quickCheckCandidates({
+            state: asking
+                ? 'asking'
+                : primary?.testID === 'quick-check-clearer'
+                  ? 'blocked'
+                  : primary?.testID === 'quick-check-start'
+                    ? 'ready'
+                    : 'none',
+        }),
+    })
     // The header count already shows progress; "Saved. Thanks." would be a second sentence under the question.
     const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
     return (
@@ -181,22 +210,26 @@ export function OverviewScreen({
                 {asking ? (
                     <>
                         <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
-                        <View style={styles.hero}>
-                            <StepPicture
-                                reference={current.step.sourceRefs[0]}
-                                references={current.step.sourceRefs}
-                                session={session}
-                                pageUris={state.pageUris}
-                                height={heroHeight}
-                                cover
-                            />
+                        <View style={[styles.hero, styles.clip]}>
+                            <Animated.View style={questionMotion}>
+                                <StepPicture
+                                    reference={current.step.sourceRefs[0]}
+                                    references={current.step.sourceRefs}
+                                    session={session}
+                                    pageUris={state.pageUris}
+                                    height={heroHeight}
+                                    cover
+                                />
+                            </Animated.View>
                         </View>
                         <TextRegion compact>
                             <PlainNotice state={quietState} controller={controller} />
-                            <Instruction>{sentence}</Instruction>
-                            {current.reason === null ? null : (
-                                <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
-                            )}
+                            <Animated.View style={[styles.question, questionMotion]}>
+                                <Instruction>{sentence}</Instruction>
+                                {current.reason === null ? null : (
+                                    <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
+                                )}
+                            </Animated.View>
                         </TextRegion>
                         <FixedBottomBar
                             primary={{
@@ -502,6 +535,8 @@ function PageStripItem({
 const styles = StyleSheet.create({
     flex: { flex: 1 },
     hero: { paddingHorizontal: space.md, paddingTop: space.sm },
+    clip: { overflow: 'hidden' },
+    question: { gap: space.sm },
     editor: { gap: space.md },
     strip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     stripItem: { width: 96, minHeight: touchTarget },

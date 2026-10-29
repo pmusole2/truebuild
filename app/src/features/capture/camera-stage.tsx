@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import Animated from 'react-native-reanimated'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -13,6 +14,10 @@ import { LoadingState } from '../../ui/states'
 import { MoreSheet } from '../../ui/sheet'
 import { ThemeProvider } from '../../theme/theme'
 import { darkColors, radius, space, touchTarget } from '../../theme/tokens'
+import { CoachLocalOverlay } from '../onboarding/coach-overlay'
+import { cameraCandidates } from '../onboarding/coach-inventory'
+import { useContentFade } from '../../ui/motion'
+import { useCoach, useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
 
 /** Assembly guide shown over the live preview: where the person is, one cue, and the full step one tap away. */
 export type AssemblyGuide = {
@@ -77,6 +82,8 @@ export function CameraStage({
     onRequestPermission,
     onOpenSettings,
     onRetry,
+    shutterReady = false,
+    busy = false,
 }: {
     readonly intent: CameraIntent | null
     readonly guide?: AssemblyGuide
@@ -85,9 +92,13 @@ export function CameraStage({
     readonly onRequestPermission: () => void
     readonly onOpenSettings: () => void
     readonly onRetry: () => void
+    // The shutter can be pressed: the preview is live and nothing is being captured. Tips wait for it.
+    readonly shutterReady?: boolean
+    readonly busy?: boolean
 }): ReactElement {
     const insets = useSafeAreaInsets()
     const large = useLargeText()
+    const coaching = useCoach()?.active?.screen === 'camera'
     const [instructionsOpen, setInstructionsOpen] = useState(false)
     useEffect(() => {
         if (presentation.status !== 'preview') {
@@ -95,6 +106,18 @@ export function CameraStage({
         }
     }, [presentation.status])
     const assembly = guide !== undefined && intent !== null && intent.kind !== 'page'
+    // One tip, inside this modal (never a second modal), and only over a live, ready, idle shutter.
+    useCoachScreen('camera', {
+        host: 'local',
+        suppressed: presentation.status !== 'preview' || !shutterReady || busy || instructionsOpen,
+        candidates: cameraCandidates({ intent: intent === null ? null : intent.kind === 'page' ? 'page' : 'part' }),
+    })
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const chromeFade = useContentFade(
+        `${presentation.status}:${shutterReady ? 'ready' : 'waiting'}`,
+        scope.active && !attention && !busy && !instructionsOpen && (presentation.status !== 'preview' || shutterReady),
+    )
     const openDetails = (): void => setInstructionsOpen(true)
     // The explanation scrolls, the close control stays in the header and the one recovery action sits in the fixed bar.
     const recovery: { readonly body: ReactNode; readonly action: BarAction | null; readonly testID?: string } | null =
@@ -133,100 +156,112 @@ export function CameraStage({
     return (
         <ThemeProvider scheme="dark">
             <View testID="camera-screen" style={styles.full}>
-                {/* The camera is dark and full bleed in both appearances, so its status bar text is always light. */}
-                <StatusBar style="light" />
-                {recovery !== null ? (
-                    <>
-                        <View style={[styles.stateHeader, { paddingTop: insets.top + space.xs }]}>
-                            <IconButton label="Go back" icon="close" testID="camera-close" onPress={onCancel} />
-                        </View>
-                        <ScrollView
-                            testID={recovery.testID}
-                            style={styles.stateScroll}
-                            contentContainerStyle={styles.stateContent}
-                        >
-                            {recovery.body}
-                        </ScrollView>
-                        {recovery.action === null ? null : <FixedBottomBar primary={recovery.action} />}
-                    </>
-                ) : presentation.status === 'preview' ? (
-                    <>
-                        {presentation.media}
-                        <View
-                            style={StyleSheet.absoluteFill}
-                            pointerEvents="box-none"
-                            testID={assembly ? 'assembly-camera' : undefined}
-                        >
-                            <View style={styles.viewfinder} pointerEvents="none">
-                                <ViewfinderCorners />
-                            </View>
-                            <View style={[styles.top, { top: insets.top + space.xs }]} pointerEvents="box-none">
-                                <View style={styles.glassButton}>
-                                    <IconButton
-                                        label="Close camera"
-                                        icon="close"
-                                        testID="camera-close"
-                                        onPress={onCancel}
-                                    />
-                                </View>
-                                <View
-                                    style={styles.pill}
-                                    accessible={true}
-                                    accessibilityLabel={cameraPill(intent, guide)}
-                                >
-                                    <Caption tone="default">{cameraPill(intent, guide, large)}</Caption>
-                                </View>
-                                <View style={styles.glassSpacer} />
-                            </View>
-                            <View
-                                style={[styles.bottom, { paddingBottom: insets.bottom + space.md }]}
-                                pointerEvents="box-none"
-                            >
-                                {assembly ? (
-                                    guide.thumbnail !== undefined ? (
-                                        // The picture opens the step's details, so no second info control is needed.
-                                        <PressMotion
-                                            testID="camera-thumbnail"
-                                            accessibilityRole="button"
-                                            accessibilityLabel="See the step picture"
-                                            onPress={openDetails}
-                                            style={styles.thumbnail}
-                                        >
-                                            {guide.thumbnail}
-                                        </PressMotion>
-                                    ) : (
-                                        // With no picture to tap, the details keep one way in.
-                                        <View style={[styles.glassButton, styles.detailsButton]}>
-                                            <IconButton label="Step details" icon="info" onPress={openDetails} />
-                                        </View>
-                                    )
-                                ) : null}
-                                <View
-                                    style={styles.cue}
-                                    testID="camera-cue"
-                                    accessible={true}
-                                    accessibilityLabel={cameraCue(intent)}
-                                >
-                                    <Callout numberOfLines={large ? undefined : 1}>{cameraCue(intent)}</Callout>
-                                </View>
-                                {presentation.shutter}
-                            </View>
-                        </View>
-                    </>
-                ) : null}
-                <MoreSheet
-                    visible={instructionsOpen && assembly && presentation.status === 'preview'}
-                    title={guide?.progress ?? 'This step'}
-                    compactTitle={
-                        guide === undefined
-                            ? undefined
-                            : `Step ${compactProgress(guide.progress)?.split('/')[0] ?? ''}`.trim()
-                    }
-                    onClose={(): void => setInstructionsOpen(false)}
-                    detents={['tall', 'full']}
+                <View
+                    style={styles.full}
+                    accessibilityElementsHidden={coaching}
+                    importantForAccessibility={coaching ? 'no-hide-descendants' : 'auto'}
                 >
-                    {guide?.instructions}
-                </MoreSheet>
+                    {/* The camera is dark and full bleed in both appearances, so its status bar text is always light. */}
+                    <StatusBar style="light" />
+                    {recovery !== null ? (
+                        <>
+                            <View style={[styles.stateHeader, { paddingTop: insets.top + space.xs }]}>
+                                <IconButton label="Go back" icon="close" testID="camera-close" onPress={onCancel} />
+                            </View>
+                            <Animated.View style={[styles.stateScroll, chromeFade]}>
+                                <ScrollView
+                                    testID={recovery.testID}
+                                    style={styles.stateScroll}
+                                    contentContainerStyle={styles.stateContent}
+                                >
+                                    {recovery.body}
+                                </ScrollView>
+                            </Animated.View>
+                            {recovery.action === null ? null : <FixedBottomBar primary={recovery.action} />}
+                        </>
+                    ) : presentation.status === 'preview' ? (
+                        <>
+                            {presentation.media}
+                            <View
+                                style={StyleSheet.absoluteFill}
+                                pointerEvents="box-none"
+                                testID={assembly ? 'assembly-camera' : undefined}
+                            >
+                                <View style={styles.viewfinder} pointerEvents="none">
+                                    <ViewfinderCorners />
+                                </View>
+                                <Animated.View
+                                    style={[styles.top, { top: insets.top + space.xs }, chromeFade]}
+                                    pointerEvents="box-none"
+                                >
+                                    <View style={styles.glassButton}>
+                                        <IconButton
+                                            label="Close camera"
+                                            icon="close"
+                                            testID="camera-close"
+                                            onPress={onCancel}
+                                        />
+                                    </View>
+                                    <View
+                                        style={styles.pill}
+                                        accessible={true}
+                                        accessibilityLabel={cameraPill(intent, guide)}
+                                    >
+                                        <Caption tone="default">{cameraPill(intent, guide, large)}</Caption>
+                                    </View>
+                                    <View style={styles.glassSpacer} />
+                                </Animated.View>
+                                <Animated.View
+                                    style={[styles.bottom, { paddingBottom: insets.bottom + space.md }, chromeFade]}
+                                    pointerEvents="box-none"
+                                >
+                                    {assembly ? (
+                                        guide.thumbnail !== undefined ? (
+                                            // The picture opens the step's details, so no second info control is needed.
+                                            <PressMotion
+                                                testID="camera-thumbnail"
+                                                accessibilityRole="button"
+                                                accessibilityLabel="See the step picture"
+                                                onPress={openDetails}
+                                                style={styles.thumbnail}
+                                            >
+                                                {guide.thumbnail}
+                                            </PressMotion>
+                                        ) : (
+                                            // With no picture to tap, the details keep one way in.
+                                            <View style={[styles.glassButton, styles.detailsButton]}>
+                                                <IconButton label="Step details" icon="info" onPress={openDetails} />
+                                            </View>
+                                        )
+                                    ) : null}
+                                    <View
+                                        style={styles.cue}
+                                        testID="camera-cue"
+                                        accessible={true}
+                                        accessibilityLabel={cameraCue(intent)}
+                                    >
+                                        <Callout numberOfLines={large ? undefined : 1}>{cameraCue(intent)}</Callout>
+                                    </View>
+                                    {presentation.shutter}
+                                </Animated.View>
+                            </View>
+                        </>
+                    ) : null}
+                    <MoreSheet
+                        visible={instructionsOpen && assembly && presentation.status === 'preview'}
+                        title={guide?.progress ?? 'This step'}
+                        compactTitle={
+                            guide === undefined
+                                ? undefined
+                                : `Step ${compactProgress(guide.progress)?.split('/')[0] ?? ''}`.trim()
+                        }
+                        onClose={(): void => setInstructionsOpen(false)}
+                        detents={['tall', 'full']}
+                    >
+                        {guide?.instructions}
+                    </MoreSheet>
+                </View>
+                <CoachLocalOverlay screen="camera" />
             </View>
         </ThemeProvider>
     )

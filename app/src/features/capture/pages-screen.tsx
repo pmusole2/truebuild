@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
 import { ScrollView, StyleSheet, View } from 'react-native'
+import Animated from 'react-native-reanimated'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { MoreSheet } from '../../ui/sheet'
@@ -13,6 +14,9 @@ import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
 import { space, touchTarget } from '../../theme/tokens'
+import { useLoadEntrance } from '../../ui/motion'
+import { pagesCandidates } from '../onboarding/coach-inventory'
+import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
 import { PRIVACY_COPY } from './privacy-copy'
 import { setReadingLanguage } from './reading-language'
 import type { LibraryEntry } from './library'
@@ -55,6 +59,7 @@ export function PagesScreen({
     const [language, setLanguage] = useState('en')
     const [sheet, setSheet] = useState<Sheet>({ kind: 'settings' })
     const { pages } = entry.session
+    const initialPages = useRef(new Set(pages.map((page) => page.pageId)))
     const busy = state.pending !== null || state.storageReadOnly
     const full = pages.length >= MAX_PAGES
     const saving =
@@ -123,6 +128,17 @@ export function PagesScreen({
                 onPress: (): void => open({ kind: 'add' }),
                 disabled: busy || full,
             }
+    useCoachScreen('pages', {
+        suppressed: busy || more.open,
+        candidates: pagesCandidates({
+            pages: pages.length,
+            open: !saving && !full,
+            canRead: !saving && pages.length >= 1,
+        }),
+    })
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const entrance = useLoadEntrance(scope.active && !attention && !more.open && state.pending === null)
     return (
         <ScreenBody testID="pages-screen">
             {chrome === 'inline' ? (
@@ -132,28 +148,41 @@ export function PagesScreen({
                     more={{ ...more, show: () => open({ kind: 'settings' }) }}
                 />
             ) : null}
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-                <PlainNotice state={state} controller={controller} />
-                {pages.length === 0 ? <Icon name="camera" /> : null}
-                <Instruction>
-                    {pages.length === 0
-                        ? 'Take a photo of each page of your paper manual.'
-                        : 'Add every page, even the parts list.'}
-                </Instruction>
-                {pages.length > MAX_PARSE_PAGES ? (
-                    <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
-                ) : null}
-                {pages.map((page, index) => (
-                    <PageRow
-                        key={page.pageId}
-                        index={index}
-                        uri={state.pageUris[page.pageId]}
-                        aspectRatio={page.width / page.height}
-                        onPress={(): void => open({ kind: 'page', pageId: page.pageId })}
-                    />
-                ))}
-                {saving ? <SkeletonCard /> : null}
-            </ScrollView>
+            <Animated.View style={[styles.flex, entrance]}>
+                <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                    <PlainNotice state={state} controller={controller} />
+                    {pages.length === 0 ? <Icon name="camera" /> : null}
+                    <Instruction>
+                        {pages.length === 0
+                            ? 'Take a photo of each page of your paper manual.'
+                            : 'Add every page, even the parts list.'}
+                    </Instruction>
+                    {pages.length > MAX_PARSE_PAGES ? (
+                        <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
+                    ) : null}
+                    {pages.map((page, index) => (
+                        <PageArrival
+                            key={page.pageId}
+                            waiting={saving && !initialPages.current.has(page.pageId)}
+                            animate={
+                                !initialPages.current.has(page.pageId) &&
+                                scope.active &&
+                                !attention &&
+                                !more.open &&
+                                state.pending === null
+                            }
+                        >
+                            <PageRow
+                                index={index}
+                                uri={state.pageUris[page.pageId]}
+                                aspectRatio={page.width / page.height}
+                                onPress={(): void => open({ kind: 'page', pageId: page.pageId })}
+                            />
+                        </PageArrival>
+                    ))}
+                    {saving ? <SkeletonCard /> : null}
+                </ScrollView>
+            </Animated.View>
             <FixedBottomBar primary={primary} secondary={secondary} />
             <MoreSheet
                 visible={more.open}
@@ -311,6 +340,30 @@ function PageTools({
     )
 }
 
+/** An incoming page stays a static placeholder until saved, then settles once without replaying the existing list. */
+function PageArrival({
+    waiting,
+    animate,
+    children,
+}: {
+    readonly waiting: boolean
+    readonly animate: boolean
+    readonly children: ReactNode
+}): ReactElement {
+    return waiting ? <SkeletonCard /> : <PageArrivalContent animate={animate}>{children}</PageArrivalContent>
+}
+
+function PageArrivalContent({
+    animate,
+    children,
+}: {
+    readonly animate: boolean
+    readonly children: ReactNode
+}): ReactElement {
+    const entrance = useLoadEntrance(animate)
+    return <Animated.View style={entrance}>{children}</Animated.View>
+}
+
 function PageRow({
     index,
     uri,
@@ -346,6 +399,7 @@ function PageRow({
 }
 
 const styles = StyleSheet.create({
+    flex: { flex: 1, minHeight: 0 },
     content: { padding: space.md, gap: space.md },
     pageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: touchTarget },
     thumb: { width: 96 },

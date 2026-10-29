@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { IconButton } from '../../ui/button'
 import { Caption, Heading } from '../../ui/text'
+import { CoachTarget, type CoachContextValue } from '../onboarding/coach-provider'
+import type { OnboardingScreen } from '../onboarding/coach-types'
 import { space } from '../../theme/tokens'
 
 /** What the More sheet is showing. `ask` opens on the question composer, `fix` on the one-fact editor. */
@@ -29,10 +31,22 @@ export type ChromeProps = {
 }
 
 /** The one trailing header control: More, the single entry to details, asking and every other secondary action. */
-export function HeaderButtons({ more }: { more: MoreControl }): ReactElement {
+export function HeaderButtons({
+    more,
+    coach,
+    registry,
+}: {
+    more: MoreControl
+    coach?: OnboardingScreen
+    registry?: Pick<CoachContextValue, 'registerTarget'> | null
+}): ReactElement {
+    const open = (): void => more.show()
     return (
         <View style={styles.buttons}>
-            <IconButton label="More" icon="more" onPress={(): void => more.show()} testID="header-more" />
+            {/* The native header sits outside the screen's own subtree, so the route names the screen it belongs to. */}
+            <CoachTarget registry={registry} id="header-more" screen={coach ?? null} label="More" onPress={open}>
+                <IconButton label="More" icon="more" onPress={open} testID="header-more" />
+            </CoachTarget>
         </View>
     )
 }

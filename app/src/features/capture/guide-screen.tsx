@@ -21,19 +21,18 @@ import type { PaneNote } from '../../ui/pane-notes'
 import { ProgressBar, StepList, type StepListItem } from '../../ui/progress'
 import { AskSheet } from '../../ui/ask-sheet'
 import { useFeedback } from '../../ui/feedback'
+import { useIconReveal, useStepTransition } from '../../ui/motion'
+import Animated from 'react-native-reanimated'
 import { Icon, type IconName } from '../../ui/icons'
 import { useTheme } from '../../theme/theme'
 import { radius, space, type ColorToken } from '../../theme/tokens'
+import { guideCandidates } from '../onboarding/coach-inventory'
+import { CoachTarget, useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
+import { ShowTipsAgainRow } from '../onboarding/tips-rows'
 import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, partGuidance } from './part-regions'
-import {
-    AnswerPanel,
-    CheckHighlight,
-    CheckPanel,
-    PartGuidanceOverlay,
-    RefusalComparison,
-} from './result-panels'
+import { AnswerPanel, CheckHighlight, CheckPanel, PartGuidanceOverlay, RefusalComparison } from './result-panels'
 import { PlainNotice, ScreenBody, TextRegion, useHeroHeight, useKeyboardVisible } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
@@ -72,18 +71,28 @@ const RESULT_LOOK: Readonly<
 }
 
 /** The verdict as a tinted mark beside the sentence. It says nothing the sentence does not, so it is not an element. */
-function ResultIcon({ kind }: { kind: 'pass' | 'refuse' | 'cannot' | 'error' }): ReactElement {
+function ResultIcon({
+    kind,
+    identity,
+    enabled,
+}: {
+    kind: 'pass' | 'refuse' | 'cannot' | 'error'
+    identity: string
+    enabled: boolean
+}): ReactElement {
     const { colors } = useTheme()
     const look = RESULT_LOOK[kind]
+    // The one result motion: the icon settles once per result identity; the sentence beside it never moves.
+    const reveal = useIconReveal(identity, enabled)
     return (
-        <View
+        <Animated.View
             testID="result-icon"
             accessibilityElementsHidden={true}
             importantForAccessibility="no-hide-descendants"
-            style={[styles.resultIcon, { backgroundColor: colors[look.surface] }]}
+            style={[styles.resultIcon, { backgroundColor: colors[look.surface] }, reveal]}
         >
             <Icon name={look.icon} color={colors[look.ink]} />
-        </View>
+        </Animated.View>
     )
 }
 
@@ -149,7 +158,6 @@ export function GuideScreen({
         state.notice !== null && (isProgressNotice(state.notice) || sentence.kind === 'error')
             ? { ...state, notice: null }
             : state
-    // Only a pass's own returned region pulses; an answer's region is outlined statically.
     const target = state.target
     const targetSummary =
         target === null
@@ -163,23 +171,36 @@ export function GuideScreen({
     // One notification per new result, announced once however often it is shown again. An answer never changes how a
     // retained check was announced.
     const { hapticOnce } = useFeedback()
+    // A new photo is a new result even when the checker words it the same, so the photo is part of the identity.
+    // Opening More or coming back to a shown result never changes it, so nothing replays.
+    const checkIdentity =
+        check === null
+            ? null
+            : JSON.stringify([
+                  'check',
+                  session.manualId,
+                  step?.stepId,
+                  capture?.binding.captureId ?? null,
+                  check.decision,
+                  check.reason,
+              ])
     useEffect(() => {
-        if (check === null) {
+        if (check === null || checkIdentity === null) {
             return
         }
-        // A new photo is a new result even when the checker words it the same, so the photo is part of the identity.
-        // Opening More or coming back to a shown result never changes it, so nothing replays.
-        const captureId = capture?.binding.captureId ?? null
-        const identity = JSON.stringify([
-            'check',
-            session.manualId,
-            step?.stepId,
-            captureId,
-            check.decision,
-            check.reason,
-        ])
-        hapticOnce(identity, check.decision === 'pass' ? 'success' : 'warning')
-    }, [capture, check, hapticOnce, session.manualId, step?.stepId])
+        hapticOnce(checkIdentity, check.decision === 'pass' ? 'success' : 'warning')
+    }, [check, checkIdentity, hapticOnce])
+    // Step and result motion hold still while the app is working, a sheet covers the screen or a tip owns attention.
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const still = state.pending !== null || more.open || attention || !scope.active
+    const previousStep = useRef(entry.stepIndex)
+    const direction = entry.stepIndex >= previousStep.current ? 1 : -1
+    useEffect(() => {
+        previousStep.current = entry.stepIndex
+    }, [entry.stepIndex])
+    // Picture, overlays and instruction share one transform, so evidence never slides apart from its photo.
+    const stepMotion = useStepTransition(`${session.manualId}:${step?.stepId ?? ''}`, direction, !still)
     useEffect(() => {
         if (answer !== null) {
             hapticOnce(
@@ -240,9 +261,7 @@ export function GuideScreen({
             flush={fillHeight !== undefined}
             overlay={(displayed): ReactNode => (
                 <>
-                    <CheckHighlight
-                        rect={highlight === null ? null : boxOnDisplay(highlight, displayed)}
-                    />
+                    <CheckHighlight rect={highlight === null ? null : boxOnDisplay(highlight, displayed)} />
                     <PartGuidanceOverlay guidance={guidance} displayed={displayed} />
                 </>
             )}
@@ -301,6 +320,16 @@ export function GuideScreen({
                     onPress: (): void => controller.camera({ kind: 'check' }),
                 }
 
+    useCoachScreen('guide', {
+        suppressed: state.pending !== null || state.storageReadOnly || more.open || keyboard,
+        candidates: guideCandidates({
+            hero: step !== undefined,
+            primaryLabel: primary.disabled === true || primary.busy === true ? null : primary.label,
+            swipe: stepCount > 1,
+            more: chrome === 'native',
+        }),
+    })
+
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
         id: item.stepId,
         title: item.title,
@@ -350,10 +379,12 @@ export function GuideScreen({
         sentence.kind === 'error'
             ? sentence.kind
             : null
+    const resultIdentity =
+        checkIdentity ?? JSON.stringify(['error', session.manualId, step?.stepId, state.notice ?? null])
     const sentenceNode =
         check !== null || answer !== null || sentence.kind === 'error' ? (
             <View accessibilityLiveRegion="polite" style={styles.sentenceRow}>
-                {verdict === null ? null : <ResultIcon kind={verdict} />}
+                {verdict === null ? null : <ResultIcon kind={verdict} identity={resultIdentity} enabled={!still} />}
                 <View style={styles.sentenceText}>
                     <Instruction>{sentence.text}</Instruction>
                 </View>
@@ -372,12 +403,28 @@ export function GuideScreen({
                 />
             ) : null}
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-                <View testID="guide-hero-frame" {...swipe.panHandlers}>
-                    <View style={blocked ? styles.dimmed : undefined}>{heroImage}</View>
+                <CoachTarget id="guide-hero-frame" label="The step picture">
+                    <CoachTarget id="guide-hero" label="The step picture">
+                        <View testID="guide-hero-frame" {...swipe.panHandlers} style={styles.heroFrame}>
+                            <View style={blocked ? styles.dimmed : undefined}>
+                                <Animated.View style={stepMotion}>{heroImage}</Animated.View>
+                            </View>
+                        </View>
+                    </CoachTarget>
+                </CoachTarget>
+                {/* A slim cue of overall progress: the full labelled bar is in More. It never moves the hero. */}
+                <View style={styles.cue}>
+                    <ProgressBar
+                        slim
+                        animate={!still}
+                        label="Current step"
+                        value={entry.stepIndex + 1}
+                        total={stepCount}
+                    />
                 </View>
                 <TextRegion testID="guide-panel">
                     <PlainNotice state={quietState} controller={controller} />
-                    {sentenceNode}
+                    <Animated.View style={stepMotion}>{sentenceNode}</Animated.View>
                 </TextRegion>
             </KeyboardAvoidingView>
             <FixedBottomBar primary={primary} reason={reason} />
@@ -635,6 +682,7 @@ function GuideMore({
                 <Caption>{PRIVACY_COPY.check}</Caption>
                 <Caption>{PRIVACY_COPY.ask}</Caption>
                 <AppButton label="All builds" variant="quiet" onPress={nav.allBuilds} />
+                <ShowTipsAgainRow onClose={onClose} />
                 <AboutThisCheck result={answer ?? check ?? undefined}>
                     <DemoControls
                         session={session}
@@ -663,6 +711,8 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     dimmed: { opacity: 0.45 },
+    heroFrame: { overflow: 'hidden' },
+    cue: { paddingHorizontal: space.md, paddingTop: space.xs },
     fullStep: { gap: space.xs },
     row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     cell: { flexGrow: 1, flexBasis: 0, minWidth: 150 },

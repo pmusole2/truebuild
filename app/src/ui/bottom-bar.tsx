@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { CoachTarget } from '../features/onboarding/coach-provider'
 import { useTheme } from '../theme/theme'
 import { space } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
@@ -57,6 +58,20 @@ export function FixedBottomBar({
         large && action.compactLabel !== undefined
             ? { ...action, label: action.compactLabel, accessibilityLabel: action.accessibilityLabel ?? action.label }
             : action
+    // A real, enabled action is a tip target under its test ID. The registry runs this same `onPress`; a disabled or
+    // busy action offers none, so a late tap can never run an action the button itself would refuse.
+    const target = (action: BarAction, node: ReactElement): ReactElement =>
+        action.testID === undefined ? (
+            node
+        ) : (
+            <CoachTarget
+                id={action.testID}
+                label={action.accessibilityLabel ?? action.label}
+                onPress={action.disabled === true || action.busy === true ? undefined : action.onPress}
+            >
+                {node}
+            </CoachTarget>
+        )
     // A secondary that stands alone (no primary beside it) keeps its words: an icon by itself reads as debris.
     const iconSecondary = large && primary !== null && secondary !== undefined && secondary.icon !== undefined
     return (
@@ -85,20 +100,27 @@ export function FixedBottomBar({
             {iconSecondary && primary !== null && secondary !== undefined ? (
                 <View style={styles.row}>
                     <View style={styles.grow}>
-                        <AppButton variant="accent" size="primary" {...shown(primary)} />
+                        {target(primary, <AppButton variant="accent" size="primary" {...shown(primary)} />)}
                     </View>
-                    <IconButton
-                        label={secondary.accessibilityLabel ?? secondary.label}
-                        icon={secondary.icon!}
-                        disabled={secondary.disabled === true || secondary.busy === true}
-                        testID={secondary.testID}
-                        onPress={secondary.onPress}
-                    />
+                    {target(
+                        secondary,
+                        <IconButton
+                            label={secondary.accessibilityLabel ?? secondary.label}
+                            icon={secondary.icon!}
+                            disabled={secondary.disabled === true || secondary.busy === true}
+                            testID={secondary.testID}
+                            onPress={secondary.onPress}
+                        />,
+                    )}
                 </View>
             ) : (
                 <>
-                    {primary === null ? null : <AppButton variant="accent" size="primary" {...shown(primary)} />}
-                    {secondary === undefined ? null : <AppButton variant="quiet" {...shown(secondary)} />}
+                    {primary === null
+                        ? null
+                        : target(primary, <AppButton variant="accent" size="primary" {...shown(primary)} />)}
+                    {secondary === undefined
+                        ? null
+                        : target(secondary, <AppButton variant="quiet" {...shown(secondary)} />)}
                 </>
             )}
         </View>

@@ -8,6 +8,7 @@ import { FixedBottomBar } from '../../ui/bottom-bar'
 import { SkeletonCard } from '../../ui/skeleton'
 import { Instruction } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
+import { touchTarget } from '../../theme/tokens'
 import { CameraScreen, type AssemblyGuide } from './camera-screen'
 import type { WorkflowState } from './controller'
 import { DoneScreen } from './done-screen'
@@ -15,6 +16,7 @@ import { GuideScreen } from './guide-screen'
 import type { LibraryEntry } from './library'
 import { LibraryScreen, useHomeTitle } from './library-screen'
 import { useWorkflowActions } from './native-routes'
+import { CoachRoute } from '../onboarding/coach-root'
 import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
 import { OverviewScreen, useQuickProgress } from './review-screen'
@@ -155,16 +157,18 @@ export function HomeRoute(): ReactElement {
     return (
         <>
             <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more, collapsed })} />
-            <LibraryScreen
-                state={state}
-                controller={controller}
-                nav={nav}
-                chrome="native"
-                largeTitle={native ? 'heading' : 'content'}
-                more={more}
-                scrollY={scrollY}
-                onCollapsedChange={onCollapsedChange}
-            />
+            <CoachRoute screen="home">
+                <LibraryScreen
+                    state={state}
+                    controller={controller}
+                    nav={nav}
+                    chrome="native"
+                    largeTitle={native ? 'heading' : 'content'}
+                    more={more}
+                    scrollY={scrollY}
+                    onCollapsedChange={onCollapsedChange}
+                />
+            </CoachRoute>
         </>
     )
 }
@@ -203,21 +207,26 @@ export function AddRoute(): ReactElement {
     return (
         <>
             <Stack.Screen
-                options={{ title: addTitle(compact), headerRight: (): ReactElement => <HeaderButtons more={more} /> }}
+                options={{
+                    title: addTitle(compact),
+                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="pages" />,
+                }}
             />
-            {entry === undefined ? (
-                <Waiting />
-            ) : (
-                <PagesScreen
-                    key={entry.session.manualId}
-                    state={state}
-                    controller={controller}
-                    entry={entry}
-                    choosePages={choosePages}
-                    chrome="native"
-                    more={more}
-                />
-            )}
+            <CoachRoute screen="pages">
+                {entry === undefined ? (
+                    <Waiting />
+                ) : (
+                    <PagesScreen
+                        key={entry.session.manualId}
+                        state={state}
+                        controller={controller}
+                        entry={entry}
+                        choosePages={choosePages}
+                        chrome="native"
+                        more={more}
+                    />
+                )}
+            </CoachRoute>
         </>
     )
 }
@@ -240,18 +249,20 @@ export function ReadingRoute(): ReactElement {
     return (
         <>
             <Stack.Screen options={{ title: READING_TITLE }} />
-            {status === 'ready' && entry !== undefined ? (
-                <ReadingScreen
-                    state={state}
-                    controller={controller}
-                    entry={entry}
-                    nav={readingNav}
-                    confirming={confirming}
-                    onConfirmingChange={setConfirming}
-                />
-            ) : (
-                <Waiting route={route} />
-            )}
+            <CoachRoute screen={null}>
+                {status === 'ready' && entry !== undefined ? (
+                    <ReadingScreen
+                        state={state}
+                        controller={controller}
+                        entry={entry}
+                        nav={readingNav}
+                        confirming={confirming}
+                        onConfirmingChange={setConfirming}
+                    />
+                ) : (
+                    <Waiting route={route} />
+                )}
+            </CoachRoute>
         </>
     )
 }
@@ -274,22 +285,24 @@ export function CheckRoute(): ReactElement {
             <Stack.Screen
                 options={{
                     title: checkTitle(progress.label, compact),
-                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
+                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="quick-check" />,
                 }}
             />
-            {status === 'ready' && entry !== undefined ? (
-                <OverviewScreen
-                    state={state}
-                    controller={controller}
-                    entry={entry}
-                    nav={nav}
-                    chrome="native"
-                    more={more}
-                    progress={progress}
-                />
-            ) : (
-                <Waiting route={route} />
-            )}
+            <CoachRoute screen="quick-check">
+                {status === 'ready' && entry !== undefined ? (
+                    <OverviewScreen
+                        state={state}
+                        controller={controller}
+                        entry={entry}
+                        nav={nav}
+                        chrome="native"
+                        more={more}
+                        progress={progress}
+                    />
+                ) : (
+                    <Waiting route={route} />
+                )}
+            </CoachRoute>
         </>
     )
 }
@@ -309,21 +322,26 @@ export function GuideRoute(): ReactElement {
             <Stack.Screen
                 options={{
                     title: guideTitle(entry),
-                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
+                    // iOS 26 tests the current touch position after its initial movement. One touch target
+                    // admits edge Back while excluding a hero swipe once its 24pt threshold is reached.
+                    gestureResponseDistance: { end: touchTarget },
+                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="guide" />,
                 }}
             />
-            {status === 'ready' && entry !== undefined ? (
-                <GuideScreen
-                    state={state}
-                    controller={controller}
-                    entry={entry}
-                    nav={nav}
-                    chrome="native"
-                    more={more}
-                />
-            ) : (
-                <Waiting route={route} />
-            )}
+            <CoachRoute screen="guide">
+                {status === 'ready' && entry !== undefined ? (
+                    <GuideScreen
+                        state={state}
+                        controller={controller}
+                        entry={entry}
+                        nav={nav}
+                        chrome="native"
+                        more={more}
+                    />
+                ) : (
+                    <Waiting route={route} />
+                )}
+            </CoachRoute>
         </>
     )
 }
@@ -349,11 +367,20 @@ export function DoneRoute(): ReactElement {
                     headerRight: (): ReactElement => <HeaderButtons more={more} />,
                 }}
             />
-            {status === 'ready' && entry !== undefined ? (
-                <DoneScreen state={state} controller={controller} entry={entry} nav={nav} chrome="native" more={more} />
-            ) : (
-                <Waiting route={route} />
-            )}
+            <CoachRoute screen={null}>
+                {status === 'ready' && entry !== undefined ? (
+                    <DoneScreen
+                        state={state}
+                        controller={controller}
+                        entry={entry}
+                        nav={nav}
+                        chrome="native"
+                        more={more}
+                    />
+                ) : (
+                    <Waiting route={route} />
+                )}
+            </CoachRoute>
         </>
     )
 }
@@ -378,15 +405,17 @@ export function CameraRoute(): ReactElement {
     return (
         <>
             <StatusBar style="light" />
-            <CameraScreen
-                busy={state.pending !== null}
-                intent={state.cameraIntent}
-                guide={assemblyGuide(entry, state)}
-                onCancel={controller.cancel}
-                onCapture={(take): void => {
-                    void controller.shutter(take)
-                }}
-            />
+            <CoachRoute screen="camera">
+                <CameraScreen
+                    busy={state.pending !== null}
+                    intent={state.cameraIntent}
+                    guide={assemblyGuide(entry, state)}
+                    onCancel={controller.cancel}
+                    onCapture={(take): void => {
+                        void controller.shutter(take)
+                    }}
+                />
+            </CoachRoute>
         </>
     )
 }

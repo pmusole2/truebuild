@@ -6,6 +6,7 @@ import { Stack } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
 import { touchTarget } from '../../theme/tokens'
+import { HideTipsForTestingRow } from '../onboarding/tips-rows'
 import { ModelProvenance } from './step-facts'
 
 const VERBS = [
@@ -65,6 +66,7 @@ export function AboutThisCheck({
                         <Caption>{`Second opinion: ${result.secondOpinion.model} (${result.secondOpinion.status})`}</Caption>
                     )}
                     {children}
+                    <HideTipsForTestingRow />
                     {__DEV__ ? (
                         <View testID="development-api-host">
                             <Caption>{`Meta · ${developmentHost(API_BASE_URL)}`}</Caption>
