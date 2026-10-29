@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { Platform, ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import type { SharedValue } from 'react-native-reanimated'
@@ -20,6 +20,8 @@ import {
     type WorkflowController,
 } from '../../features/capture/screens'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { CoachTarget } from '../../features/onboarding/coach-provider'
+import { InertTour, tourScreenFor } from './inert-tour'
 import { ThemeProvider, useTheme } from '../../theme/theme'
 import type { ColorScheme } from '../../theme/tokens'
 import { SegmentedControl } from '../fields'
@@ -89,16 +91,39 @@ export function WorkflowPreview({
     initialScheme = 'light',
     showControls = true,
     native,
+    tour = false,
+    externalTour = false,
+    reduceMotion = true,
+    reveal,
 }: {
     readonly initialCase?: WorkflowPreviewCase
     readonly initialScheme?: ColorScheme
     readonly showControls?: boolean
     readonly native?: NativeChrome
+    // Explicit inert tour fixture for native visual evidence. Off by default: the gallery shows no tips.
+    readonly tour?: boolean
+    readonly externalTour?: boolean
+    readonly reduceMotion?: boolean | null
+    // Explicit inert motion-capture sequence. No controller or request is involved.
+    readonly reveal?: 'pass' | 'refuse' | 'cannot-verify'
 }): ReactElement {
     const [scheme, setScheme] = useState<ColorScheme>(initialScheme)
     const [selected, setSelected] = useState<WorkflowPreviewCase>(initialCase)
+    useEffect(() => {
+        if (reveal === undefined) return undefined
+        setSelected('guide-pending')
+        // Setup delay, not animation: let the OS motion preference resolve before the canned result arrives.
+        const timer = setTimeout(
+            () =>
+                setSelected(
+                    reveal === 'pass' ? 'guide-pass' : reveal === 'refuse' ? 'guide-refuse' : 'guide-cannot-verify',
+                ),
+            1500,
+        )
+        return (): void => clearTimeout(timer)
+    }, [reveal])
     return (
-        <FeedbackProvider reduceMotion={true}>
+        <FeedbackProvider reduceMotion={reduceMotion}>
             <ThemeProvider scheme={scheme}>
                 <PreviewFrame
                     scheme={scheme}
@@ -107,6 +132,8 @@ export function WorkflowPreview({
                     onSelect={setSelected}
                     showControls={showControls && native === undefined}
                     native={native}
+                    tour={tour}
+                    externalTour={externalTour}
                 />
             </ThemeProvider>
         </FeedbackProvider>
@@ -120,6 +147,8 @@ function PreviewFrame({
     onSelect,
     showControls,
     native,
+    tour,
+    externalTour,
 }: {
     readonly scheme: ColorScheme
     readonly onScheme: (scheme: ColorScheme) => void
@@ -127,6 +156,8 @@ function PreviewFrame({
     readonly onSelect: (selected: WorkflowPreviewCase) => void
     readonly showControls: boolean
     readonly native: NativeChrome | undefined
+    readonly tour: boolean
+    readonly externalTour: boolean
 }): ReactElement {
     const { colors } = useTheme()
     // The gallery runs inside the app, under the status bar, so its controls clear the top inset themselves.
@@ -138,6 +169,11 @@ function PreviewFrame({
         label: preview.label.split(' · ')[1]!,
     }))
 
+    // This branch is a synthetic coverage failure, never a production gate or a workflow action.
+    const guideController =
+        selected === 'guide-needs-pages'
+            ? { ...INERT_WORKFLOW_CONTROLLER, coverageNotice: (): string => 'A clearer page is needed.' }
+            : INERT_WORKFLOW_CONTROLLER
     const chrome = native === undefined ? {} : { chrome: 'native' as const, more: native.more }
     const screenFor = (): ReactElement => (
         <>
@@ -167,15 +203,24 @@ function PreviewFrame({
                                 />
                             ),
                             shutter: (
-                                <ShutterButton
-                                    label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
-                                    disabled={selected === 'camera-preparing'}
-                                    busy={selected === 'camera-preparing'}
+                                <CoachTarget
+                                    id="camera-shutter"
+                                    screen="camera"
+                                    label="Capture photo"
                                     onPress={doNothing}
-                                />
+                                >
+                                    <ShutterButton
+                                        label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
+                                        disabled={selected === 'camera-preparing'}
+                                        busy={selected === 'camera-preparing'}
+                                        onPress={doNothing}
+                                    />
+                                </CoachTarget>
                             ),
                         }
                     }
+                    shutterReady={selected !== 'camera-preparing'}
+                    busy={selected === 'camera-preparing'}
                     onCancel={doNothing}
                     onRequestPermission={doNothing}
                     onOpenSettings={doNothing}
@@ -215,7 +260,7 @@ function PreviewFrame({
                     progress={native?.progress}
                 />
             ) : (
-                <GuideScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} {...chrome} />
+                <GuideScreen state={state} entry={entry} controller={guideController} {...chrome} />
             )}
         </>
     )
@@ -225,7 +270,13 @@ function PreviewFrame({
             <View style={[styles.root, { backgroundColor: colors.canvas }]} testID="workflow-preview">
                 <StatusBar style={state.route === 'camera' || scheme === 'dark' ? 'light' : 'dark'} />
                 <View key={selected} style={styles.nativeDevice}>
-                    {screenFor()}
+                    {externalTour ? (
+                        screenFor()
+                    ) : (
+                        <InertTour enabled={tour} screen={tourScreenFor(selected)} scene={selected}>
+                            {screenFor()}
+                        </InertTour>
+                    )}
                 </View>
             </View>
         )
@@ -280,7 +331,13 @@ function PreviewFrame({
                 ) : null}
             </View>
             <View key={selected} style={[styles.device, { borderColor: colors.border }]}>
-                {screenFor()}
+                {externalTour ? (
+                    screenFor()
+                ) : (
+                    <InertTour enabled={tour} screen={tourScreenFor(selected)} scene={selected}>
+                        {screenFor()}
+                    </InertTour>
+                )}
             </View>
         </View>
     )

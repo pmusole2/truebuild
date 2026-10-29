@@ -88,6 +88,9 @@ export default defineConfig({
                 EXPO_PUBLIC_API_BASE_URL: API_ORIGIN,
                 EXPO_PUBLIC_API_SECRET: FIXTURE_DEMO_KEY,
                 EXPO_PUBLIC_PROVIDER_MODE: 'meta',
+                // Tips are for people; the regression suite drives the real controls directly. This flag only hides them
+                // in a development bundle and never marks a screen seen.
+                EXPO_PUBLIC_SKIP_TIPS: '1',
             },
         },
     ],

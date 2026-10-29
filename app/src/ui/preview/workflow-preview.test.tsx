@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { INERT_WORKFLOW_CONTROLLER, WorkflowPreview, type NativeChrome } from './workflow-preview'
 import { useMoreState } from '../../features/capture/screen-header'
 import { HeaderButtons } from '../../features/capture/screen-header'
@@ -164,4 +164,27 @@ describe('native chrome for hidden-controls captures', () => {
         expect(screen.getAllByRole('radio').length).toBeGreaterThan(0)
         expect(screen.getByTestId('inline-header')).toBeTruthy()
     })
+})
+
+it.each([
+    ['review-blocked', 'Add clearer photos'],
+    ['guide-needs-check', 'Answer questions'],
+    ['guide-needs-pages', 'Add clearer photos'],
+    ['guide-earlier-open', 'Go to step 1'],
+] as const)('shows the real conditional primary in the inert %s fixture', async (fixture, label) => {
+    await render(<WorkflowPreview initialCase={fixture} showControls={false} />)
+    expect(screen.getByRole('button', { name: label })).toBeTruthy()
+})
+
+it('opts into a delayed inert result for native motion capture, without changing the default gallery', async () => {
+    jest.useFakeTimers()
+    try {
+        await render(<WorkflowPreview initialCase="guide-pending" reveal="pass" showControls={false} />)
+        expect(screen.queryByTestId('result-icon', { hidden: true })).toBeNull()
+        await act(async () => jest.advanceTimersByTime(1600))
+        expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Next step' })).toBeTruthy()
+    } finally {
+        jest.useRealTimers()
+    }
 })

@@ -24,8 +24,12 @@ export const WORKFLOW_PREVIEW_CASES = [
     { id: 'pages-populated', label: 'Pages · added', group: 'Pages' },
     { id: 'pages-reading', label: 'Pages · reading', group: 'Pages' },
     { id: 'review-unresolved', label: 'Review · unresolved', group: 'Review' },
+    { id: 'review-blocked', label: 'Review · clearer page needed', group: 'Review' },
     { id: 'review-ready', label: 'Review · ready', group: 'Review' },
     { id: 'review-reviewed', label: 'Review · confirmed', group: 'Review' },
+    { id: 'guide-needs-check', label: 'Guide · quick check needed', group: 'Guide' },
+    { id: 'guide-needs-pages', label: 'Guide · clearer page needed', group: 'Guide' },
+    { id: 'guide-earlier-open', label: 'Guide · earlier step open', group: 'Guide' },
     { id: 'guide-empty', label: 'Guide · no photo', group: 'Guide' },
     { id: 'done-finished', label: 'Done · finished', group: 'Done' },
     { id: 'guide-photo', label: 'Guide · frozen photo', group: 'Guide' },
@@ -184,7 +188,7 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
     if (id === 'pages-reading') {
         state.pending = 'Reading manual pages…'
     }
-    if (id === 'review-ready' || id === 'review-unresolved') {
+    if (id === 'review-ready' || id === 'review-unresolved' || id === 'review-blocked') {
         session.reviewStatus = 'unreviewed'
         for (const step of session.reviewedSteps) {
             if (step.correction !== null) {
@@ -330,6 +334,21 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
         state.notice = 'Check unavailable. Synthetic error for visual review; no request was sent.'
     }
 
+    // Additional inert coach branches: no guessed answer, auto-confirmation or backfilled progress.
+    if (id === 'review-blocked') {
+        const part = session.reviewedSteps[0]?.parts[0]
+        if (part !== undefined) part.quantity = { state: 'unknown', reason: 'The page is hard to read.' }
+    }
+    if (id === 'guide-needs-check') {
+        session.reviewStatus = 'unreviewed'
+        const step = session.reviewedSteps[0]
+        if (step !== undefined) step.orientation = { state: 'unknown', reason: 'The page is hard to read.' }
+    }
+    if (id === 'guide-earlier-open') {
+        entry.stepIndex = session.reviewedSteps.length - 1
+        entry.completedStepIds = [session.reviewedSteps[entry.stepIndex]!.stepId]
+        state.capture = null
+    }
     return { state, entry }
 }
 

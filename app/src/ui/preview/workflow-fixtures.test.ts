@@ -30,7 +30,7 @@ describe('synthetic workflow preview fixtures', () => {
     })
 
     it('keeps every selectable workflow state valid and all imagery inline', () => {
-        expect(WORKFLOW_PREVIEW_CASES).toHaveLength(39)
+        expect(WORKFLOW_PREVIEW_CASES).toHaveLength(43)
         for (const preview of WORKFLOW_PREVIEW_CASES) {
             const { state, entry } = workflowPreviewFixture(preview.id)
             expect(manualSessionSchema.safeParse(entry.session).success, preview.id).toBe(true)
@@ -228,4 +228,14 @@ describe('inert region fixtures (synthetic, mocked, no API)', () => {
             expect(source, file).not.toMatch(/\bfetch\(|XMLHttpRequest|process\.env/u)
         }
     })
+})
+
+it('provides honest blocked and earlier-open coach states without marking earlier work complete', () => {
+    const blocked = workflowPreviewFixture('review-blocked')
+    expect(blocked.entry.session.reviewedSteps[0]?.parts[0]?.quantity.state).toBe('unknown')
+    expect(workflowPreviewFixture('guide-needs-check').entry.session.reviewStatus).toBe('unreviewed')
+    const earlier = workflowPreviewFixture('guide-earlier-open')
+    expect(earlier.entry.stepIndex).toBe(1)
+    expect(earlier.state.capture).toBeNull()
+    expect(earlier.entry.completedStepIds).toEqual([earlier.entry.session.reviewedSteps[1]?.stepId])
 })
