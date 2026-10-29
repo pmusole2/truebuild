@@ -1,7 +1,15 @@
-import { useState, type ReactElement } from 'react'
-import { ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import {
+    ScrollView,
+    StyleSheet,
+    View,
+    type LayoutChangeEvent,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
+} from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
 import { FixedBottomBar } from '../../ui/bottom-bar'
+import { useFeedback } from '../../ui/feedback'
 import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction, LargeTitle } from '../../ui/text'
@@ -25,13 +33,35 @@ import type { WorkflowScreenProps } from './workflow-types'
 /** Distance the large title takes to collapse into the small header title. */
 export const COLLAPSE_DISTANCE = 56
 
-/** 0 at rest, 1 once the large title has scrolled away. Pure so the header and the title share one rule. */
-export function collapseProgress(offset: number): number {
+/** 0 at rest, 1 once the large title has scrolled `distance` away. Pure so the header and the title share one rule. */
+export function collapseProgress(offset: number, distance: number = COLLAPSE_DISTANCE): number {
     'worklet'
-    return Math.max(0, Math.min(1, offset / COLLAPSE_DISTANCE))
+    return Math.max(0, Math.min(1, offset / distance))
 }
 
-/** Small title that appears in the header as the large one collapses. Android and previews; iOS uses its native title. */
+/**
+ * Home's scroll offset and whether its large heading has scrolled away, for the one header and the one list that share
+ * them. The state is presentational only. `resetKey` clears both when the screen behind them is swapped for another
+ * (the gallery changing fixture or scheme), so the next Home does not inherit a collapsed bar.
+ */
+export function useHomeTitle(resetKey?: string): {
+    readonly scrollY: SharedValue<number>
+    readonly collapsed: boolean
+    readonly onCollapsedChange: (collapsed: boolean) => void
+} {
+    const scrollY = useSharedValue(0)
+    const [state, setState] = useState({ key: resetKey, collapsed: false })
+    useEffect(() => {
+        scrollY.value = 0
+    }, [resetKey, scrollY])
+    const onCollapsedChange = useCallback(
+        (collapsed: boolean): void => setState({ key: resetKey, collapsed }),
+        [resetKey],
+    )
+    return { scrollY, collapsed: state.key === resetKey && state.collapsed, onCollapsedChange }
+}
+
+/** Small title that appears in the header as the large one collapses. Android and previews. */
 export function PinnedTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
     const style = useAnimatedStyle(() => ({ opacity: collapseProgress(scrollY.value) }))
     return (
@@ -53,13 +83,50 @@ function CollapsingTitle({ scrollY, title }: { scrollY: SharedValue<number>; tit
     )
 }
 
+/**
+ * iOS Home's large heading. The platform's own large title painted nothing on a real device, so the heading lives in
+ * the list and fades as the list scrolls; the native bar then shows its small platform title. It wraps and is never
+ * capped. The fade runs over the heading's own measured height, so a tall heading at the largest text size does not
+ * fade out early and leave a blank gap while it is still on screen.
+ */
+function HomeHeading({
+    scrollY,
+    distance,
+    onHeight,
+}: {
+    scrollY: SharedValue<number>
+    distance: number
+    onHeight: (height: number) => void
+}): ReactElement {
+    const { reduceMotion } = useFeedback()
+    const style = useAnimatedStyle(() => {
+        const progress = collapseProgress(scrollY.value, distance)
+        return reduceMotion
+            ? { opacity: 1 - progress }
+            : { opacity: 1 - progress, transform: [{ scale: 1 - progress * 0.2 }] }
+    })
+    return (
+        <Animated.View
+            testID="home-heading"
+            style={[styles.collapsing, style]}
+            onLayout={(event: LayoutChangeEvent): void => onHeight(Math.ceil(event.nativeEvent.layout.height))}
+        >
+            <LargeTitle>{HOME_HEADING}</LargeTitle>
+        </Animated.View>
+    )
+}
+
 type LibraryProps = WorkflowScreenProps &
     ChromeProps & {
         readonly nav?: ScreenNav
-        // 'content' draws the large title inside the scroll (Android, previews); 'native' leaves it to the iOS header.
-        readonly largeTitle?: 'content' | 'native'
+        // 'content' draws "TrueBuild" inside the scroll (Android, previews). 'heading' (iOS) draws "Your builds" there
+        // and reports, through onCollapsedChange, when it has scrolled away so the native bar can show its own title.
+        readonly largeTitle?: 'content' | 'heading'
         readonly scrollY?: SharedValue<number>
+        readonly onCollapsedChange?: (collapsed: boolean) => void
     }
+
+const HOME_HEADING = 'Your builds'
 
 /** Why Add manual is unavailable, so a disabled primary action is never unexplained. */
 function addHint(state: WorkflowScreenProps['state']): string | null {
@@ -91,15 +158,19 @@ export function LibraryScreen({
     nav: navProp,
     chrome = 'inline',
     more: moreProp,
-    largeTitle = chrome === 'inline' ? 'content' : 'native',
+    largeTitle = chrome === 'inline' ? 'content' : 'heading',
     scrollY: scrollYProp,
+    onCollapsedChange,
 }: LibraryProps): ReactElement {
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
-    // The iOS large title collapses only with a scroll view that fills the screen, so there the bar floats over it and
-    // the list is padded by the bar's measured height. Elsewhere the bar sits below the list as before.
-    const overlay = largeTitle === 'native'
+    // On iOS the list fills the screen under a floating bar, padded by the bar's measured height, so the heading
+    // scrolls with it. Elsewhere the bar sits below the list as before.
+    const overlay = largeTitle === 'heading'
     const [barHeight, setBarHeight] = useState(0)
+    const [headingHeight, setHeadingHeight] = useState(0)
+    const collapsed = useRef(false)
+    const distance = headingHeight > 0 ? headingHeight : COLLAPSE_DISTANCE
     const ownScroll = useSharedValue(0)
     const scrollY = scrollYProp ?? ownScroll
     const nav = navProp ?? defaultNav(controller)
@@ -114,7 +185,12 @@ export function LibraryScreen({
         void controller.createManual()
     }
     const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>): void => {
-        scrollY.value = event.nativeEvent.contentOffset.y
+        const offset = event.nativeEvent.contentOffset.y
+        scrollY.value = offset
+        if (overlay && onCollapsedChange !== undefined && offset >= distance !== collapsed.current) {
+            collapsed.current = !collapsed.current
+            onCollapsedChange(collapsed.current)
+        }
     }
     const primary = state.loading
         ? { label: 'Add manual', compactLabel: 'Add', onPress: addManual, disabled: true }
@@ -149,12 +225,13 @@ export function LibraryScreen({
     return (
         <ScreenBody testID="library-screen">
             {chrome === 'inline' ? <InlineHeader title="Your builds" more={more} /> : null}
-            {/* The scroll view is the first child so the iOS large title collapses with it. */}
+            {/* The scroll view is the first child so the list fills the screen under the header. */}
             <ScrollView
                 testID="library-scroll"
                 contentContainerStyle={[
                     styles.content,
-                    empty && styles.centred,
+                    empty && !overlay && styles.centred,
+                    empty && overlay && styles.fill,
                     overlay && { paddingBottom: space.md + barHeight },
                 ]}
                 keyboardShouldPersistTaps="handled"
@@ -163,6 +240,7 @@ export function LibraryScreen({
                 onScroll={onScroll}
             >
                 {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
+                {overlay ? <HomeHeading scrollY={scrollY} distance={distance} onHeight={setHeadingHeight} /> : null}
                 <PlainNotice state={state} controller={controller} />
                 {state.loading ? (
                     <Card>
@@ -171,7 +249,7 @@ export function LibraryScreen({
                 ) : failed ? (
                     <Instruction>We could not open your saved builds. Your photos are still on this phone.</Instruction>
                 ) : empty ? (
-                    <View style={styles.hero}>
+                    <View style={[styles.hero, overlay && styles.heroCentred]}>
                         <Icon name="image" />
                         <Instruction>Build furniture with step-by-step help.</Instruction>
                     </View>
@@ -310,6 +388,8 @@ function ManualRow({
 const styles = StyleSheet.create({
     content: { padding: space.md, gap: space.md },
     centred: { flexGrow: 1, justifyContent: 'center' },
+    fill: { flexGrow: 1 },
+    heroCentred: { flex: 1, justifyContent: 'center' },
     hero: { gap: space.sm, alignItems: 'flex-start' },
     collapsing: { transformOrigin: 'left center' },
     summary: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },

@@ -113,6 +113,7 @@ describe('native chrome for hidden-controls captures', () => {
         const native: NativeChrome = {
             more,
             scrollY: { value: 0 } as unknown as SharedValue<number>,
+            onCollapsedChange: (): void => undefined,
             progress: {
                 questions: [],
                 current: undefined,

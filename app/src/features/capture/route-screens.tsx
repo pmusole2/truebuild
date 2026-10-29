@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { Platform } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
-import { useSharedValue } from 'react-native-reanimated'
 import { MediaRejectedError } from '../../media/media-errors'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { SkeletonCard } from '../../ui/skeleton'
@@ -13,7 +12,7 @@ import type { WorkflowState } from './controller'
 import { DoneScreen } from './done-screen'
 import { GuideScreen } from './guide-screen'
 import type { LibraryEntry } from './library'
-import { LibraryScreen } from './library-screen'
+import { LibraryScreen, useHomeTitle } from './library-screen'
 import { useWorkflowActions } from './native-routes'
 import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
@@ -149,20 +148,21 @@ export function HomeRoute(): ReactElement {
     const { state } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
-    const scrollY = useSharedValue(0)
+    const { scrollY, collapsed, onCollapsedChange } = useHomeTitle()
     const { colors } = useTheme()
     const native = Platform.OS === 'ios'
     return (
         <>
-            <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more })} />
+            <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more, collapsed })} />
             <LibraryScreen
                 state={state}
                 controller={controller}
                 nav={nav}
                 chrome="native"
-                largeTitle={native ? 'native' : 'content'}
+                largeTitle={native ? 'heading' : 'content'}
                 more={more}
                 scrollY={scrollY}
+                onCollapsedChange={onCollapsedChange}
             />
         </>
     )

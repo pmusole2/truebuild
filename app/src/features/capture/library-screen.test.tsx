@@ -1,8 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/react-native'
+import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react-native'
+import type { ReactElement } from 'react'
 import { StyleSheet } from 'react-native'
+import type { SharedValue } from 'react-native-reanimated'
+import { FeedbackProvider } from '../../ui/feedback'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture, type WorkflowPreviewCase } from '../../ui/preview/workflow-fixtures'
-import { collapseProgress, COLLAPSE_DISTANCE, LibraryScreen } from './library-screen'
+import { collapseProgress, COLLAPSE_DISTANCE, LibraryScreen, useHomeTitle } from './library-screen'
 import type { WorkflowState } from './controller'
 import type { WorkflowController } from './workflow-types'
 
@@ -92,7 +95,7 @@ describe('Add manual placement', () => {
     it('lets the native iOS list fill the screen under a floating bar, padded by the bar so nothing is hidden', async () => {
         const { state } = workflowPreviewFixture('home-populated')
         await render(
-            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="native" />,
+            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="heading" />,
         )
         expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style)).toMatchObject({
             position: 'absolute',
@@ -109,13 +112,85 @@ describe('Add manual placement', () => {
         expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style).position).toBeUndefined()
     })
 
-    it('draws no large title in the scroll when the native iOS header owns it', async () => {
+    it('draws the uncapped "Your builds" heading in the list and no brand title there on iOS', async () => {
         const { state } = workflowPreviewFixture('home-empty')
         await render(
-            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="native" />,
+            <LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} chrome="native" largeTitle="heading" />,
         )
+        const heading = within(screen.getByTestId('library-scroll')).getByRole('header', { name: 'Your builds' })
+        expect(heading.props.numberOfLines).toBeUndefined()
+        expect(heading.props.maxFontSizeMultiplier).toBe(0)
+        expect(screen.queryByText('TrueBuild')).toBeNull()
         expect(screen.queryByTestId('collapsing-title')).toBeNull()
         expect(screen.queryByTestId('inline-header')).toBeNull()
+    })
+})
+
+describe('iOS heading collapse', () => {
+    async function scrollTo(y: number): Promise<void> {
+        await fireEvent.scroll(screen.getByTestId('library-scroll'), { nativeEvent: { contentOffset: { x: 0, y } } })
+    }
+    async function renderHeading(): Promise<jest.Mock> {
+        const onCollapsedChange = jest.fn()
+        const { state } = workflowPreviewFixture('home-populated')
+        await render(
+            <LibraryScreen
+                state={state}
+                controller={INERT_WORKFLOW_CONTROLLER}
+                chrome="native"
+                largeTitle="heading"
+                onCollapsedChange={onCollapsedChange}
+            />,
+        )
+        return onCollapsedChange
+    }
+
+    it('reports collapsed once, only when the heading has scrolled away, and open again on the way back', async () => {
+        const onCollapsedChange = await renderHeading()
+        await scrollTo(COLLAPSE_DISTANCE - 1)
+        expect(onCollapsedChange).not.toHaveBeenCalled()
+        await scrollTo(COLLAPSE_DISTANCE)
+        await scrollTo(COLLAPSE_DISTANCE + 80)
+        expect(onCollapsedChange.mock.calls).toEqual([[true]])
+        await scrollTo(0)
+        expect(onCollapsedChange.mock.calls).toEqual([[true], [false]])
+    })
+
+    it('waits for the measured heading height, so a tall heading at the largest text size is not collapsed at 56', async () => {
+        const onCollapsedChange = await renderHeading()
+        await fireEvent(screen.getByTestId('home-heading'), 'layout', { nativeEvent: { layout: { height: 256 } } })
+        await scrollTo(COLLAPSE_DISTANCE + 100)
+        expect(onCollapsedChange).not.toHaveBeenCalled()
+        await scrollTo(256)
+        expect(onCollapsedChange.mock.calls).toEqual([[true]])
+    })
+
+    it('fades and scales the heading over that height, and only fades under reduced motion', async () => {
+        const { state } = workflowPreviewFixture('home-populated')
+        const scrollY = { value: 0 }
+        const view = (reduceMotion: boolean): ReactElement => (
+            <FeedbackProvider reduceMotion={reduceMotion}>
+                <LibraryScreen
+                    state={state}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                    chrome="native"
+                    largeTitle="heading"
+                    scrollY={scrollY as unknown as SharedValue<number>}
+                />
+            </FeedbackProvider>
+        )
+        const { rerender } = await render(view(false))
+        await fireEvent(screen.getByTestId('home-heading'), 'layout', { nativeEvent: { layout: { height: 200 } } })
+        scrollY.value = 100
+        await rerender(view(false))
+        expect(StyleSheet.flatten(screen.getByTestId('home-heading').props.style)).toMatchObject({
+            opacity: 0.5,
+            transform: [{ scale: 0.9 }],
+        })
+        await rerender(view(true))
+        const reduced = StyleSheet.flatten(screen.getByTestId('home-heading').props.style)
+        expect(reduced.opacity).toBe(0.5)
+        expect(reduced.transform).toBeUndefined()
     })
 })
 
@@ -126,6 +201,24 @@ describe('collapsing title', () => {
         expect(collapseProgress(COLLAPSE_DISTANCE)).toBe(1)
         expect(collapseProgress(COLLAPSE_DISTANCE * 3)).toBe(1)
         expect(collapseProgress(-40)).toBe(0)
+        expect(collapseProgress(128, 256)).toBe(0.5)
+    })
+})
+
+describe('home title state', () => {
+    it('starts open, follows the heading, and resets with the key so a new fixture does not inherit a collapsed bar', async () => {
+        const { result, rerender } = await renderHook(({ key }: { key: string }) => useHomeTitle(key), {
+            initialProps: { key: 'home-populated:light' },
+        })
+        expect(result.current.collapsed).toBe(false)
+        await act(async () => {
+            result.current.scrollY.value = 90
+            result.current.onCollapsedChange(true)
+        })
+        expect(result.current.collapsed).toBe(true)
+        await rerender({ key: 'home-empty:light' })
+        expect(result.current.collapsed).toBe(false)
+        expect(result.current.scrollY.value).toBe(0)
     })
 })
 

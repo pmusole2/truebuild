@@ -80,6 +80,7 @@ export type NativeChrome = {
     readonly more: MoreControl
     // Home's large-title collapse and Quick check's "Question N of M" live above the screen, as in the production routes.
     readonly scrollY: SharedValue<number>
+    readonly onCollapsedChange: (collapsed: boolean) => void
     readonly progress: QuickProgress
 }
 
@@ -188,8 +189,9 @@ function PreviewFrame({
                     {...(native === undefined
                         ? {}
                         : {
-                              largeTitle: Platform.OS === 'ios' ? ('native' as const) : ('content' as const),
+                              largeTitle: Platform.OS === 'ios' ? ('heading' as const) : ('content' as const),
                               scrollY: native.scrollY,
+                              onCollapsedChange: native.onCollapsedChange,
                           })}
                 />
             ) : selected === 'done-finished' ? (

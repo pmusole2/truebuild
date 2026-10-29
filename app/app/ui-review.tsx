@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from 'react'
 import { Stack, useLocalSearchParams } from 'expo-router'
-import { useSharedValue } from 'react-native-reanimated'
 import { useCompactTitles } from '../src/features/capture/header-options'
+import { useHomeTitle } from '../src/features/capture/library-screen'
 import { useQuickProgress } from '../src/features/capture/review-screen'
 import { useMoreState } from '../src/features/capture/screen-header'
 import { colorsFor } from '../src/theme/tokens'
@@ -20,7 +20,8 @@ export default function WorkflowReviewRoute(): ReactElement | null {
     const id = workflowPreviewCase(params.fixture)
     const scheme = params.scheme === 'dark' ? 'dark' : 'light'
     const more = useMoreState()
-    const scrollY = useSharedValue(0)
+    // Home's scroll and collapsed bar belong to one fixture and scheme; a different one starts from the top.
+    const { scrollY, collapsed, onCollapsedChange } = useHomeTitle(`${id}:${scheme}`)
     const fixture = useMemo(() => workflowPreviewFixture(id), [id])
     const progress = useQuickProgress(fixture.entry.session)
     const compactTitles = useCompactTitles()
@@ -40,6 +41,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
                               colors: colorsFor(scheme),
                               more,
                               scrollY,
+                              collapsed,
                               progressLabel: progress.label,
                               compactTitles,
                           })
@@ -51,7 +53,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
                 initialCase={id}
                 initialScheme={scheme}
                 showControls={!native}
-                native={native ? { more, scrollY, progress } : undefined}
+                native={native ? { more, scrollY, onCollapsedChange, progress } : undefined}
             />
         </>
     )

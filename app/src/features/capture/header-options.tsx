@@ -69,21 +69,23 @@ export type ScreenOptions = Exclude<
 >
 
 /**
- * Home's native header: the platform's large title on iOS, collapsing with the list; Android and web pin the same title
- * with Reanimated. One definition serves the production route and the development gallery, so they cannot drift.
+ * Home's native header. iOS keeps the real Stack bar, its platform "TrueBuild" string and its More control, but not the
+ * platform large title, which painted nothing on a device: the list draws "Your builds" instead, and the bar's own
+ * small title takes its colour only once that has scrolled away (`collapsed`). Android and web pin the same title with
+ * Reanimated. One definition serves the production route and the development gallery, so they cannot drift.
  */
 export function homeHeaderOptions(args: {
     readonly colors: Colors
     readonly scrollY: SharedValue<number>
     readonly more: MoreControl | null
+    readonly collapsed?: boolean
 }): ScreenOptions {
-    const native = Platform.OS === 'ios'
+    const ios = Platform.OS === 'ios'
     return {
         title: 'TrueBuild',
-        headerLargeTitleEnabled: native,
-        headerLargeTitleShadowVisible: false,
-        headerLargeStyle: { backgroundColor: args.colors.canvas },
-        headerTitle: native ? undefined : (): ReactElement => <PinnedTitle scrollY={args.scrollY} title="TrueBuild" />,
+        headerLargeTitleEnabled: false,
+        headerTitle: ios ? undefined : (): ReactElement => <PinnedTitle scrollY={args.scrollY} title="TrueBuild" />,
+        headerTitleStyle: ios ? { color: args.collapsed === true ? args.colors.ink : 'transparent' } : undefined,
         headerRight: args.more === null ? undefined : (): ReactElement => <HeaderButtons more={args.more!} />,
     }
 }

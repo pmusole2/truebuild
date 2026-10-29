@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import { render, screen, fireEvent } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
+import { Platform } from 'react-native'
 import type { SharedValue } from 'react-native-reanimated'
 import { darkColors, lightColors } from '../../theme/tokens'
 import type { ScreenOptions } from '../../features/capture/header-options'
@@ -77,6 +78,54 @@ describe('gallery native header', () => {
         // No progress to lead with: the title stays the plain words.
         const none = galleryHeaderOptions({ ...args, progressLabel: undefined, compactTitles: true })
         expect(none.title).toBe('Quick check')
+    })
+
+    it('colours the native platform title on iOS Home only once the list heading has scrolled away', () => {
+        const { state, entry } = workflowPreviewFixture('home-populated')
+        const more = { open: false, mode: 'details' as const, show: jest.fn(), hide: jest.fn() }
+        const args = {
+            id: 'home-populated' as const,
+            state,
+            entry,
+            colors: lightColors,
+            more,
+            scrollY,
+            progressLabel: undefined,
+        }
+        const open = galleryHeaderOptions(args)
+        const shut = galleryHeaderOptions({ ...args, collapsed: true })
+        expect([open.title, shut.title]).toEqual(['TrueBuild', 'TrueBuild'])
+        expect(open.headerTitleStyle).toEqual({ color: 'transparent' })
+        expect(shut.headerTitleStyle).toEqual({ color: lightColors.ink })
+        // The platform large title stays off (it painted nothing on device) and Back stays hidden.
+        expect([open.headerLargeTitleEnabled, shut.headerLargeTitleEnabled]).toEqual([false, false])
+        // A different fixture drops the Home bar title, so a collapsed Home cannot leak into it.
+        const merged = { ...shut, ...optionsFor('guide-pass').options }
+        expect(merged.title).toBe('Step 1 of 2')
+        expect(merged.headerTitle).toBeUndefined()
+        expect(merged.headerTitleStyle).toBeUndefined()
+    })
+
+    it('keeps the pinned Reanimated title on Android Home, whatever the collapsed state', () => {
+        const platform = jest.replaceProperty(Platform, 'OS', 'android')
+        try {
+            const { state, entry } = workflowPreviewFixture('home-populated')
+            const more = { open: false, mode: 'details' as const, show: jest.fn(), hide: jest.fn() }
+            const options = galleryHeaderOptions({
+                id: 'home-populated',
+                state,
+                entry,
+                colors: lightColors,
+                more,
+                scrollY,
+                progressLabel: undefined,
+                collapsed: true,
+            })
+            expect(typeof options.headerTitle).toBe('function')
+            expect(options.headerTitleStyle).toBeUndefined()
+        } finally {
+            platform.restore()
+        }
     })
 
     it('has no Back on the Home fixtures, which are production root screens, and keeps it elsewhere', () => {
