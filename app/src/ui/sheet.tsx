@@ -33,6 +33,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { useTheme } from '../theme/theme'
 import { motion, radius, space, touchTarget } from '../theme/tokens'
 import { IconButton } from './button'
+import { useMeterRoot } from './meter-roots'
 import { useFeedback } from './feedback'
 import { SPRING_GENTLE, timing } from './motion'
 import { useLargeText } from './large-text'
@@ -234,6 +235,8 @@ function SheetFrame({
     const dragging = useRef(false)
     const closing = useRef(false)
     const titleRef = useRef<ComponentRef<typeof View>>(null)
+    // The sheet is its own native window; its content is a root the host meter must be able to reach while it is open.
+    const attachMeterRoot = useMeterRoot(titleRef, 'sheet')
 
     const settle = useCallback(
         (to: number): void => {
@@ -392,7 +395,7 @@ function SheetFrame({
                 </View>
                 <View style={styles.header}>
                     <View
-                        ref={titleRef}
+                        ref={attachMeterRoot}
                         accessible={true}
                         accessibilityRole={large && compactTitle !== undefined ? 'header' : undefined}
                         accessibilityLabel={large && compactTitle !== undefined ? title : undefined}

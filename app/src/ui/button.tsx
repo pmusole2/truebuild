@@ -38,6 +38,7 @@ export type AppButtonProps = {
     readonly size?: 'regular' | 'primary'
     // Less horizontal inset for side-by-side coach actions at accessibility sizes; type and target floors stay intact.
     readonly compact?: boolean
+    readonly nativeID?: string
 }
 
 export function AppButton({
@@ -52,6 +53,7 @@ export function AppButton({
     icon,
     size = 'regular',
     compact = false,
+    nativeID,
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
@@ -76,6 +78,7 @@ export function AppButton({
             onPressIn={press.onPressIn}
             onPressOut={press.onPressOut}
             testID={testID}
+            nativeID={nativeID}
             style={[
                 styles.base,
                 compact && styles.compact,
@@ -108,6 +111,7 @@ export type IconButtonProps = {
     readonly variant?: Exclude<ButtonVariant, 'accent' | 'primary'>
     readonly disabled?: boolean
     readonly testID?: string
+    readonly nativeID?: string
 }
 
 export function IconButton({
@@ -117,6 +121,7 @@ export function IconButton({
     variant = 'quiet',
     disabled = false,
     testID,
+    nativeID,
 }: IconButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
@@ -138,6 +143,7 @@ export function IconButton({
             onPressIn={press.onPressIn}
             onPressOut={press.onPressOut}
             testID={testID}
+            nativeID={nativeID}
             style={[
                 styles.base,
                 styles.square,

@@ -33,3 +33,22 @@ export function developmentHost(baseUrl: string): string {
         return 'unconfigured'
     }
 }
+
+export type GenerativeUiMode = 'off' | 'steps' | 'full'
+
+/**
+ * Public generative-UI selection; it must agree with the backend GENERATIVE_UI. `off` keeps every original native screen
+ * byte for byte, `steps` generates only the Guide step screens, `full` (the default) generates every screen. Anything
+ * else is a configuration error and never silently enables or disables generation.
+ */
+export function resolveGenerativeUi(value: string | undefined): GenerativeUiMode {
+    if (value === undefined || value === 'full') {
+        return 'full'
+    }
+    if (value === 'off' || value === 'steps') {
+        return value
+    }
+    throw new Error('EXPO_PUBLIC_GENERATIVE_UI must be "off", "steps" or "full"')
+}
+
+export const GENERATIVE_UI: GenerativeUiMode = resolveGenerativeUi(process.env.EXPO_PUBLIC_GENERATIVE_UI)

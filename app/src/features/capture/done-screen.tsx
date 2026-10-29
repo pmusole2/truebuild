@@ -15,8 +15,17 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { StepPicture } from './step-picture'
 import type { WorkflowScreenProps } from './workflow-types'
+import { ComposedHero, composeBar, GeneratedBody, MoreIntro, ScreenPending } from '../screens/host'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 
-type DoneProps = WorkflowScreenProps & ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav }
+type DoneProps = WorkflowScreenProps &
+    ChromeProps & {
+        entry: LibraryEntry
+        readonly nav?: ScreenNav
+        // The model-composed screen and More intro, or undefined for the native ones.
+        readonly slot?: ScreenSlot
+        readonly moreSlot?: ScreenSlot
+    }
 
 /**
  * Done: calm and truthful. Marked-complete steps are the person's own record and do not prove any check, so the screen
@@ -29,6 +38,8 @@ export function DoneScreen({
     nav: navProp,
     chrome = 'inline',
     more: moreProp,
+    slot,
+    moreSlot,
 }: DoneProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
@@ -40,6 +51,7 @@ export function DoneScreen({
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const entrance = useLoadEntrance(scope.active && !attention && !more.open && state.pending === null)
+    const composed = slot?.status === 'ready' ? slot.screen : null
     const items: StepListItem[] = session.reviewedSteps.map((step) => ({
         id: step.stepId,
         title: step.title,
@@ -49,23 +61,43 @@ export function DoneScreen({
         <ScreenBody testID="done-screen">
             {chrome === 'inline' ? <InlineHeader title="Done" more={more} /> : null}
             <Animated.View style={[styles.flex, entrance]}>
-                <View style={styles.hero}>
-                    <StepPicture
-                        reference={last?.sourceRefs[0]}
-                        references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
-                        session={session}
-                        pageUris={state.pageUris}
-                        height={heroHeight}
-                        testID="done-hero"
-                        cover
-                    />
-                </View>
+                {composed !== null ? (
+                    <ComposedHero screen={composed} />
+                ) : (
+                    <View style={styles.hero}>
+                        <StepPicture
+                            reference={last?.sourceRefs[0]}
+                            references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
+                            session={session}
+                            pageUris={state.pageUris}
+                            height={heroHeight}
+                            testID="done-hero"
+                            cover
+                        />
+                    </View>
+                )}
                 <TextRegion>
-                    <Instruction>You finished every step. Nice work.</Instruction>
+                    {composed !== null ? (
+                        <GeneratedBody screen={composed} enabled={state.pending === null && !more.open} pinned />
+                    ) : slot?.status === 'pending' ? (
+                        <ScreenPending />
+                    ) : (
+                        <Instruction>You finished every step. Nice work.</Instruction>
+                    )}
                 </TextRegion>
             </Animated.View>
             <FixedBottomBar
-                primary={{ label: 'Back to Home', compactLabel: 'Home', testID: 'done-home', onPress: nav.leave }}
+                {...composeBar(
+                    {
+                        primary: {
+                            label: 'Back to Home',
+                            compactLabel: 'Home',
+                            testID: 'done-home',
+                            onPress: nav.leave,
+                        },
+                    },
+                    slot,
+                )}
             />
             <MoreSheet
                 visible={more.open}
@@ -75,6 +107,7 @@ export function DoneScreen({
                 detents={['tall', 'full']}
             >
                 <Stack gap="md">
+                    <MoreIntro slot={moreSlot} />
                     <StepList steps={items} />
                 </Stack>
             </MoreSheet>

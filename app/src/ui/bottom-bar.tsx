@@ -20,6 +20,8 @@ export type BarAction = {
     readonly accessibilityLabel?: string
     // The short visible verb at accessibility text sizes (for example "Start" for "Start building").
     readonly compactLabel?: string
+    // Render-origin marker when this action's label, icon and behaviour were composed from a screen document.
+    readonly nativeID?: string
 }
 
 // At accessibility text sizes a long reason scrolls inside this share of the window instead of pushing the bar up.
@@ -109,6 +111,7 @@ export function FixedBottomBar({
                             icon={secondary.icon!}
                             disabled={secondary.disabled === true || secondary.busy === true}
                             testID={secondary.testID}
+                            nativeID={secondary.nativeID}
                             onPress={secondary.onPress}
                         />,
                     )}

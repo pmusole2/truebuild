@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ComponentRef, type ReactElement, type ReactNode } from 'react'
 import { Dimensions, Keyboard, Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { AppButton } from '../../ui/button'
+import { useMeterRoot } from '../../ui/meter-roots'
 import { Notice } from '../../ui/status'
 import { useTheme } from '../../theme/theme'
 import { space } from '../../theme/tokens'
@@ -45,8 +46,16 @@ export function useHeroHeight(keyboard = false): number {
 /** Canvas fill for a screen body; the native header above and the fixed bar below belong to the screen, not to this. */
 export function ScreenBody({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
     const { colors } = useTheme()
+    // The host meter counts the whole document this screen sits in; it only needs a ref to reach it.
+    const root = useRef<ComponentRef<typeof View>>(null)
+    const attachRoot = useMeterRoot(root, 'app')
     return (
-        <View testID={testID} collapsable={false} style={[styles.body, { backgroundColor: colors.canvas }]}>
+        <View
+            ref={attachRoot}
+            testID={testID}
+            collapsable={false}
+            style={[styles.body, { backgroundColor: colors.canvas }]}
+        >
             {children}
         </View>
     )

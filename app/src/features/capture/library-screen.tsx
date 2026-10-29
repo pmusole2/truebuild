@@ -34,6 +34,9 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { SettingsSections } from './settings-screen'
 import type { WorkflowScreenProps } from './workflow-types'
+import { applyTips, composeBar, GeneratedBody, MoreIntro, ScreenPending } from '../screens/host'
+import { originId, type RenderOrigin } from '../screens/render-origin'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 
 /** Distance the large title takes to collapse into the small header title. */
 export const COLLAPSE_DISTANCE = 56
@@ -100,10 +103,14 @@ function HomeHeading({
     scrollY,
     distance,
     onHeight,
+    title = HOME_HEADING,
+    origin,
 }: {
     scrollY: SharedValue<number>
     distance: number
     onHeight: (height: number) => void
+    title?: string
+    origin?: RenderOrigin
 }): ReactElement {
     const { reduceMotion } = useFeedback()
     const style = useAnimatedStyle(() => {
@@ -118,13 +125,16 @@ function HomeHeading({
             style={[styles.collapsing, style]}
             onLayout={(event: LayoutChangeEvent): void => onHeight(Math.ceil(event.nativeEvent.layout.height))}
         >
-            <LargeTitle>{HOME_HEADING}</LargeTitle>
+            <LargeTitle nativeID={origin === undefined ? undefined : originId(origin)}>{title}</LargeTitle>
         </Animated.View>
     )
 }
 
 type LibraryProps = WorkflowScreenProps &
     ChromeProps & {
+        // The model-composed Home, or undefined for the native one.
+        readonly slot?: ScreenSlot
+        readonly moreSlot?: ScreenSlot
         readonly nav?: ScreenNav
         // 'content' draws "TrueBuild" inside the scroll (Android, previews). 'heading' (iOS) draws "Your builds" there
         // and reports, through onCollapsedChange, when it has scrolled away so the native bar can show its own title.
@@ -168,6 +178,8 @@ export function LibraryScreen({
     largeTitle = chrome === 'inline' ? 'content' : 'heading',
     scrollY: scrollYProp,
     onCollapsedChange,
+    slot,
+    moreSlot,
 }: LibraryProps): ReactElement {
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
@@ -203,6 +215,11 @@ export function LibraryScreen({
             ? 'Your saved builds need another try.'
             : plainNotice(state.notice).replace(/ Try again\.$/u, '')
     const empty = !state.loading && !state.storageReadOnly && state.entries.length === 0
+    // The composed Home only ever replaces the intro; loading and a failed library stay native, with their own recovery.
+    const composed = slot?.status === 'ready' && !state.loading && !failed
+    const waiting = slot?.status === 'pending' && !state.loading && !failed
+    // A composed Home lists the builds itself (a library block). One that did not still lets the person open each build.
+    const listed = slot?.status === 'ready' && slot.screen.guarded.body.some((node) => node.type === 'ManualLibrary')
     // Most recently touched first; the first one is where "keep building" goes.
     const entries = [...state.entries].sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
     const sole = entries.length === 1 ? entries[0] : undefined
@@ -252,11 +269,14 @@ export function LibraryScreen({
     const scope = useCoachScope()
     useCoachScreen('home', {
         suppressed: state.loading || state.pending !== null || state.storageReadOnly || failed || more.open,
-        candidates: homeCandidates({
-            add: !failed && !addDisabled && sole === undefined,
-            resume: !failed && !addDisabled && sole !== undefined,
-            more: chrome === 'native',
-        }),
+        candidates: applyTips(
+            homeCandidates({
+                add: !failed && !addDisabled && sole === undefined,
+                resume: !failed && !addDisabled && sole !== undefined,
+                more: chrome === 'native',
+            }),
+            slot,
+        ),
     })
     // The launch entrance plays once, for the first cold start only, after the content is ready. The heading and the
     // content share one timeline; the header and the bottom bar never move.
@@ -286,7 +306,15 @@ export function LibraryScreen({
             >
                 <Animated.View style={headingEntrance}>
                     {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
-                    {overlay ? <HomeHeading scrollY={scrollY} distance={distance} onHeight={setHeadingHeight} /> : null}
+                    {overlay ? (
+                        <HomeHeading
+                            scrollY={scrollY}
+                            distance={distance}
+                            onHeight={setHeadingHeight}
+                            title={composed ? slot.screen.title : HOME_HEADING}
+                            origin={composed ? slot.screen.headerOrigin : undefined}
+                        />
+                    ) : null}
                 </Animated.View>
                 <Animated.View style={[styles.group, empty && overlay && styles.groupFill, contentEntrance]}>
                     {state.storageReadOnly ? null : <PlainNotice state={state} controller={controller} />}
@@ -296,16 +324,20 @@ export function LibraryScreen({
                         </Card>
                     ) : failed ? (
                         <Instruction>{recoveryCopy}</Instruction>
+                    ) : composed ? (
+                        <GeneratedBody screen={slot.screen} enabled={motionEnabled} />
+                    ) : waiting ? (
+                        <ScreenPending />
                     ) : empty ? (
                         <View style={[styles.hero, overlay && styles.heroCentred]}>
                             <Icon name="image" />
                             <Instruction>Build furniture with step-by-step help.</Instruction>
                         </View>
                     ) : null}
-                    {sole === undefined ? null : (
+                    {composed || sole === undefined ? null : (
                         <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
                     )}
-                    {entries.length > 1
+                    {(!composed || !listed) && entries.length > 1
                         ? entries.map((entry) => (
                               <ManualRow
                                   key={entry.session.manualId}
@@ -318,17 +350,17 @@ export function LibraryScreen({
                 </Animated.View>
             </ScrollView>
             <FixedBottomBar
-                primary={primary}
-                secondary={secondary}
-                reason={hint}
+                {...composeBar({ primary, secondary }, slot, state.loading || failed)}
+                reason={hint ?? (composed ? slot.screen.barReason : null)}
                 placement={overlay ? 'overlay' : 'flow'}
                 onHeight={overlay ? setBarHeight : undefined}
             />
             <MoreSheet visible={more.open} title="More" onClose={more.hide}>
+                <MoreIntro slot={moreSlot} />
                 <HowItWorks />
                 <SettingsSections state={state} />
                 <ShowTipsAgainRow onClose={more.hide} />
-                <AboutThisCheck />
+                <AboutThisCheck onCompare={more.hide} />
             </MoreSheet>
         </ScreenBody>
     )
@@ -372,26 +404,30 @@ function ManualThumb({
 }
 
 /** Where the one manual stands. A summary, not a button: "Keep building" below is the single way in. */
-function ContinueCard({
+export function ContinueCard({
     entry,
     pageUris,
     resumable,
+    nativeID,
+    showProgress = true,
 }: {
     entry: LibraryEntry
     pageUris: LibraryProps['state']['pageUris']
     resumable: boolean
+    nativeID?: string
+    showProgress?: boolean
 }): ReactElement {
     const total = entry.session.reviewedSteps.length
     const completed = entry.completedStepIds.length
     return (
-        <Card tone="raised" testID="manual-card">
+        <Card tone="raised" testID="manual-card" nativeID={nativeID}>
             <View style={styles.summary}>
                 <ManualThumb entry={entry} pageUris={pageUris} />
                 <View style={styles.summaryText}>
                     <Stack gap="xs">
                         <Heading>{entry.session.title}</Heading>
                         <Body>{progressLine(entry)}</Body>
-                        {total === 0 ? null : (
+                        {total === 0 || !showProgress ? null : (
                             <ProgressBar
                                 label={`Steps done: ${completed} of ${total}`}
                                 value={completed}
@@ -406,22 +442,30 @@ function ContinueCard({
     )
 }
 
-function ManualRow({
+export function ManualRow({
     entry,
     pageUris,
     onOpen,
+    nativeID,
+    disabled = false,
+    showProgress = false,
 }: {
     entry: LibraryEntry
     pageUris: LibraryProps['state']['pageUris']
     onOpen: () => void
+    nativeID?: string
+    disabled?: boolean
+    showProgress?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
     return (
-        <Card tone="raised" testID="manual-card">
+        <Card tone="raised" testID="manual-card" nativeID={nativeID}>
             <PressMotion
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
+                accessibilityState={{ disabled }}
+                disabled={disabled}
                 {...focus.focusHandlers}
                 onPress={onOpen}
                 style={[styles.row, focusRingStyle(focus.focused, colors)]}
@@ -431,6 +475,13 @@ function ManualRow({
                     <Stack gap="xs">
                         <Heading>{entry.session.title}</Heading>
                         <Caption>{progressLine(entry)}</Caption>
+                        {showProgress && entry.session.reviewedSteps.length > 0 ? (
+                            <ProgressBar
+                                label={`Steps done: ${entry.completedStepIds.length} of ${entry.session.reviewedSteps.length}`}
+                                value={entry.completedStepIds.length}
+                                total={entry.session.reviewedSteps.length}
+                            />
+                        ) : null}
                     </Stack>
                 </View>
                 <Icon name="chevronRight" color={colors.inkMuted} />

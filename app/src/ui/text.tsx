@@ -22,6 +22,8 @@ type TypeProps = {
     readonly children: ReactNode
     readonly tone?: TextTone
     readonly numberOfLines?: number
+    // Render-origin marker for a text composed from a screen document; see features/screens/render-origin.
+    readonly nativeID?: string
 }
 
 function Typeset({
@@ -30,11 +32,13 @@ function Typeset({
     header = false,
     children,
     numberOfLines,
+    nativeID,
 }: TypeProps & { readonly role: TypeRole; readonly header?: boolean }): ReactElement {
     const { colors } = useTheme()
     const type = typeProps(role)
     return (
         <Text
+            nativeID={nativeID}
             accessibilityRole={header ? 'header' : undefined}
             maxFontSizeMultiplier={type.maxFontSizeMultiplier}
             numberOfLines={numberOfLines}

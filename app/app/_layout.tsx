@@ -8,6 +8,9 @@ import { WorkflowProvider } from '../src/features/capture/workflow-provider'
 import { ThemeProvider, useTheme } from '../src/theme/theme'
 import { statusBarStyleFor } from '../src/features/capture/header-options'
 import { AppCoachProvider } from '../src/features/onboarding/coach-root'
+import { JudgeProvider } from '../src/features/screens/judge-context'
+import { MeterTriggers, NativeMeterProvider } from '../src/features/screens/native-meter'
+import { proofEvidenceLabel } from '../src/features/screens/proof-mode'
 import { ColdStartProvider } from '../src/ui/cold-start'
 import { FeedbackProvider } from '../src/ui/feedback'
 import { nativeHaptics } from '../src/ui/haptics'
@@ -41,14 +44,19 @@ export default function RootLayout(): ReactElement {
         <SafeAreaProvider>
             <ThemeProvider>
                 <FeedbackProvider haptics={nativeHaptics}>
-                    <WorkflowProvider>
-                        <ColdStartProvider>
-                            <AppCoachProvider>
-                                <ThemedStack />
-                            </AppCoachProvider>
-                        </ColdStartProvider>
-                        <NativeRouteSync />
-                    </WorkflowProvider>
+                    <JudgeProvider>
+                        <NativeMeterProvider enabled={proofEvidenceLabel() === null ? undefined : true}>
+                            <WorkflowProvider>
+                                <ColdStartProvider>
+                                    <AppCoachProvider>
+                                        <ThemedStack />
+                                        <MeterTriggers />
+                                    </AppCoachProvider>
+                                </ColdStartProvider>
+                                <NativeRouteSync />
+                            </WorkflowProvider>
+                        </NativeMeterProvider>
+                    </JudgeProvider>
                 </FeedbackProvider>
             </ThemeProvider>
         </SafeAreaProvider>

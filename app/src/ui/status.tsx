@@ -24,17 +24,19 @@ export function StatusTag({
     label,
     tone = 'neutral',
     icon,
+    nativeID,
 }: {
     readonly label: string
     readonly tone?: StatusTone
     readonly icon?: IconName
+    readonly nativeID?: string
 }): ReactElement {
     const { colors } = useTheme()
     const tokens = TONE[tone]
     const type = typeProps('label')
     const iconColor = colors[tokens.text]
     return (
-        <View style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
+        <View nativeID={nativeID} style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
             {icon === undefined ? null : <Icon name={icon} size="sm" color={iconColor} />}
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
@@ -52,9 +54,15 @@ const VERDICT: Readonly<Record<Verdict, { label: string; tone: StatusTone; icon:
     cannot_verify: { label: 'Can’t tell', tone: 'caution', icon: 'help' },
 }
 
-export function VerdictTag({ verdict }: { readonly verdict: Verdict }): ReactElement {
+export function VerdictTag({
+    verdict,
+    nativeID,
+}: {
+    readonly verdict: Verdict
+    readonly nativeID?: string
+}): ReactElement {
     const { label, tone, icon } = VERDICT[verdict]
-    return <StatusTag label={label} tone={tone} icon={icon} />
+    return <StatusTag label={label} tone={tone} icon={icon} nativeID={nativeID} />
 }
 
 export type NoticeTone = 'info' | 'caution' | 'error'
@@ -68,11 +76,20 @@ const NOTICE_INK: Readonly<Record<NoticeTone, ColorToken>> = {
 /**
  * Inline message. Errors announce as alerts; other notices are read in place so they do not interrupt the user.
  */
-export function Notice({ text, tone = 'info' }: { readonly text: string; readonly tone?: NoticeTone }): ReactElement {
+export function Notice({
+    text,
+    tone = 'info',
+    nativeID,
+}: {
+    readonly text: string
+    readonly tone?: NoticeTone
+    readonly nativeID?: string
+}): ReactElement {
     const { colors } = useTheme()
     const type = typeProps('callout')
     return (
         <View
+            nativeID={nativeID}
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
             style={[styles.notice, { backgroundColor: colors.surfaceRaised }]}

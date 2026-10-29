@@ -1,5 +1,7 @@
 import type { ReactElement } from 'react'
-import { Line, Polygon, Rect, type RectProps } from 'react-native-svg'
+import Animated, { useAnimatedProps, useSharedValue, withTiming } from 'react-native-reanimated'
+import { useEffect } from 'react'
+import { G, Line, Path, Polygon, Rect, type RectProps } from 'react-native-svg'
 import { useTheme } from '../../theme/theme'
 import { lightColors, radius } from '../../theme/tokens'
 import { arrowSegment } from '../capture/part-regions'
@@ -152,5 +154,58 @@ function PartArrow({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2:
                 strokeLinejoin="round"
             />
         </>
+    )
+}
+
+type MaskMark = {
+    readonly box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+    readonly mask?: { readonly width: number; readonly height: number; readonly path: string }
+}
+
+const AnimatedG = Animated.createAnimatedComponent(G)
+
+/**
+ * SAM masks on the displayed photo. A mask is an SVG path on its own raster grid that maps onto its record's box; it is
+ * drawn only when the server returned one, and the box alone is never presented as a mask. The layer fades in once when
+ * it first appears, and not at all under reduced motion, so a late mask never moves the photo or the verdict.
+ */
+export function SegmentMasks({
+    marks,
+    displayed,
+    reduceMotion,
+}: {
+    readonly marks: readonly MaskMark[]
+    readonly displayed: DisplayRect
+    readonly reduceMotion: boolean
+}): ReactElement {
+    const { colors } = useTheme()
+    const opacity = useSharedValue(reduceMotion ? 1 : 0)
+    useEffect(() => {
+        opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 250 })
+    }, [opacity, reduceMotion])
+    const animated = useAnimatedProps(() => ({ opacity: opacity.value }))
+    return (
+        <AnimatedG animatedProps={animated}>
+            {marks.map((mark, index) => {
+                if (mark.mask === undefined) return null
+                const x = displayed.x + mark.box.x * displayed.width
+                const y = displayed.y + mark.box.y * displayed.height
+                const scaleX = (mark.box.width * displayed.width) / mark.mask.width
+                const scaleY = (mark.box.height * displayed.height) / mark.mask.height
+                return (
+                    <G key={index} transform={`translate(${x} ${y}) scale(${scaleX} ${scaleY})`}>
+                        <Path
+                            testID="segment-mask"
+                            d={mark.mask.path}
+                            fill={colors.accent}
+                            fillOpacity={0.35}
+                            stroke={colors.accent}
+                            strokeWidth={1.5}
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    </G>
+                )
+            })}
+        </AnimatedG>
     )
 }

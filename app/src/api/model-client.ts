@@ -6,6 +6,7 @@ import {
     matchesBinding,
     parsedManualSchema,
     questionResultSchema,
+    screensResultSchema,
     segmentEventSchema,
     type ApiResult,
     type CaptureBinding,
@@ -16,6 +17,8 @@ import {
     type ParsedManual,
     type QuestionResult,
     type QuestionTarget,
+    type ScreenKind,
+    type ScreensResult,
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
@@ -23,12 +26,22 @@ import {
     PARSE_SPLIT_MESSAGE,
     MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
+    modelOverlayMetadataSchema,
     modelParseMetadataSchema,
+    modelQuestionJobMetadataSchema,
     modelQuestionMetadataSchema,
+    modelScreensMetadataSchema,
     modelSegmentMetadataSchema,
     modelSecondOpinionMetadataSchema,
+    overlayResultSchema,
+    pendingResultSchema,
+    type ModelScreensMetadata,
+    type OverlayResult,
+    type PendingResult,
+    type ScreenContext,
 } from '@truebuild/contracts/model'
 import type { z } from 'zod'
+import { sameIdentity } from '../features/screens/screen-spec'
 import { streamFetch as defaultStreamFetch, type StreamFetch } from './stream-fetch'
 import {
     awaitStopped,
@@ -52,6 +65,17 @@ export const MODEL_PARSE_TIMEOUT_MS = 110_000
 export const MODEL_CHECK_TIMEOUT_MS = 8_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
+// The server answers a question within QUESTION_SYNC_WAIT_MS (8 s by default) or hands back a 202 ticket. The first
+// request must outlive that wait, or the app would cancel exactly when the ticket arrives. The ticket then owns the
+// rest of the (server-bounded) job; a collect call long-polls for about five seconds at most.
+export const MODEL_QUESTION_FIRST_TIMEOUT_MS = 12_000
+export const MODEL_QUESTION_COLLECT_TIMEOUT_MS = 10_000
+export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
+// Latency screens use the server's 20 s screens policy, step pages 45 s, the overlay 60 s; each plus a transport margin.
+export const MODEL_SCREEN_TIMEOUT_MS = 30_000
+export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
+export const MODEL_SCREEN_CONTROL_TIMEOUT_MS = 10_000
+export const MODEL_OVERLAY_TIMEOUT_MS = 70_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
 const MAX_SSE_EVENT_BYTES = 262_144
@@ -72,6 +96,11 @@ export interface ModelRequestContext {
     readonly language?: string
     /** Trusted in-process outer action deadline; never serialized or supplied by the backend. */
     readonly checkpoint?: () => void
+    /**
+     * Identity of the VALIDATED generated guide page the person is looking at (its `screenId` and exact `contextKey`).
+     * The server recomputes the key from the session and step; a request without one behaves as before.
+     */
+    readonly screen?: ScreenContext
 }
 
 function composeCheckpoint(
@@ -279,6 +308,7 @@ export class ModelApiClient {
             sourcePageIds: [...sourcePageIds],
             observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
             ...(secondary ? { secondOpinionToken } : {}),
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
         }
         const schema = secondary ? modelSecondOpinionMetadataSchema : modelCheckMetadataSchema
         if (!schema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
@@ -319,7 +349,7 @@ export class ModelApiClient {
         question: string,
         target: QuestionTarget,
         ctx: ModelRequestContext,
-    ): Promise<ApiResult<QuestionResult>> {
+    ): Promise<ApiResult<QuestionResult> | PendingResult> {
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -329,6 +359,7 @@ export class ModelApiClient {
             observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
             question,
             target,
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
         }
         if (!modelQuestionMetadataSchema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
             return invalidInputResult(ctx.requestId)
@@ -345,17 +376,196 @@ export class ModelApiClient {
         }
         const allowed = new Set(sourcePageIds)
 
-        return this.post({
+        return this.post<QuestionResult, PendingResult>({
             path: '/api/questions',
             requestId: ctx.requestId,
             binding,
             form,
-            timeoutMs: MODEL_CHECK_TIMEOUT_MS,
+            timeoutMs: MODEL_QUESTION_FIRST_TIMEOUT_MS,
             valueSchema: questionResultSchema,
             accepts: (value: QuestionResult): boolean => value.sourceRefs.every((ref) => allowed.has(ref.pageId)),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
+            pending: pendingFor(ctx.requestId, binding),
         })
+    }
+
+    /**
+     * Collects a slow question's ticket: pending again, or the original final response (an envelope). This never
+     * resends the question or its photo; a stopped or cancelled job is reported as such and not repeated.
+     */
+    async questionResult(
+        binding: CaptureBinding,
+        ticket: string,
+        ctx: ModelRequestContext,
+        sourcePageIds: readonly string[],
+    ): Promise<ApiResult<QuestionResult> | PendingResult> {
+        const body = { mode: 'model', requestId: ctx.requestId, binding, ticket }
+        if (!modelQuestionJobMetadataSchema.safeParse(body).success) {
+            return invalidInputResult(ctx.requestId)
+        }
+        const allowed = new Set(sourcePageIds)
+        return this.post<QuestionResult, PendingResult>({
+            path: '/api/questions/result',
+            requestId: ctx.requestId,
+            binding,
+            form: JSON.stringify(body),
+            timeoutMs: MODEL_QUESTION_COLLECT_TIMEOUT_MS,
+            valueSchema: questionResultSchema,
+            accepts: (value: QuestionResult): boolean => value.sourceRefs.every((ref) => allowed.has(ref.pageId)),
+            signal: ctx.signal,
+            checkpoint: ctx.checkpoint,
+            pending: pendingFor(ctx.requestId, binding),
+        })
+    }
+
+    /** Best-effort stop of a slow question's job (204). Never throws; a refusal or failure is simply `false`. */
+    async questionCancel(
+        binding: CaptureBinding,
+        ticket: string,
+        ctx: Pick<ModelRequestContext, 'requestId'>,
+    ): Promise<boolean> {
+        const body = { mode: 'model', requestId: ctx.requestId, binding, ticket }
+        if (!modelQuestionJobMetadataSchema.safeParse(body).success) {
+            return false
+        }
+        const guard = createCallGuard(MODEL_QUESTION_CANCEL_TIMEOUT_MS, undefined)
+        let owned: Response | undefined
+        try {
+            const url = new URL('/api/questions/cancel', this.baseUrl).toString()
+            owned = await awaitStopped(
+                this.fetchImpl(url, this.init(JSON.stringify(body), guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            return owned.status === 204
+        } catch {
+            return false
+        } finally {
+            guard.dispose()
+            if (owned !== undefined) {
+                discardResponse(owned)
+            }
+        }
+    }
+
+    /**
+     * Wonder overlay for one published verdict. Consumes the one-use ticket from `followUps.overlay`; the verdict never
+     * waits for it and it carries no decision. A replay or different bytes is refused by the server, not retried here.
+     */
+    async overlay(
+        binding: CaptureBinding,
+        session: ManualSession,
+        sourcePageIds: readonly string[],
+        sources: readonly ImageBytes[],
+        observation: ImageBytes,
+        overlayToken: string,
+        ctx: ModelRequestContext,
+    ): Promise<ApiResult<OverlayResult>> {
+        const metadata = {
+            mode: 'model',
+            requestId: ctx.requestId,
+            binding,
+            session,
+            sourcePageIds: [...sourcePageIds],
+            observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
+            overlayToken,
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
+        }
+        if (!modelOverlayMetadataSchema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
+            return invalidInputResult(ctx.requestId)
+        }
+        if (!fileFieldsWithinLimits([...sources, observation])) {
+            return invalidInputResult(ctx.requestId)
+        }
+        const form = buildForm(metadata, [
+            ...sources.map((image, index) => ({ name: `source-${index}`, image })),
+            { name: 'observation', image: observation },
+        ])
+        if (form === null) {
+            return invalidInputResult(ctx.requestId)
+        }
+        return this.post({
+            path: '/api/checks/overlay',
+            requestId: ctx.requestId,
+            binding,
+            form,
+            timeoutMs: MODEL_OVERLAY_TIMEOUT_MS,
+            valueSchema: overlayResultSchema,
+            accepts: (): boolean => true,
+            signal: ctx.signal,
+            checkpoint: ctx.checkpoint,
+        })
+    }
+
+    /**
+     * Model-composed screens: generate one, or control the background step-page job (precompute, progress, cancel).
+     * Zero files. The envelope is the screens envelope, not the check envelope. A document is accepted only when every
+     * identity field and its kind match what was asked, so a stale, foreign or mislabelled document is never published.
+     */
+    async screens(request: ScreenRequest, ctx: ModelRequestContext): Promise<ScreensResult> {
+        const metadata = screenMetadata(request, ctx.requestId)
+        const valid = modelScreensMetadataSchema.safeParse(metadata)
+        if (!valid.success) {
+            return screensUnavailable(ctx.requestId, 'invalid_input', false)
+        }
+        const form = buildForm(metadata, [])
+        if (form === null) {
+            return screensUnavailable(ctx.requestId, 'invalid_input', false)
+        }
+        const { requestId } = ctx
+        if (ctx.signal?.aborted === true) {
+            return screensUnavailable(requestId, 'invalid_input', false)
+        }
+        const generating = request.op === 'generate'
+        const guard = createCallGuard(
+            generating
+                ? stepPageKind(request.kind)
+                    ? MODEL_STEP_PAGE_TIMEOUT_MS
+                    : MODEL_SCREEN_TIMEOUT_MS
+                : MODEL_SCREEN_CONTROL_TIMEOUT_MS,
+            ctx.signal,
+        )
+        const { checkpoint, outerExpired } = composeCheckpoint(guard, ctx.checkpoint)
+        let owned: Response | undefined
+        try {
+            checkpoint()
+            const url = new URL('/api/screens', this.baseUrl).toString()
+            owned = await awaitStopped(
+                this.fetchImpl(url, this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            checkpoint()
+            const text = await readBoundedText(owned, guard.signal, checkpoint)
+            checkpoint()
+            const result = interpretScreens(owned.status, text, requestId, request)
+            checkpoint()
+            return result
+        } catch (error: unknown) {
+            try {
+                checkpoint()
+            } catch {
+                /* Classify the stopped action below. */
+            }
+            if (outerExpired() || (!guard.callerAborted() && guard.timedOut())) {
+                return screensUnavailable(requestId, 'timeout', true)
+            }
+            if (guard.callerAborted()) {
+                return screensUnavailable(requestId, 'invalid_input', false)
+            }
+            return screensUnavailable(
+                requestId,
+                error instanceof InvalidResponseError ? 'invalid_output' : 'provider_error',
+                error instanceof InvalidResponseError ? false : true,
+            )
+        } finally {
+            releaseMultipartImages(form)
+            guard.dispose()
+            if (owned !== undefined) {
+                discardResponse(owned)
+            }
+        }
     }
 
     /**
@@ -401,20 +611,27 @@ export class ModelApiClient {
         yield* this.streamSegments(call, form, ctx)
     }
 
-    private async post<T>(spec: {
+    private async post<T, P = never>(spec: {
         path: string
         requestId: string
         binding: ManualBinding | CaptureBinding
-        form: FormData
+        form: FormData | string
         timeoutMs: number
         valueSchema: z.ZodType<T>
         accepts: (value: T, binding: ManualBinding | CaptureBinding) => boolean
         signal: AbortSignal | undefined
         checkpoint: (() => void) | undefined
-    }): Promise<ApiResult<T>> {
+        /** A 202 carries this shape instead of an envelope (slow questions). Only the requested binding may match. */
+        pending?: (value: unknown) => P | null
+    }): Promise<ApiResult<T> | P> {
         const { requestId, binding, signal } = spec
+        const release = (): void => {
+            if (typeof spec.form !== 'string') {
+                releaseMultipartImages(spec.form)
+            }
+        }
         if (signal?.aborted === true) {
-            releaseMultipartImages(spec.form)
+            release()
             return unavailableResult(requestId, binding, 'invalid_input', false)
         }
 
@@ -440,6 +657,20 @@ export class ModelApiClient {
             checkpoint()
             const text = await readBoundedText(owned, guard.signal, checkpoint)
             checkpoint()
+            if (spec.pending !== undefined && owned.status === 202) {
+                let json: unknown
+                try {
+                    json = JSON.parse(text)
+                } catch {
+                    throw new InvalidResponseError('Pending response is not JSON')
+                }
+                const pending = spec.pending(json)
+                if (pending === null) {
+                    throw new InvalidResponseError('Pending response does not echo this request')
+                }
+                checkpoint()
+                return pending
+            }
             const result = interpretEnvelope(call, owned.status, text, 'model', modelStatusResult)
             checkpoint()
 
@@ -464,7 +695,7 @@ export class ModelApiClient {
             }
             return unavailableResult(requestId, binding, 'provider_error', true)
         } finally {
-            releaseMultipartImages(spec.form)
+            release()
             guard.dispose()
             if (owned !== undefined) {
                 discardResponse(owned)
@@ -472,10 +703,14 @@ export class ModelApiClient {
         }
     }
 
-    private init(form: FormData, signal: AbortSignal): RequestInit {
+    private init(form: FormData | string, signal: AbortSignal): RequestInit {
         return {
             method: 'POST',
-            headers: { 'x-truebuild-key': this.secret, Accept: 'application/json, text/event-stream' },
+            headers: {
+                'x-truebuild-key': this.secret,
+                Accept: 'application/json, text/event-stream',
+                ...(typeof form === 'string' ? { 'content-type': 'application/json' } : {}),
+            },
             body: form,
             credentials: 'omit',
             redirect: 'error',
@@ -639,6 +874,186 @@ export class ModelApiClient {
             if (owned !== undefined) {
                 discardResponse(owned)
             }
+        }
+    }
+}
+
+/** One typed `/api/screens` call. `generate` names the screen kind; the rest control the background step-page job. */
+export type ScreenRequest =
+    | {
+          readonly op: 'generate'
+          readonly kind: ScreenKind
+          readonly session: ManualSession | null
+          readonly stepId: string | null
+          readonly captureId: string | null
+          readonly result: ModelScreensMetadata['result']
+          readonly failure: ModelScreensMetadata['failure']
+          readonly completedStepIds?: readonly string[]
+          readonly uiState?: ModelScreensMetadata['uiState']
+      }
+    | { readonly op: 'precompute'; readonly session: ManualSession; readonly focusStepId: string | null }
+    | { readonly op: 'progress'; readonly binding: ManualBinding; readonly want: readonly string[] }
+    | { readonly op: 'cancel'; readonly binding: ManualBinding }
+
+const STEP_PAGE_KINDS: ReadonlySet<ScreenKind> = new Set(['guide', 'result', 'answer'])
+
+function stepPageKind(kind: ScreenKind): boolean {
+    return STEP_PAGE_KINDS.has(kind)
+}
+
+function screenMetadata(request: ScreenRequest, requestId: string): unknown {
+    const base = {
+        mode: 'model',
+        requestId,
+        kind: null,
+        binding: null,
+        session: null,
+        stepId: null,
+        captureId: null,
+        result: null,
+        failure: null,
+        focusStepId: null,
+        want: [] as string[],
+    }
+    switch (request.op) {
+        case 'generate':
+            return {
+                ...base,
+                op: 'generate',
+                kind: request.kind,
+                binding:
+                    request.session === null
+                        ? null
+                        : { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
+                session: request.session,
+                stepId: request.stepId,
+                captureId: request.captureId,
+                result: request.result,
+                failure: request.failure,
+                ...(request.completedStepIds === undefined ? {} : { completedStepIds: [...request.completedStepIds] }),
+                ...(request.uiState === undefined ? {} : { uiState: request.uiState }),
+            }
+        case 'precompute':
+            return {
+                ...base,
+                op: 'precompute',
+                binding: { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
+                session: request.session,
+                focusStepId: request.focusStepId,
+            }
+        case 'progress':
+            return { ...base, op: 'progress', binding: request.binding, want: [...request.want] }
+        case 'cancel':
+            return { ...base, op: 'cancel', binding: request.binding }
+    }
+}
+
+function screensUnavailable(
+    requestId: string,
+    code: Extract<ScreensResult, { status: 'unavailable' }>['code'],
+    retryable: boolean,
+): ScreensResult {
+    return { status: 'unavailable', requestId, binding: null, code, retryable }
+}
+
+function pendingFor(requestId: string, binding: CaptureBinding): (value: unknown) => PendingResult | null {
+    return (value: unknown): PendingResult | null => {
+        const parsed = pendingResultSchema.safeParse(value)
+        return parsed.success && parsed.data.requestId === requestId && matchesBinding(parsed.data.binding, binding)
+            ? parsed.data
+            : null
+    }
+}
+
+function statusToScreensCode(status: number): Extract<ScreensResult, { status: 'unavailable' }>['code'] {
+    if (status === 401 || status === 403) return 'unauthorized'
+    if (status === 503) return 'unconfigured'
+    if (status === 400 || status === 413 || status === 415) return 'invalid_input'
+    if (status === 409) return 'duplicate_request'
+    if (status === 429) return 'budget_exhausted'
+    if (status === 504) return 'timeout'
+    return status >= 500 && status < 600 ? 'provider_error' : 'invalid_output'
+}
+
+/** Pure: validates the whole screens envelope and the identity of every document against what was requested. */
+export function interpretScreens(
+    status: number,
+    text: string,
+    requestId: string,
+    request: ScreenRequest,
+): ScreensResult {
+    let json: unknown
+    try {
+        json = JSON.parse(text)
+    } catch {
+        return status >= 200 && status < 300
+            ? screensUnavailable(requestId, 'invalid_output', false)
+            : screensUnavailable(requestId, statusToScreensCode(status), status >= 500)
+    }
+    const parsed = screensResultSchema.safeParse(json)
+    if (!parsed.success || parsed.data.requestId !== requestId) {
+        return status >= 200 && status < 300
+            ? screensUnavailable(requestId, 'invalid_output', false)
+            : screensUnavailable(requestId, statusToScreensCode(status), status >= 500)
+    }
+    const result = parsed.data
+    if (status < 200 || status >= 300) {
+        return result.status === 'unavailable' ? result : screensUnavailable(requestId, 'invalid_output', false)
+    }
+    if (result.status === 'unavailable') {
+        return result
+    }
+    return acceptsScreens(request, result.value) ? result : screensUnavailable(requestId, 'invalid_output', false)
+}
+
+function acceptsScreens(request: ScreenRequest, value: Extract<ScreensResult, { status: 'ok' }>['value']): boolean {
+    switch (request.op) {
+        case 'generate': {
+            const document = value.document
+            if (document === null || value.documents.length > 0 || value.progress !== null) return false
+            return (
+                document.kind === request.kind &&
+                sameIdentity(document.bound, {
+                    manualId: request.session?.manualId ?? null,
+                    revision: request.session?.revision ?? null,
+                    stepId: request.stepId,
+                    captureId: request.result === null ? null : request.captureId,
+                })
+            )
+        }
+        case 'precompute':
+        case 'cancel': {
+            const progress = value.progress
+            const binding = request.op === 'precompute' ? request.session : request.binding
+            return (
+                value.document === null &&
+                value.documents.length === 0 &&
+                (progress === null ||
+                    (progress.manualId === binding.manualId && progress.revision === binding.revision))
+            )
+        }
+        case 'progress': {
+            const progress = value.progress
+            if (value.document !== null) return false
+            if (
+                progress !== null &&
+                (progress.manualId !== request.binding.manualId || progress.revision !== request.binding.revision)
+            ) {
+                return false
+            }
+            const want = new Set(request.want)
+            return value.documents.every(
+                (document) =>
+                    document.kind === 'guide' &&
+                    document.bound.stepId !== null &&
+                    want.has(document.bound.stepId) &&
+                    sameIdentity(document.bound, {
+                        manualId: request.binding.manualId,
+                        revision: request.binding.revision,
+                        stepId: document.bound.stepId,
+                        captureId: null,
+                    }),
+            )
         }
     }
 }

@@ -21,6 +21,7 @@ import { PagesScreen } from './pages-screen'
 import { ReadingScreen } from './reading-screen'
 import { OverviewScreen, useQuickProgress } from './review-screen'
 import { HeaderButtons, useMoreState } from './screen-header'
+import { cameraWordingOf, headerFor } from '../screens/host'
 import {
     addTitle,
     checkTitle,
@@ -36,6 +37,19 @@ import { ScreenBody, TextRegion } from './screen-layout'
 import { stopFor, type Stop } from './plain-copy'
 import { stepAssemblyGuide } from './step-facts'
 import { useWorkflow } from './workflow-provider'
+import {
+    useCameraSlot,
+    useDoneSlot,
+    useGuideSlot,
+    useHomeSlot,
+    useMoreSlot,
+    useNextScreenWarmUp,
+    usePagesSlot,
+    useQuestionsSlot,
+    useQuickCheckSlot,
+    useReadingSlot,
+} from '../screens/slots'
+import { readingLanguage } from './reading-language'
 
 export type RouteStatus = 'loading' | 'ready' | 'missing' | 'failed'
 
@@ -154,6 +168,10 @@ export function HomeRoute(): ReactElement {
     const { scrollY, collapsed, onCollapsedChange } = useHomeTitle()
     const { colors } = useTheme()
     const native = Platform.OS === 'ios'
+    const common = { state, entry: undefined, controller, nav, more }
+    const slot = useHomeSlot({ ...common, native: false })
+    const moreSlot = useMoreSlot(common)
+    useNextScreenWarmUp('home', state, undefined)
     return (
         <>
             <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more, collapsed })} />
@@ -165,6 +183,8 @@ export function HomeRoute(): ReactElement {
                     chrome="native"
                     largeTitle={native ? 'heading' : 'content'}
                     more={more}
+                    slot={slot}
+                    moreSlot={moreSlot}
                     scrollY={scrollY}
                     onCollapsedChange={onCollapsedChange}
                 />
@@ -197,10 +217,22 @@ function useChoosePages(entry: LibraryEntry | undefined): (replaceIndex?: number
 
 export function AddRoute(): ReactElement {
     const { state, entry } = useWorkflow()
-    const { controller } = useWorkflowActions()
+    const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
     const choosePages = useChoosePages(entry)
     const compact = useCompactTitles()
+    const common = {
+        state,
+        entry,
+        controller,
+        nav,
+        more,
+        choosePages: (): void => choosePages(),
+        language: entry === undefined ? undefined : readingLanguage(entry.session.manualId),
+    }
+    const slot = usePagesSlot({ ...common, native: false })
+    const moreSlot = useMoreSlot(common)
+    useNextScreenWarmUp('pages', state, entry)
     if (!state.loading && entry === undefined) {
         return <Redirect href="/" />
     }
@@ -208,8 +240,14 @@ export function AddRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: addTitle(compact),
-                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="pages" />,
+                    ...headerFor(slot, addTitle(compact)),
+                    headerRight: (): ReactElement => (
+                        <HeaderButtons
+                            more={more}
+                            coach="pages"
+                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
+                        />
+                    ),
                 }}
             />
             <CoachRoute screen="pages">
@@ -224,6 +262,8 @@ export function AddRoute(): ReactElement {
                         choosePages={choosePages}
                         chrome="native"
                         more={more}
+                        slot={slot}
+                        moreSlot={moreSlot}
                     />
                 )}
             </CoachRoute>
@@ -239,6 +279,16 @@ export function ReadingRoute(): ReactElement {
     const { controller, nav } = useWorkflowActions()
     const [confirming, setConfirming] = useState(false)
     const reading = state.pending !== null && state.pending.startsWith('Reading')
+    const more = useMoreState()
+    const slot = useReadingSlot({
+        state,
+        entry,
+        controller,
+        nav,
+        more,
+        native: status !== 'ready',
+        language: entry === undefined ? undefined : readingLanguage(entry.session.manualId),
+    })
     // Back while a read is running asks first and never traps: stopping reads the same cancel as the Cancel button.
     usePreventRemove(reading, () => setConfirming(true))
     // The prevention lifts on the render after the cancel, so the step back waits for it.
@@ -248,7 +298,7 @@ export function ReadingRoute(): ReactElement {
     }
     return (
         <>
-            <Stack.Screen options={{ title: READING_TITLE }} />
+            <Stack.Screen options={headerFor(slot, READING_TITLE)} />
             <CoachRoute screen={null}>
                 {status === 'ready' && entry !== undefined ? (
                     <ReadingScreen
@@ -258,6 +308,7 @@ export function ReadingRoute(): ReactElement {
                         nav={readingNav}
                         confirming={confirming}
                         onConfirmingChange={setConfirming}
+                        slot={slot}
                     />
                 ) : (
                     <Waiting route={route} />
@@ -277,6 +328,15 @@ export function CheckRoute(): ReactElement {
     // The question count lives here, above the screen, so accepting a fact (a new revision) never restarts it.
     const progress = useQuickProgress(entry?.session)
     const compact = useCompactTitles()
+    const slot = useQuickCheckSlot({
+        state,
+        entry,
+        controller,
+        nav,
+        more,
+        native: status !== 'ready',
+        live: { quick: progress },
+    })
     if (route.redirect !== null) {
         return <Redirect href={route.redirect as never} />
     }
@@ -284,8 +344,15 @@ export function CheckRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: checkTitle(progress.label, compact),
-                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="quick-check" />,
+                    // The question count is the app's own; the document names the screen only when no question is on it.
+                    ...headerFor(progress.label === undefined ? slot : undefined, checkTitle(progress.label, compact)),
+                    headerRight: (): ReactElement => (
+                        <HeaderButtons
+                            more={more}
+                            coach="quick-check"
+                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
+                        />
+                    ),
                 }}
             />
             <CoachRoute screen="quick-check">
@@ -298,6 +365,7 @@ export function CheckRoute(): ReactElement {
                         chrome="native"
                         more={more}
                         progress={progress}
+                        slot={slot}
                     />
                 ) : (
                     <Waiting route={route} />
@@ -314,6 +382,17 @@ export function GuideRoute(): ReactElement {
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
+    const needsQuestions = entry !== undefined && entry.session.reviewStatus !== 'reviewed'
+    const common = { state, entry, controller, nav, more }
+    const slot = useGuideSlot({
+        ...common,
+        native: status !== 'ready',
+        blocked: needsQuestions,
+        coverage: entry !== undefined && controller.coverageNotice() !== null,
+    })
+    const moreSlot = useMoreSlot(common)
+    const questionsSlot = useQuestionsSlot({ ...common, native: status !== 'ready', blocked: needsQuestions })
+    useNextScreenWarmUp('guide', state, needsQuestions ? undefined : entry)
     if (route.redirect !== null) {
         return <Redirect href={route.redirect as never} />
     }
@@ -321,11 +400,17 @@ export function GuideRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: guideTitle(entry),
+                    ...headerFor(slot, guideTitle(entry)),
                     // iOS 26 tests the current touch position after its initial movement. One touch target
                     // admits edge Back while excluding a hero swipe once its 24pt threshold is reached.
                     gestureResponseDistance: { end: touchTarget },
-                    headerRight: (): ReactElement => <HeaderButtons more={more} coach="guide" />,
+                    headerRight: (): ReactElement => (
+                        <HeaderButtons
+                            more={more}
+                            coach="guide"
+                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
+                        />
+                    ),
                 }}
             />
             <CoachRoute screen="guide">
@@ -337,6 +422,9 @@ export function GuideRoute(): ReactElement {
                         nav={nav}
                         chrome="native"
                         more={more}
+                        slot={slot}
+                        moreSlot={moreSlot}
+                        questionsSlot={questionsSlot}
                     />
                 ) : (
                     <Waiting route={route} />
@@ -353,6 +441,8 @@ export function DoneRoute(): ReactElement {
     const { state, entry } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
+    const slot = useDoneSlot({ state, entry, controller, nav, more, native: status !== 'ready' })
+    const moreSlot = useMoreSlot({ state, entry, controller, nav, more })
     // A Done URL shows Done only for a build whose every step is marked; otherwise it goes to the stop the build is at.
     if (route.redirect !== null) {
         return <Redirect href={route.redirect as never} />
@@ -361,10 +451,12 @@ export function DoneRoute(): ReactElement {
         <>
             <Stack.Screen
                 options={{
-                    title: DONE_TITLE,
+                    ...headerFor(slot, DONE_TITLE),
                     headerBackVisible: false,
                     gestureEnabled: false,
-                    headerRight: (): ReactElement => <HeaderButtons more={more} />,
+                    headerRight: (): ReactElement => (
+                        <HeaderButtons more={more} trailing={slot?.status === 'ready' ? slot.screen.trailing : null} />
+                    ),
                 }}
             />
             <CoachRoute screen={null}>
@@ -376,6 +468,8 @@ export function DoneRoute(): ReactElement {
                         nav={nav}
                         chrome="native"
                         more={more}
+                        slot={slot}
+                        moreSlot={moreSlot}
                     />
                 ) : (
                     <Waiting route={route} />
@@ -395,7 +489,22 @@ function assemblyGuide(entry: LibraryEntry | undefined, state: WorkflowState): A
 
 export function CameraRoute(): ReactElement {
     const { controller, state, entry } = useWorkflow()
+    const { nav } = useWorkflowActions()
+    const more = useMoreState()
     const entered = useRef(state.route === 'camera')
+    // The step's guide is already composed for the Guide; the camera reads its camera wording and nothing else.
+    const wording = cameraWordingOf(
+        useCameraSlot({
+            state,
+            entry,
+            controller,
+            nav,
+            more,
+            blocked:
+                entry !== undefined &&
+                (entry.session.reviewStatus !== 'reviewed' || controller.coverageNotice() !== null),
+        }),
+    )
     // Back, the hardware button and the close control all mean "cancel the photo" and use the existing cancel. The
     // screen closes once the controller leaves the camera route, so a save in progress is never abandoned.
     usePreventRemove(state.route === 'camera', () => controller.cancel())
@@ -410,6 +519,7 @@ export function CameraRoute(): ReactElement {
                     busy={state.pending !== null}
                     intent={state.cameraIntent}
                     guide={assemblyGuide(entry, state)}
+                    wording={wording}
                     onCancel={controller.cancel}
                     onCapture={(take): void => {
                         void controller.shutter(take)

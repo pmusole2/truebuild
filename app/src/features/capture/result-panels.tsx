@@ -13,6 +13,7 @@ import { ManualImage } from './page-media'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, type PartGuidance } from './part-regions'
 import { plainReason } from './plain-copy'
+import { secondOpinionLine } from './provenance-copy'
 import { ModelProvenance, SourceDiagrams } from './step-facts'
 
 /** The verdict for a frozen check, exactly as the backend returned it. Refusals keep their reason and missing evidence. */
@@ -51,9 +52,7 @@ export function CheckPanel({
                 }
             />
             {provenance ? <ModelProvenance result={check} /> : null}
-            {!provenance || check.secondOpinion === undefined || check.secondOpinion.status === 'available' ? null : (
-                <Caption>{`Second opinion: ${check.secondOpinion.model} (${check.secondOpinion.status})`}</Caption>
-            )}
+            {!provenance || secondOpinionLine(check) === null ? null : <Caption>{secondOpinionLine(check)}</Caption>}
         </Reveal>
     )
 }

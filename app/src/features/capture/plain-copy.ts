@@ -106,7 +106,10 @@ export function plainPending(pending: string | null): string | null {
         return 'Checking your photo…'
     }
     if (pending.startsWith('Second opinion')) {
-        return 'Taking a second look…'
+        return 'Taking a closer look…'
+    }
+    if (pending.startsWith('Still thinking')) {
+        return 'Still thinking…'
     }
     if (pending.startsWith('Asking')) {
         return 'Asking…'
@@ -223,6 +226,9 @@ export function guideSentence(args: {
     readonly unfinished?: number | undefined
 }): GuideSentence {
     const { state, step, blocked, unfinished } = args
+    if (state.pending !== null && state.pending.startsWith('Still thinking')) {
+        return { kind: 'checking', text: 'Still thinking…' }
+    }
     if (state.pending !== null && state.pending.startsWith('Asking')) {
         return { kind: 'checking', text: 'Asking…' }
     }

@@ -9,9 +9,10 @@ import type {
     QuestionResult,
     QuestionTarget,
 } from '@truebuild/contracts'
+import type { PendingResult, ScreenContext } from '@truebuild/contracts/model'
 import type { ImageBytes, ModelApiClient } from '../../api/model-client'
-import { MODEL_CHECK_TIMEOUT_MS } from '../../api/model-client'
-import { awaitStopped, unavailableResult, type CallGuard } from '../../api/transport'
+import { MODEL_CHECK_TIMEOUT_MS, MODEL_QUESTION_FIRST_TIMEOUT_MS } from '../../api/model-client'
+import { awaitStopped, createCallGuard, unavailableResult, type CallGuard } from '../../api/transport'
 import { beforeDispatch, type PrepStopReason } from './prep-budget'
 import type { Observation } from './observation'
 
@@ -55,6 +56,8 @@ export type ModelCheckRequest = {
     readonly observation: Observation
     readonly loadPageAsset: (assetId: string) => Promise<SourcePageAsset | null>
     readonly signal: AbortSignal
+    /** The shown, validated guide page's identity (see ModelRequestContext.screen). */
+    readonly screen?: ScreenContext
 }
 
 /** The frozen photo as the wire type. Same bytes and geometry; no re-encoding happens here. */
@@ -67,7 +70,20 @@ export function observationImage(observation: Observation): ImageBytes {
     }
 }
 
-export type ModelQuestionRequest = Omit<ModelCheckRequest, 'loadPageAsset'> & {
+/** A question may wait up to the server's own job budget (60 s by default) plus this margin before the app gives up. */
+export const QUESTION_JOB_MARGIN_MS = 5_000
+export const QUESTION_JOB_CEILING_MS = 75_000
+// Preparing the cited pages is still bounded like a check; the first request then gets its own, longer budget.
+const QUESTION_PREP_MS = MODEL_CHECK_TIMEOUT_MS
+const QUESTION_FIRST_ACTION_MS = QUESTION_PREP_MS + MODEL_QUESTION_FIRST_TIMEOUT_MS
+const POLL_MIN_MS = 500
+const POLL_MAX_MS = 3_000
+
+export type ModelQuestionRequest = Omit<ModelCheckRequest, 'loadPageAsset' | 'client'> & {
+    readonly client: Pick<ModelApiClient, 'check' | 'questions'> &
+        Partial<Pick<ModelApiClient, 'questionResult' | 'questionCancel'>>
+    /** Called once when the server hands back a ticket instead of an answer, so the screen can say it is still working. */
+    readonly onSlow?: () => void
     readonly question: string
     readonly target: QuestionTarget
     readonly loadPageAsset: ModelCheckRequest['loadPageAsset']
@@ -78,8 +94,8 @@ export async function askModelQuestion(request: ModelQuestionRequest): Promise<A
     const { requestId, binding } = request
     const outcome = await beforeDispatch(
         request.signal,
-        MODEL_CHECK_TIMEOUT_MS,
-        async (guard): Promise<ApiResult<QuestionResult>> => {
+        QUESTION_FIRST_ACTION_MS,
+        async (guard): Promise<ApiResult<QuestionResult> | PendingResult> => {
             const pageIds = selectedStepSourcePageIds(request.session, request.step)
             guard.checkpoint()
 
@@ -103,7 +119,12 @@ export async function askModelQuestion(request: ModelQuestionRequest): Promise<A
                     observationImage(request.observation),
                     request.question,
                     request.target,
-                    { requestId, signal: guard.signal, checkpoint: guard.checkpoint },
+                    {
+                        requestId,
+                        signal: guard.signal,
+                        checkpoint: guard.checkpoint,
+                        ...(request.screen === undefined ? {} : { screen: request.screen }),
+                    },
                 ),
                 guard.signal,
             )
@@ -113,7 +134,80 @@ export async function askModelQuestion(request: ModelQuestionRequest): Promise<A
         },
     )
 
-    return outcome.ok ? outcome.value : stoppedResult<QuestionResult>(requestId, binding, outcome.reason)
+    if (!outcome.ok) {
+        return stoppedResult<QuestionResult>(requestId, binding, outcome.reason)
+    }
+    if (outcome.value.status !== 'pending') {
+        return outcome.value
+    }
+    request.onSlow?.()
+    return collectQuestion(request, outcome.value)
+}
+
+function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject): void => {
+        if (signal.aborted) {
+            reject(new Error('Request stopped'))
+            return
+        }
+        const onAbort = (): void => {
+            clearTimeout(timer)
+            reject(new Error('Request stopped'))
+        }
+        const timer = setTimeout((): void => {
+            signal.removeEventListener('abort', onAbort)
+            resolve()
+        }, milliseconds)
+        signal.addEventListener('abort', onAbort, { once: true })
+    })
+}
+
+/**
+ * Follows a 202 ticket to its final response. The question and its photo are never sent again; the only requests are
+ * reads of this one ticket. A caller stop or the ticket's own horizon stops the job on the server and reports it as
+ * stopped, so a late answer can never appear after the person moved on.
+ */
+async function collectQuestion(
+    request: ModelQuestionRequest,
+    first: PendingResult,
+): Promise<ApiResult<QuestionResult>> {
+    const { requestId, binding, client } = request
+    if (client.questionResult === undefined) {
+        return unavailableResult<QuestionResult>(requestId, binding, 'invalid_output', false)
+    }
+    const pageIds = selectedStepSourcePageIds(request.session, request.step)
+    const guard = createCallGuard(
+        Math.min(first.expiresInMs + QUESTION_JOB_MARGIN_MS, QUESTION_JOB_CEILING_MS),
+        request.signal,
+    )
+    let ticket = first
+    try {
+        for (;;) {
+            await pause(Math.min(Math.max(ticket.retryAfterMs, POLL_MIN_MS), POLL_MAX_MS), guard.signal)
+            guard.checkpoint()
+            const next = await awaitStopped(
+                client.questionResult(
+                    binding,
+                    first.ticket,
+                    { requestId, signal: guard.signal, checkpoint: guard.checkpoint },
+                    pageIds,
+                ),
+                guard.signal,
+            )
+            guard.checkpoint()
+            if (next.status !== 'pending') {
+                return next
+            }
+            ticket = next
+        }
+    } catch {
+        const reason: PrepStopReason = guard.callerAborted() ? 'caller' : 'timeout'
+        // Fire and forget: the job is stopped so nothing keeps working for an answer nobody will see.
+        void client.questionCancel?.(binding, first.ticket, { requestId })
+        return stoppedResult<QuestionResult>(requestId, binding, reason)
+    } finally {
+        guard.dispose()
+    }
 }
 
 export type RunModelCheck = (request: ModelCheckRequest) => Promise<ApiResult<CheckResult>>

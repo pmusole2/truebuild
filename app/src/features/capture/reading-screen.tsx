@@ -15,6 +15,8 @@ import { readingLanguage } from './reading-language'
 import { ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import type { WorkflowScreenProps } from './workflow-types'
+import { ComposedHero, composeBar, GeneratedBody } from '../screens/host'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 
 type ReadingProps = WorkflowScreenProps & {
     entry: LibraryEntry
@@ -22,6 +24,8 @@ type ReadingProps = WorkflowScreenProps & {
     // Native Back while reading asks first. The route sets this; without a router the Cancel button sets it.
     readonly confirming?: boolean
     readonly onConfirmingChange?: (confirming: boolean) => void
+    // The model-composed screen, or undefined for the native one.
+    readonly slot?: ScreenSlot
 }
 
 // The only captions Reading ever shows. They name no step of the pipeline and promise nothing new.
@@ -37,6 +41,7 @@ export function ReadingScreen({
     nav: navProp,
     confirming: confirmingProp,
     onConfirmingChange,
+    slot,
 }: ReadingProps): ReactElement {
     const nav = navProp ?? defaultNav(controller)
     const [internal, setInternal] = useState(false)
@@ -69,6 +74,7 @@ export function ReadingScreen({
         controller.cancel()
         nav.back()
     }
+    const composed = slot?.status === 'ready' && !confirming ? slot.screen : null
     const sentence = reading
         ? confirming
             ? 'Stop reading? You can start again.'
@@ -107,19 +113,28 @@ export function ReadingScreen({
           }
     return (
         <ScreenBody testID="reading-screen">
-            <View style={[styles.hero, { height: heroHeight }]}>
-                {first === undefined ? (
-                    <SkeletonCard />
-                ) : (
-                    <PageImage
-                        uri={state.pageUris[first.pageId]}
-                        label="First page of your manual"
-                        aspectRatio={first.width / first.height}
-                    />
-                )}
-            </View>
+            {composed !== null ? (
+                // The document's own figure is the picture; without one the document chose a screen without a picture.
+                <ComposedHero screen={composed} />
+            ) : (
+                <View style={[styles.hero, { height: heroHeight }]}>
+                    {first === undefined ? (
+                        <SkeletonCard />
+                    ) : (
+                        <PageImage
+                            uri={state.pageUris[first.pageId]}
+                            label="First page of your manual"
+                            aspectRatio={first.width / first.height}
+                        />
+                    )}
+                </View>
+            )}
             <TextRegion>
-                <Instruction>{sentence}</Instruction>
+                {composed !== null ? (
+                    <GeneratedBody screen={composed} enabled={!reading} pinned />
+                ) : (
+                    <Instruction>{sentence}</Instruction>
+                )}
                 {reading ? (
                     <Animated.View
                         testID="reading-indicator"
@@ -133,7 +148,7 @@ export function ReadingScreen({
                     <Caption>{plainNotice(state.notice)}</Caption>
                 ) : null}
             </TextRegion>
-            <FixedBottomBar {...bar} />
+            <FixedBottomBar {...composeBar(bar, slot, reading || confirming)} />
         </ScreenBody>
     )
 }

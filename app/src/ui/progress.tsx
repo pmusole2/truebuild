@@ -20,12 +20,14 @@ export function ProgressBar({
     total,
     slim = false,
     animate = true,
+    nativeID,
 }: {
     readonly label: string
     readonly value: number
     readonly total: number
     readonly slim?: boolean
     readonly animate?: boolean
+    readonly nativeID?: string
 }): ReactElement {
     const { colors } = useTheme()
     const { reduceMotion } = useFeedback()
@@ -52,6 +54,7 @@ export function ProgressBar({
     const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }))
     return (
         <View
+            nativeID={nativeID}
             testID="progress-track"
             accessible={slim ? false : true}
             accessibilityElementsHidden={slim}

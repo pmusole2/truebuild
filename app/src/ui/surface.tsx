@@ -50,11 +50,17 @@ const GAPS = { xs: space.xs, sm: space.sm, md: space.md, lg: space.lg } as const
 export function Stack({
     gap = 'md',
     children,
+    nativeID,
 }: {
     readonly gap?: keyof typeof GAPS
     readonly children: ReactNode
+    readonly nativeID?: string
 }): ReactElement {
-    return <View style={{ gap: GAPS[gap] }}>{children}</View>
+    return (
+        <View nativeID={nativeID} style={{ gap: GAPS[gap] }}>
+            {children}
+        </View>
+    )
 }
 
 // Cards are filled shapes with no outline: `result` is lifted and `raised` sits one step above the canvas, so a verdict
@@ -66,11 +72,13 @@ export function Card({
     elevation = 0,
     tone = 'surface',
     testID,
+    nativeID,
 }: {
     readonly children: ReactNode
     readonly elevation?: ElevationLevel
     readonly tone?: CardTone
     readonly testID?: string
+    readonly nativeID?: string
 }): ReactElement {
     const { colors, scheme } = useTheme()
     // In the dark scheme the plain surface sits too close to the canvas, so every card uses the raised surface.
@@ -79,6 +87,7 @@ export function Card({
     return (
         <View
             testID={testID}
+            nativeID={nativeID}
             style={[
                 styles.card,
                 { backgroundColor: raised ? colors.surfaceRaised : colors.surface },

@@ -8,6 +8,10 @@ import { useTheme } from '../../theme/theme'
 import { touchTarget } from '../../theme/tokens'
 import { HideTipsForTestingRow } from '../onboarding/tips-rows'
 import { ModelProvenance } from './step-facts'
+import { BuiltToggleRow, CompareManualsRow, StagesPanel } from '../screens/attribution'
+import type { CheckStages } from './controller'
+import { secondOpinionLine } from './provenance-copy'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 
 const VERBS = [
     ['Scan', 'Photograph the pages of your paper manual.'],
@@ -36,10 +40,20 @@ export function HowItWorks(): ReactElement {
 export function AboutThisCheck({
     result,
     children,
+    stages,
+    resultSlot,
+    check,
+    onCompare,
 }: {
-    result?: Pick<CheckResult | QuestionResult, 'model' | 'modelNotes'> & Partial<Pick<CheckResult, 'secondOpinion'>>
+    result?: Pick<CheckResult | QuestionResult, 'model' | 'modelNotes'> &
+        Partial<Pick<CheckResult, 'secondOpinion' | 'evidence'>>
     // Judge and demo controls. They render only once the entry is open, so no technical control shows before it.
     children?: ReactNode
+    // The same photo's stages after the verdict, and the composed result screen's state, for the judge layer only.
+    stages?: CheckStages | null
+    resultSlot?: ScreenSlot
+    check?: Pick<CheckResult, 'model' | 'decision'> | null
+    onCompare?: () => void
 }): ReactElement {
     const { colors } = useTheme()
     const [open, setOpen] = useState(false)
@@ -62,9 +76,12 @@ export function AboutThisCheck({
                     ) : (
                         <ModelProvenance result={result} />
                     )}
-                    {result?.secondOpinion === undefined || result.secondOpinion.status === 'available' ? null : (
-                        <Caption>{`Second opinion: ${result.secondOpinion.model} (${result.secondOpinion.status})`}</Caption>
+                    {result === undefined || secondOpinionLine(result) === null ? null : (
+                        <Caption>{secondOpinionLine(result)}</Caption>
                     )}
+                    <StagesPanel check={check ?? null} stages={stages} resultSlot={resultSlot} />
+                    <BuiltToggleRow />
+                    <CompareManualsRow onOpen={onCompare} />
                     {children}
                     <HideTipsForTestingRow />
                     {__DEV__ ? (

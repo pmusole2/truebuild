@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
-import type { ManualBinding, ManualSession, ManualStep } from '@truebuild/contracts'
+import type { ManualSession, ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
-import { SegmentedControl, TextField } from '../../ui/fields'
 import { ProgressBar } from '../../ui/progress'
 import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
@@ -20,11 +19,15 @@ import { quickCheckCandidates } from '../onboarding/coach-inventory'
 import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
 import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
-import { firstSentences, isProgressNotice, plainReason, plainWords } from './plain-copy'
+import { firstSentences, isProgressNotice, plainReason } from './plain-copy'
+import { FixEditor } from './fix-editor'
 import { editableQuestions, otherBlockers, type Question } from './quick-check-model'
 import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
+import { applyTips, ComposedHero, composeBar, GeneratedBody, ScreenPending } from '../screens/host'
+import { MandatoryFacts } from '../screens/mandatory'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 import { StepDetails } from './step-details'
 import { StepPicture } from './step-picture'
 import type { WorkflowScreenProps } from './workflow-types'
@@ -91,7 +94,13 @@ export function useQuickProgress(session: ManualSession | undefined): QuickProgr
 }
 
 type QuickCheckProps = WorkflowScreenProps &
-    ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav; readonly progress?: QuickProgress }
+    ChromeProps & {
+        entry: LibraryEntry
+        readonly nav?: ScreenNav
+        readonly progress?: QuickProgress
+        // The model-composed screen, or undefined for the native one. Questions themselves stay the app's own.
+        readonly slot?: ScreenSlot
+    }
 
 /**
  * Quick check: one honest question at a time. Only what the existing gate lets a person fill in is asked (a missing
@@ -107,6 +116,7 @@ export function OverviewScreen({
     chrome = 'inline',
     more: moreProp,
     progress: progressProp,
+    slot,
 }: QuickCheckProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
@@ -170,6 +180,12 @@ export function OverviewScreen({
     }
 
     const asking = current !== undefined && !unreadable
+    const composed = slot?.status === 'ready' ? slot.screen : null
+    // A composed Quick check that placed the editor in its body edits there; otherwise Let me fix it opens the sheet.
+    const editorInline =
+        composed !== null &&
+        asking &&
+        composed.guarded.body.some((node) => node.type === 'FactEditor' && node.kind === current.kind)
     // A new question moves its picture and sentence together; nothing moves while work, a sheet or a tip holds the screen.
     const scope = useCoachScope()
     const attention = useCoachAttention()
@@ -185,15 +201,18 @@ export function OverviewScreen({
     )
     useCoachScreen('quick-check', {
         suppressed: busy || more.open,
-        candidates: quickCheckCandidates({
-            state: asking
-                ? 'asking'
-                : primary?.testID === 'quick-check-clearer'
-                  ? 'blocked'
-                  : primary?.testID === 'quick-check-start'
-                    ? 'ready'
-                    : 'none',
-        }),
+        candidates: applyTips(
+            quickCheckCandidates({
+                state: asking
+                    ? 'asking'
+                    : primary?.testID === 'quick-check-clearer'
+                      ? 'blocked'
+                      : primary?.testID === 'quick-check-start'
+                        ? 'ready'
+                        : 'none',
+            }),
+            slot,
+        ),
     })
     // The header count already shows progress; "Saved. Thanks." would be a second sentence under the question.
     const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
@@ -209,36 +228,59 @@ export function OverviewScreen({
                 ) : null}
                 {asking ? (
                     <>
-                        <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
-                        <View style={[styles.hero, styles.clip]}>
-                            <Animated.View style={questionMotion}>
-                                <StepPicture
-                                    reference={current.step.sourceRefs[0]}
-                                    references={current.step.sourceRefs}
-                                    session={session}
-                                    pageUris={state.pageUris}
-                                    height={heroHeight}
-                                    cover
-                                />
+                        {composed === null ? (
+                            <ProgressBar
+                                label={`Question ${position} of ${total}`}
+                                value={position - 1}
+                                total={total}
+                            />
+                        ) : null}
+                        {composed !== null ? (
+                            <Animated.View style={[styles.clip, questionMotion]}>
+                                <ComposedHero screen={composed} />
                             </Animated.View>
-                        </View>
+                        ) : (
+                            <View style={[styles.hero, styles.clip]}>
+                                <Animated.View style={questionMotion}>
+                                    <StepPicture
+                                        reference={current.step.sourceRefs[0]}
+                                        references={current.step.sourceRefs}
+                                        session={session}
+                                        pageUris={state.pageUris}
+                                        height={heroHeight}
+                                        cover
+                                    />
+                                </Animated.View>
+                            </View>
+                        )}
                         <TextRegion compact>
                             <PlainNotice state={quietState} controller={controller} />
+                            <MandatoryFacts session={session} stepId={current.step.stepId} slot={slot} />
                             <Animated.View style={[styles.question, questionMotion]}>
-                                <Instruction>{sentence}</Instruction>
-                                {current.reason === null ? null : (
-                                    <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
+                                {composed !== null ? (
+                                    <GeneratedBody screen={composed} enabled={!busy && !more.open} pinned />
+                                ) : (
+                                    <>
+                                        <Instruction>{sentence}</Instruction>
+                                        {current.reason === null ? null : (
+                                            <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
+                                        )}
+                                    </>
                                 )}
                             </Animated.View>
                         </TextRegion>
                         <FixedBottomBar
-                            primary={{
-                                label: 'Let me fix it',
-                                compactLabel: 'Fix',
-                                testID: 'quick-check-fix',
-                                disabled: busy,
-                                onPress: (): void => more.show('fix'),
-                            }}
+                            primary={
+                                editorInline
+                                    ? null
+                                    : {
+                                          label: 'Let me fix it',
+                                          compactLabel: 'Fix',
+                                          testID: 'quick-check-fix',
+                                          disabled: busy,
+                                          onPress: (): void => more.show('fix'),
+                                      }
+                            }
                             secondary={{
                                 label: 'Skip for now',
                                 icon: 'arrowRight',
@@ -250,21 +292,34 @@ export function OverviewScreen({
                     </>
                 ) : (
                     <>
-                        <View style={styles.hero}>
-                            <StepPicture
-                                reference={session.reviewedSteps[0]?.sourceRefs[0]}
-                                references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
-                                session={session}
-                                pageUris={state.pageUris}
-                                height={heroHeight}
-                                cover
-                            />
-                        </View>
+                        {composed !== null ? (
+                            <ComposedHero screen={composed} />
+                        ) : (
+                            <View style={styles.hero}>
+                                <StepPicture
+                                    reference={session.reviewedSteps[0]?.sourceRefs[0]}
+                                    references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
+                                    session={session}
+                                    pageUris={state.pageUris}
+                                    height={heroHeight}
+                                    cover
+                                />
+                            </View>
+                        )}
                         <TextRegion>
                             <PlainNotice state={quietState} controller={controller} />
-                            <Instruction>{sentence}</Instruction>
+                            {composed !== null ? (
+                                <GeneratedBody screen={composed} enabled={!busy && !more.open} pinned />
+                            ) : slot?.status === 'pending' ? (
+                                <ScreenPending />
+                            ) : (
+                                <Instruction>{sentence}</Instruction>
+                            )}
                         </TextRegion>
-                        <FixedBottomBar primary={primary} secondary={secondary} />
+                        <FixedBottomBar
+                            {...composeBar({ primary, secondary }, slot, state.storageReadOnly || noRead)}
+                            reason={slot?.status === 'ready' && !noRead ? slot.screen.barReason : null}
+                        />
                     </>
                 )}
             </View>
@@ -280,105 +335,6 @@ export function OverviewScreen({
                 busy={busy}
             />
         </ScreenBody>
-    )
-}
-
-/**
- * The one scoped editor, opened by Let me fix it. Its draft lives only while the sheet is open: Cancel and closing
- * discard it, a refused save keeps it, and only Save writes (through the unchanged `acceptStepFacts`).
- */
-function FixEditor({
-    question,
-    session,
-    state,
-    controller,
-    busy,
-    onDone,
-}: {
-    question: Question
-    session: ManualSession
-    state: WorkflowScreenProps['state']
-    controller: WorkflowScreenProps['controller']
-    busy: boolean
-    onDone: () => void
-}): ReactElement {
-    const { step } = question
-    const binding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
-    const labels = new Map(
-        session.parts.map((part) => [part.partId, part.name.state === 'known' ? part.name.value : 'A part']),
-    )
-    const parts = step.parts.map((part) => ({ value: part.partId, label: labels.get(part.partId) ?? 'A part' }))
-    const [partId, setPartId] = useState<string | null>(parts.length === 1 ? parts[0]!.value : null)
-    const [text, setText] = useState('')
-    const [error, setError] = useState<string | undefined>(undefined)
-    const accept = async (
-        resolution: Parameters<WorkflowScreenProps['controller']['acceptStepFacts']>[2],
-    ): Promise<void> => {
-        if (await controller.acceptStepFacts(binding, step.stepId, resolution)) {
-            onDone()
-        }
-    }
-    const save = async (): Promise<void> => {
-        if (question.kind === 'orientation') {
-            const description = text.trim()
-            if (description.length === 0) {
-                setError('Write a few words first.')
-                return
-            }
-            if (partId === null) {
-                setError('Choose the part first.')
-                return
-            }
-            setError(undefined)
-            await accept({ orientation: { partId, description } })
-            return
-        }
-        const visibleChecks = text
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0)
-        if (visibleChecks.length === 0) {
-            setError('Write at least one thing, one per line.')
-            return
-        }
-        setError(undefined)
-        await accept({ visibleChecks })
-    }
-    return (
-        <View testID="quick-check-editor" style={styles.editor}>
-            <PlainNotice state={state} controller={controller} />
-            <Body>
-                {question.kind === 'orientation'
-                    ? `Which way should the part face in step ${step.order}?`
-                    : `What should you see when step ${step.order} is done?`}
-            </Body>
-            {question.reason === null ? null : <Caption>{`The manual says: ${plainWords(question.reason)}`}</Caption>}
-            {question.kind === 'orientation' && parts.length > 1 ? (
-                <SegmentedControl label="Which part" options={parts} value={partId ?? ''} onChange={setPartId} />
-            ) : null}
-            {question.kind === 'orientation' && parts.length === 1 ? (
-                <Caption>{`Part: ${parts[0]!.label}`}</Caption>
-            ) : null}
-            <TextField
-                label={question.kind === 'orientation' ? 'What the picture shows' : 'What you should see, one per line'}
-                value={text}
-                onChangeText={setText}
-                multiline={question.kind === 'checks'}
-                placeholder={question.kind === 'orientation' ? 'e.g. the groove faces inward' : 'One thing per line'}
-                error={error}
-                editable={!busy}
-            />
-            <AppButton
-                label="Save"
-                testID="quick-check-save"
-                variant="accent"
-                disabled={busy || (question.kind === 'orientation' && parts.length === 0)}
-                onPress={(): void => {
-                    void save()
-                }}
-            />
-            <AppButton label="Cancel" testID="quick-check-cancel" variant="quiet" onPress={onDone} />
-        </View>
     )
 }
 
@@ -497,7 +453,7 @@ function QuickCheckMore({
                             nav.editPages()
                         }}
                     />
-                    <AboutThisCheck result={session.rawExtraction ?? undefined} />
+                    <AboutThisCheck result={session.rawExtraction ?? undefined} onCompare={close} />
                 </Stack>
             )}
         </MoreSheet>
@@ -537,7 +493,6 @@ const styles = StyleSheet.create({
     hero: { paddingHorizontal: space.md, paddingTop: space.sm },
     clip: { overflow: 'hidden' },
     question: { gap: space.sm },
-    editor: { gap: space.md },
     strip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     stripItem: { width: 96, minHeight: touchTarget },
 })

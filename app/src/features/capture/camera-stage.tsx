@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ComponentRef, type ReactElement, type ReactNode } from 'react'
 import Animated from 'react-native-reanimated'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
@@ -10,6 +10,7 @@ import { ViewfinderCorners } from '../../ui/camera-chrome'
 import { useLargeText } from '../../ui/large-text'
 import { PressMotion } from '../../ui/press-motion'
 import { Body, Callout, Caption, Instruction } from '../../ui/text'
+import { useMeterRoot } from '../../ui/meter-roots'
 import { LoadingState } from '../../ui/states'
 import { MoreSheet } from '../../ui/sheet'
 import { ThemeProvider } from '../../theme/theme'
@@ -18,6 +19,7 @@ import { CoachLocalOverlay } from '../onboarding/coach-overlay'
 import { cameraCandidates } from '../onboarding/coach-inventory'
 import { useContentFade } from '../../ui/motion'
 import { useCoach, useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
+import { applyWrittenTips } from '../screens/host'
 
 /** Assembly guide shown over the live preview: where the person is, one cue, and the full step one tap away. */
 export type AssemblyGuide = {
@@ -27,6 +29,17 @@ export type AssemblyGuide = {
     // A small picture of the step; tapping it opens the full step.
     readonly thumbnail?: ReactNode
     readonly instructions: ReactNode
+}
+
+/**
+ * Wording the step's composed guide gave the camera: the one-line cue, the top pill and tip copy for the shutter. It
+ * only replaces words. The preview, corners, shutter, permission flow and every gate stay the camera's own, and each
+ * item names the server-owned origin of the document component that wrote it.
+ */
+export type CameraWording = {
+    readonly cue: { readonly text: string; readonly nativeID: string } | null
+    readonly pill: { readonly text: string; readonly nativeID: string } | null
+    readonly tips: ReadonlyMap<string, { readonly heading: string; readonly text: string }>
 }
 
 // Glass over the live preview: translucent dark, never a solid band.
@@ -44,7 +57,10 @@ function compactProgress(progress: string): string | null {
  * without being cut off. It never names a part or fact of the manual; the full step is one tap away in the picture's
  * details.
  */
-export function cameraCue(intent: CameraIntent | null): string {
+export function cameraCue(intent: CameraIntent | null, wording?: CameraWording): string {
+    if (wording?.cue != null && intent !== null && intent.kind !== 'page') {
+        return wording.cue.text
+    }
     if (intent === null) {
         return 'Fill the frame.'
     }
@@ -52,8 +68,17 @@ export function cameraCue(intent: CameraIntent | null): string {
 }
 
 /** What the pill at the top says: the step, or what the photo is for. Compact form: "2/8", "Page", "Ask". */
-export function cameraPill(intent: CameraIntent | null, guide?: AssemblyGuide, compact = false): string {
+export function cameraPill(
+    intent: CameraIntent | null,
+    guide?: AssemblyGuide,
+    compact = false,
+    wording?: CameraWording,
+): string {
     const count = guide === undefined ? null : compactProgress(guide.progress)
+    // The compact form exists for the largest text sizes, where it is the only one that fits; it is never replaced.
+    if (!compact && wording?.pill != null && intent !== null && intent.kind !== 'page') {
+        return wording.pill.text
+    }
     if (intent?.kind === 'page') {
         return compact ? 'Page' : 'Page photo'
     }
@@ -84,6 +109,7 @@ export function CameraStage({
     onRetry,
     shutterReady = false,
     busy = false,
+    wording,
 }: {
     readonly intent: CameraIntent | null
     readonly guide?: AssemblyGuide
@@ -95,9 +121,14 @@ export function CameraStage({
     // The shutter can be pressed: the preview is live and nothing is being captured. Tips wait for it.
     readonly shutterReady?: boolean
     readonly busy?: boolean
+    // Words from the step's composed guide, when it has any.
+    readonly wording?: CameraWording
 }): ReactElement {
     const insets = useSafeAreaInsets()
     const large = useLargeText()
+    // The camera is a full-screen modal route with its own window; the host meter reaches it through this ref.
+    const root = useRef<ComponentRef<typeof View>>(null)
+    const attachRoot = useMeterRoot(root, 'camera')
     const coaching = useCoach()?.active?.screen === 'camera'
     const [instructionsOpen, setInstructionsOpen] = useState(false)
     useEffect(() => {
@@ -110,7 +141,10 @@ export function CameraStage({
     useCoachScreen('camera', {
         host: 'local',
         suppressed: presentation.status !== 'preview' || !shutterReady || busy || instructionsOpen,
-        candidates: cameraCandidates({ intent: intent === null ? null : intent.kind === 'page' ? 'page' : 'part' }),
+        candidates: applyWrittenTips(
+            cameraCandidates({ intent: intent === null ? null : intent.kind === 'page' ? 'page' : 'part' }),
+            assembly ? wording?.tips : undefined,
+        ),
     })
     const scope = useCoachScope()
     const attention = useCoachAttention()
@@ -155,7 +189,7 @@ export function CameraStage({
                 : null
     return (
         <ThemeProvider scheme="dark">
-            <View testID="camera-screen" style={styles.full}>
+            <View ref={attachRoot} testID="camera-screen" style={styles.full}>
                 <View
                     style={styles.full}
                     accessibilityElementsHidden={coaching}
@@ -203,11 +237,18 @@ export function CameraStage({
                                         />
                                     </View>
                                     <View
+                                        nativeID={
+                                            assembly && wording?.pill != null
+                                                ? large
+                                                    ? 'truebuild-render-origin:shell'
+                                                    : wording.pill.nativeID
+                                                : undefined
+                                        }
                                         style={styles.pill}
                                         accessible={true}
-                                        accessibilityLabel={cameraPill(intent, guide)}
+                                        accessibilityLabel={cameraPill(intent, guide, false, wording)}
                                     >
-                                        <Caption tone="default">{cameraPill(intent, guide, large)}</Caption>
+                                        <Caption tone="default">{cameraPill(intent, guide, large, wording)}</Caption>
                                     </View>
                                     <View style={styles.glassSpacer} />
                                 </Animated.View>
@@ -235,12 +276,15 @@ export function CameraStage({
                                         )
                                     ) : null}
                                     <View
+                                        nativeID={assembly && wording?.cue != null ? wording.cue.nativeID : undefined}
                                         style={styles.cue}
                                         testID="camera-cue"
                                         accessible={true}
-                                        accessibilityLabel={cameraCue(intent)}
+                                        accessibilityLabel={cameraCue(intent, assembly ? wording : undefined)}
                                     >
-                                        <Callout numberOfLines={large ? undefined : 1}>{cameraCue(intent)}</Callout>
+                                        <Callout numberOfLines={large ? undefined : 1}>
+                                            {cameraCue(intent, assembly ? wording : undefined)}
+                                        </Callout>
                                     </View>
                                     {presentation.shutter}
                                 </Animated.View>

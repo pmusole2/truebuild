@@ -23,6 +23,7 @@ import { useTheme } from '../../theme/theme'
 import { motion, radius, space, touchTarget } from '../../theme/tokens'
 import { AppButton } from '../../ui/button'
 import { useFeedback } from '../../ui/feedback'
+import { useMeterRoot } from '../../ui/meter-roots'
 import { usePressMotion } from '../../ui/press-motion'
 import { useLargeText } from '../../ui/large-text'
 import { SPRING_GENTLE, timing } from '../../ui/motion'
@@ -108,6 +109,8 @@ export function CoachOverlayView({
     const large = useLargeText()
     const [size, setSize] = useState<{ width: number; height: number } | null>(null)
     const headingRef = useRef<ComponentRef<typeof View>>(null)
+    // The tip is drawn in its own overlay window while it is active; the host meter reaches it through this ref.
+    const attachMeterRoot = useMeterRoot(headingRef, 'coach')
     const fade = useSharedValue(reduceMotion ? 1 : 0)
     const lift = useSharedValue(reduceMotion ? 1 : 0)
     const [travelling, setTravelling] = useState(false)
@@ -328,7 +331,7 @@ export function CoachOverlayView({
                         />
                     )}
                     {large ? null : (
-                        <View ref={headingRef} testID="coach-heading" accessible={true} accessibilityRole="header">
+                        <View ref={attachMeterRoot} testID="coach-heading" accessible={true} accessibilityRole="header">
                             <Heading>{heading}</Heading>
                         </View>
                     )}
@@ -338,7 +341,7 @@ export function CoachOverlayView({
                         contentContainerStyle={styles.scrollContent}
                         showsVerticalScrollIndicator={true}
                     >
-                        <View ref={large ? headingRef : undefined} testID={large ? 'coach-heading' : undefined}>
+                        <View ref={large ? attachMeterRoot : undefined} testID={large ? 'coach-heading' : undefined}>
                             <Body>{step.candidate.sentence}</Body>
                         </View>
                     </ScrollView>

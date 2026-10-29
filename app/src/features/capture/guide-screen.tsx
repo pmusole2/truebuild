@@ -9,6 +9,7 @@ import {
     View,
 } from 'react-native'
 import { FrozenPhoto } from '../assembly/frozen-photo'
+import { SegmentMasks } from '../assembly/grounded-overlays'
 import { boxOnDisplay, type Point } from '../assembly/frame-geometry'
 import type { Observation } from '../assembly/observation'
 import { stepPartChoices } from '../assembly/question-state'
@@ -45,7 +46,19 @@ import { SourceDiagrams } from './step-facts'
 import { StepDetails } from './step-details'
 import { StepLayout } from './step-layout'
 import { StepPicture } from './step-picture'
+import {
+    applyTips,
+    ComposedHero,
+    composeBar,
+    GeneratedBody,
+    MoreIntro,
+    ScreenPending,
+    splitHero,
+} from '../screens/host'
+import { MandatoryFacts } from '../screens/mandatory'
+import type { ScreenSlot } from '../screens/use-screen-slot'
 import type { WorkflowScreenProps } from './workflow-types'
+import { useOptionalWorkflow } from './workflow-context'
 
 // A horizontal drag this long on the hero moves to the neighbouring step.
 const SWIPE_DISTANCE = 56
@@ -96,7 +109,17 @@ function ResultIcon({
     )
 }
 
-type GuideProps = WorkflowScreenProps & ChromeProps & { entry: LibraryEntry; readonly nav?: ScreenNav }
+type GuideProps = WorkflowScreenProps &
+    ChromeProps & {
+        entry: LibraryEntry
+        readonly nav?: ScreenNav
+        // The model-composed screen for this moment, or undefined for the native screen (generated screens off, failed, or not ready).
+        readonly slot?: ScreenSlot
+        // The More sheet's own composed intro.
+        readonly moreSlot?: ScreenSlot
+        // The composed ask view for the held photo, while the ask view is open.
+        readonly questionsSlot?: ScreenSlot
+    }
 
 /**
  * Guide: the step's picture fills the top, one sentence says what to do or how it went, and one primary sits above the
@@ -110,6 +133,9 @@ export function GuideScreen({
     nav: navProp,
     chrome = 'inline',
     more: moreProp,
+    slot,
+    moreSlot,
+    questionsSlot,
 }: GuideProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
@@ -170,7 +196,7 @@ export function GuideScreen({
 
     // One notification per new result, announced once however often it is shown again. An answer never changes how a
     // retained check was announced.
-    const { hapticOnce } = useFeedback()
+    const { hapticOnce, reduceMotion } = useFeedback()
     // A new photo is a new result even when the checker words it the same, so the photo is part of the identity.
     // Opening More or coming back to a shown result never changes it, so nothing replays.
     const checkIdentity =
@@ -247,6 +273,12 @@ export function GuideScreen({
         [controller, entry.stepIndex, state.pending, state.storageReadOnly, stepCount, windowWidth],
     )
 
+    // Precise masks arrive after the verdict and only for the photo they were made from; a mask for any other capture
+    // is never drawn. They are presentation: the verdict, the sentence and the action never wait for them.
+    const masks =
+        state.stages != null && capture !== null && state.stages.captureId === capture.binding.captureId
+            ? state.stages.masks.filter((mark) => mark.mask !== undefined)
+            : []
     // What the hero photo must keep in view: the observed area and the returned next-part and target areas.
     const heroRegions = [highlight, guidance.next?.box, guidance.target?.box].filter((box) => box != null)
     const frozenPhoto = (observation: Observation, notes?: readonly PaneNote[], fillHeight?: number): ReactElement => (
@@ -263,6 +295,9 @@ export function GuideScreen({
                 <>
                     <CheckHighlight rect={highlight === null ? null : boxOnDisplay(highlight, displayed)} />
                     <PartGuidanceOverlay guidance={guidance} displayed={displayed} />
+                    {masks.length === 0 ? null : (
+                        <SegmentMasks marks={masks} displayed={displayed} reduceMotion={reduceMotion} />
+                    )}
                 </>
             )}
         />
@@ -322,12 +357,15 @@ export function GuideScreen({
 
     useCoachScreen('guide', {
         suppressed: state.pending !== null || state.storageReadOnly || more.open || keyboard,
-        candidates: guideCandidates({
-            hero: step !== undefined,
-            primaryLabel: primary.disabled === true || primary.busy === true ? null : primary.label,
-            swipe: stepCount > 1,
-            more: chrome === 'native',
-        }),
+        candidates: applyTips(
+            guideCandidates({
+                hero: step !== undefined,
+                primaryLabel: primary.disabled === true || primary.busy === true ? null : primary.label,
+                swipe: stepCount > 1,
+                more: chrome === 'native',
+            }),
+            slot,
+        ),
     })
 
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
@@ -352,6 +390,14 @@ export function GuideScreen({
     const pairedFrom = capture === null || refusal !== null ? null : answer !== null ? 'answer' : 'check'
     const pairedRefs =
         pairedFrom === 'answer' ? (answer?.sourceRefs ?? []) : pairedFrom === 'check' ? (check?.sourceRefs ?? []) : []
+    // The hero is the document's own figure when it put one first; otherwise (native, pending, or a document without a
+    // picture) the native picture stays for the states that have one.
+    const composed = slot?.status === 'ready' ? slot.screen : null
+    const composedHero = composed !== null && splitHero(composed).hero !== null
+    const heroLive = {
+        heroCapture: (height: number): ReactElement | null =>
+            capture === null ? null : frozenPhoto(capture.observation, guideNotes, height),
+    }
     const heroImage = (
         <View testID="guide-hero" style={{ height: heroHeight }}>
             {capture === null ? (
@@ -371,6 +417,14 @@ export function GuideScreen({
         </View>
     )
     const reason = state.pending !== null && check !== null ? plainPending(state.pending) : null
+    // A busy or blocked native state is the only honest bar; otherwise the document composed it.
+    const composedBar = composeBar(
+        { primary },
+        slot,
+        blocked || state.storageReadOnly || (state.pending !== null && check === null),
+    )
+    const composedReason =
+        slot?.status === 'ready' && composedBar.primary?.disabled === true ? slot.screen.barReason : null
     // An answer never carries a verdict, even while a check is retained, so only the check's own sentence gets the mark.
     const verdict =
         sentence.kind === 'pass' ||
@@ -403,31 +457,55 @@ export function GuideScreen({
                 />
             ) : null}
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-                <CoachTarget id="guide-hero-frame" label="The step picture">
-                    <CoachTarget id="guide-hero" label="The step picture">
-                        <View testID="guide-hero-frame" {...swipe.panHandlers} style={styles.heroFrame}>
-                            <View style={blocked ? styles.dimmed : undefined}>
-                                <Animated.View style={stepMotion}>{heroImage}</Animated.View>
+                {composed !== null && !composedHero ? null : (
+                    <CoachTarget id="guide-hero-frame" label="The step picture">
+                        <CoachTarget id="guide-hero" label="The step picture">
+                            <View testID="guide-hero-frame" {...swipe.panHandlers} style={styles.heroFrame}>
+                                <View style={blocked ? styles.dimmed : undefined}>
+                                    <Animated.View style={stepMotion}>
+                                        {composed !== null ? (
+                                            <ComposedHero screen={composed} live={heroLive} />
+                                        ) : (
+                                            heroImage
+                                        )}
+                                    </Animated.View>
+                                </View>
                             </View>
-                        </View>
+                        </CoachTarget>
                     </CoachTarget>
-                </CoachTarget>
+                )}
                 {/* A slim cue of overall progress: the full labelled bar is in More. It never moves the hero. */}
-                <View style={styles.cue}>
-                    <ProgressBar
-                        slim
-                        animate={!still}
-                        label="Current step"
-                        value={entry.stepIndex + 1}
-                        total={stepCount}
-                    />
-                </View>
+                {composed !== null ? null : (
+                    <View style={styles.cue}>
+                        <ProgressBar
+                            slim
+                            animate={!still}
+                            label="Current step"
+                            value={entry.stepIndex + 1}
+                            total={stepCount}
+                        />
+                    </View>
+                )}
                 <TextRegion testID="guide-panel">
                     <PlainNotice state={quietState} controller={controller} />
-                    <Animated.View style={stepMotion}>{sentenceNode}</Animated.View>
+                    <MandatoryFacts
+                        session={session}
+                        stepId={step?.stepId ?? null}
+                        slot={slot}
+                        visibleText={composed === null && slot?.status !== 'pending' ? sentence.text : undefined}
+                    />
+                    <Animated.View style={stepMotion}>
+                        {slot?.status === 'pending' ? (
+                            <ScreenPending />
+                        ) : composed !== null ? (
+                            <GeneratedBody screen={composed} enabled={!still} pinned live={heroLive} />
+                        ) : (
+                            sentenceNode
+                        )}
+                    </Animated.View>
                 </TextRegion>
             </KeyboardAvoidingView>
-            <FixedBottomBar primary={primary} reason={reason} />
+            <FixedBottomBar {...composedBar} reason={reason ?? composedReason} />
             <MoreSheet
                 visible={more.open}
                 title={more.mode === 'ask' ? 'Ask about this step' : 'More about this step'}
@@ -437,6 +515,9 @@ export function GuideScreen({
                 initialDetent="tall"
             >
                 <GuideMore
+                    moreSlot={moreSlot}
+                    questionsSlot={questionsSlot}
+                    resultSlot={slot}
                     mode={more.mode === 'ask' ? 'ask' : 'details'}
                     onAsk={(): void => more.show('ask')}
                     state={state}
@@ -464,6 +545,9 @@ export function GuideScreen({
 }
 
 function GuideMore({
+    moreSlot,
+    questionsSlot,
+    resultSlot,
     mode,
     onAsk,
     state,
@@ -485,6 +569,9 @@ function GuideMore({
     editable,
     askBlocked,
 }: {
+    moreSlot: ScreenSlot | undefined
+    questionsSlot: ScreenSlot | undefined
+    resultSlot: ScreenSlot | undefined
     mode: 'details' | 'ask'
     onAsk: () => void
     state: WorkflowScreenProps['state']
@@ -508,6 +595,8 @@ function GuideMore({
 }): ReactElement {
     const { session } = entry
     const { check, capture, answer, target } = state
+    const step = session.reviewedSteps[entry.stepIndex]
+    const questionsEnabled = useOptionalWorkflow()?.screens?.enabled('questions') === true
     const busy = state.pending !== null || state.storageReadOnly
     const last = entry.stepIndex >= session.reviewedSteps.length - 1
     const ask = (
@@ -535,7 +624,8 @@ function GuideMore({
                     targetSummary={targetSummary}
                     hasTarget={target !== null}
                     editable={editable}
-                    busy={state.pending !== null && state.pending.startsWith('Asking')}
+                    busy={state.pending !== null && /^(Asking|Still thinking)/u.test(state.pending)}
+                    stillThinking={state.pending?.startsWith('Still thinking') === true}
                     onSubmit={(): void => {
                         void controller.ask()
                     }}
@@ -585,15 +675,46 @@ function GuideMore({
         </>
     )
     if (mode === 'ask') {
+        // The composed ask view replaces both the evidence and the composer; until it arrives the native ones stand.
+        if (questionsSlot?.status === 'ready') {
+            return (
+                <Stack gap="md">
+                    <GeneratedBody
+                        screen={questionsSlot.screen}
+                        live={{
+                            ask: {
+                                choices: choices.map((choice) => ({ partId: choice.partId, label: choice.label })),
+                                editable,
+                                blocked: askBlocked,
+                                targetSummary,
+                            },
+                        }}
+                    />
+                    <MandatoryFacts
+                        session={session}
+                        stepId={step?.stepId ?? null}
+                        slot={questionsSlot}
+                        enabled={questionsEnabled}
+                    />
+                </Stack>
+            )
+        }
         return (
             <Stack gap="md">
                 {evidence}
                 {ask}
+                <MandatoryFacts
+                    session={session}
+                    stepId={step?.stepId ?? null}
+                    slot={questionsSlot}
+                    enabled={questionsEnabled}
+                />
             </Stack>
         )
     }
     return (
         <Stack gap="lg">
+            <MoreIntro slot={moreSlot} />
             {state.pending === null ? null : (
                 <Card tone="raised">
                     <Body>{plainPending(state.pending) ?? 'Working…'}</Body>
@@ -683,7 +804,13 @@ function GuideMore({
                 <Caption>{PRIVACY_COPY.ask}</Caption>
                 <AppButton label="All builds" variant="quiet" onPress={nav.allBuilds} />
                 <ShowTipsAgainRow onClose={onClose} />
-                <AboutThisCheck result={answer ?? check ?? undefined}>
+                <AboutThisCheck
+                    onCompare={onClose}
+                    result={answer ?? check ?? undefined}
+                    check={check}
+                    stages={state.stages}
+                    resultSlot={resultSlot}
+                >
                     <DemoControls
                         session={session}
                         stepIndex={entry.stepIndex}

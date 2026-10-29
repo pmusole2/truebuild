@@ -35,26 +35,44 @@ export function HeaderButtons({
     more,
     coach,
     registry,
+    trailing,
 }: {
     more: MoreControl
     coach?: OnboardingScreen
     registry?: Pick<CoachContextValue, 'registerTarget'> | null
+    // The control as a composed screen worded it. It is still More; only its origin and availability come from the document.
+    trailing?: { readonly nativeID: string; readonly enabled: boolean; readonly run: () => void } | null
 }): ReactElement {
-    const open = (): void => more.show()
+    const open = (): void => (trailing?.enabled === true ? trailing.run() : more.show())
     return (
         <View style={styles.buttons}>
             {/* The native header sits outside the screen's own subtree, so the route names the screen it belongs to. */}
             <CoachTarget registry={registry} id="header-more" screen={coach ?? null} label="More" onPress={open}>
-                <IconButton label="More" icon="more" onPress={open} testID="header-more" />
+                <IconButton
+                    label="More"
+                    icon="more"
+                    onPress={open}
+                    testID="header-more"
+                    nativeID={trailing?.nativeID}
+                />
             </CoachTarget>
         </View>
     )
 }
 
 /** Two-line native header title: the screen name and where the person is. */
-export function HeaderTitle({ title, subtitle }: { title: string; subtitle?: string }): ReactElement {
+export function HeaderTitle({
+    title,
+    subtitle,
+    nativeID,
+}: {
+    title: string
+    subtitle?: string
+    nativeID?: string
+}): ReactElement {
     return (
         <View
+            nativeID={nativeID}
             accessible={true}
             accessibilityRole="header"
             accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
