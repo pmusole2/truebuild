@@ -85,13 +85,18 @@ test('real path: pages are read by the API, the plan is started, the guide resto
     await page.getByTestId('guide-primary').click()
     const capture = page.getByRole('button', { name: 'Capture photo', exact: true })
     await expect(capture).toBeEnabled({ timeout: 60_000 })
-    const check = page.waitForResponse(
-        (response) => response.url() === `${API}/api/checks` && response.request().method() === 'POST',
-    )
+    // Read immediately when headers arrive: closing the camera route can evict Chromium's response body before
+    // capture.click() settles. This still reads the real API response without intercepting the request.
+    const check = page
+        .waitForResponse((response) => response.url() === `${API}/api/checks` && response.request().method() === 'POST')
+        .then(async (response) => ({
+            status: response.status(),
+            body: (await response.json()) as { status: string; value: { decision: string } },
+        }))
     await capture.click()
     const response = await check
-    expect(response.status()).toBe(200)
-    const body = (await response.json()) as { status: string; value: { decision: string } }
+    expect(response.status).toBe(200)
+    const body = response.body
     expect(body.status).toBe('ok')
     expect(body.value.decision).toBe(DECISION[SCENARIO])
     await expect(page.getByText(VERDICT_SENTENCE[SCENARIO] ?? /$^/u)).toBeVisible({ timeout: 90_000 })

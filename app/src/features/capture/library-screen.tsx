@@ -34,7 +34,8 @@ import type { WorkflowScreenProps } from './workflow-types'
 export const COLLAPSE_DISTANCE = 56
 
 /** 0 at rest, 1 once the large title has scrolled `distance` away. Pure so the header and the title share one rule. */
-export function collapseProgress(offset: number, distance: number = COLLAPSE_DISTANCE): number {
+// Keep the default literal: Reanimated does not capture references used only in a default parameter.
+export function collapseProgress(offset: number, distance: number = 56): number {
     'worklet'
     return Math.max(0, Math.min(1, offset / distance))
 }
