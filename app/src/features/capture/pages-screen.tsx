@@ -140,7 +140,6 @@ export function PagesScreen({
                         ? 'Take a photo of each page of your paper manual.'
                         : 'Add every page, even the parts list.'}
                 </Instruction>
-                {pages.length === 0 ? <Caption>You can add up to 20 pages.</Caption> : null}
                 {pages.length > MAX_PARSE_PAGES ? (
                     <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
                 ) : null}
@@ -198,6 +197,7 @@ export function PagesScreen({
                     </Stack>
                 ) : (
                     <Stack gap="md">
+                        <Caption>{`You can add up to ${MAX_PAGES} pages.`}</Caption>
                         <TextField
                             label="Name this build"
                             value={title}

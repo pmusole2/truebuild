@@ -801,10 +801,12 @@ describe('PagesScreen', () => {
             />,
         )
         expect(screen.getByText('Take a photo of each page of your paper manual.')).toBeTruthy()
-        expect(screen.getByText('You can add up to 20 pages.')).toBeTruthy()
+        expect(screen.queryByText('You can add up to 20 pages.')).toBeNull()
         expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy()
         expect(screen.queryByRole('button', { name: 'Read my manual' })).toBeNull()
         expect(screen.queryByTestId('skeleton-block', hidden)).toBeNull()
+        await fireEvent.press(screen.getByRole('button', { name: 'More' }))
+        expect(within(screen.getByTestId('more-sheet')).getByText('You can add up to 20 pages.')).toBeTruthy()
     })
 
     it.each(['Choosing manual pages…', 'Preparing page 1 of 2…', 'Saving manual pages…'])(
