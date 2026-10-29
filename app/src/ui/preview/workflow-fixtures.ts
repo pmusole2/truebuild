@@ -168,7 +168,8 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
         state.selectedId = null
         state.loading = id === 'home-loading'
         state.storageReadOnly = id === 'home-error'
-        state.notice = id === 'home-error' ? 'Local library unavailable. Synthetic error for visual review.' : null
+        state.notice =
+            id === 'home-error' ? 'Local library images could not be read. Synthetic error for visual review.' : null
     }
 
     if (id === 'pages-empty') {

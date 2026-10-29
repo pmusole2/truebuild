@@ -282,12 +282,24 @@ describe('unavailable states', () => {
 
     it('explains an unreadable library plainly, with one explicit Try again that is not pressed for the person', async () => {
         const { restore, createManual } = await setup('home-error')
-        expect(
-            screen.getByText('We could not open your saved builds. Your photos are still on this phone.'),
-        ).toBeTruthy()
+        expect(screen.getByText('We could not open your saved photos. They are still on this phone.')).toBeTruthy()
         expect(restore).not.toHaveBeenCalled()
         expect(screen.queryByRole('button', { name: 'Add manual' })).toBeNull()
-        await fireEvent.press(screen.getAllByRole('button', { name: 'Try again' })[0]!)
+        await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
+        expect(restore).toHaveBeenCalledTimes(1)
+        expect(createManual).not.toHaveBeenCalled()
+    })
+
+    it('pins the sole recovery action when saved builds are retained but read-only', async () => {
+        const { restore, createManual } = await setup('home-populated', {
+            storageReadOnly: true,
+            notice: 'Could not save on this device. Your earlier work is safe.',
+        })
+        expect(screen.getByText('We could not save on this phone. Your earlier work is safe.')).toBeTruthy()
+        expect(screen.queryByText(/could not open/u)).toBeNull()
+        const retry = screen.getByRole('button', { name: 'Try again' })
+        expect(within(screen.getByTestId('bottom-bar')).getByRole('button', { name: 'Try again' })).toBe(retry)
+        await fireEvent.press(retry)
         expect(restore).toHaveBeenCalledTimes(1)
         expect(createManual).not.toHaveBeenCalled()
     })

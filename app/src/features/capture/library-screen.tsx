@@ -22,7 +22,7 @@ import { useTheme } from '../../theme/theme'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck, HowItWorks } from './more-sections'
-import { progressLine, stopFor } from './plain-copy'
+import { plainNotice, progressLine, stopFor } from './plain-copy'
 import { ManualImage } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
@@ -191,8 +191,12 @@ export function LibraryScreen({
     const scrollY = scrollYProp ?? ownScroll
     const nav = navProp ?? defaultNav(controller)
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
-    const hint = addHint(state)
-    const failed = !state.loading && state.storageReadOnly && state.entries.length === 0
+    const failed = !state.loading && state.storageReadOnly
+    const hint = failed ? null : addHint(state)
+    const recoveryCopy =
+        state.notice === null
+            ? 'Your saved builds need another try.'
+            : plainNotice(state.notice).replace(/ Try again\.$/u, '')
     const empty = !state.loading && !state.storageReadOnly && state.entries.length === 0
     // Most recently touched first; the first one is where "keep building" goes.
     const entries = [...state.entries].sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
@@ -255,13 +259,13 @@ export function LibraryScreen({
             >
                 {largeTitle === 'content' ? <CollapsingTitle scrollY={scrollY} title="TrueBuild" /> : null}
                 {overlay ? <HomeHeading scrollY={scrollY} distance={distance} onHeight={setHeadingHeight} /> : null}
-                <PlainNotice state={state} controller={controller} />
+                {state.storageReadOnly ? null : <PlainNotice state={state} controller={controller} />}
                 {state.loading ? (
                     <Card>
                         <LoadingState label="Getting your builds ready." shape="card" />
                     </Card>
                 ) : failed ? (
-                    <Instruction>We could not open your saved builds. Your photos are still on this phone.</Instruction>
+                    <Instruction>{recoveryCopy}</Instruction>
                 ) : empty ? (
                     <View style={[styles.hero, overlay && styles.heroCentred]}>
                         <Icon name="image" />
