@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 
 import { DEMO_LABEL } from './providers/types'
 import { corsResponse, deniedOrigin, isAllowedOrigin, preflight } from './server/cors'
-import { createRuntimeFromEnvironment, type ApiRuntime } from './server/model-runtime'
+import { createRuntimeFromEnvironment, describeAiPolicy, type ApiRuntime } from './server/model-runtime'
 
 type ApiEnv = { Variables: { runtime: ApiRuntime } }
 type Operation = 'parse' | 'check' | 'question' | 'segment'
@@ -13,7 +13,11 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/manuals/parse', 'POST'],
     ['/api/checks', 'POST'],
     ['/api/checks/second-opinion', 'POST'],
+    ['/api/checks/overlay', 'POST'],
     ['/api/questions', 'POST'],
+    ['/api/questions/result', 'POST'],
+    ['/api/questions/cancel', 'POST'],
+    ['/api/screens', 'POST'],
     ['/api/segments', 'POST'],
 ])
 
@@ -47,6 +51,8 @@ const routes = new Hono<ApiEnv>()
             sparkModel: context.get('runtime').sparkModel,
             parseModel: context.get('runtime').parseModel,
             secondOpinionModel: context.get('runtime').secondOpinionModel,
+            aiPolicy: describeAiPolicy(context.get('runtime').policy),
+            followUps: { overlay: context.get('runtime').overlay, segments: context.get('runtime').segments },
             samModel: context.get('runtime').samModel,
             checkContext: context.get('runtime').checkContext,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
@@ -55,6 +61,14 @@ const routes = new Hono<ApiEnv>()
     .post('/api/manuals/parse', (context): Promise<Response> => dispatch(context, 'parse'))
     .post('/api/checks/second-opinion', (context): Promise<Response> =>
         context.get('runtime').model.secondOpinion(context.req.raw),
+    )
+    .post('/api/checks/overlay', (context): Promise<Response> => context.get('runtime').model.overlay(context.req.raw))
+    .post('/api/screens', (context): Promise<Response> => context.get('runtime').model.screens(context.req.raw))
+    .post('/api/questions/result', (context): Promise<Response> =>
+        context.get('runtime').model.questionResult(context.req.raw),
+    )
+    .post('/api/questions/cancel', (context): Promise<Response> =>
+        context.get('runtime').model.questionCancel(context.req.raw),
     )
     .post('/api/checks', (context): Promise<Response> => dispatch(context, 'check'))
     .post('/api/questions', (context): Promise<Response> => dispatch(context, 'question'))

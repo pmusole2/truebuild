@@ -4,6 +4,7 @@ import {
     parsedManualSchema,
     partRegionSchema,
     proposedLayoutSchema,
+    providerScreenProposalSchema,
     questionResultSchema,
     sourceRefSchema,
 } from '@truebuild/contracts'
@@ -128,7 +129,7 @@ const gridPartRegion = z
 const assessment = z.enum(['matches', 'mismatch', 'unobservable'])
 export const providerParseSchema = z
     .strictObject(parsedManualSchema.shape)
-    .omit({ model: true, modelNotes: true })
+    .omit({ model: true, modelNotes: true, telemetry: true })
     .superRefine((value, ctx) => {
         if (!parsedManualSchema.safeParse(value).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid extraction' })
@@ -154,7 +155,7 @@ export const providerCheckSchema = z
         orientationAssessment: z.enum(['correct', 'reversed', 'uncertain']),
         observedRegion: gridBox.nullable(),
     })
-    .omit({ model: true, modelNotes: true, secondOpinion: true })
+    .omit({ model: true, modelNotes: true, telemetry: true, secondOpinion: true, followUps: true, evidence: true })
     .superRefine((value, ctx) => {
         const {
             partsAssessment: _parts,
@@ -168,6 +169,19 @@ export const providerCheckSchema = z
         if (!checkResultSchema.safeParse(publicValue).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid check evidence' })
     })
+/**
+ * The Spark verdict when a Wonder overlay stage follows: a decision with its grounded evidence and no geometry at all
+ * (no observedRegion, layout or regions). A refusal is valid without a region; orientation, parts, connection and
+ * visible-check evidence are still required, so the evidence needed for a pass or a refusal is unchanged.
+ */
+const verdictShape = z
+    .strictObject(providerCheckSchema.shape)
+    .omit({ layout: true, nextPartRegion: true, targetRegion: true, observedRegion: true })
+export const providerVerdictSchema = verdictShape.superRefine((value, ctx) => {
+    const { partsAssessment: _parts, connectionAssessment: _connection, checks: _checks, ...publicValue } = value
+    if (!checkResultSchema.safeParse({ ...publicValue, observedRegion: null }).success)
+        ctx.addIssue({ code: 'custom', message: 'Invalid check evidence' })
+})
 export const providerQuestionSchema = z
     .strictObject({
         ...questionResultSchema.shape,
@@ -176,11 +190,22 @@ export const providerQuestionSchema = z
         targetRegion: gridPartRegion,
         observedRegion: gridBox.nullable(),
     })
-    .omit({ model: true, modelNotes: true })
+    .omit({ model: true, modelNotes: true, telemetry: true })
     .superRefine(({ layout: _layout, nextPartRegion: _next, targetRegion: _target, ...value }, ctx) => {
         if (!questionResultSchema.safeParse(value).success)
             ctx.addIssue({ code: 'custom', message: 'Invalid question evidence' })
     })
+
+/**
+ * Presentation-only output of the asynchronous overlay stage. There is deliberately no decision, reason or citation
+ * field: the published verdict is fixed context, so this stage cannot change it. Regions use the strict grid.
+ */
+export const providerOverlaySchema = z.strictObject({
+    observedRegion: gridBox.nullable(),
+    layout: layoutProposal,
+    nextPartRegion: gridPartRegion,
+    targetRegion: gridPartRegion,
+})
 
 type Schema = Record<string, unknown>
 function object(value: unknown): value is Schema {
@@ -293,7 +318,12 @@ export const metaOutputSchemas = {
             },
         ),
     ),
+    overlay: strictSchema(z.toJSONSchema(providerOverlaySchema, { target: 'draft-7', io: 'input' })),
+    screen: strictSchema(z.toJSONSchema(providerScreenProposalSchema, { target: 'draft-7', io: 'input' })),
 }
+
+/** Wire schema of the verdict-only Spark call (same `truebuild_check` name; no geometry property exists in it). */
+export const metaVerdictOutputSchema = strictSchema(z.toJSONSchema(verdictShape, { target: 'draft-7', io: 'input' }))
 
 /** Variants selected by the provider only for MODEL_LAYOUT=1: same single call, adds nullable layout and regions. */
 export const metaLayoutOutputSchemas = {
@@ -326,3 +356,14 @@ export const completedResponseSchema = z
             .max(32),
     })
     .refine((value) => value.output.filter((item) => item.type === 'message').length === 1)
+
+/** True when the provider reports an unfinished response (for example the output cap was reached). */
+export function isIncompleteResponse(raw: unknown): boolean {
+    return (
+        typeof raw === 'object' &&
+        raw !== null &&
+        'status' in raw &&
+        (raw.status === 'incomplete' ||
+            ('incomplete_details' in raw && raw.incomplete_details !== null && raw.incomplete_details !== undefined))
+    )
+}

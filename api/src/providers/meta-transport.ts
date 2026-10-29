@@ -2,8 +2,11 @@ import type { Deadline } from '../server/deadline'
 
 export const RETRY_STATUSES = new Set([429, 500, 503])
 export interface ProviderMetrics {
-    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion'
+    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'overlay'
+    /** The configured request target, never a claim about what answered; see `modelIdentity`. */
     model: string
+    /** Whether the provider's own response reported `model`. Absent on events logged before any response body. */
+    modelIdentity?: 'verified' | 'unverified'
     status: number
     latencyMs: number
     inputTokens?: number
@@ -12,6 +15,26 @@ export interface ProviderMetrics {
     reasoningTokens?: number
     imagesProcessed?: number
     videoFramesProcessed?: number
+    /** Policy stage and configured reasoning effort of the call. */
+    effort?: string
+    stage?: string
+    /** Admission-to-send, send-to-body, JSON parse + validation, and whole-call milliseconds. */
+    timeToProviderMs?: number
+    providerMs?: number
+    parseValidateMs?: number
+    totalMs?: number
+    /** Split of providerMs: pacing/backoff wait, time to response headers, time reading the body. */
+    paceWaitMs?: number
+    networkMs?: number
+    bodyMs?: number
+}
+
+/** Filled in by `MetaTransport.send`: where the time before the response headers went. */
+export interface TransportObservation {
+    /** Pacing reservation wait plus status-retry backoff. */
+    paceWaitMs: number
+    /** Time from each dispatch to its response headers, summed over bounded status retries. */
+    networkMs: number
 }
 
 export function usageMetrics(
@@ -117,16 +140,20 @@ export class MetaTransport {
         deadline: Deadline,
         onAttempt?: (status: number, elapsed: number) => void,
         maxAttempts: 1 | 3 = 3,
+        observed?: TransportObservation,
     ): Promise<Response> {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const waitStart = performance.now()
             await pause((this.#next.get(model) ?? 0) - performance.now(), deadline)
             deadline.checkpoint()
+            if (observed) observed.paceWaitMs += Math.max(0, performance.now() - waitStart)
             const started = performance.now()
             // A rejected/ambiguous dispatch is deliberately never retried.
             const response = await settleMetaResponse(
                 this.fetchImpl('https://api.meta.ai/v1/responses', init),
                 deadline,
             )
+            if (observed) observed.networkMs += Math.max(0, performance.now() - started)
             onAttempt?.(response.status, Math.max(0, performance.now() - started))
             const number = (name: string): number | undefined => {
                 const value = response.headers.get(name)
@@ -154,10 +181,12 @@ export class MetaTransport {
                     : /^\d+(?:\.\d+)?$/u.test(retry.trim())
                       ? Number(retry) * 1000
                       : Math.max(0, Date.parse(retry) - Date.now())
+            const backoffStart = performance.now()
             await pause(
                 Math.max(500 * 2 ** attempt + Math.random() * 250, Number.isNaN(retryMs) ? 0 : retryMs),
                 deadline,
             )
+            if (observed) observed.paceWaitMs += Math.max(0, performance.now() - backoffStart)
         }
         throw new Error('provider_error')
     }

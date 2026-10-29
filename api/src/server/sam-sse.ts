@@ -101,11 +101,24 @@ function responseEvent(value: unknown): ResponsesEvent | null {
     }
 }
 
-/** Owns and cancels the body, including on parser/consumer early return. */
+/** Events that carry a `Response` object (ResponseCreated, ResponseCompleted and their siblings). */
+const RESPONSE_ENVELOPE_EVENTS = new Set([
+    'response.created',
+    'response.queued',
+    'response.in_progress',
+    'response.completed',
+    'response.incomplete',
+])
+
+/**
+ * Owns and cancels the body, including on parser/consumer early return.
+ * `onResponse` sees each envelope's `Response` before its event is delivered, and may throw to stop the stream.
+ */
 export async function* readSamSse(
     response: Response,
     deadline: Deadline,
     onTerminalResponse?: (value: unknown) => void,
+    onResponse?: (value: unknown) => void,
 ): AsyncGenerator<ResponsesEvent> {
     const reader = response.body?.getReader()
     let released = false
@@ -161,6 +174,9 @@ export async function* readSamSse(
                     ['response.completed', 'response.failed', 'response.incomplete'].includes(String(value.type))
                 ) {
                     onTerminalResponse?.(value.response)
+                }
+                if (record(value) && RESPONSE_ENVELOPE_EVENTS.has(String(value.type))) {
+                    onResponse?.(value.response)
                 }
                 return responseEvent(value)
             }

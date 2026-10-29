@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+    decodeMaskToSVGPath,
     frameIndexOf,
     parseImageStream,
     parseVideoStream,
     ResponsesStreamSourceError,
     type SegmentationSnapshot,
+    type SegmentationMaskRecord,
     type SegmentationResult,
 } from '@meta-sam/parser'
 import {
     captureBindingSchema,
+    MAX_MASK_PATH_CHARS,
     trackSnapshotSchema,
     LIMITS,
     type CaptureBinding,
@@ -95,19 +98,57 @@ function ownInput(input: SamInput): SamInput {
     return value
 }
 
+type TrackMask = NonNullable<TrackRecord['mask']>
+
+/**
+ * The validated mask for the native outline. The path lives on the mask's own raster grid, which maps onto the
+ * record's box. A mask that cannot be converted or exceeds its bound is omitted (the box remains); never truncated.
+ */
+function maskFor(mask: SegmentationMaskRecord['mask']): TrackMask | undefined {
+    try {
+        const path = decodeMaskToSVGPath(mask)
+        return path.length > 0 && path.length <= MAX_MASK_PATH_CHARS
+            ? { width: mask.width, height: mask.height, path }
+            : undefined
+    } catch {
+        return undefined
+    }
+}
+
+const SAM_MODEL = 'sam-3.1'
+
+/**
+ * What a streamed `Response` says about the model that produced it. A response that does not state a model (the
+ * field is absent) neither confirms nor contradicts the request; one that states anything but the requested SAM
+ * model, in any form, is a stream that cannot be trusted.
+ */
+function samResponseIdentity(response: unknown): 'confirmed' | 'silent' {
+    if (typeof response !== 'object' || response === null || !('model' in response)) return 'silent'
+    if (response.model === SAM_MODEL) return 'confirmed'
+    throw new SamStreamError('invalid_output')
+}
+
+function reportsModel(response: unknown): boolean {
+    return typeof response === 'object' && response !== null && 'model' in response && response.model === SAM_MODEL
+}
+
 function snapshots(
     view: SegmentationSnapshot,
     geometry: SamGeometry,
     seen: Set<number>,
     input: SamInput,
     streamId: string,
+    startedAt: number,
+    identified: boolean,
 ): SegmentEvent[] {
     if (view.diagnostics.length > 0) {
         throw new SamStreamError('invalid_output')
     }
     const frames = new Map<number, TrackRecord[]>()
     const masks = new Set<string>()
+    const maskShapes = new Map<string, TrackMask>()
     const boxes = new Set<string>()
+    const identities = new Map<TrackRecord, string>()
     for (const record of view.records) {
         if (record.kind === 'text') {
             throw new SamStreamError('invalid_output')
@@ -122,13 +163,15 @@ function snapshots(
                 throw new SamStreamError('invalid_output')
             }
             masks.add(identity)
+            const shape = maskFor(record.mask)
+            if (shape) maskShapes.set(identity, shape)
         } else {
             if (boxes.has(identity)) {
                 throw new SamStreamError('invalid_output')
             }
             boxes.add(identity)
             const records = frames.get(frameIndex) ?? []
-            records.push({
+            const track: TrackRecord = {
                 objectId: record.objectId,
                 label: input.prompt,
                 box: {
@@ -137,7 +180,9 @@ function snapshots(
                     width: (record.right - record.left) / geometry.width,
                     height: (record.bottom - record.top) / geometry.height,
                 },
-            })
+            }
+            identities.set(track, identity)
+            records.push(track)
             frames.set(frameIndex, records)
         }
     }
@@ -153,6 +198,10 @@ function snapshots(
             throw new SamStreamError('invalid_output')
         }
         seen.add(frameIndex)
+        const withMasks = records.map((track): TrackRecord => {
+            const shape = maskShapes.get(identities.get(track) ?? '')
+            return shape ? { ...track, mask: shape } : track
+        })
         events.push({
             type: 'snapshot',
             snapshot: trackSnapshotSchema.parse({
@@ -160,8 +209,12 @@ function snapshots(
                 streamId,
                 frameIndex,
                 capturedAt: input.capturedAt,
-                records,
+                records: withMasks,
                 complete: false,
+                // Only after a response confirmed the model; before that nothing is claimed about what answered.
+                ...(identified
+                    ? { stage: { model: SAM_MODEL, elapsedMs: Math.max(0, performance.now() - startedAt) } }
+                    : {}),
             }),
         })
     }
@@ -231,7 +284,7 @@ async function* run(
         }
         deadline.checkpoint()
         const body = JSON.stringify({
-            model: 'sam-3.1',
+            model: SAM_MODEL,
             stream: true,
             store: false,
             input: [
@@ -241,7 +294,7 @@ async function* run(
         deadline.checkpoint()
         const pending = transport
             .send(
-                'sam-3.1',
+                SAM_MODEL,
                 {
                     method: 'POST',
                     headers: {
@@ -254,7 +307,7 @@ async function* run(
                     redirect: 'error',
                 },
                 deadline,
-                (status, latencyMs) => onMetrics?.({ operation: 'segment', model: 'sam-3.1', status, latencyMs }),
+                (status, latencyMs) => onMetrics?.({ operation: 'segment', model: SAM_MODEL, status, latencyMs }),
             )
             .then((settled): Response => {
                 response = settled
@@ -274,15 +327,24 @@ async function* run(
             })
         response = await withSamDeadline(pending, deadline)
         deadline.checkpoint()
+        // Set only by a streamed Response that itself reported the requested model.
+        let identified = false
         const source = guardSamGrammar(
-            readSamSse(response, deadline, (value) =>
-                onMetrics?.({
-                    operation: 'segment',
-                    model: 'sam-3.1',
-                    status: response!.status,
-                    latencyMs: Math.max(0, performance.now() - started),
-                    ...usageMetrics(value),
-                }),
+            readSamSse(
+                response,
+                deadline,
+                (value) =>
+                    onMetrics?.({
+                        operation: 'segment',
+                        model: SAM_MODEL,
+                        modelIdentity: reportsModel(value) ? 'verified' : 'unverified',
+                        status: response!.status,
+                        latencyMs: Math.max(0, performance.now() - started),
+                        ...usageMetrics(value),
+                    }),
+                (value) => {
+                    if (samResponseIdentity(value) === 'confirmed') identified = true
+                },
             ),
             geometry,
             deadline,
@@ -292,7 +354,7 @@ async function* run(
         const seen = new Set<number>()
         for await (const view of parsed) {
             deadline.checkpoint()
-            for (const snapshot of snapshots(view, geometry, seen, input, streamId)) {
+            for (const snapshot of snapshots(view, geometry, seen, input, streamId, started, identified)) {
                 deadline.checkpoint()
                 yield snapshot
                 deadline.checkpoint()
@@ -305,7 +367,7 @@ async function* run(
             throw new SamStreamError('invalid_output')
         }
         // A finalized trailing line may be the first parser snapshot; never synthesize missing frames.
-        for (const snapshot of snapshots(final, geometry, seen, input, streamId)) {
+        for (const snapshot of snapshots(final, geometry, seen, input, streamId, started, identified)) {
             deadline.checkpoint()
             yield snapshot
             deadline.checkpoint()
