@@ -309,10 +309,12 @@ describe('unavailable states', () => {
         const { restore } = await setup('home-populated', {
             storageReadOnly: true,
             pending: 'Asking about frozen photo…',
+            notice: 'Local library images could not be read. Synthetic error for visual review.',
         })
         const retry = screen.getByRole('button', { name: 'Try again' })
         expect(retry.props.accessibilityState.disabled).toBe(true)
-        expect(screen.getByText('Wait for the current request to finish.')).toBeTruthy()
+        expect(screen.getByText('We could not open your saved photos. They are still on this phone.')).toBeTruthy()
+        expect(screen.getByText('Please wait')).toBeTruthy()
         await fireEvent.press(retry)
         expect(restore).not.toHaveBeenCalled()
     })

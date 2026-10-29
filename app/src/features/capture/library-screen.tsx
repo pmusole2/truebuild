@@ -192,7 +192,7 @@ export function LibraryScreen({
     const nav = navProp ?? defaultNav(controller)
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     const failed = !state.loading && state.storageReadOnly
-    const hint = failed ? (state.pending === null ? null : 'Wait for the current request to finish.') : addHint(state)
+    const hint = failed ? (state.pending === null ? null : 'Please wait') : addHint(state)
     const recoveryCopy =
         state.notice === null
             ? 'Your saved builds need another try.'
