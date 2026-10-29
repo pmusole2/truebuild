@@ -22,6 +22,7 @@ function ThemedStack(): ReactElement {
                     presentation: 'fullScreenModal',
                     gestureEnabled: false,
                     animation: 'slide_from_bottom',
+                    statusBarStyle: 'light',
                 }}
             />
         </Stack>

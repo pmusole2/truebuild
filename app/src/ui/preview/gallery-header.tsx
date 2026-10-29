@@ -50,7 +50,11 @@ export function galleryHeaderOptions(args: {
     const trailing = (): ReactElement => <HeaderButtons more={more} />
     // The camera and the unavailable screen own their whole viewport in production, with no Stack header.
     if (state.route === 'camera' || id === 'home-unavailable') {
-        return { ...style, headerShown: false }
+        return {
+            ...style,
+            headerShown: false,
+            statusBarStyle: state.route === 'camera' ? 'light' : style.statusBarStyle,
+        }
     }
     if (id === 'settings') {
         return { ...style, title: 'Settings' }

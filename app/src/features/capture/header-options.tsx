@@ -2,7 +2,7 @@ import type { ComponentProps, ReactElement } from 'react'
 import { Platform } from 'react-native'
 import type { Stack } from 'expo-router'
 import type { SharedValue } from 'react-native-reanimated'
-import type { Colors } from '../../theme/tokens'
+import { darkColors, type Colors } from '../../theme/tokens'
 import { useLargeText } from '../../ui/large-text'
 import type { LibraryEntry } from './library'
 import { PinnedTitle } from './library-screen'
@@ -51,6 +51,7 @@ export type HeaderStyle = {
     headerTintColor: string
     headerShadowVisible: false
     contentStyle: { backgroundColor: string }
+    statusBarStyle: 'light' | 'dark'
 }
 
 /** The native header coloured from a palette, so light and dark both read as one surface with the canvas. */
@@ -60,6 +61,7 @@ export function headerStyleFor(colors: Colors): HeaderStyle {
         headerTintColor: colors.accentInk,
         headerShadowVisible: false,
         contentStyle: { backgroundColor: colors.canvas },
+        statusBarStyle: colors.canvas === darkColors.canvas ? 'light' : 'dark',
     }
 }
 

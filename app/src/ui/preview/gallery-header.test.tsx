@@ -4,7 +4,7 @@ import type { ReactElement } from 'react'
 import { Platform } from 'react-native'
 import type { SharedValue } from 'react-native-reanimated'
 import { darkColors, lightColors } from '../../theme/tokens'
-import type { ScreenOptions } from '../../features/capture/header-options'
+import { headerStyleFor, type ScreenOptions } from '../../features/capture/header-options'
 import { galleryHeaderOptions } from './gallery-header'
 import { workflowPreviewFixture, WORKFLOW_PREVIEW_CASES, type WorkflowPreviewCase } from './workflow-fixtures'
 
@@ -39,6 +39,13 @@ function optionsFor(
 }
 
 describe('gallery native header', () => {
+    it('restores themed status icons after leaving the dark camera viewport', () => {
+        expect(headerStyleFor(lightColors).statusBarStyle).toBe('dark')
+        expect(headerStyleFor(darkColors).statusBarStyle).toBe('light')
+        expect(optionsFor('camera-denied').options.statusBarStyle).toBe('light')
+        const returned = { ...optionsFor('camera-check').options, ...optionsFor('home-empty').options }
+        expect(returned.statusBarStyle).toBe('dark')
+    })
     it('resets Camera and Home overrides when switching back to Guide on the same native route', () => {
         const merged = {
             ...optionsFor('home-empty').options,
