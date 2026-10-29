@@ -1,20 +1,9 @@
-import { useEffect, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import { StyleSheet, View, type DimensionValue } from 'react-native'
-import Animated, {
-    cancelAnimation,
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSequence,
-    withTiming,
-} from 'react-native-reanimated'
 import { useTheme } from '../theme/theme'
-import { motion, radius, space, touchTarget } from '../theme/tokens'
-import { useFeedback } from './feedback'
+import { radius, space, touchTarget } from '../theme/tokens'
 
-// A placeholder block that pulses while content loads. Under reduced motion it stays still at full strength. The loop
-// is cancelled on unmount, so no animation outlives the content it stood in for.
+// A static placeholder block. Skeletons never animate: the only looping motion in the app is the Reading indicator.
 export function Skeleton({
     width = '100%',
     height = space.md,
@@ -23,35 +12,12 @@ export function Skeleton({
     readonly height?: number
 }): ReactElement {
     const { colors } = useTheme()
-    const { reduceMotion } = useFeedback()
-    const opacity = useSharedValue(1)
-    useEffect(() => {
-        if (reduceMotion) {
-            cancelAnimation(opacity)
-            opacity.value = 1
-            return undefined
-        }
-        const half = motion.pulse / 2
-        const ease = Easing.inOut(Easing.ease)
-        opacity.value = withRepeat(
-            withSequence(
-                withTiming(0.45, { duration: half, easing: ease }),
-                withTiming(1, { duration: half, easing: ease }),
-            ),
-            -1,
-            false,
-        )
-        return (): void => {
-            cancelAnimation(opacity)
-        }
-    }, [opacity, reduceMotion])
-    const pulse = useAnimatedStyle(() => ({ opacity: opacity.value }))
     return (
-        <Animated.View
+        <View
             testID="skeleton-block"
             accessibilityElementsHidden={true}
             importantForAccessibility="no"
-            style={[styles.block, { width, height, backgroundColor: colors.surfaceSunken }, pulse]}
+            style={[styles.block, { width, height, backgroundColor: colors.surfaceSunken }]}
         />
     )
 }

@@ -534,12 +534,12 @@ describe('grounded region overlay', () => {
         return { ...workflowPreviewFixture('guide-pass').state.check!, observedRegion, ...patch }
     }
 
-    it('outlines the returned region on the frozen photo and pulses it once for a pass', async () => {
+    it('outlines the returned region on the frozen photo statically for a pass: the pulse is gone', async () => {
         await render(view('guide-pass', { check: passWith(region) }))
         await measurePhoto()
         expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
-        expect(screen.getByTestId('grounded-outline-pulse')).toBeTruthy()
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
     })
 
     it('draws nothing and pulses nothing for a pass that returned no region', async () => {
@@ -573,11 +573,11 @@ describe('grounded region overlay', () => {
         expect(animationSpies.withSequence).not.toHaveBeenCalled()
     })
 
-    it('neither re-pulses nor re-notifies on a metadata-only rerender of the same result', async () => {
+    it('does not re-notify on a metadata-only rerender of the same result, and nothing pulses', async () => {
         const { rerender } = await render(view('guide-pass', { check: passWith(region) }))
         await measurePhoto()
         await rerender(view('guide-pass', { check: passWith(region, { modelNotes: ['Metadata only.'] }) }))
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
         expect(trigger).toHaveBeenCalledTimes(1)
     })
 
@@ -590,11 +590,11 @@ describe('grounded region overlay', () => {
         expect(screen.queryByTestId('grounded-outline-line')).toBeNull()
         await rerender(view('guide-pass', { check, answer: null }))
         expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
         expect(trigger.mock.calls.filter(([kind]) => kind === 'success')).toHaveLength(1)
     })
 
-    it('carries no region into a new capture and pulses the next pass for its own capture', async () => {
+    it('carries no region into a new capture and outlines the next pass statically for its own capture', async () => {
         const first = workflowPreviewFixture('guide-pass').state.capture!
         const second = { ...first, binding: { ...first.binding, captureId: 'synthetic-capture-2' } }
         const { rerender } = await render(view('guide-pass', { check: passWith(region), capture: first }))
@@ -605,7 +605,7 @@ describe('grounded region overlay', () => {
         await rerender(view('guide-pass', { check: passWith(region), capture: second }))
         await measurePhoto()
         expect(screen.getByTestId('grounded-outline-line')).toBeTruthy()
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(2)
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
     })
 
     it('leaves the refusal comparison and its tappable photo pane alone, with no pulse', async () => {
@@ -968,21 +968,21 @@ describe('next part and target guidance', () => {
         noGuidanceText()
     })
 
-    it('keeps the pass pulse and its identity: one pulse for the observed region, none for guidance', async () => {
+    it('keeps the haptic identity with a static observed outline and static guidance', async () => {
         const check = {
             ...workflowPreviewFixture('guide-pass-guided').state.check!,
             observedRegion: { x: 0.3, y: 0.2, width: 0.2, height: 0.6 },
         }
         const { rerender } = await render(view('guide-pass-guided', { check }))
         await measureFrozenPhoto()
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
-        expect(screen.getByTestId('grounded-outline-pulse')).toBeTruthy()
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
+        expect(screen.queryByTestId('grounded-outline-pulse')).toBeNull()
         expect(screen.getAllByTestId(ARROW_ID)).toHaveLength(1)
-        // Metadata, a changed pairing or removed guidance neither replays the pulse nor re-notifies.
+        // Metadata, a changed pairing or removed guidance never re-notifies.
         await rerender(view('guide-pass-guided', { check: { ...check, modelNotes: ['Metadata only.'] } }))
         const { nextPartRegion: _next, ...withoutNext } = check
         await rerender(view('guide-pass-guided', { check: withoutNext }))
-        expect(animationSpies.withSequence).toHaveBeenCalledTimes(1)
+        expect(animationSpies.withSequence).not.toHaveBeenCalled()
         expect(trigger.mock.calls.filter(([kind]) => kind === 'success')).toHaveLength(1)
     })
 

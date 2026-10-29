@@ -33,6 +33,21 @@ function latestSystemListener(): (value: boolean) => void {
 }
 
 describe('reduced motion', () => {
+    it('shares one system subscription across provider consumers and new mounts', async () => {
+        const tree = (second: boolean): ReactElement => (
+            <FeedbackProvider>
+                <MotionProbe />
+                {second ? <MotionProbe /> : null}
+            </FeedbackProvider>
+        )
+        const view = await render(tree(false))
+        await view.rerender(tree(true))
+        expect(isReduceMotionEnabled).toHaveBeenCalledTimes(1)
+        expect(addEventListener.mock.calls.filter(([event]) => event === 'reduceMotionChanged')).toHaveLength(1)
+        await act(() => latestSystemListener()(true))
+        expect(screen.getAllByText('reduced')).toHaveLength(2)
+    })
+
     it('treats motion as reduced until the system has answered', async () => {
         isReduceMotionEnabled.mockReturnValue(new Promise<boolean>(() => undefined))
         await render(<MotionProbe />)

@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { lightColors, touchTarget } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
 import { FeedbackProvider } from './feedback'
+import { SPRING_GENTLE } from './motion'
 import { PRESS_SCALE } from './press-motion'
 import { spies } from './test-support/reanimated-mock'
 
@@ -113,7 +114,7 @@ describe('press motion', () => {
         await render(<AppButton label="Take photo" onPress={(): void => undefined} />)
         const button = screen.getByRole('button', { name: 'Take photo' })
         await fireEvent(button, 'pressIn')
-        expect(spies.withSpring).toHaveBeenLastCalledWith(1, expect.objectContaining({ damping: expect.any(Number) }))
+        expect(spies.withSpring).toHaveBeenLastCalledWith(1, SPRING_GENTLE)
         await fireEvent(button, 'pressOut')
         expect(spies.withSpring).toHaveBeenLastCalledWith(0, expect.any(Object))
         expect(PRESS_SCALE).toBe(0.97)

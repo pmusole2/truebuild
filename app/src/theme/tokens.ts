@@ -113,11 +113,11 @@ export const iconSize = {
     md: 24,
 } as const
 
-// Durations for the shared motion helper. Under reduced motion every transition resolves immediately.
+// The only three transition durations. Under reduced motion every transition resolves immediately or fades at `fast`.
+// `emphasis` is the one bounded budget for the gentle spring (see ui/motion.ts); no other duration may be added.
 export const motion = {
     instant: 0,
-    quick: 150,
-    standard: 240,
-    sheet: 320,
-    pulse: 900,
+    fast: 150,
+    standard: 250,
+    emphasis: 350,
 } as const

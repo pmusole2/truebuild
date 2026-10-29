@@ -36,6 +36,8 @@ export type AppButtonProps = {
     readonly icon?: IconName
     // `primary` is the one 56 point action pinned above the safe area; every other button keeps the 44 point floor.
     readonly size?: 'regular' | 'primary'
+    // Less horizontal inset for side-by-side coach actions at accessibility sizes; type and target floors stay intact.
+    readonly compact?: boolean
 }
 
 export function AppButton({
@@ -49,6 +51,7 @@ export function AppButton({
     testID,
     icon,
     size = 'regular',
+    compact = false,
 }: AppButtonProps): ReactElement {
     const { colors } = useTheme()
     const { haptic } = useFeedback()
@@ -75,6 +78,7 @@ export function AppButton({
             testID={testID}
             style={[
                 styles.base,
+                compact && styles.compact,
                 size === 'primary' && styles.primarySize,
                 { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quietText,
@@ -161,6 +165,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     primarySize: { minHeight: primaryHeight },
+    compact: { paddingHorizontal: space.xs },
     // A quiet text button has no fill and no outline: it reads as text with a 44 point target.
     quietText: { backgroundColor: 'transparent' },
     quiet: { backgroundColor: 'transparent' },

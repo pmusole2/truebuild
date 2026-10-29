@@ -53,6 +53,12 @@ export const Easing = {
     out: <T>(easing: T): T => easing,
 }
 
+export enum ReduceMotion {
+    System = 'system',
+    Always = 'always',
+    Never = 'never',
+}
+
 export const { withRepeat, withTiming, withSequence, withSpring, cancelAnimation } = spies
 
 export default { View, createAnimatedComponent }

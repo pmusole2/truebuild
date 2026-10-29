@@ -67,9 +67,8 @@ describe('layout and motion scales', () => {
         expect(touchTarget).toBeGreaterThanOrEqual(44)
     })
 
-    it('orders motion durations from instant to sheet, with zero meaning immediate', () => {
-        expect(motion.instant).toBe(0)
-        expect(motion.quick).toBeLessThan(motion.standard)
-        expect(motion.standard).toBeLessThan(motion.sheet)
+    it('has exactly the three approved transition durations, none past 400 ms, and zero meaning immediate', () => {
+        expect(motion).toEqual({ instant: 0, fast: 150, standard: 250, emphasis: 350 })
+        expect(Math.max(...Object.values(motion))).toBeLessThanOrEqual(400)
     })
 })

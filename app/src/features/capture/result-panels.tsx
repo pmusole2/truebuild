@@ -10,7 +10,6 @@ import { ResultSheet } from '../../ui/result-sheet'
 import { ResultReveal } from '../../ui/result-reveal'
 import type { WorkflowState } from './controller'
 import { ManualImage } from './page-media'
-import { groundedRegion } from './grounded-region'
 import type { LibraryEntry } from './library'
 import { guidanceNotes, type PartGuidance } from './part-regions'
 import { plainReason } from './plain-copy'
@@ -166,24 +165,13 @@ export function RefusalComparison({
     return <ComparisonFrame diagram={diagram} photo={photo} onViewDiagram={onViewDiagram} />
 }
 
-/**
- * Pulse identity for a grounded pass: tied to its capture and the exact returned region, so notes or other metadata
- * never replay it. Only a pass that actually returned a region is keyed; a pass without one never invents a region.
- */
-export function passPulseKey(check: CheckResult, captureId: string): string | null {
-    const region = check.decision === 'pass' ? groundedRegion(check) : null
-    return region === null ? null : `pass:${captureId}:${region.x}:${region.y}:${region.width}:${region.height}`
-}
-
-/** The grounded region, drawn as an SVG child because FrozenPhoto places its overlay inside an Svg. */
+/** The grounded region, drawn as an SVG child because FrozenPhoto places its overlay inside an Svg. Always static. */
 export function CheckHighlight({
     rect,
-    pulseKey = null,
 }: {
     rect: { x: number; y: number; width: number; height: number } | null
-    pulseKey?: string | null
 }): ReactElement {
-    return <GroundedRegionOutline rect={rect} pulseKey={pulseKey} />
+    return <GroundedRegionOutline rect={rect} />
 }
 
 /** Next part, target and the paired arrow, placed on the displayed photo rect. Draws only what `guidance` carries. */

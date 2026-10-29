@@ -32,7 +32,6 @@ import {
     CheckHighlight,
     CheckPanel,
     PartGuidanceOverlay,
-    passPulseKey,
     RefusalComparison,
 } from './result-panels'
 import { PlainNotice, ScreenBody, TextRegion, useHeroHeight, useKeyboardVisible } from './screen-layout'
@@ -151,8 +150,6 @@ export function GuideScreen({
             ? { ...state, notice: null }
             : state
     // Only a pass's own returned region pulses; an answer's region is outlined statically.
-    const pulseKey =
-        answer === null && check !== null && capture !== null ? passPulseKey(check, capture.binding.captureId) : null
     const target = state.target
     const targetSummary =
         target === null
@@ -245,7 +242,6 @@ export function GuideScreen({
                 <>
                     <CheckHighlight
                         rect={highlight === null ? null : boxOnDisplay(highlight, displayed)}
-                        pulseKey={pulseKey}
                     />
                     <PartGuidanceOverlay guidance={guidance} displayed={displayed} />
                 </>

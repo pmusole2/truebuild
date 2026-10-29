@@ -12,6 +12,7 @@ import {
     snapHeight,
 } from './sheet'
 import { FeedbackProvider } from './feedback'
+import { SPRING_GENTLE } from './motion'
 import { spies } from './test-support/reanimated-mock'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
@@ -52,6 +53,31 @@ describe('BottomSheet', () => {
             </BottomSheet>,
         )
         expect(screen.queryByText('Hidden body')).toBeNull()
+    })
+})
+
+describe('BottomSheet motion', () => {
+    it('opens and settles with the one gentle spring and leaves with a fast fade, scrim and sheet together', async () => {
+        spies.withSpring.mockClear()
+        spies.withTiming.mockClear()
+        const onClose = jest.fn()
+        await render(
+            <FeedbackProvider reduceMotion={false}>
+                <BottomSheet visible={true} title="Instructions" onClose={onClose}>
+                    <Text>Body</Text>
+                </BottomSheet>
+            </FeedbackProvider>,
+        )
+        expect(spies.withSpring).toHaveBeenCalled()
+        for (const call of spies.withSpring.mock.calls) {
+            expect(call[1]).toBe(SPRING_GENTLE)
+        }
+        await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
+        expect(spies.withTiming).toHaveBeenCalledWith(0, expect.objectContaining({ duration: 150 }))
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 200))
+        })
+        expect(onClose).toHaveBeenCalledTimes(1)
     })
 })
 

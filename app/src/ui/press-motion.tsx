@@ -2,17 +2,16 @@ import type { ReactElement } from 'react'
 import { Pressable, type PressableProps, type StyleProp, type ViewStyle } from 'react-native'
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { useFeedback } from './feedback'
+import { SPRING_GENTLE } from './motion'
 
 /** How far an action gives under the finger. */
 export const PRESS_SCALE = 0.97
 const PRESS_FADE = 0.8
-// Quick and well damped: it settles at once instead of wobbling under the thumb.
-const PRESS_SPRING = { damping: 22, stiffness: 420, mass: 0.6 } as const
 
 export const MotionPressable = Animated.createAnimatedComponent(Pressable)
 
 /**
- * The one press feel for actions: a spring to 0.97 and a slight fade, driven on the UI thread. Under reduced motion
+ * The one press feel for actions: the app's one gentle spring to 0.97 and a slight fade, driven on the UI thread. Under reduced motion
  * nothing scales; the fade alone answers the press, set instantly. A resting opacity lets a disabled control keep its
  * dimmed look, because the animated opacity replaces the static one.
  */
@@ -38,7 +37,7 @@ export function usePressMotion(
             cancelAnimation(pressed)
             pressed.value = to
         } else {
-            pressed.value = withSpring(to, PRESS_SPRING)
+            pressed.value = withSpring(to, SPRING_GENTLE)
         }
     }
     return {

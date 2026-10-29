@@ -24,7 +24,6 @@ import {
 } from 'react-native'
 import Animated, {
     cancelAnimation,
-    Easing,
     useAnimatedStyle,
     useSharedValue,
     withSpring,
@@ -35,6 +34,7 @@ import { useTheme } from '../theme/theme'
 import { motion, radius, space, touchTarget } from '../theme/tokens'
 import { IconButton } from './button'
 import { useFeedback } from './feedback'
+import { SPRING_GENTLE, timing } from './motion'
 import { useLargeText } from './large-text'
 import { Body, Heading } from './text'
 
@@ -46,8 +46,7 @@ const ORDER: readonly SheetDetent[] = ['peek', 'tall', 'full']
 // Long content scrolls inside the sheet; the sheet never grows past this share of the window, so the scrim stays visible.
 export const SHEET_MAX_HEIGHT_RATIO = DETENT_RATIO.full
 
-// Spring tuned to settle without a visible bounce; reduced motion skips it and sets the height directly.
-const SPRING = { damping: 26, stiffness: 260, mass: 1 } as const
+// Reduced motion skips the spring and sets the height directly.
 // A fling faster than this (points per millisecond) projects the sheet to the detent it points at.
 const FLING_PROJECTION_MS = 160
 
@@ -244,7 +243,7 @@ function SheetFrame({
                 sheetHeight.value = to
                 return
             }
-            sheetHeight.value = withSpring(to, SPRING)
+            sheetHeight.value = withSpring(to, SPRING_GENTLE)
         },
         [reduceMotion, sheetHeight],
     )
@@ -258,8 +257,8 @@ function SheetFrame({
             onClose()
             return
         }
-        entrance.value = withTiming(0, { duration: motion.quick, easing: Easing.out(Easing.cubic) })
-        setTimeout(onClose, motion.quick)
+        entrance.value = withTiming(0, timing(motion.fast))
+        setTimeout(onClose, motion.fast)
     }, [entrance, onClose, reduceMotion])
 
     useEffect(() => {
@@ -267,7 +266,7 @@ function SheetFrame({
             cancelAnimation(entrance)
             entrance.value = 1
         } else {
-            entrance.value = withSpring(1, SPRING)
+            entrance.value = withSpring(1, SPRING_GENTLE)
         }
         // Screen readers land on the sheet title, the first thing the sheet says.
         const focusTimer = setTimeout(() => {
