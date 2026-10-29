@@ -296,6 +296,26 @@ describe('keyboard-fitted sheet', () => {
         }
     })
 
+    it('finishes an in-flight keyboard-fit spring when reduced motion is enabled', async () => {
+        const element = (reduceMotion: boolean): React.ReactElement => (
+            <FeedbackProvider reduceMotion={reduceMotion}>
+                <MoreSheet visible={true} title="Ask" onClose={(): void => undefined} detents={['tall', 'full']}>
+                    <Text>Composer</Text>
+                </MoreSheet>
+            </FeedbackProvider>
+        )
+        const view = await render(element(false))
+        // Model a native spring still above its endpoint; the normal stand-in jumps directly to that endpoint.
+        spies.withSpring.mockImplementationOnce((target: number): number => target + 80)
+        await keyboard(window() * 0.5)
+        await view.rerender(element(false))
+        const fitted = Math.round(window() * 0.5 - 8)
+        expect(heightOf()).toBe(fitted + 80)
+        await view.rerender(element(true))
+        await view.rerender(element(true))
+        expect(heightOf()).toBe(fitted)
+    })
+
     it.each([
         [false, true],
         [true, false],

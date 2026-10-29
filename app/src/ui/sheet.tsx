@@ -291,10 +291,11 @@ function SheetFrame({
     // its fitted height now and returns to the full one when the keyboard goes away. Reduced motion is respected by settle.
     const fitted = heights[index] ?? 0
     useEffect(() => {
-        if (current.current !== fitted && !dragging.current) {
+        // A motion-preference change cancels an in-flight spring even when its recorded target already matches.
+        if ((reduceMotion || current.current !== fitted) && !dragging.current) {
             settle(fitted)
         }
-    }, [fitted, settle])
+    }, [fitted, reduceMotion, settle])
 
     const moveTo = useCallback(
         (next: number): void => {
