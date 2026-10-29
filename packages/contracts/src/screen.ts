@@ -159,16 +159,22 @@ export const APP_INTENTS = [
     'show-tips',
 ] as const
 export const ROUTE_TARGETS = ['home', 'add', 'pages', 'reading', 'quick-check', 'guide', 'done', 'more'] as const
+/**
+ * Where a navigate intent can go: a route, or `back` (close what is open / return to where the person came from). `back`
+ * names no route: the app resolves it from its own stack, a sheet host or the camera, so a screen never has to guess
+ * which route it was opened from.
+ */
+export const NAVIGATE_TARGETS = [...ROUTE_TARGETS, 'back'] as const
 
 /** Finite typed targets per intent. The app maps each pair to an existing controller call and checks preconditions. */
 export const INTENT_TARGETS = {
-    navigate: ROUTE_TARGETS,
+    navigate: NAVIGATE_TARGETS,
     capture: ['take-photo', 'choose-pages', 'add-page', 'retake'],
     check: ['current-step'],
     ask: ['about-step', 'about-part'],
-    confirm: ['reading', 'facts', 'step', 'manual'],
-    retry: ['last-action', 'reading', 'check', 'question', 'screen'],
-    'open-details': ['step', 'result', 'sources', 'about-check'],
+    confirm: ['reading', 'facts', 'step', 'manual', 'camera-permission'],
+    retry: ['last-action', 'reading', 'check', 'question', 'screen', 'camera'],
+    'open-details': ['step', 'result', 'sources', 'about-check', 'device-settings'],
     'show-tips': ['screen'],
 } as const
 
@@ -582,7 +588,8 @@ export const screenMetadataSchema = z.strictObject({
      */
     origins: z.record(z.string().regex(COMPONENT_PATH), screenSourceSchema).optional(),
     /**
-     * `live`: composed by a runtime with a configured provider (a fallback after a real failure is still `live`).
+     * `live`: composed by a runtime with a configured provider (a fallback after a real failure is still `live`; it
+     * proves no provider call by itself).
      * `synthetic-fixture`: a fixture/test runtime; never evidence of model output. A `generated` document with this
      * evidence is an honest synthetic example (its model, effort, timing and usage are all null).
      */

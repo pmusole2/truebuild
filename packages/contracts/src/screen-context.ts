@@ -92,7 +92,7 @@ export function screenUiForKind(
 }
 
 /** What the provider sees of a result: decision, words, citations and geometry. Telemetry and tickets are never seen. */
-function resultView(result: ScreenResultInput | null): Record<string, unknown> | null {
+export function screenResultView(result: ScreenResultInput | null): Record<string, unknown> | null {
     if (result === null) return null
     const { value } = result
     const regions = {
@@ -165,7 +165,7 @@ export function screenContextParts(inputs: ScreenContextInputs): {
             steps: kind === 'quick-check' ? (facts?.steps ?? null) : null,
             failure: inputs.failure,
             completion: kind === 'completion' ? completionWitnessed(inputs) : null,
-            result: resultView(result),
+            result: screenResultView(result),
             ui: screenUiForKind(kind, inputs.uiState),
         },
         identity: {
