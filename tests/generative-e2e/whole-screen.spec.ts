@@ -1,0 +1,190 @@
+import { expect, test, type Page } from '@playwright/test'
+import { screensV2ResultSchema } from '@truebuild/contracts/model'
+
+// Browser integration evidence only. Real controller, capture IO seam, client, multipart, API and catalog renderer.
+// The fixture server has no inference transport. No route intercepts or answers an application request.
+const API = 'http://127.0.0.1:3101'
+const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
+
+async function photographPage(page: Page, first: boolean): Promise<void> {
+    await page.getByTestId(first ? 'take-page-photo' : 'add-page').click()
+    await expect(page.getByTestId('camera-shutter')).toBeEnabled()
+    await page.getByTestId('camera-shutter').click()
+    await expect(page.getByTestId('read-manual')).toBeEnabled()
+}
+
+async function prepareGuide(page: Page, alreadyHome = false): Promise<void> {
+    if (!alreadyHome) await page.goto('/')
+    await page.getByTestId('home-add').click()
+    await photographPage(page, true)
+    const parse = page.waitForResponse((response) => response.url() === `${API}/api/manuals/parse`)
+    await page.getByTestId('read-manual').click()
+    expect((await parse).status()).toBe(200)
+    await expect(page.getByTestId('quick-check-start')).toBeEnabled()
+    await page.getByTestId('quick-check-start').click()
+    await expect(page.getByTestId('guide-primary')).toBeEnabled()
+    await expect(page).toHaveURL(/\/guide\//u)
+}
+
+async function checkPhoto(page: Page): Promise<{ decision: string; captureId: string }> {
+    await page.getByTestId('guide-primary').click()
+    await expect(page.getByTestId('camera-shutter')).toBeEnabled()
+    const check = page
+        .waitForResponse((response) => response.url() === `${API}/api/checks`)
+        .then(async (response) => {
+            expect(response.status()).toBe(200)
+            return (await response.json()) as {
+                binding: { captureId: string }
+                value: { decision: string; evidence: string; model?: string }
+            }
+        })
+    await page.getByTestId('camera-shutter').click()
+    const response = await check
+    expect(response.value.evidence).toBe('synthetic-fixture')
+    expect(response.value.model).toBeUndefined()
+    return { decision: response.value.decision, captureId: response.binding.captureId }
+}
+
+test('a complete document owns the frame; off stays local and full publishes honestly synthetic metadata', async ({
+    page,
+}) => {
+    let documentRequests = 0
+    page.on('request', (request) => {
+        if (request.url() === `${API}/api/screens/v2`) documentRequests++
+    })
+    // Consume the first complete response before navigating. Chromium may discard a response body when its route leaves.
+    const firstDocument =
+        mode === 'full'
+            ? page
+                  .waitForResponse(
+                      (response) => response.url() === `${API}/api/screens/v2` && response.status() === 200,
+                  )
+                  .then((response) => response.json())
+            : null
+    await page.goto('/')
+    if (firstDocument !== null) {
+        const published = screensV2ResultSchema.parse(await firstDocument)
+        expect(published).toMatchObject({
+            status: 'ok',
+            mode: 'fixture',
+            value: {
+                document: {
+                    metadata: { source: 'generated', evidence: 'synthetic-fixture', model: null, effort: null },
+                },
+            },
+        })
+    }
+    await prepareGuide(page, true)
+    await expect(page.getByTestId('guide-screen').getByTestId('bottom-bar')).toHaveCount(1)
+    await expect(
+        page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
+    ).toBeVisible()
+    await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
+    if (mode === 'full') {
+        expect(documentRequests).toBeGreaterThan(0)
+    } else expect(documentRequests).toBe(0)
+    await page.reload()
+    await expect(page.getByTestId('guide-primary')).toBeEnabled()
+    await expect(page).toHaveURL(/\/guide\//u)
+})
+
+test('the verdict shows its held photo before a late overlay is collected', async ({ page }) => {
+    await prepareGuide(page)
+    const overlay =
+        mode === 'full' ? page.waitForResponse((response) => response.url() === `${API}/api/checks/overlay`) : null
+    const collected =
+        mode === 'full'
+            ? page.waitForResponse(
+                  (response) => response.url() === `${API}/api/checks/overlay/result` && response.status() === 200,
+              )
+            : null
+    const result = await checkPhoto(page)
+    expect(result.decision).toBe('pass')
+    await expect(page.getByTestId('frozen-photo-image')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Looks right', exact: true })).toBeVisible()
+    if (overlay !== null) {
+        expect((await overlay).status()).toBe(202)
+        expect(await (await collected!).json()).toMatchObject({
+            status: 'ok',
+            value: { evidence: 'synthetic-fixture' },
+        })
+        await expect(page.getByRole('heading', { name: 'Looks right', exact: true })).toBeVisible()
+    }
+})
+
+test('reading cancellation is an authored confirmation and Keep preserves the running parse', async ({ page }) => {
+    await page.goto('/')
+    await page.getByTestId('home-add').click()
+    await photographPage(page, true)
+    await page.getByTestId('read-manual').click()
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Stop reading', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep reading', exact: true }).click()
+    await expect(page.getByTestId('quick-check-start')).toBeEnabled()
+})
+
+test('a closer look, slow question and retained More use the same photo; a fresh passing check completes the build', async ({
+    page,
+}) => {
+    await prepareGuide(page)
+    await checkPhoto(page)
+    await expect(page.getByRole('heading', { name: 'Looks right', exact: true })).toBeVisible()
+    await page.getByTestId('guide-primary').click()
+    await expect(page.getByRole('heading', { name: 'Step 2 of 2', exact: true })).toBeVisible()
+    const secondPass = page
+        .waitForResponse((response) => response.url() === `${API}/api/checks/second-opinion`)
+        .then(async (response) => ({ status: response.status(), body: (await response.json()) as unknown }))
+    const primary = await checkPhoto(page)
+    expect(primary.decision).toBe('cannot_verify')
+    await expect(page.getByRole('heading', { name: 'Taking a closer look…', exact: true }).first()).toBeVisible()
+    expect(await secondPass).toMatchObject({ status: 200, body: { status: 'ok', value: { decision: 'refuse' } } })
+    await expect(page.getByRole('heading', { name: 'Not quite right', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'More', exact: true }).click()
+    const more = page.getByTestId('more-sheet')
+    await expect(more.getByTestId('frozen-photo-image')).toBeVisible()
+    await expect(more.getByRole('img', { name: 'Picture from your manual', exact: true }).first()).toBeVisible()
+    await expect(more.getByTestId('document-check-result')).toContainText(
+        'Check the connection against the manual picture.',
+    )
+    await more.getByRole('button', { name: 'Ask about this step', exact: true }).click()
+    await more
+        .getByRole('button', { name: 'Choose a point in your photo. Double tap to choose the middle.', exact: true })
+        .click()
+    await more.getByLabel('Your question', { exact: true }).fill('How should this connection face?')
+    let questionDispatches = 0
+    page.on('request', (request) => {
+        if (request.url() === `${API}/api/questions`) questionDispatches++
+    })
+    const questionResponse = page
+        .waitForResponse((response) => response.url() === `${API}/api/questions`)
+        .then(async (response) => ({ status: response.status(), body: (await response.json()) as unknown }))
+    await more.getByRole('button', { name: 'Ask', exact: true }).click()
+    // The API's actual pending response confirms which held capture it accepted. Chromium omits blob multipart postData.
+    expect(await questionResponse).toMatchObject({
+        status: 202,
+        body: { status: 'pending', binding: { captureId: primary.captureId } },
+    })
+    expect(questionDispatches).toBe(1)
+    await expect(more.getByRole('heading', { name: 'Still thinking…', exact: true }).first()).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Answer', exact: true })).toBeVisible()
+    expect(questionDispatches).toBe(1)
+    await page.getByRole('button', { name: 'More', exact: true }).click()
+    await expect(more.getByText('How should this connection face?', { exact: true })).toBeVisible()
+    await expect(more.getByTestId('document-check-result')).toContainText(
+        'Check the connection against the manual picture.',
+    )
+    await expect(more.getByTestId('document-question-result')).toContainText(
+        'Divider is horizontal and square to the upright panel.',
+    )
+    await expect(more.getByText('Looks right', { exact: true })).toHaveCount(0)
+    await more.getByTestId('close-sheet').click()
+    await page.getByTestId('guide-primary').click()
+    await expect(page.getByTestId('guide-primary')).toBeEnabled()
+    const fresh = await checkPhoto(page)
+    expect(fresh.decision).toBe('pass')
+    expect(fresh.captureId).not.toBe(primary.captureId)
+    await expect(page.getByRole('heading', { name: 'Looks right', exact: true })).toBeVisible()
+    await page.getByTestId('guide-primary').click()
+    await expect(page).toHaveURL(/\/done\//u)
+    await expect(page.getByRole('heading', { name: 'All steps done', exact: true })).toBeVisible()
+})
