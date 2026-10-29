@@ -165,6 +165,18 @@ describe('iOS heading collapse', () => {
         expect(onCollapsedChange.mock.calls).toEqual([[true]])
     })
 
+    it('reconciles the header when the heading reflows without another scroll', async () => {
+        const onCollapsedChange = await renderHeading()
+        await scrollTo(100)
+        expect(onCollapsedChange.mock.calls).toEqual([[true]])
+        await fireEvent(screen.getByTestId('home-heading'), 'layout', { nativeEvent: { layout: { height: 256 } } })
+        expect(onCollapsedChange.mock.calls).toEqual([[true], [false]])
+        await fireEvent(screen.getByTestId('home-heading'), 'layout', { nativeEvent: { layout: { height: 40 } } })
+        expect(onCollapsedChange.mock.calls).toEqual([[true], [false], [true]])
+        await fireEvent(screen.getByTestId('home-heading'), 'layout', { nativeEvent: { layout: { height: 40 } } })
+        expect(onCollapsedChange).toHaveBeenCalledTimes(3)
+    })
+
     it('fades and scales the heading over that height, and only fades under reduced motion', async () => {
         const { state } = workflowPreviewFixture('home-populated')
         const scrollY = { value: 0 }
@@ -190,7 +202,7 @@ describe('iOS heading collapse', () => {
         await rerender(view(true))
         const reduced = StyleSheet.flatten(screen.getByTestId('home-heading').props.style)
         expect(reduced.opacity).toBe(0.5)
-        expect(reduced.transform).toBeUndefined()
+        expect(reduced.transform).toEqual([{ scale: 1 }])
     })
 })
 

@@ -102,7 +102,7 @@ function HomeHeading({
     const style = useAnimatedStyle(() => {
         const progress = collapseProgress(scrollY.value, distance)
         return reduceMotion
-            ? { opacity: 1 - progress }
+            ? { opacity: 1 - progress, transform: [{ scale: 1 }] }
             : { opacity: 1 - progress, transform: [{ scale: 1 - progress * 0.2 }] }
     })
     return (
@@ -170,7 +170,21 @@ export function LibraryScreen({
     const [barHeight, setBarHeight] = useState(0)
     const [headingHeight, setHeadingHeight] = useState(0)
     const collapsed = useRef(false)
+    const latestOffset = useRef(0)
     const distance = headingHeight > 0 ? headingHeight : COLLAPSE_DISTANCE
+    const reconcileTitle = useCallback(
+        (offset: number): void => {
+            const nextCollapsed = offset >= distance
+            if (overlay && onCollapsedChange !== undefined && nextCollapsed !== collapsed.current) {
+                collapsed.current = nextCollapsed
+                onCollapsedChange(nextCollapsed)
+            }
+        },
+        [distance, onCollapsedChange, overlay],
+    )
+    useEffect(() => {
+        reconcileTitle(latestOffset.current)
+    }, [reconcileTitle])
     const ownScroll = useSharedValue(0)
     const scrollY = scrollYProp ?? ownScroll
     const nav = navProp ?? defaultNav(controller)
@@ -186,11 +200,9 @@ export function LibraryScreen({
     }
     const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>): void => {
         const offset = event.nativeEvent.contentOffset.y
+        latestOffset.current = offset
         scrollY.value = offset
-        if (overlay && onCollapsedChange !== undefined && offset >= distance !== collapsed.current) {
-            collapsed.current = !collapsed.current
-            onCollapsedChange(collapsed.current)
-        }
+        reconcileTitle(offset)
     }
     const primary = state.loading
         ? { label: 'Add manual', compactLabel: 'Add', onPress: addManual, disabled: true }
