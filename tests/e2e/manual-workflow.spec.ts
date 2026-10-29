@@ -239,6 +239,15 @@ test('camera access is requested only on demand: without permission the screen e
 
 test('a local library that cannot be read keeps its data, says so, and offers an explicit retry', async ({ page }) => {
     await page.addInitScript(() => {
+        const probe = { writes: 0 }
+        Object.defineProperty(window, '__truebuildStorageProbe', { value: probe })
+        const originalSet = Storage.prototype.setItem
+        Storage.prototype.setItem = function (key: string, value: string): void {
+            if (String(key).startsWith('truebuild/')) {
+                probe.writes += 1
+            }
+            originalSet.call(this, key, value)
+        }
         const original = Storage.prototype.getItem
         Storage.prototype.getItem = function (key: string): string | null {
             if (String(key).startsWith('truebuild/')) {
@@ -248,10 +257,20 @@ test('a local library that cannot be read keeps its data, says so, and offers an
         }
     })
     await page.goto('/')
-    await expect(
-        page.getByText('We could not open your saved builds. Your photos are still on this phone.', { exact: true }),
-    ).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByRole('button', { name: 'Try again', exact: true }).first()).toBeVisible()
+    await expect(page.getByText('Saving is paused until your saved builds open again.', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    })
+    const retry = page.getByRole('button', { name: 'Try again', exact: true })
+    await expect(retry).toHaveCount(1)
+    await expect(page.getByTestId('bottom-bar').getByRole('button', { name: 'Try again', exact: true })).toBeVisible()
+    const writeCount = (): Promise<number> =>
+        page.evaluate(
+            () => (window as unknown as { __truebuildStorageProbe: { writes: number } }).__truebuildStorageProbe.writes,
+        )
+    expect(await writeCount()).toBe(0)
+    await retry.click()
+    await expect(retry).toBeEnabled()
+    expect(await writeCount()).toBe(0)
 })
 
 test('More on Home describes storage, what leaves the phone and camera access', async ({ page }) => {
