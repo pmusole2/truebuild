@@ -84,7 +84,6 @@ export default defineConfig({
                 CI: '1',
                 EXPO_NO_TELEMETRY: '1',
                 EXPO_NO_DOTENV: '1',
-                EXPO_OFFLINE: '1',
                 EXPO_PUBLIC_API_BASE_URL: API_ORIGIN,
                 EXPO_PUBLIC_API_SECRET: FIXTURE_DEMO_KEY,
                 EXPO_PUBLIC_PROVIDER_MODE: 'meta',

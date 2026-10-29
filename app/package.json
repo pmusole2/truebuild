@@ -4,8 +4,8 @@
     "private": true,
     "main": "expo-router/entry",
     "scripts": {
-        "start": "EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 expo start",
-        "web": "EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 expo start --web --localhost --port 8081",
+        "start": "EXPO_NO_DOTENV=1 expo start",
+        "web": "EXPO_NO_DOTENV=1 expo start --web",
         "typecheck": "tsc --noEmit",
         "test": "jest --runInBand --no-watchman"
     },
