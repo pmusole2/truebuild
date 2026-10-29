@@ -100,6 +100,8 @@ export type WorkflowState = {
     capture: CaptureView | null
     check: CheckResult | null
     answer: QuestionResult | null
+    /** Exact submitted question paired with this answer; the editable draft is never its provenance. */
+    answeredQuestion?: string | null
     question: string
     target: QuestionTarget | null
     pageUris: Readonly<Record<string, string>>
@@ -182,6 +184,7 @@ export class CaptureController {
         capture: null,
         check: null,
         answer: null,
+        answeredQuestion: null,
         question: '',
         target: null,
         pageUris: {},
@@ -232,6 +235,7 @@ export class CaptureController {
             pending: null,
             check: null,
             answer: null,
+            answeredQuestion: null,
             capture: null,
             target: null,
             question,
@@ -1316,13 +1320,13 @@ export class CaptureController {
         if (!this.cancelPendingAnswer()) {
             return
         }
-        this.publish({ question: question.slice(0, 500), answer: null, pending: null })
+        this.publish({ question: question.slice(0, 500), answer: null, answeredQuestion: null, pending: null })
     }
     targetChanged = (target: QuestionTarget): void => {
         if (!this.cancelPendingAnswer()) {
             return
         }
-        this.publish({ target, answer: null, pending: null })
+        this.publish({ target, answer: null, answeredQuestion: null, pending: null })
     }
     async ask(): Promise<void> {
         const entry = this.current
@@ -1352,7 +1356,7 @@ export class CaptureController {
         this.operationKind = 'ask'
         const requestId = `question-${this.ports.id()}`
         const shownGuide = this.ports.screenContext?.(entry.session, step.stepId) ?? null
-        this.publish({ pending: 'Asking about frozen photo…', answer: null, notice: null })
+        this.publish({ pending: 'Asking about frozen photo…', answer: null, answeredQuestion: null, notice: null })
         try {
             const result = await askModelQuestion({
                 client: this.ports.client,
@@ -1384,7 +1388,11 @@ export class CaptureController {
                 !operation.signal.aborted &&
                 this.isCurrentCapture(capture.binding)
             ) {
-                this.publish(result.status === 'ok' ? { answer: result.value } : { notice: this.unavailable(result) })
+                this.publish(
+                    result.status === 'ok'
+                        ? { answer: result.value, answeredQuestion: question }
+                        : { notice: this.unavailable(result) },
+                )
             }
         } catch {
             if (token === this.epoch && this.operation === operation) {

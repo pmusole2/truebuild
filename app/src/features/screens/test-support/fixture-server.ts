@@ -1,4 +1,11 @@
 import {
+    assembleDocumentV2,
+    composeProposalV2,
+    documentMaterialV2,
+    type ScreenContextInputsV2,
+    type ScreenDocumentV2,
+    type ScreenKindV2,
+    type ScreenProposalV2,
     requiredManualFacts,
     type AppIntent,
     type ManualSession,
@@ -9,7 +16,23 @@ import {
     type ScreenNode,
     type ScreensResult,
 } from '@truebuild/contracts'
-import type { ModelRequestContext, ScreenRequest } from '../../../api/model-client'
+import {
+    modelScreensV2MetadataSchema,
+    type ModelScreensV2Metadata,
+    type ScreensV2Result,
+} from '@truebuild/contracts/model'
+import {
+    ModelApiClient,
+    type ModelFetch,
+    type ModelRequestContext,
+    type ScreenRequest,
+} from '../../../api/model-client'
+import {
+    documentJobContextKey,
+    documentPrecomputeInputs,
+    inputsFromDocumentMetadata,
+} from '../../../api/document-client'
+import { sha256Hex } from '../../documents/sha256'
 import { hashText, sessionForScreens, specKey, type ScreenSpec } from '../screen-spec'
 import type { ScreenClient } from '../screen-store'
 import { contextKeyOf, hex, instruction, liveMetadata, makeDocument } from './documents'
@@ -412,4 +435,169 @@ export function fixtureScreens(options: FixtureServerOptions = {}): FixtureServe
             return ok({})
         },
     }
+}
+
+// V2 production-route fixture boundary. These documents use the same complete shared composer/material and SHA-256
+// as the API. Generated examples are explicitly synthetic with null unobserved telemetry. This is not a model run.
+
+export type DocumentFixtureServerOptions = {
+    readonly arrange?: (proposal: ScreenProposalV2, inputs: ScreenContextInputsV2) => ScreenProposalV2
+    readonly generated?: readonly ScreenKindV2[]
+    readonly failing?: readonly ScreenKindV2[]
+    readonly gate?: Promise<void>
+    readonly onRequest?: (request: ModelScreensV2Metadata) => void
+    readonly transform?: (document: ScreenDocumentV2, inputs: ScreenContextInputsV2) => ScreenDocumentV2
+    /** Explicit simulated upstream observations for metadata passthrough assertions ONLY. Never native/coverage proof. */
+    readonly recordedMetadata?: boolean
+}
+export type DocumentFixtureServer = Pick<ModelApiClient, 'screensV2'> & { readonly requests: ModelScreensV2Metadata[] }
+
+export function documentForV2(
+    inputs: ScreenContextInputsV2,
+    options: DocumentFixtureServerOptions = {},
+): ScreenDocumentV2 {
+    const material = documentMaterialV2(inputs)
+    const generated = options.generated?.includes(inputs.kind) === true
+    const recorded = options.recordedMetadata === true
+    const proposal = composeProposalV2(material)
+    const document = assembleDocumentV2(
+        material,
+        options.arrange?.(proposal, inputs) ?? proposal,
+        {
+            source: generated ? 'generated' : 'fallback',
+            evidence: recorded ? 'live' : 'synthetic-fixture',
+            fallbackReason: generated ? null : 'fixture',
+            ...(recorded && generated
+                ? {
+                      model: 'muse-wonder-1.0',
+                      effort: 'max',
+                      timing: { timeToProviderMs: 15, providerMs: 3_400, parseValidateMs: 5, totalMs: 3_420 },
+                      usage: { inputTokens: 1_200, cachedTokens: 0, outputTokens: 900, reasoningTokens: 700 },
+                  }
+                : {}),
+        },
+        { sha256Hex, now: (): Date => new Date('2026-01-01T00:00:00.000Z') },
+    )
+    return options.transform?.(document, inputs) ?? document
+}
+
+export function fixtureDocuments(options: DocumentFixtureServerOptions = {}): DocumentFixtureServer {
+    const requests: ModelScreensV2Metadata[] = []
+    type Progress = NonNullable<Extract<ScreensV2Result, { status: 'ok' }>['value']['progress']>
+    type Job = { context: string; documents: Map<string, ScreenDocumentV2>; progress: Progress }
+    const jobs = new Map<string, Job>()
+    const fetch: ModelFetch = async (_url, init): Promise<Response> => {
+        const metadata = modelScreensV2MetadataSchema.parse(JSON.parse(String((init.body as FormData).get('metadata'))))
+        requests.push(metadata)
+        options.onRequest?.(metadata)
+        const unavailable = (): ScreensV2Result => ({
+            status: 'unavailable',
+            requestId: metadata.requestId,
+            binding: null,
+            code: 'provider_error',
+            retryable: false,
+        })
+        const ok = (value: Extract<ScreensV2Result, { status: 'ok' }>['value']): ScreensV2Result => ({
+            status: 'ok',
+            requestId: metadata.requestId,
+            mode: options.recordedMetadata ? 'model' : 'fixture',
+            value,
+        })
+        const value: Extract<ScreensV2Result, { status: 'ok' }>['value'] = {
+            document: null,
+            documents: [],
+            progress: null,
+        }
+        if (metadata.op === 'generate') {
+            await options.gate
+            return Response.json(
+                options.failing?.includes(metadata.kind!)
+                    ? unavailable()
+                    : ok({ ...value, document: documentForV2(inputsFromDocumentMetadata(metadata), options) }),
+            )
+        }
+        if (metadata.session === null) return Response.json(unavailable())
+        const common = {
+            session: metadata.session,
+            uiState: metadata.uiState,
+            completedStepIds: metadata.completedStepIds,
+            requestedKinds: metadata.requestedKinds,
+        }
+        const context = documentJobContextKey(common)
+        const key = `${metadata.session.manualId}:${metadata.session.revision}`
+        if (metadata.op === 'precompute') {
+            const documents = new Map<string, ScreenDocumentV2>()
+            const expected = documentPrecomputeInputs(common)
+            const progress: Progress = {
+                manualId: metadata.session.manualId,
+                revision: metadata.session.revision,
+                contextKey: context,
+                mode: 'full',
+                items: expected.map((item) => ({
+                    key: item.key,
+                    kind: item.inputs.kind,
+                    stepId: item.inputs.stepId,
+                    state: 'queued',
+                    screenId: null,
+                })),
+            }
+            const job: Job = { context, documents, progress }
+            jobs.set(key, job)
+            const finish = (): void => {
+                if (jobs.get(key) !== job) return
+                job.progress = {
+                    ...progress,
+                    items: expected.map((item) => {
+                        if (options.failing?.includes(item.inputs.kind))
+                            return {
+                                key: item.key,
+                                kind: item.inputs.kind,
+                                stepId: item.inputs.stepId,
+                                state: 'failed',
+                                screenId: null,
+                            }
+                        const document = documentForV2(item.inputs, options)
+                        documents.set(item.key, document)
+                        return {
+                            key: item.key,
+                            kind: item.inputs.kind,
+                            stepId: item.inputs.stepId,
+                            state: document.metadata.source === 'generated' ? 'ready' : 'fallback',
+                            screenId: document.screenId,
+                        }
+                    }),
+                }
+            }
+            const gate = options.gate
+            if (gate === undefined) finish()
+            else void gate.then(finish)
+            return Response.json(ok({ ...value, progress: job.progress }))
+        }
+        const job = jobs.get(key)
+        if (job === undefined || job.context !== context) return Response.json(ok(value))
+        if (metadata.op === 'cancel') {
+            jobs.delete(key)
+            return Response.json(
+                ok({
+                    ...value,
+                    progress: {
+                        ...job.progress,
+                        items: job.progress.items.map((item) => ({ ...item, state: 'cancelled' })),
+                    },
+                }),
+            )
+        }
+        return Response.json(
+            ok({
+                ...value,
+                progress: job.progress,
+                documents: metadata.want.flatMap((name) => {
+                    const document = job.documents.get(name)
+                    return document === undefined ? [] : [document]
+                }),
+            }),
+        )
+    }
+    const client = new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: 'ui-fixture-key', fetch })
+    return { requests, screensV2: client.screensV2.bind(client) }
 }

@@ -63,7 +63,7 @@ type Script = {
     /** Answers the overlay call. `reply` wraps a value in the envelope that echoes the request, as the server does. */
     overlay?: (call: {
         signal: AbortSignal | null | undefined
-        reply: (value: unknown) => Response
+        reply: (value: unknown, mode?: 'model' | 'fixture') => Response
     }) => Promise<Response>
     secondOpinion?: (reply: (value: unknown) => Response) => Promise<Response>
     locate?: typeof locateInPhoto
@@ -136,8 +136,8 @@ async function ready(script: Script = {}): Promise<{
         if (path === '/api/checks/overlay') {
             const meta = modelOverlayMetadataSchema.parse(raw)
             overlayForms.push(form)
-            const reply = (value: unknown): Response =>
-                Response.json({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value })
+            const reply = (value: unknown, mode: 'model' | 'fixture' = 'model'): Response =>
+                Response.json({ status: 'ok', mode, requestId: meta.requestId, binding: meta.binding, value })
             return script.overlay === undefined
                 ? reply({ ...overlayBody, nextPartRegion })
                 : script.overlay({ signal: init.signal, reply })
@@ -285,7 +285,10 @@ describe('follow-ups after a published verdict', () => {
     it('lands a fixture overlay that names no model or effort without inventing either, and keeps the decision', async () => {
         const { controller } = await ready({
             overlay: async ({ reply }) =>
-                reply({ evidence: 'synthetic-fixture', observedRegion: overlayBody.observedRegion, nextPartRegion }),
+                reply(
+                    { evidence: 'synthetic-fixture', observedRegion: overlayBody.observedRegion, nextPartRegion },
+                    'fixture',
+                ),
         })
         await check(controller)
         await vi.waitFor(() => expect(controller.getSnapshot().stages?.overlay.status).toBe('landed'))

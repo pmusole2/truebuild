@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from 'react'
+import { READING_CANCELLATION_V2 } from '@truebuild/contracts'
 import { AppUnavailableScreen } from './app-unavailable'
 import type { CaptureController } from './controller'
-import { createController, createScreens } from './controller-factory'
+import { createController, createDocuments } from './controller-factory'
 import { WorkflowContext, type WorkflowValue } from './workflow-context'
 import type { ScreenStore } from '../screens/screen-store'
 import { sessionForPrecompute, sessionForScreens } from '../screens/screen-spec'
 import { testRestoreDelayMs } from './test-controls'
+import type { DocumentStore } from '../document-runtime/store'
+import { homeUiState, pagesUiState } from '../screens/ui-state'
 
 /**
  * The one owner of the capture controller. It is created and restored once above the native Stack and is disposed only
@@ -15,27 +18,31 @@ import { testRestoreDelayMs } from './test-controls'
 export function WorkflowProvider({
     controller,
     screens,
+    documents,
     children,
 }: {
     readonly controller?: CaptureController
     readonly screens?: ScreenStore | null
+    readonly documents?: DocumentStore | null
     readonly children: ReactNode
 }): ReactElement {
-    const [runtime] = useState((): { controller: CaptureController | null; screens: ScreenStore | null } => {
-        if (controller !== undefined) {
-            return { controller, screens: screens ?? null }
-        }
-        try {
-            const created = createScreens()
-            return { controller: createController(created), screens: created }
-        } catch {
-            return { controller: null, screens: null }
-        }
-    })
+    const [runtime] = useState(
+        (): { controller: CaptureController | null; screens: ScreenStore | null; documents: DocumentStore | null } => {
+            if (controller !== undefined) {
+                return { controller, screens: screens ?? null, documents: documents ?? null }
+            }
+            try {
+                const created = documents ?? createDocuments()
+                return { controller: createController(null, created), screens: screens ?? null, documents: created }
+            } catch {
+                return { controller: null, screens: null, documents: null }
+            }
+        },
+    )
     return runtime.controller === null ? (
         <AppUnavailableScreen />
     ) : (
-        <ControllerHost controller={runtime.controller} screens={runtime.screens}>
+        <ControllerHost controller={runtime.controller} screens={runtime.screens} documents={runtime.documents}>
             {children}
         </ControllerHost>
     )
@@ -44,10 +51,12 @@ export function WorkflowProvider({
 function ControllerHost({
     controller,
     screens,
+    documents,
     children,
 }: {
     readonly controller: CaptureController
     readonly screens: ScreenStore | null
+    readonly documents: DocumentStore | null
     readonly children: ReactNode
 }): ReactElement {
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
@@ -88,10 +97,27 @@ function ControllerHost({
         }
         // The step index only picks which page goes first; it must not restart a job already running.
     }, [screens, session])
+    useEffect(() => {
+        if (documents === null || session === undefined || state.loading) return
+        documents.observeSession(session)
+        documents.precompute(
+            session,
+            session.reviewStatus === 'reviewed'
+                ? `guide:${session.reviewedSteps[entry?.stepIndex ?? 0]?.stepId ?? ''}`
+                : null,
+            {
+                ...homeUiState(state.entries),
+                ...(entry === undefined ? {} : pagesUiState(entry)),
+                reading: { cancellation: READING_CANCELLATION_V2 },
+            },
+            entry?.completedStepIds,
+        )
+    }, [documents, session, state.loading, state.entries])
     useEffect(() => (): void => screens?.dispose(), [screens])
+    useEffect(() => (): void => documents?.dispose(), [documents])
     const value = useMemo(
-        (): WorkflowValue => ({ controller, state, entry, screens }),
-        [controller, state, entry, screens],
+        (): WorkflowValue => ({ controller, state, entry, screens, documents }),
+        [controller, state, entry, screens, documents],
     )
     return <WorkflowContext.Provider value={value}>{children}</WorkflowContext.Provider>
 }

@@ -4,17 +4,17 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react-native'
-import { createController, createScreens } from '../capture/controller-factory'
+import { createController, createDocuments, createScreens } from '../capture/controller-factory'
 import {
     measureRenderOriginTree,
     summarizeRenderOriginSession,
     type RenderOriginMeasurement,
     type RenderOriginCheckpoint,
 } from '../../ui/test-support/render-origin-coverage'
-import type { ScreenKind } from '@truebuild/contracts'
-import { flush, mount, press, type Mounted } from './test-support/flow'
+import { SCREEN_KINDS_V2, type ScreenKindV2 as ScreenKind } from '@truebuild/contracts'
+import { flush, loadPhoto, mount, press, type Mounted } from './test-support/flow'
 import { deferred, entry, source, type Replies } from './test-support/route-harness'
-import type { FixtureServerOptions } from './test-support/fixture-server'
+import type { DocumentFixtureServerOptions as FixtureServerOptions } from './test-support/fixture-server'
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 
@@ -35,7 +35,11 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('../capture/controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn() }))
+jest.mock('../capture/controller-factory', () => ({
+    createController: jest.fn(),
+    createScreens: jest.fn(),
+    createDocuments: jest.fn(),
+}))
 jest.mock('./judge-storage', () => {
     const values = new Map<string, string>()
     return {
@@ -79,24 +83,11 @@ afterEach(async () => {
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
     jest.mocked(createScreens).mockReset()
+    jest.mocked(createDocuments).mockReset()
     await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: false }))
 })
 
-const ALL_KINDS: readonly ScreenKind[] = [
-    'home',
-    'add',
-    'pages',
-    'reading',
-    'quick-check',
-    'guide',
-    'result',
-    'questions',
-    'answer',
-    'more',
-    'completion',
-    'error',
-    'recovery',
-]
+const ALL_KINDS: readonly ScreenKind[] = SCREEN_KINDS_V2
 
 type Mode = 'generated' | 'fallback' | 'off'
 const MODES: readonly { readonly mode: Mode; readonly sessionId: string }[] = [
@@ -119,8 +110,8 @@ const options = (mode: Mode, extra: FixtureServerOptions = {}): { screens: Fixtu
 const settle = async (): Promise<void> => {
     await flush()
 }
-const startBuilding = async (mode: Mode): Promise<void> => {
-    await press(mode === 'off' ? 'Keep building' : 'Continue building')
+const startBuilding = async (_mode: Mode): Promise<void> => {
+    await press('Continue building')
 }
 const atGuide = async (
     mode: Mode,
@@ -131,13 +122,14 @@ const atGuide = async (
     const mounted = await mount(entries, { ...options(mode, extra), ...(replies === undefined ? {} : { replies }) })
     await startBuilding(mode)
     await waitFor(() => expect(mounted.view.getPathname()).toBe('/guide/flow-manual'))
-    await screen.findByText(/Step 1: /u)
+    await screen.findByText(/^Step 1 of \d+$/u)
     await settle()
     return mounted
 }
 const check = async (mounted: Mounted): Promise<void> => {
     await press('Take photo')
     await act(async () => mounted.controller.shutter(async () => source))
+    if (mounted.controller.getSnapshot().check !== null) await loadPhoto()
     await settle()
 }
 const measureLayout = async (): Promise<void> => {
@@ -175,7 +167,7 @@ const checkpoints: readonly Checkpoint[] = [
         id: 'empty',
         run: async ({ mode }): Promise<Mounted> => {
             const mounted = await mount([], options(mode))
-            await press(mode === 'off' ? 'Add manual' : 'Add a manual')
+            await press('Add a manual')
             await waitFor(() => expect(mounted.view.getPathname()).toBe('/add'))
             await settle()
             return mounted
@@ -186,7 +178,7 @@ const checkpoints: readonly Checkpoint[] = [
         id: 'one-page',
         run: async ({ mode }): Promise<Mounted> => {
             const mounted = await mount([], options(mode))
-            await press(mode === 'off' ? 'Add manual' : 'Add a manual')
+            await press('Add a manual')
             await waitFor(() => expect(mounted.view.getPathname()).toBe('/add'))
             await act(async () => mounted.controller.importPages(async () => [source]))
             await settle()
@@ -199,10 +191,10 @@ const checkpoints: readonly Checkpoint[] = [
         run: async ({ mode }): Promise<Mounted> => {
             const gate = deferred<void>()
             const mounted = await mount([], { ...options(mode), replies: { parse: gate.promise } })
-            await press(mode === 'off' ? 'Add manual' : 'Add a manual')
+            await press('Add a manual')
             await waitFor(() => expect(mounted.view.getPathname()).toBe('/add'))
             await act(async () => mounted.controller.importPages(async () => [source]))
-            await press('Read my manual')
+            await press('Read manual')
             await waitFor(() => expect(mounted.view.getPathname()).toMatch(/^\/reading\//u))
             await settle()
             return mounted
@@ -213,10 +205,10 @@ const checkpoints: readonly Checkpoint[] = [
         id: 'after-reading',
         run: async ({ mode }): Promise<Mounted> => {
             const mounted = await mount([], options(mode))
-            await press(mode === 'off' ? 'Add manual' : 'Add a manual')
+            await press('Add a manual')
             await waitFor(() => expect(mounted.view.getPathname()).toBe('/add'))
             await act(async () => mounted.controller.importPages(async () => [source]))
-            await press('Read my manual')
+            await press('Read manual')
             await waitFor(() => expect(mounted.view.getPathname()).toMatch(/^\/check\//u))
             await settle()
             return mounted
@@ -349,7 +341,7 @@ const checkpoints: readonly Checkpoint[] = [
         id: 'all-steps-done',
         run: async ({ mode }): Promise<Mounted> => {
             const mounted = await mount([done], options(mode))
-            await press(mode === 'off' ? 'See finished build' : 'Continue building')
+            await press('Continue building')
             await waitFor(() => expect(mounted.view.getPathname()).toBe('/done/flow-manual'))
             await settle()
             return mounted
@@ -396,7 +388,9 @@ describe('render-origin diagnostic matrix (synthetic documents, remounted route 
             results.set(mode, [...(results.get(mode) ?? []), measured])
             if (mode === 'off') {
                 // Off is the original app: not one host element is claimed as composed.
-                expect(measured.counts.generated + measured.counts.fallback).toBe(0)
+                expect(measured.counts.generated).toBe(0)
+                expect(measured.counts.fallback).toBeGreaterThan(0)
+                expect(mounted.server.requests).toEqual([])
             }
             if (mode === 'fallback') expect(measured.counts.generated).toBe(0)
             failures.length = 0
@@ -412,10 +406,10 @@ describe('render-origin diagnostic matrix (synthetic documents, remounted route 
                 mode,
                 note:
                     mode === 'generated'
-                        ? 'Documents carry test-input metadata that claims a model; nothing here is output of any model.'
+                        ? 'Documents are explicitly synthetic generated examples with null model, timing and usage; not model output.'
                         : mode === 'fallback'
                           ? 'Documents are deterministic fallbacks marked fixture, as the fixture runtime composes them.'
-                          : 'GENERATIVE_UI off: the original screens, no screens request.',
+                          : 'GENERATIVE_UI off: complete local fallback documents, no screens request.',
                 summary: {
                     status: summary.status,
                     counts: summary.counts,
@@ -436,7 +430,7 @@ describe('render-origin diagnostic matrix (synthetic documents, remounted route 
         const directory = resolve(__dirname, '../../../../.local/ai-effort')
         mkdirSync(directory, { recursive: true })
         writeFileSync(
-            resolve(directory, 'coverage.json'),
+            resolve(directory, 'coverage-v2-route-matrix.json'),
             `${JSON.stringify(
                 {
                     generatedAt: new Date().toISOString(),
@@ -449,7 +443,9 @@ describe('render-origin diagnostic matrix (synthetic documents, remounted route 
                         'the native Stack header and OS chrome (outside the JS host tree)',
                         'a percentage target: none is claimed here',
                     ],
-                    screenKinds: ALL_KINDS,
+                    screenKinds: [...new Set(checkpoints.map((point) => point.screen))],
+                    catalogKinds: ALL_KINDS,
+                    unmeasuredKinds: ALL_KINDS.filter((kind) => !checkpoints.some((point) => point.screen === kind)),
                     fixedMatrix: checkpoints.map((point) => `${point.screen}/${point.id}`),
                     sessions,
                 },

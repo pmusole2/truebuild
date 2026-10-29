@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
 import { DeviceEventEmitter } from 'react-native'
 import { act, cleanup, fireEvent, screen, waitFor, type RenderResult } from '@testing-library/react-native'
-import { createDemoManual, type ParsedManual } from '@truebuild/contracts'
+import { createDemoManual, COACH_COPY_V2, type ParsedManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
 import { onboardingStorage } from './coach-storage'
@@ -47,7 +47,17 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('../capture/controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn(() => null) }))
+jest.mock('../capture/controller-factory', () => ({
+    createController: jest.fn(),
+    createScreens: jest.fn(() => null),
+    createDocuments: jest.fn(
+        () =>
+            new (jest.requireActual('../document-runtime/store').DocumentStore)({
+                mode: 'off',
+                id: (): string => 'route-test',
+            }),
+    ),
+}))
 jest.unmock('react-native/Libraries/AppState/AppState')
 // Use real AppState subscriptions/currentState updates over the native OS bridge, rather than Jest's inert AppState.
 jest.mock('react-native/Libraries/AppState/NativeAppState', () => ({
@@ -187,7 +197,14 @@ async function mount(): Promise<Awaited<ReturnType<typeof renderRouter>>> {
 
 async function press(name: string): Promise<void> {
     await layoutCoachBubble()
-    await fireEvent.press(screen.getByRole('button', { name }))
+    const stable: Record<string, string> = {
+        'Add manual': 'home-add',
+        'Keep building': 'keep-building',
+        'Close sheet': 'close-sheet',
+    }
+    await fireEvent.press(
+        stable[name] === undefined ? screen.getByRole('button', { name }) : screen.getByTestId(stable[name]!),
+    )
 }
 
 beforeEach(() => {
@@ -267,7 +284,7 @@ it('runs the real Home action once, keeps seen above Stack across push/pop, and 
     const { controller, calls, restore, dispose } = await runtime()
     const create = jest.spyOn(controller, 'createManual')
     const view = await mount()
-    expect(await screen.findByText('Tap here to add your paper manual.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['home-add']!.body)).toBeTruthy()
     await layoutCoachBubble()
     const tap = handlerFor('coach-target-hole')
     await act(async () => {
@@ -276,7 +293,7 @@ it('runs the real Home action once, keeps seen above Stack across push/pop, and 
     })
     await waitFor(() => expect(view.getPathname()).toBe('/add'))
     expect(create).toHaveBeenCalledTimes(1)
-    expect(await screen.findByText('Take a photo of each page.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['take-page-photo']!.body)).toBeTruthy()
     expect(seen()).toEqual(['home'])
     expect(jest.mocked(onboardingStorage.getItem)).toHaveBeenCalledTimes(1)
     await press('Skip tips')
@@ -298,7 +315,7 @@ it('resets all tips from the actual More sheet and reoffers the already mounted 
     expect(screen.queryByTestId('coach-overlay')).toBeNull()
     await press('More')
     await fireEvent.press(await screen.findByTestId('show-tips-again'))
-    expect(await screen.findByText('Tap here to add your paper manual.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['home-add']!.body)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Close sheet' })).toBeNull()
     expect(seen()).toEqual([])
     expect(create).not.toHaveBeenCalled()
@@ -310,9 +327,11 @@ it('pauses the real Pages tour during pending work and background without burnin
     const { controller, calls } = await runtime()
     const view = await mount()
     await pressCoach('coach-skip')
+    await waitFor(() => expect(screen.queryByTestId('coach-overlay')).toBeNull())
+    expect(seen()).toEqual(['home'])
     await press('Add manual')
     expect(view.getPathname()).toBe('/add')
-    expect(await screen.findByText('Take a photo of each page.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['take-page-photo']!.body)).toBeTruthy()
     let importing!: Promise<void>
     await act(async () => {
         importing = controller.importPages(() => gate.promise)
@@ -328,7 +347,7 @@ it('pauses the real Pages tour during pending work and background without burnin
     await settle()
     expect(screen.queryByTestId('coach-overlay')).toBeNull()
     await act(async () => DeviceEventEmitter.emit('appStateDidChange', { app_state: 'active' }))
-    expect(await screen.findByText('Take a photo of each page.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['take-page-photo']!.body)).toBeTruthy()
     expect(seen()).toEqual(['home'])
     expect(calls).toEqual([])
 })
@@ -338,13 +357,13 @@ it('binds the native-header More target to the current route sheet and suppresse
     await mount()
     await screen.findByTestId('coach-next')
     await pressCoach('coach-next')
-    expect(await screen.findByText('Tap More for help and settings.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['header-more']!.body)).toBeTruthy()
     await pressCoach('coach-target-hole')
     expect(await screen.findByTestId('show-tips-again')).toBeTruthy()
     expect(screen.queryByTestId('coach-overlay')).toBeNull()
     expect(seen()).toEqual(['home'])
     await fireEvent.press(screen.getByTestId('show-tips-again'))
-    expect(await screen.findByText('Tap here to add your paper manual.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['home-add']!.body)).toBeTruthy()
 })
 
 it('keeps the focused Guide tour after another manual Guide is pushed and popped', async () => {
@@ -353,23 +372,23 @@ it('keeps the focused Guide tour after another manual Guide is pushed and popped
     const camera = jest.spyOn(controller, 'camera')
     const view = await mount()
     await press('Open first-manual')
-    expect(await screen.findByText('This picture shows what to build.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['guide-hero']!.body)).toBeTruthy()
     // iOS 26 defaults to full-screen pop, which otherwise steals the hero's previous-step swipe.
     expect(nativeScreenOption('guide/', 'gestureResponseDistance')).toEqual({ start: -1, end: 44, top: -1, bottom: -1 })
     expect(nativeScreenOption('index:', 'gestureResponseDistance')).toEqual({ start: -1, end: -1, top: -1, bottom: -1 })
     await pressCoach('coach-next')
-    expect(await screen.findByText('Take a photo to check your work.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['guide-primary']!.body)).toBeTruthy()
     await testRouter.push('/guide/second-manual')
     await waitFor(() => expect(controller.current?.session.manualId).toBe('second-manual'))
     expect(screen.queryByTestId('coach-overlay')).toBeNull()
     // The native test bridge does not deliver onAppear for a second instance of the same route.
     // Deliver that OS boundary explicitly; the real Stack handler emits transitionEnd.
     await act(async () => (nativeScreenOption('guide/', 'onAppear') as () => void)())
-    expect(await screen.findByText('Take a photo to check your work.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['guide-primary']!.body)).toBeTruthy()
     await testRouter.back('/guide/first-manual')
     await waitFor(() => expect(controller.current?.session.manualId).toBe('first-manual'))
     await act(async () => (nativeScreenOption('guide/', 'onAppear') as () => void)())
-    expect(await screen.findByText('Take a photo to check your work.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['guide-primary']!.body)).toBeTruthy()
     expect(seen()).toEqual([])
     await pressCoach('coach-target-hole')
     await waitFor(() => expect(view.getPathname()).toBe('/camera'))
@@ -401,16 +420,16 @@ it('ignores an old route target callback after focus moves and a new tour is vis
     const { controller, calls } = await runtime([entry()])
     const camera = jest.spyOn(controller, 'camera')
     await mount()
-    expect(await screen.findByText('Tap here to pick up where you left off.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['keep-building']!.body)).toBeTruthy()
     await layoutCoachBubble()
     const staleHomeTap = handlerFor('coach-target-hole')
     await testRouter.push('/guide/navigation-manual')
-    expect(await screen.findByText('This picture shows what to build.')).toBeTruthy()
+    expect(await screen.findByText(COACH_COPY_V2['guide-hero']!.body)).toBeTruthy()
     await act(async () => staleHomeTap?.())
     await settle()
     // An already queued event from a blurred route must not consume the focused route's different step.
-    expect(screen.getByText('This picture shows what to build.')).toBeTruthy()
-    expect(screen.queryByText('Take a photo to check your work.')).toBeNull()
+    expect(screen.getByText(COACH_COPY_V2['guide-hero']!.body)).toBeTruthy()
+    expect(screen.queryByText(COACH_COPY_V2['guide-primary']!.body)).toBeNull()
     expect(camera).not.toHaveBeenCalled()
     expect(onboardingStorage.setItem).not.toHaveBeenCalled()
     expect(calls).toEqual([])

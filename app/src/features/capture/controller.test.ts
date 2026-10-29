@@ -967,12 +967,14 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect(controller.getSnapshot().capture).toBeNull()
         await controller.shutter(async () => photo)
         expect(controller.getSnapshot().capture?.binding.captureId).not.toBe(captureId)
-        controller.questionChanged('Which way should this panel face?')
+        controller.questionChanged('  Which way should this panel face?  ')
         controller.targetChanged({ kind: 'point', x: 0.3, y: 0.5 })
         await controller.ask()
         expect(controller.getSnapshot().answer?.answer).toBe('Check the expected diagram.')
+        expect(controller.getSnapshot().answeredQuestion).toBe('Which way should this panel face?')
         controller.questionChanged('A different question')
         expect(controller.getSnapshot().answer).toBeNull()
+        expect(controller.getSnapshot().answeredQuestion).toBeNull()
     })
 
     it('discards a camera result after the step changes without dispatching a check', async () => {
@@ -1109,12 +1111,14 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         controller.targetChanged({ kind: 'point', x: 0.4, y: 0.5 })
         await controller.ask()
         const previous = controller.getSnapshot().capture!.binding.captureId
+        expect(controller.getSnapshot().answeredQuestion).toBe('Which way should the panel face?')
         controller.camera({ kind: 'question' })
         await controller.shutter(async () => photo)
         expect(controller.getSnapshot().question).toBe('Which way should the panel face?')
         expect(controller.getSnapshot().capture?.binding.captureId).not.toBe(previous)
         expect(controller.getSnapshot().target).toBeNull()
         expect(controller.getSnapshot().answer).toBeNull()
+        expect(controller.getSnapshot().answeredQuestion).toBeNull()
     })
 
     it('allows noncritical annotations while reporting and blocking actual unresolved critical facts', () => {

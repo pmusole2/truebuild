@@ -4,6 +4,7 @@ import type { LibraryEntry } from '../capture/library'
 import { stopFor } from '../capture/plain-copy'
 import { otherBlockers } from '../capture/quick-check-model'
 import type { QuickProgress } from '../capture/review-screen'
+import { manualDisplayTitle } from '../documents/manual-title'
 
 const MAX_TITLE = 200
 const MAX_REASON = 500
@@ -24,7 +25,7 @@ export function homeUiState(entries: readonly LibraryEntry[]): ScreenUiState {
         library: {
             entries: recent.slice(0, 100).map((entry) => ({
                 manualId: entry.session.manualId,
-                title: clip(entry.session.title.trim() === '' ? 'Untitled build' : entry.session.title, MAX_TITLE),
+                title: clip(manualDisplayTitle(entry.session), MAX_TITLE),
                 updatedAt: entry.session.updatedAt,
                 stopStepId:
                     stopFor(entry) === 'guide' ? (entry.session.reviewedSteps[entry.stepIndex]?.stepId ?? null) : null,

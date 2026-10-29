@@ -14,16 +14,17 @@ import { proofEvidenceLabel } from '../src/features/screens/proof-mode'
 import { ColdStartProvider } from '../src/ui/cold-start'
 import { FeedbackProvider } from '../src/ui/feedback'
 import { nativeHaptics } from '../src/ui/haptics'
+import { DocumentNavigationRoot, DocumentOwnershipProvider } from '../src/features/documents/ownership'
 
-// One fixed native header for every screen but the camera. The capture controller lives above the Stack, so pushing,
-// popping and swiping back never recreate it or clear a photo, a result or a draft.
+// Documents own the visible header. The native Stack retains transitions and Back gestures; the controller above it
+// preserves the held photo, result and draft across pushes, pops and swipes.
 function ThemedStack(): ReactElement {
     const header = useHeaderStyle()
     const { colors } = useTheme()
     return (
         <>
             <StatusBar style={statusBarStyleFor(colors)} />
-            <Stack screenOptions={{ ...header, headerBackButtonDisplayMode: 'minimal' }}>
+            <Stack screenOptions={{ ...header, headerShown: false, headerBackButtonDisplayMode: 'minimal' }}>
                 <Stack.Screen name="index" options={{ title: 'TrueBuild' }} />
                 <Stack.Screen
                     name="camera"
@@ -41,24 +42,28 @@ function ThemedStack(): ReactElement {
 
 export default function RootLayout(): ReactElement {
     return (
-        <SafeAreaProvider>
-            <ThemeProvider>
-                <FeedbackProvider haptics={nativeHaptics}>
-                    <JudgeProvider>
-                        <NativeMeterProvider enabled={proofEvidenceLabel() === null ? undefined : true}>
-                            <WorkflowProvider>
-                                <ColdStartProvider>
-                                    <AppCoachProvider>
-                                        <ThemedStack />
-                                        <MeterTriggers />
-                                    </AppCoachProvider>
-                                </ColdStartProvider>
-                                <NativeRouteSync />
-                            </WorkflowProvider>
-                        </NativeMeterProvider>
-                    </JudgeProvider>
-                </FeedbackProvider>
-            </ThemeProvider>
-        </SafeAreaProvider>
+        <DocumentOwnershipProvider>
+            <DocumentNavigationRoot>
+                <SafeAreaProvider>
+                    <ThemeProvider>
+                        <FeedbackProvider haptics={nativeHaptics}>
+                            <JudgeProvider>
+                                <NativeMeterProvider enabled={proofEvidenceLabel() === null ? undefined : true}>
+                                    <WorkflowProvider>
+                                        <ColdStartProvider>
+                                            <AppCoachProvider>
+                                                <ThemedStack />
+                                                <MeterTriggers />
+                                            </AppCoachProvider>
+                                        </ColdStartProvider>
+                                        <NativeRouteSync />
+                                    </WorkflowProvider>
+                                </NativeMeterProvider>
+                            </JudgeProvider>
+                        </FeedbackProvider>
+                    </ThemeProvider>
+                </SafeAreaProvider>
+            </DocumentNavigationRoot>
+        </DocumentOwnershipProvider>
     )
 }

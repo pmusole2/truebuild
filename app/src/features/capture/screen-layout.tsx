@@ -44,7 +44,17 @@ export function useHeroHeight(keyboard = false): number {
 }
 
 /** Canvas fill for a screen body; the native header above and the fixed bar below belong to the screen, not to this. */
-export function ScreenBody({ children, testID }: { children: ReactNode; testID?: string }): ReactElement {
+export function ScreenBody({
+    children,
+    testID,
+    nativeID,
+    insetTop = 0,
+}: {
+    children: ReactNode
+    testID?: string
+    nativeID?: string
+    insetTop?: number
+}): ReactElement {
     const { colors } = useTheme()
     // The host meter counts the whole document this screen sits in; it only needs a ref to reach it.
     const root = useRef<ComponentRef<typeof View>>(null)
@@ -53,8 +63,9 @@ export function ScreenBody({ children, testID }: { children: ReactNode; testID?:
         <View
             ref={attachRoot}
             testID={testID}
+            nativeID={nativeID}
             collapsable={false}
-            style={[styles.body, { backgroundColor: colors.canvas }]}
+            style={[styles.body, { backgroundColor: colors.canvas, paddingTop: insetTop }]}
         >
             {children}
         </View>
@@ -78,6 +89,7 @@ export function TextRegion({
             style={styles.region}
             contentContainerStyle={[styles.regionContent, compact && styles.regionCompact]}
             keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled={true}
             contentInsetAdjustmentBehavior="never"
         >
             {children}

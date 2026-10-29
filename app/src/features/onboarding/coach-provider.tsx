@@ -571,7 +571,8 @@ function sameReport(a: CoachReport, b: CoachReport): boolean {
                 candidate.id === other.id &&
                 candidate.kind === other.kind &&
                 candidate.heading === other.heading &&
-                candidate.sentence === other.sentence
+                candidate.sentence === other.sentence &&
+                candidate.textOrigin === other.textOrigin
             )
         })
     )

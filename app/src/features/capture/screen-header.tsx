@@ -77,7 +77,8 @@ export function HeaderTitle({
             accessibilityRole="header"
             accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
         >
-            <Heading numberOfLines={1}>{title}</Heading>
+            {/* Titles wrap at the largest native fonts; height is content-driven so nothing clips or overlaps. */}
+            <Heading>{title}</Heading>
             {subtitle === undefined ? null : <Caption>{subtitle}</Caption>}
         </View>
     )

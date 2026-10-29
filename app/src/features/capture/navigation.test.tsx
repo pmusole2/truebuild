@@ -2,14 +2,22 @@
 
 import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
-import { AppState, DeviceEventEmitter } from 'react-native'
+import { AppState, DeviceEventEmitter, Linking } from 'react-native'
 import { router } from 'expo-router'
 import { act, cleanup, fireEvent, screen, waitFor, type RenderResult } from '@testing-library/react-native'
-import { createDemoManual, type CheckResult, type ParsedManual } from '@truebuild/contracts'
+import { createDemoManual, screenDocumentV2Schema, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
 import { CaptureController } from './controller'
 import { createController } from './controller-factory'
+import RootLayout from '../../../app/_layout'
+import IndexRoute from '../../../app/index'
+import { DocumentRouteBoundary } from '../documents/ownership'
+import { DocumentRenderer } from '../documents/document-renderer'
+import { hostsOutsideDocuments, type OwnershipTree } from '../documents/ownership-audit'
+import { View } from 'react-native'
+import { BottomSheet } from '../../ui/sheet'
+import { DocumentSurface } from './document-surface'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
 
 // The production root layout, provider, Stack, route files, screens and controller run unchanged. Only construction
@@ -33,7 +41,17 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('./controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn(() => null) }))
+jest.mock('./controller-factory', () => ({
+    createController: jest.fn(),
+    createScreens: jest.fn(() => null),
+    createDocuments: jest.fn(
+        () =>
+            new (jest.requireActual('../document-runtime/store').DocumentStore)({
+                mode: 'off',
+                id: (): string => 'route-test',
+            }),
+    ),
+}))
 jest.unmock('react-native/Libraries/AppState/AppState')
 // Use real AppState subscriptions/currentState updates over the native OS bridge, rather than Jest's inert AppState.
 jest.mock('react-native/Libraries/AppState/NativeAppState', () => ({
@@ -57,7 +75,9 @@ jest.mock('expo-camera', () => ({
 
 // Load the actual harness without its old matcher declaration, which clashes with RNTL 14's typed matchers.
 const { renderRouter, testRouter } = jest.requireActual<{
-    renderRouter: (directory: string) => Promise<RenderResult & { getPathname: () => string }>
+    renderRouter: (
+        directory: string | { appDir: string; overrides: Record<string, unknown> },
+    ) => Promise<RenderResult & { getPathname: () => string }>
     testRouter: {
         push: (path: string) => Promise<void>
         back: (path?: string) => Promise<void>
@@ -134,6 +154,7 @@ async function runtime(
         parse?: ReturnType<typeof deferred<void>>
         check?: ReturnType<typeof deferred<void>>
         parseFailureOnce?: boolean
+        storageUnavailable?: boolean
     } = {},
 ): Promise<{
     controller: CaptureController
@@ -142,12 +163,24 @@ async function runtime(
     capturedLanguages: string[]
     restore: jest.SpyInstance
     dispose: jest.SpyInstance
+    writes: string[]
 }> {
     const data = new Map<string, string>()
+    const writes: string[] = []
+    let controllerRestore = false
     const kv: KeyValueStorage = {
-        getItem: async (key) => data.get(key) ?? null,
-        setItem: async (key, value) => void data.set(key, value),
-        removeItem: async (key) => void data.delete(key),
+        getItem: async (key) => {
+            if (controllerRestore && gates.storageUnavailable === true) throw new Error('Synthetic storage unavailable')
+            return data.get(key) ?? null
+        },
+        setItem: async (key, value) => {
+            writes.push(key)
+            data.set(key, value)
+        },
+        removeItem: async (key) => {
+            writes.push(key)
+            data.delete(key)
+        },
         getAllKeys: async () => [...data.keys()],
     }
     const storage = new LibraryStorage(kv, digest)
@@ -158,6 +191,7 @@ async function runtime(
             entries.flatMap((item) => item.session.pages.map((page) => ({ assetId: page.assetId, bytes }))),
         )
     }
+    controllerRestore = true
     const calls: string[] = []
     const capturedLanguages: string[] = []
     const fetch: ModelFetch = async (url, init) => {
@@ -206,7 +240,7 @@ async function runtime(
     const restore = jest.spyOn(controller, 'restore')
     const dispose = jest.spyOn(controller, 'dispose')
     jest.mocked(createController).mockReturnValue(controller)
-    return { controller, storage, calls, capturedLanguages, restore, dispose }
+    return { controller, storage, calls, capturedLanguages, restore, dispose, writes }
 }
 
 async function mount(): Promise<Awaited<ReturnType<typeof renderRouter>>> {
@@ -217,7 +251,24 @@ async function mount(): Promise<Awaited<ReturnType<typeof renderRouter>>> {
 }
 
 async function press(name: string): Promise<void> {
-    await fireEvent.press(screen.getByRole('button', { name }))
+    const stable: Record<string, string> = {
+        'Add manual': 'home-add',
+        'Keep building': 'keep-building',
+        'Read my manual': 'read-manual',
+        'Start building': 'quick-check-start',
+        'Take photo': 'guide-primary',
+        'Next step': 'guide-primary',
+        Finish: 'guide-primary',
+        'All builds': 'done-home',
+        'Back to Home': 'done-home',
+        'Answer a few questions': 'keep-building',
+        'Add a page': 'add-page',
+        'Close sheet': 'close-sheet',
+        'Go back': 'camera-close',
+    }
+    await fireEvent.press(
+        stable[name] === undefined ? screen.getByRole('button', { name }) : screen.getByTestId(stable[name]!),
+    )
 }
 
 afterEach(async () => {
@@ -225,6 +276,37 @@ afterEach(async () => {
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
     jest.useRealTimers()
+})
+
+it('offers one authored Home restore action after a real storage read failure, with no writes or model dispatch', async () => {
+    const gates = { storageUnavailable: true }
+    const { controller, restore, writes, calls } = await runtime([], gates)
+    await mount()
+    expect(await screen.findByText('Saving is paused until your saved builds open again.')).toBeTruthy()
+    expect(controller.getSnapshot().storageReadOnly).toBe(true)
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1)
+    expect(screen.getByTestId('retry-library')).toBeTruthy()
+    expect(writes).toEqual([])
+    await fireEvent.press(screen.getByTestId('retry-library'))
+    await waitFor(() => expect(restore).toHaveBeenCalledTimes(2))
+    expect(controller.getSnapshot().storageReadOnly).toBe(true)
+    expect(writes).toEqual([])
+    gates.storageUnavailable = false
+    await fireEvent.press(screen.getByTestId('retry-library'))
+    await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(false))
+    expect(screen.getByTestId('home-add')).toBeTruthy()
+    expect(writes).toEqual([])
+    expect(calls).toEqual([])
+})
+
+it('keeps the authored Home More device-settings action on its native OS port', async () => {
+    const settings = jest.spyOn(Linking, 'openSettings').mockResolvedValue()
+    const { calls } = await runtime()
+    await mount()
+    await press('More')
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open device settings' }))
+    expect(settings).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual([])
 })
 
 it('replaces Reading with Quick check, keeps Add in Back history, and explicitly confirms before Guide', async () => {
@@ -240,7 +322,7 @@ it('replaces Reading with Quick check, keeps Add in Back history, and explicitly
     await act(async () => parse.resolve())
     await waitFor(() => expect(view.getPathname()).toBe('/check/manual-navigation-1'))
     expect(controller.current?.session.reviewStatus).toBe('unreviewed')
-    expect(screen.getByRole('button', { name: 'Start building' })).toBeTruthy()
+    expect(screen.getByTestId('quick-check-start')).toBeTruthy()
     await testRouter.back('/add')
     expect(controller.current?.session.pages).toHaveLength(1)
     await testRouter.back('/')
@@ -285,7 +367,11 @@ it('keeps the same photo, result and question draft across native Back, Home res
         question: 'Should this groove face inward?',
         target: { kind: 'part', partId: 'side-panel' },
     })
-    expect(screen.getByText('Looks right. The groove faces inward.')).toBeTruthy()
+    await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 300, height: 200 } },
+    })
+    await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+    expect(screen.getByText('The groove faces inward.')).toBeTruthy()
     expect(calls).toHaveLength(1)
     await act(async () => controller.ask())
     const answer = controller.getSnapshot().answer
@@ -333,7 +419,11 @@ it('keeps one pending check alive across background, foreground and route change
     })
     expect(controller.getSnapshot().pending).toBeNull()
     expect(controller.getSnapshot().check?.decision).toBe('pass')
-    expect(screen.getByText('Looks right. The groove faces inward.')).toBeTruthy()
+    await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 300, height: 200 } },
+    })
+    await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+    expect(screen.getByText('The groove faces inward.')).toBeTruthy()
     expect(calls).toHaveLength(1)
 })
 
@@ -356,6 +446,7 @@ it('asks before native Back cancels Reading, preserves pages, and ignores the st
     await press('Stop reading')
     await waitFor(() => expect(view.getPathname()).toBe('/add'))
     await act(async () => parse.resolve())
+    expect(screen.getAllByText('Stopped, so nothing more will be shown.')).toHaveLength(1)
     expect(controller.current?.session.pages).toEqual(pages)
     expect(controller.current?.session.rawExtraction).toBeNull()
     expect(controller.current?.session.reviewStatus).toBe('unreviewed')
@@ -372,7 +463,6 @@ it('returns from Camera through native Back and its close control without losing
     await act(async () => controller.importPages(async () => [source]))
     const pages = controller.current!.session.pages
     await press('Add a page')
-    await press('Take photo')
     expect(view.getPathname()).toBe('/camera')
     await act(async () => router.back())
     await waitFor(() => expect(view.getPathname()).toBe('/add'))
@@ -380,7 +470,6 @@ it('returns from Camera through native Back and its close control without losing
     expect(controller.current?.session.manualId).toBe('manual-navigation-1')
     expect(controller.current?.session.pages).toEqual(pages)
     await press('Add a page')
-    await press('Take photo')
     expect(view.getPathname()).toBe('/camera')
     // The denied-permission hardware boundary still renders the production CameraStage Back control.
     await press('Go back')
@@ -414,11 +503,19 @@ it('marks each passed step before moving forward and reaches Done through the ac
     await press('Keep building')
     await press('Take photo')
     await act(async () => controller.shutter(async () => source))
+    await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 300, height: 200 } },
+    })
+    await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
     await press('Next step')
     expect(controller.current?.stepIndex).toBe(1)
     expect(controller.current?.completedStepIds).toEqual(['step-1'])
     await press('Take photo')
     await act(async () => controller.shutter(async () => source))
+    await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 300, height: 200 } },
+    })
+    await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
     await press('Finish')
     await waitFor(() => expect(view.getPathname()).toBe('/done/navigation-manual'))
     expect(screen.getByTestId('done-screen')).toBeTruthy()
@@ -466,7 +563,7 @@ it.each([
         await fireEvent.press(screen.getByRole('radio', { name }))
     }
     await press('Close sheet')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Read my manual' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('read-manual')).toBeTruthy())
     await press('Read my manual')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
     expect(view.getPathname()).toBe('/reading/english-manual')
@@ -480,4 +577,124 @@ it.each([
         'https://navigation.invalid/api/manuals/parse',
         'https://navigation.invalid/api/manuals/parse',
     ])
+})
+
+type TestFiber = { type: unknown; memoizedProps?: Record<string, unknown>; return: TestFiber | null }
+function actualDocumentIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const host of screen.container.queryAll(() => true)) {
+        let fiber = host.unstable_fiber as unknown as TestFiber | null
+        while (fiber !== null) {
+            if (fiber.type === DocumentRenderer) {
+                const parsed = screenDocumentV2Schema.parse(fiber.memoizedProps?.document)
+                ids.add(parsed.screenId)
+            }
+            fiber = fiber.return
+        }
+    }
+    expect(ids.size).toBeGreaterThan(0)
+    return ids
+}
+function actualRoot(): OwnershipTree {
+    const root = screen.getByTestId('document-navigation-root')
+    let fiber = root.unstable_fiber as unknown as TestFiber | null
+    let found = false
+    while (fiber !== null) {
+        if (fiber.type === RootLayout) found = true
+        fiber = fiber.return
+    }
+    expect(found).toBe(true)
+    return root as unknown as OwnershipTree
+}
+
+it('owns the real production RootLayout navigator and routes through validated v2 documents', async () => {
+    await runtime([entry()])
+    await mount()
+    const checkOwnership = (): void => expect(hostsOutsideDocuments(actualRoot(), actualDocumentIds())).toEqual([])
+    await waitFor(checkOwnership)
+    await press('Keep building')
+    await waitFor(checkOwnership)
+    await testRouter.push('/check/navigation-manual')
+    await waitFor(checkOwnership)
+    await testRouter.back('/guide/navigation-manual')
+    await press('Take photo')
+    await waitFor(checkOwnership)
+})
+
+it('rejects a stray native route sibling even inside the real document-owned navigator', async () => {
+    await runtime()
+    await renderRouter({
+        appDir: resolve(__dirname, '../../../app'),
+        overrides: {
+            index: {
+                default: (): ReactModule.ReactElement => (
+                    <DocumentRouteBoundary>
+                        <IndexRoute />
+                        <View testID="unowned-route-leftover" />
+                    </DocumentRouteBoundary>
+                ),
+            },
+        },
+    })
+    await waitFor(() => expect(screen.getByTestId('library-screen')).toBeTruthy())
+    await waitFor(() =>
+        expect(hostsOutsideDocuments(actualRoot(), actualDocumentIds())).toContain('View#unowned-route-leftover'),
+    )
+})
+
+it.each([false, true])(
+    'audits actual document-frame Modal content with an injected stray sibling=%s',
+    async (stray) => {
+        await runtime()
+        await renderRouter({
+            appDir: resolve(__dirname, '../../../app'),
+            overrides: {
+                index: {
+                    default: (): ReactModule.ReactElement => (
+                        <DocumentRouteBoundary>
+                            <BottomSheet visible title="" documentFrame onClose={(): void => undefined}>
+                                <DocumentSurface kind="more" />
+                                {stray ? <View testID="unowned-modal-leftover" /> : null}
+                            </BottomSheet>
+                        </DocumentRouteBoundary>
+                    ),
+                },
+            },
+        })
+        await screen.findByTestId('bottom-sheet')
+        await waitFor(() => {
+            const failures = hostsOutsideDocuments(actualRoot(), actualDocumentIds())
+            if (stray) expect(failures).toContain('View#unowned-modal-leftover')
+            else expect(failures).toEqual([])
+        })
+    },
+)
+
+it('the actual More and nested judge entry publish document owners while their Modal is open', async () => {
+    await runtime([entry()])
+    await mount()
+    await press('Keep building')
+    await press('More')
+    await screen.findByTestId('more-sheet')
+    const check = (count: number): void => {
+        const ids = actualDocumentIds()
+        const modals = screen.container
+            .queryAll(() => true)
+            .filter((host) => (host as unknown as OwnershipTree).type === 'Modal')
+        expect(modals).toHaveLength(count)
+        for (const modal of modals) {
+            const id = (modal as unknown as OwnershipTree).props.nativeID
+            expect(typeof id).toBe('string')
+            expect(ids.has(String(id).replace('truebuild-document-root:', ''))).toBe(true)
+        }
+        expect(hostsOutsideDocuments(actualRoot(), ids)).toEqual([])
+    }
+    await waitFor(() => check(1))
+    await fireEvent.press(screen.getByTestId('judge-entry'))
+    await screen.findByRole('switch', { name: 'Show how Meta AI built this' })
+    await waitFor(() => check(2))
+    await fireEvent.press(screen.getByTestId('close-sheet'))
+    await waitFor(() => check(1))
+    await fireEvent.press(screen.getByTestId('close-sheet'))
+    await waitFor(() => check(0))
 })

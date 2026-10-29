@@ -132,6 +132,9 @@ export async function layoutCoachBubble(): Promise<void> {
 }
 
 export async function pressCoach(id: string): Promise<void> {
+    // A route can still be settling when the helper starts. The real OS delivers onLayout after the bubble mounts;
+    // await that mount before supplying the geometry boundary, otherwise its pointerEvents are correctly still none.
+    await screen.findByTestId('coach-bubble')
     await layoutCoachBubble()
     await waitFor(() => expect(screen.getByTestId(id)).toBeEnabled())
     await fireEvent.press(screen.getByTestId(id))

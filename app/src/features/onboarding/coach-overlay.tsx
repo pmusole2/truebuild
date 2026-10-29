@@ -32,6 +32,7 @@ import { TARGET_HINT } from './coach-inventory'
 import { bubbleMaxHeight, bubbleWidth, cutoutOf, placeBubble, type Placement } from './coach-placement'
 import { useCoach } from './coach-provider'
 import type { ActiveStep, Rect } from './coach-types'
+import { originId } from '../screens/render-origin'
 
 type Controls = {
     readonly next: () => void
@@ -331,7 +332,13 @@ export function CoachOverlayView({
                         />
                     )}
                     {large ? null : (
-                        <View ref={attachMeterRoot} testID="coach-heading" accessible={true} accessibilityRole="header">
+                        <View
+                            ref={attachMeterRoot}
+                            testID="coach-heading"
+                            accessible={true}
+                            accessibilityRole="header"
+                            nativeID={originId(step.candidate.textOrigin ?? 'shell')}
+                        >
                             <Heading>{heading}</Heading>
                         </View>
                     )}
@@ -341,7 +348,11 @@ export function CoachOverlayView({
                         contentContainerStyle={styles.scrollContent}
                         showsVerticalScrollIndicator={true}
                     >
-                        <View ref={large ? attachMeterRoot : undefined} testID={large ? 'coach-heading' : undefined}>
+                        <View
+                            ref={large ? attachMeterRoot : undefined}
+                            testID={large ? 'coach-heading' : undefined}
+                            nativeID={originId(step.candidate.textOrigin ?? 'shell')}
+                        >
                             <Body>{step.candidate.sentence}</Body>
                         </View>
                     </ScrollView>

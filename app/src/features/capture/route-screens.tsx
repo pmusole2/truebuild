@@ -1,57 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Platform } from 'react-native'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import * as ImagePicker from 'expo-image-picker'
-import { StatusBar } from 'expo-status-bar'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
 import { MediaRejectedError } from '../../media/media-errors'
-import { FixedBottomBar } from '../../ui/bottom-bar'
-import { SkeletonCard } from '../../ui/skeleton'
-import { Instruction } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
 import { touchTarget } from '../../theme/tokens'
-import { CameraScreen, type AssemblyGuide } from './camera-screen'
-import type { WorkflowState } from './controller'
-import { DoneScreen } from './done-screen'
-import { GuideScreen } from './guide-screen'
+import { DocumentCamera } from '../documents/document-camera'
+import { DocumentSurface } from './document-surface'
 import type { LibraryEntry } from './library'
-import { LibraryScreen, useHomeTitle } from './library-screen'
-import { useWorkflowActions } from './native-routes'
 import { CoachRoute } from '../onboarding/coach-root'
-import { PagesScreen } from './pages-screen'
-import { ReadingScreen } from './reading-screen'
-import { OverviewScreen, useQuickProgress } from './review-screen'
-import { HeaderButtons, useMoreState } from './screen-header'
-import { cameraWordingOf, headerFor } from '../screens/host'
-import {
-    addTitle,
-    checkTitle,
-    DONE_TITLE,
-    guideTitle,
-    headerStyleFor,
-    homeHeaderOptions,
-    READING_TITLE,
-    useCompactTitles,
-    type HeaderStyle,
-} from './header-options'
-import { ScreenBody, TextRegion } from './screen-layout'
-import { stopFor, type Stop } from './plain-copy'
-import { stepAssemblyGuide } from './step-facts'
+import { useQuickProgress } from './review-screen'
+import { headerStyleFor, type HeaderStyle } from './header-options'
+import { isProblemNotice, stopFor, type Stop } from './plain-copy'
 import { useWorkflow } from './workflow-provider'
-import {
-    useCameraSlot,
-    useDoneSlot,
-    useGuideSlot,
-    useHomeSlot,
-    useMoreSlot,
-    useNextScreenWarmUp,
-    usePagesSlot,
-    useQuestionsSlot,
-    useQuickCheckSlot,
-    useReadingSlot,
-} from '../screens/slots'
-import { readingLanguage } from './reading-language'
 
 export type RouteStatus = 'loading' | 'ready' | 'missing' | 'failed'
+
+export function useHeaderStyle(): HeaderStyle {
+    const { colors } = useTheme()
+    return headerStyleFor(colors)
+}
 
 export type ManualRoute = {
     readonly status: RouteStatus
@@ -136,58 +103,28 @@ export function useManualRoute(manualId: string, stop: Stop): ManualRoute {
     return { status: 'ready', redirect: focused && reached !== stop ? hrefForStop(reached, manualId) : null, retry }
 }
 
+/**
+ * Loading, failure and recovery route states are complete fallback documents through the same renderer as every
+ * other route — never a native branch beside a document. The native Stack header above stays the one header.
+ */
 function Waiting({ route }: { route?: ManualRoute }): ReactElement {
-    if (route?.status === 'failed') {
-        return (
-            <ScreenBody testID="route-failed">
-                <TextRegion>
-                    <Instruction>We could not open this build.</Instruction>
-                </TextRegion>
-                <FixedBottomBar
-                    primary={{ label: 'Try again', compactLabel: 'Retry', testID: 'retry-route', onPress: route.retry }}
-                />
-            </ScreenBody>
-        )
-    }
     return (
-        <ScreenBody>
-            <SkeletonCard />
-        </ScreenBody>
+        <DocumentSurface
+            kind={route?.status === 'failed' ? 'error' : 'reading'}
+            state={route?.status === 'failed' ? 'error' : 'pending'}
+            retry={route?.retry}
+            primaryTestId={route?.status === 'failed' ? 'retry-route' : undefined}
+            operationNotice={route?.status === 'failed' ? 'We could not open this build.' : undefined}
+        />
     )
 }
 
-/** Colours the native header from the theme. */
-export function useHeaderStyle(): HeaderStyle {
-    return headerStyleFor(useTheme().colors)
-}
-
 export function HomeRoute(): ReactElement {
-    const { state } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
-    const more = useMoreState()
-    const { scrollY, collapsed, onCollapsedChange } = useHomeTitle()
-    const { colors } = useTheme()
-    const native = Platform.OS === 'ios'
-    const common = { state, entry: undefined, controller, nav, more }
-    const slot = useHomeSlot({ ...common, native: false })
-    const moreSlot = useMoreSlot(common)
-    useNextScreenWarmUp('home', state, undefined)
     return (
         <>
-            <Stack.Screen options={homeHeaderOptions({ colors, scrollY, more, collapsed })} />
+            <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="home">
-                <LibraryScreen
-                    state={state}
-                    controller={controller}
-                    nav={nav}
-                    chrome="native"
-                    largeTitle={native ? 'heading' : 'content'}
-                    more={more}
-                    slot={slot}
-                    moreSlot={moreSlot}
-                    scrollY={scrollY}
-                    onCollapsedChange={onCollapsedChange}
-                />
+                <DocumentSurface kind="home" />
             </CoachRoute>
         </>
     )
@@ -217,55 +154,16 @@ function useChoosePages(entry: LibraryEntry | undefined): (replaceIndex?: number
 
 export function AddRoute(): ReactElement {
     const { state, entry } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
-    const more = useMoreState()
     const choosePages = useChoosePages(entry)
-    const compact = useCompactTitles()
-    const common = {
-        state,
-        entry,
-        controller,
-        nav,
-        more,
-        choosePages: (): void => choosePages(),
-        language: entry === undefined ? undefined : readingLanguage(entry.session.manualId),
-    }
-    const slot = usePagesSlot({ ...common, native: false })
-    const moreSlot = useMoreSlot(common)
-    useNextScreenWarmUp('pages', state, entry)
-    if (!state.loading && entry === undefined) {
-        return <Redirect href="/" />
-    }
+    if (!state.loading && entry === undefined) return <Redirect href="/" />
     return (
         <>
-            <Stack.Screen
-                options={{
-                    ...headerFor(slot, addTitle(compact)),
-                    headerRight: (): ReactElement => (
-                        <HeaderButtons
-                            more={more}
-                            coach="pages"
-                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
-                        />
-                    ),
-                }}
-            />
+            <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="pages">
-                {entry === undefined ? (
-                    <Waiting />
-                ) : (
-                    <PagesScreen
-                        key={entry.session.manualId}
-                        state={state}
-                        controller={controller}
-                        entry={entry}
-                        choosePages={choosePages}
-                        chrome="native"
-                        more={more}
-                        slot={slot}
-                        moreSlot={moreSlot}
-                    />
-                )}
+                <DocumentSurface
+                    kind={entry?.session.pages.length === 0 ? 'add' : 'pages'}
+                    choosePages={(): void => choosePages()}
+                />
             </CoachRoute>
         </>
     )
@@ -274,41 +172,24 @@ export function AddRoute(): ReactElement {
 export function ReadingRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
     const route = useManualRoute(manualId, 'pages')
-    const { status } = route
-    const { state, entry } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
+    const { state } = useWorkflow()
     const [confirming, setConfirming] = useState(false)
-    const reading = state.pending !== null && state.pending.startsWith('Reading')
-    const more = useMoreState()
-    const slot = useReadingSlot({
-        state,
-        entry,
-        controller,
-        nav,
-        more,
-        native: status !== 'ready',
-        language: entry === undefined ? undefined : readingLanguage(entry.session.manualId),
-    })
-    // Back while a read is running asks first and never traps: stopping reads the same cancel as the Cancel button.
-    usePreventRemove(reading, () => setConfirming(true))
-    // The prevention lifts on the render after the cancel, so the step back waits for it.
-    const readingNav = useMemo(() => ({ ...nav, back: (): void => void setTimeout(nav.back, 0) }), [nav])
-    if (route.redirect !== null) {
-        return <Redirect href={route.redirect as never} />
-    }
+    // Native Back and document navigation use the same cancellation; an in-flight result can never reopen this route.
+    usePreventRemove(state.pending?.startsWith('Reading') === true, (): void => setConfirming(true))
+    if (route.redirect !== null) return <Redirect href={route.redirect as never} />
     return (
         <>
-            <Stack.Screen options={headerFor(slot, READING_TITLE)} />
+            <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen={null}>
-                {status === 'ready' && entry !== undefined ? (
-                    <ReadingScreen
-                        state={state}
-                        controller={controller}
-                        entry={entry}
-                        nav={readingNav}
-                        confirming={confirming}
-                        onConfirmingChange={setConfirming}
-                        slot={slot}
+                {route.status === 'ready' ? (
+                    <DocumentSurface
+                        kind="reading"
+                        state={
+                            state.pending === null && state.notice !== null && isProblemNotice(state.notice)
+                                ? 'error'
+                                : undefined
+                        }
+                        readingConfirmation={{ open: confirming, onChange: setConfirming }}
                     />
                 ) : (
                     <Waiting route={route} />
@@ -321,52 +202,15 @@ export function ReadingRoute(): ReactElement {
 export function CheckRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
     const route = useManualRoute(manualId, 'overview')
-    const { status } = route
-    const { state, entry } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
-    const more = useMoreState()
-    // The question count lives here, above the screen, so accepting a fact (a new revision) never restarts it.
+    const { entry } = useWorkflow()
     const progress = useQuickProgress(entry?.session)
-    const compact = useCompactTitles()
-    const slot = useQuickCheckSlot({
-        state,
-        entry,
-        controller,
-        nav,
-        more,
-        native: status !== 'ready',
-        live: { quick: progress },
-    })
-    if (route.redirect !== null) {
-        return <Redirect href={route.redirect as never} />
-    }
+    if (route.redirect !== null) return <Redirect href={route.redirect as never} />
     return (
         <>
-            <Stack.Screen
-                options={{
-                    // The question count is the app's own; the document names the screen only when no question is on it.
-                    ...headerFor(progress.label === undefined ? slot : undefined, checkTitle(progress.label, compact)),
-                    headerRight: (): ReactElement => (
-                        <HeaderButtons
-                            more={more}
-                            coach="quick-check"
-                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
-                        />
-                    ),
-                }}
-            />
+            <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="quick-check">
-                {status === 'ready' && entry !== undefined ? (
-                    <OverviewScreen
-                        state={state}
-                        controller={controller}
-                        entry={entry}
-                        nav={nav}
-                        chrome="native"
-                        more={more}
-                        progress={progress}
-                        slot={slot}
-                    />
+                {route.status === 'ready' ? (
+                    <DocumentSurface kind="quick-check" quick={progress} />
                 ) : (
                     <Waiting route={route} />
                 )}
@@ -378,57 +222,12 @@ export function CheckRoute(): ReactElement {
 export function GuideRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
     const route = useManualRoute(manualId, 'guide')
-    const { status } = route
-    const { state, entry } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
-    const more = useMoreState()
-    const needsQuestions = entry !== undefined && entry.session.reviewStatus !== 'reviewed'
-    const common = { state, entry, controller, nav, more }
-    const slot = useGuideSlot({
-        ...common,
-        native: status !== 'ready',
-        blocked: needsQuestions,
-        coverage: entry !== undefined && controller.coverageNotice() !== null,
-    })
-    const moreSlot = useMoreSlot(common)
-    const questionsSlot = useQuestionsSlot({ ...common, native: status !== 'ready', blocked: needsQuestions })
-    useNextScreenWarmUp('guide', state, needsQuestions ? undefined : entry)
-    if (route.redirect !== null) {
-        return <Redirect href={route.redirect as never} />
-    }
+    if (route.redirect !== null) return <Redirect href={route.redirect as never} />
     return (
         <>
-            <Stack.Screen
-                options={{
-                    ...headerFor(slot, guideTitle(entry)),
-                    // iOS 26 tests the current touch position after its initial movement. One touch target
-                    // admits edge Back while excluding a hero swipe once its 24pt threshold is reached.
-                    gestureResponseDistance: { end: touchTarget },
-                    headerRight: (): ReactElement => (
-                        <HeaderButtons
-                            more={more}
-                            coach="guide"
-                            trailing={slot?.status === 'ready' ? slot.screen.trailing : null}
-                        />
-                    ),
-                }}
-            />
+            <Stack.Screen options={{ headerShown: false, gestureResponseDistance: { end: touchTarget } }} />
             <CoachRoute screen="guide">
-                {status === 'ready' && entry !== undefined ? (
-                    <GuideScreen
-                        state={state}
-                        controller={controller}
-                        entry={entry}
-                        nav={nav}
-                        chrome="native"
-                        more={more}
-                        slot={slot}
-                        moreSlot={moreSlot}
-                        questionsSlot={questionsSlot}
-                    />
-                ) : (
-                    <Waiting route={route} />
-                )}
+                {route.status === 'ready' ? <DocumentSurface kind="guide" /> : <Waiting route={route} />}
             </CoachRoute>
         </>
     )
@@ -437,94 +236,27 @@ export function GuideRoute(): ReactElement {
 export function DoneRoute(): ReactElement {
     const { manualId } = useLocalSearchParams<{ manualId: string }>()
     const route = useManualRoute(manualId, 'done')
-    const { status } = route
-    const { state, entry } = useWorkflow()
-    const { controller, nav } = useWorkflowActions()
-    const more = useMoreState()
-    const slot = useDoneSlot({ state, entry, controller, nav, more, native: status !== 'ready' })
-    const moreSlot = useMoreSlot({ state, entry, controller, nav, more })
-    // A Done URL shows Done only for a build whose every step is marked; otherwise it goes to the stop the build is at.
-    if (route.redirect !== null) {
-        return <Redirect href={route.redirect as never} />
-    }
+    if (route.redirect !== null) return <Redirect href={route.redirect as never} />
     return (
         <>
-            <Stack.Screen
-                options={{
-                    ...headerFor(slot, DONE_TITLE),
-                    headerBackVisible: false,
-                    gestureEnabled: false,
-                    headerRight: (): ReactElement => (
-                        <HeaderButtons more={more} trailing={slot?.status === 'ready' ? slot.screen.trailing : null} />
-                    ),
-                }}
-            />
+            <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
             <CoachRoute screen={null}>
-                {status === 'ready' && entry !== undefined ? (
-                    <DoneScreen
-                        state={state}
-                        controller={controller}
-                        entry={entry}
-                        nav={nav}
-                        chrome="native"
-                        more={more}
-                        slot={slot}
-                        moreSlot={moreSlot}
-                    />
-                ) : (
-                    <Waiting route={route} />
-                )}
+                {route.status === 'ready' ? <DocumentSurface kind="completion" /> : <Waiting route={route} />}
             </CoachRoute>
         </>
     )
 }
 
-/** The guide shown over the assembly camera. Manual scanning has no step guide. */
-function assemblyGuide(entry: LibraryEntry | undefined, state: WorkflowState): AssemblyGuide | undefined {
-    if (entry === undefined || state.cameraIntent === null || state.cameraIntent.kind === 'page') {
-        return undefined
-    }
-    return stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
-}
-
 export function CameraRoute(): ReactElement {
-    const { controller, state, entry } = useWorkflow()
-    const { nav } = useWorkflowActions()
-    const more = useMoreState()
+    const { controller, state } = useWorkflow()
     const entered = useRef(state.route === 'camera')
-    // The step's guide is already composed for the Guide; the camera reads its camera wording and nothing else.
-    const wording = cameraWordingOf(
-        useCameraSlot({
-            state,
-            entry,
-            controller,
-            nav,
-            more,
-            blocked:
-                entry !== undefined &&
-                (entry.session.reviewStatus !== 'reviewed' || controller.coverageNotice() !== null),
-        }),
-    )
-    // Back, the hardware button and the close control all mean "cancel the photo" and use the existing cancel. The
-    // screen closes once the controller leaves the camera route, so a save in progress is never abandoned.
-    usePreventRemove(state.route === 'camera', () => controller.cancel())
-    if (!entered.current) {
-        return <Redirect href="/" />
-    }
+    usePreventRemove(state.route === 'camera', controller.cancel)
+    if (!entered.current) return <Redirect href="/" />
     return (
         <>
-            <StatusBar style="light" />
+            <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="camera">
-                <CameraScreen
-                    busy={state.pending !== null}
-                    intent={state.cameraIntent}
-                    guide={assemblyGuide(entry, state)}
-                    wording={wording}
-                    onCancel={controller.cancel}
-                    onCapture={(take): void => {
-                        void controller.shutter(take)
-                    }}
-                />
+                <DocumentCamera />
             </CoachRoute>
         </>
     )

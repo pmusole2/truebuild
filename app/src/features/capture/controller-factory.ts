@@ -10,6 +10,7 @@ import { CaptureController } from './controller'
 import { LibraryStorage, type Digest } from './library'
 import { parseDevScenario, withDevScenario } from '../screens/dev-controls'
 import { ScreenStore } from '../screens/screen-store'
+import { DocumentStore } from '../document-runtime/store'
 
 export const imageDigest: Digest = async (bytes): Promise<string> => {
     const result = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, Uint8Array.from(bytes))
@@ -42,10 +43,13 @@ export function proofPorts(): ProofRuntime.ProofPorts | null {
 }
 
 /** Production wiring: the real model API client, device storage and image normalization. */
-export function createController(screens: ScreenStore | null = null): CaptureController {
+export function createController(
+    _screens: ScreenStore | null = null,
+    documents: DocumentStore | null = null,
+): CaptureController {
     const proof = proofPorts()
     return new CaptureController({
-        screenContext: (session, stepId) => screens?.shownGuide(session.manualId, session.revision, stepId) ?? null,
+        screenContext: (session, stepId) => documents?.shownGuide(session, stepId) ?? null,
         storage: new LibraryStorage(proof?.storage ?? deviceStorage, imageDigest),
         client: new ModelApiClient({ baseUrl: API_BASE_URL, secret: API_SECRET }),
         normalize: proof?.normalize ?? normalizeImage,
@@ -55,9 +59,20 @@ export function createController(screens: ScreenStore | null = null): CaptureCon
     })
 }
 
+/** Production v2 runtime exists in every mode: off renders shared complete local documents with no network. */
+export function createDocuments(): DocumentStore {
+    return new DocumentStore({
+        ...(GENERATIVE_UI === 'off'
+            ? {}
+            : { client: new ModelApiClient({ baseUrl: API_BASE_URL, secret: API_SECRET }) }),
+        mode: GENERATIVE_UI,
+        id: (): string => Crypto.randomUUID(),
+    })
+}
+
 /**
- * The session's screen store on its own stateless client, or null when generated screens are off (the original app,
- * with no screens request ever made). The controller keeps its own client; they share only configuration.
+ * Legacy v1 store for compatibility callers. Production routes use createDocuments; off makes no screens request.
+ * The controller keeps its own client; they share only configuration.
  */
 export function createScreens(): ScreenStore | null {
     if (GENERATIVE_UI === 'off') return null

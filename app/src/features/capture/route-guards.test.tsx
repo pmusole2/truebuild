@@ -3,7 +3,7 @@
 import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
 import { router } from 'expo-router'
-import { act, cleanup, fireEvent, screen, waitFor, type RenderResult } from '@testing-library/react-native'
+import { act, cleanup, fireEvent, screen, waitFor, within, type RenderResult } from '@testing-library/react-native'
 import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
@@ -31,7 +31,17 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('./controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn(() => null) }))
+jest.mock('./controller-factory', () => ({
+    createController: jest.fn(),
+    createScreens: jest.fn(() => null),
+    createDocuments: jest.fn(
+        () =>
+            new (jest.requireActual('../document-runtime/store').DocumentStore)({
+                mode: 'off',
+                id: (): string => 'route-test',
+            }),
+    ),
+}))
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',
@@ -150,7 +160,7 @@ it('a Guide URL for a manual that is not confirmed shows Quick check instead of 
     await act(async () => router.push('/guide/guard-manual'))
     await waitFor(() => expect(view.getPathname()).toBe('/check/guard-manual'))
     expect(screen.queryByTestId('guide-screen')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Start building' })).toBeTruthy()
+    expect(screen.getByTestId('quick-check-start')).toBeTruthy()
 })
 
 it('a Done or Guide URL for a manual that does not exist goes Home', async () => {
@@ -159,28 +169,6 @@ it('a Done or Guide URL for a manual that does not exist goes Home', async () =>
     await act(async () => router.push('/done/nothing-here'))
     await waitFor(() => expect(view.getPathname()).toBe('/'))
 })
-
-type HostNode = { type?: string; props?: Record<string, unknown>; children?: unknown[] | null }
-
-/**
- * The title strings handed to the real native header, outermost screen first. Jest cannot paint UIKit, so it cannot read
- * the title off a pixel; the header config the native stack receives is the closest actual thing to assert.
- */
-function nativeHeaderTitles(): string[] {
-    const titles: string[] = []
-    const walk = (node: unknown): void => {
-        if (typeof node !== 'object' || node === null) {
-            return
-        }
-        const host = node as HostNode
-        if (host.type === 'RNSScreenStackHeaderConfig' && typeof host.props?.title === 'string') {
-            titles.push(host.props.title)
-        }
-        host.children?.forEach(walk)
-    }
-    walk(screen.toJSON())
-    return titles
-}
 
 it('keeps “Question 2 of 2” in the header after the first fact is accepted', async () => {
     const item = entry('guard-manual', 'unreviewed')
@@ -192,14 +180,17 @@ it('keeps “Question 2 of 2” in the header after the first fact is accepted',
     await waitFor(() => expect(controller.current?.session.manualId).toBe('guard-manual'))
     // The native header carries the position as its plain title; the progress bar on screen carries it too.
     expect(await screen.findByRole('progressbar', { name: 'Question 1 of 2' })).toBeTruthy()
-    expect(nativeHeaderTitles().at(-1)).toBe('Question 1 of 2')
-    await fireEvent.press(screen.getByRole('button', { name: 'Let me fix it' }))
-    await fireEvent.changeText(screen.getByLabelText('What the picture shows'), 'Groove faces inward.')
+    expect(
+        within(screen.getByRole('header', { name: 'Quick check' }).parent!).getByText('Question 1 of 2'),
+    ).toBeTruthy()
+    await fireEvent.changeText(screen.getByLabelText('Orientation'), 'Groove faces inward.')
     await fireEvent.press(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(controller.current?.session.revision).toBe(2))
     expect(await screen.findByRole('progressbar', { name: 'Question 2 of 2' })).toBeTruthy()
-    expect(nativeHeaderTitles().at(-1)).toBe('Question 2 of 2')
-    expect(nativeHeaderTitles()).not.toContain('Question 1 of 1')
+    expect(
+        within(screen.getByRole('header', { name: 'Quick check' }).parent!).getByText('Question 2 of 2'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Question 1 of 1')).toBeNull()
     expect(screen.queryByRole('progressbar', { name: 'Question 1 of 1' })).toBeNull()
     expect(view.getPathname()).toBe('/check/guard-manual')
 })
@@ -219,14 +210,14 @@ it('asks once to open a manual that does not open, then offers one in-place Try 
     expect(view.getPathname()).toBe('/guide/second-manual')
 })
 
-it('titles each production route with a platform string and never an uncapped custom header', async () => {
+it('uses the document wrapping header while preserving the native navigator and a single More control', async () => {
     await runtime([entry('guard-manual')])
     const view = await mount()
-    expect(nativeHeaderTitles().at(-1)).toBe('TrueBuild')
+    expect(screen.getByRole('header', { name: 'Your manuals' }).props.maxFontSizeMultiplier).toBe(0)
     await act(async () => router.push('/guide/guard-manual'))
     await waitFor(() => expect(view.getPathname()).toBe('/guide/guard-manual'))
     await screen.findByTestId('guide-screen')
-    expect(nativeHeaderTitles().at(-1)).toBe('Step 1 of 2')
+    expect(screen.getByRole('header', { name: 'Step 1 of 2' }).props.maxFontSizeMultiplier).toBe(0)
     // One trailing control only: More. Back is the platform's own chevron.
     expect(screen.getAllByRole('button', { name: 'More' })).toHaveLength(1)
 })

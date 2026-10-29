@@ -69,7 +69,14 @@ function spies(): { controller: WorkflowController; nav: ScreenNav; extras: Requ
         leave: vi.fn(),
         back: vi.fn(),
     }
-    const extras = { choosePages: vi.fn(), showMore: vi.fn(), showTips: vi.fn(), refresh: vi.fn(), language: 'en' }
+    const extras = {
+        choosePages: vi.fn(),
+        showMore: vi.fn(),
+        showTips: vi.fn(),
+        refresh: vi.fn(),
+        language: 'en',
+        contextualMore: false,
+    }
     return { controller, nav, extras }
 }
 
@@ -243,6 +250,48 @@ describe('guards that hold whatever a document asked for', () => {
         resolveIntent({ intent: 'open-details', target: 'sources' }, h.host).run()
         expect(h.extras.showMore).toHaveBeenLastCalledWith('details')
         expect(h.controller.navigate).not.toHaveBeenCalled()
+    })
+
+    it('opens contextual More questions only for its actual reviewed step and held reusable photo', () => {
+        const capture: NonNullable<WorkflowState['capture']> = {
+            binding: {
+                kind: 'capture',
+                manualId: reviewed.manualId,
+                revision: reviewed.revision,
+                stepId: reviewed.reviewedSteps[0]!.stepId,
+                captureId: 'held-more',
+            },
+            observation: {
+                uri: 'file:///synthetic-more.jpg',
+                width: 600,
+                height: 800,
+                bytes: new Uint8Array(),
+                mimeType: 'image/jpeg',
+            },
+            capturedAt: 0,
+            reusable: true,
+        }
+        const ready = host({ kind: 'more' }, { capture, check: { ...passCheck, decision: 'refuse' } })
+        const contextualHost = { ...ready.host, extras: { ...ready.extras, contextualMore: true } }
+        const ask: AppIntent = { intent: 'ask', target: 'about-step' }
+        resolveIntent(ask, contextualHost).run()
+        expect(ready.extras.showMore).toHaveBeenCalledWith('ask')
+        expect(ready.controller.completeStep).not.toHaveBeenCalled()
+        for (const stale of [
+            { ...contextualHost, extras: { ...ready.extras, contextualMore: false } },
+            { ...contextualHost, state: { ...ready.host.state, capture: null } },
+            { ...contextualHost, state: { ...ready.host.state, pending: 'Checking photo…' } },
+            ...[
+                { reusable: false },
+                { binding: { ...capture.binding, manualId: 'another-manual' } },
+                { binding: { ...capture.binding, revision: reviewed.revision + 1 } },
+                { binding: { ...capture.binding, stepId: 'another-step' } },
+            ].map((change) => ({
+                ...contextualHost,
+                state: { ...ready.host.state, capture: { ...capture, ...change } },
+            })),
+        ])
+            expect(resolveIntent(ask, stale).enabled).toBe(false)
     })
 
     it('disables an action whose handler the screen does not have, with a reason', () => {

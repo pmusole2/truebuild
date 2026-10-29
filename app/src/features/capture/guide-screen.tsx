@@ -60,17 +60,8 @@ import type { ScreenSlot } from '../screens/use-screen-slot'
 import type { WorkflowScreenProps } from './workflow-types'
 import { useOptionalWorkflow } from './workflow-context'
 
-// A horizontal drag this long on the hero moves to the neighbouring step.
-const SWIPE_DISTANCE = 56
-
-// iOS goes back when a drag starts at the leading screen edge. The hero's step swipe leaves that strip to the system,
-// so a back swipe is never swallowed; swipes that start anywhere else still browse steps.
-export const EDGE_RESERVE = 28
-
-/** True when a drag that began at `startX` belongs to the system's edge Back and not to the step swipe. */
-export function startsAtSystemEdge(startX: number, width: number, rtl: boolean): boolean {
-    return rtl ? startX > width - EDGE_RESERVE : startX < EDGE_RESERVE
-}
+import { startsAtSystemEdge, STEP_SWIPE_DISTANCE as SWIPE_DISTANCE } from './gesture-policy'
+export { startsAtSystemEdge, EDGE_RESERVE } from './gesture-policy'
 
 const RESULT_SIZE = 48
 

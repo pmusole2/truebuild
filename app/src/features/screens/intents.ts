@@ -14,6 +14,7 @@ export type IntentExtras = {
     /** Ask the screen store for this screen's document again. */
     readonly refresh?: () => void
     readonly language?: string
+    readonly contextualMore?: boolean
 }
 
 /** The current app facts an intent is checked against at the moment it is pressed, never at composition time. */
@@ -86,6 +87,12 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
     const busy = busyReason(state)
     const session = entry?.session
     const reviewed = session?.reviewStatus === 'reviewed'
+    const contextualStep =
+        kind === 'more' &&
+        extras.contextualMore === true &&
+        reviewed &&
+        entry !== undefined &&
+        session?.reviewedSteps[entry.stepIndex] !== undefined
     const hasCoverageGap = (): boolean => controller.coverageNotice() !== null
     const checkPhoto = (): ResolvedIntent => {
         if (entry === undefined || !reviewed) return unavailable('Confirm the manual facts first.')
@@ -150,7 +157,9 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
                             ? unavailable(busy)
                             : available(() => controller.camera({ kind: 'question' }))
                     }
-                    return STEP_KINDS.has(kind) ? checkPhoto() : unavailable('No photo is needed here.')
+                    return STEP_KINDS.has(kind) || contextualStep
+                        ? checkPhoto()
+                        : unavailable('No photo is needed here.')
                 case 'choose-pages':
                     if (extras.choosePages === undefined || !PAGE_KINDS.has(kind)) {
                         return unavailable('Choosing photos is not available here.')
@@ -165,7 +174,22 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
         case 'check':
             return STEP_KINDS.has(kind) ? checkPhoto() : unavailable('A check needs a step.')
         case 'ask':
-            if (!STEP_KINDS.has(kind) || entry === undefined || !reviewed) return unavailable('Open a step first.')
+            if ((!STEP_KINDS.has(kind) && kind !== 'more') || entry === undefined || !reviewed)
+                return unavailable('Open a step first.')
+            if (kind === 'more') {
+                if (extras.contextualMore !== true) return unavailable('Open a step first.')
+                const step = session?.reviewedSteps[entry.stepIndex]
+                const capture = state.capture
+                if (busy !== null) return unavailable(busy)
+                if (
+                    step === undefined ||
+                    capture?.reusable !== true ||
+                    capture.binding.manualId !== session?.manualId ||
+                    capture.binding.revision !== session.revision ||
+                    capture.binding.stepId !== step.stepId
+                )
+                    return unavailable('Take a photo of this step first.')
+            }
             return extras.showMore === undefined
                 ? unavailable('Asking is not on this screen.')
                 : available(() => extras.showMore?.('ask'))
@@ -185,6 +209,7 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
                         ? available(() => void nav.startBuilding())
                         : unavailable('Some facts still need a clearer photo.')
                 case 'step':
+                    if (kind === 'more' && !contextualStep) return unavailable('Open a step first.')
                     // Only a held pass for the current photo can mark a step done, whatever a screen asked for.
                     if (state.check?.decision !== 'pass' || state.capture === null || entry === undefined) {
                         return unavailable('Take a photo that looks right first.')

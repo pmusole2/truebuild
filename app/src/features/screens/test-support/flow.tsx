@@ -2,11 +2,14 @@
 import { resolve } from 'node:path'
 import { act, fireEvent, screen, waitFor, type RenderResult } from '@testing-library/react-native'
 import type { CaptureController } from '../../capture/controller'
-import { createController, createScreens } from '../../capture/controller-factory'
+import { createController, createDocuments, createScreens } from '../../capture/controller-factory'
 import type { LibraryEntry } from '../../capture/library'
-import { ScreenStore } from '../screen-store'
-import { nodeDigest } from './documents'
-import { fixtureScreens, type FixtureServer, type FixtureServerOptions } from './fixture-server'
+import { DocumentStore } from '../../document-runtime/store'
+import {
+    fixtureDocuments,
+    type DocumentFixtureServer as FixtureServer,
+    type DocumentFixtureServerOptions as FixtureServerOptions,
+} from './fixture-server'
 import { runtime, type Replies } from './route-harness'
 
 // Mounts the production root layout. The calling test file must mock '../../capture/controller-factory' (the
@@ -19,7 +22,7 @@ export type Mounted = {
     view: Awaited<ReturnType<typeof renderRouter>>
     controller: CaptureController
     server: FixtureServer
-    store: ScreenStore | null
+    store: DocumentStore
     calls: string[]
 }
 
@@ -28,23 +31,19 @@ export async function mount(
     options: { screens?: FixtureServerOptions | 'off'; replies?: Replies } = {},
 ): Promise<Mounted> {
     const { controller, calls } = await runtime(entries, options.replies)
-    const server = fixtureScreens(options.screens === 'off' ? {} : options.screens)
-    const store =
-        options.screens === 'off'
-            ? null
-            : new ScreenStore({
-                  client: server,
-                  mode: 'full',
-                  id: (() => {
-                      let id = 0
-                      return (): string => `s-${++id}`
-                  })(),
-                  pollMs: 1,
-                  sleep: async (): Promise<void> => undefined,
-                  digest: nodeDigest,
-              })
+    const server = fixtureDocuments(options.screens === 'off' ? {} : options.screens)
+    const store = new DocumentStore({
+        client: server,
+        mode: options.screens === 'off' ? 'off' : 'full',
+        id: (() => {
+            let id = 0
+            return (): string => `s-${++id}`
+        })(),
+        pollMs: 1,
+    })
     jest.mocked(createController).mockReturnValue(controller)
-    jest.mocked(createScreens).mockReturnValue(store)
+    jest.mocked(createScreens).mockReturnValue(null)
+    jest.mocked(createDocuments).mockReturnValue(store)
     const view = await renderRouter(resolve(__dirname, '../../../../app'))
     await waitFor(() => expect(screen.queryByText('Getting your builds ready.')).toBeNull())
     return { view, controller, server, store, calls }
@@ -52,6 +51,14 @@ export async function mount(
 
 export async function press(name: string): Promise<void> {
     await fireEvent.press(screen.getByRole('button', { name }))
+}
+
+/** The native image event, after the real photo node exists; this exercises the photo-before-verdict gate. */
+export async function loadPhoto(): Promise<void> {
+    await fireEvent(await screen.findByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 390, height: 460, x: 0, y: 0 } },
+    })
+    await fireEvent(await screen.findByTestId('frozen-photo-image'), 'load')
 }
 
 // Lets every pending promise settle inside act, so a request that was answered has been applied (or refused).

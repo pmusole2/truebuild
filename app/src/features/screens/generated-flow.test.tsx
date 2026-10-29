@@ -3,13 +3,23 @@
 import type * as ReactModule from 'react'
 import type * as ReactNative from 'react-native'
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react-native'
-import { createController, createScreens } from '../capture/controller-factory'
-import type { ScreenDocument } from '@truebuild/contracts'
+import { createController, createDocuments, createScreens } from '../capture/controller-factory'
+import {
+    documentMaterialV2,
+    STATE_COPY_V2,
+    type ScreenContextInputsV2,
+    type ScreenProposalV2,
+    type ScreenNodeV2,
+} from '@truebuild/contracts'
 import type { CaptureController } from '../capture/controller'
-import { flush, mount, press, type Mounted } from './test-support/flow'
+import { flush, loadPhoto, mount, press, type Mounted } from './test-support/flow'
 import { deferred, entry, source, type Replies } from './test-support/route-harness'
-import type { FixtureServer, FixtureServerOptions } from './test-support/fixture-server'
-import { PENDING_COPY } from './host'
+import type {
+    DocumentFixtureServer as FixtureServer,
+    DocumentFixtureServerOptions as FixtureServerOptions,
+} from './test-support/fixture-server'
+import { inputsFromDocumentMetadata } from '../../api/document-client'
+import { measureRenderOriginTree } from '../../ui/test-support/render-origin-coverage'
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { LibraryEntry } from '../capture/library'
@@ -30,7 +40,11 @@ jest.mock('react', () => {
         },
     }
 })
-jest.mock('../capture/controller-factory', () => ({ createController: jest.fn(), createScreens: jest.fn() }))
+jest.mock('../capture/controller-factory', () => ({
+    createController: jest.fn(),
+    createScreens: jest.fn(),
+    createDocuments: jest.fn(),
+}))
 // Device key-value IO only: the real JudgeProvider/store still restores, gates and persists the preference.
 jest.mock('./judge-storage', () => {
     const values = new Map<string, string>()
@@ -81,25 +95,40 @@ afterEach(async () => {
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
     jest.mocked(createScreens).mockReset()
+    jest.mocked(createDocuments).mockReset()
     jest.useRealTimers()
     await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: false }))
 })
 
+const hostCounts = (view: Mounted['view']): { generated: number; fallback: number; shell: number; total: number } => {
+    const sample = measureRenderOriginTree(view.toJSON(), {
+        sessionId: 'ui-grace',
+        screen: 'home',
+        checkpointId: 'current',
+        platform: 'ios',
+        evidence: 'synthetic-fixture',
+    })
+    if (sample.status !== 'measured') throw new Error('unavailable_host_tree')
+    return sample.counts
+}
+
 const generateCalls = (server: FixtureServer): string[] =>
-    server.requests.flatMap((request) => (request.op === 'generate' ? [request.kind] : []))
+    server.requests.flatMap((request) => (request.op === 'generate' && request.kind !== null ? [request.kind] : []))
 
 describe('generated screens off keeps the original app', () => {
     it('makes no screens request and shows the native Home and Guide copy exactly', async () => {
         const { server, view, controller } = await mount([entry()], { screens: 'off' })
-        expect(screen.getByRole('button', { name: 'Keep building' })).toBeTruthy()
-        expect(screen.queryByTestId('screen-pending')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Continue building' })).toBeTruthy()
+        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
         expect(screen.queryByTestId('generated-body')).toBeNull()
-        await press('Keep building')
+        await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         await waitFor(() => expect(controller.current?.session.manualId).toBe('flow-manual'))
         expect(screen.getByTestId('guide-primary')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy()
         expect(server.requests).toEqual([])
+        expect(hostCounts(view).generated).toBe(0)
+        expect(hostCounts(view).fallback).toBeGreaterThan(0)
     })
 })
 
@@ -107,16 +136,16 @@ describe('Home composed by the document', () => {
     it('shows the calm skeleton while composing, then the document, keeping the stable test identity of the action', async () => {
         const gate = deferred<void>()
         const { server } = await mount([], { screens: { gate: gate.promise } })
-        expect(await screen.findByTestId('screen-pending')).toBeTruthy()
-        expect(screen.getByText(PENDING_COPY)).toBeTruthy()
-        expect(PENDING_COPY).toBe('Getting the next steps ready…')
+        expect(await screen.findByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
+        expect(screen.getByText(STATE_COPY_V2.pending.detail)).toBeTruthy()
+        expect(STATE_COPY_V2.pending.heading).toBe('Getting this ready')
         await act(async () => gate.resolve())
-        expect(await screen.findByText('Turn your paper manual into steps.')).toBeTruthy()
-        expect(screen.queryByTestId('screen-pending')).toBeNull()
+        expect(await screen.findByText('Add a manual to start building.')).toBeTruthy()
+        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
         const add = screen.getByTestId('home-add')
         expect(add).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
-        expect(screen.queryByRole('button', { name: 'Add manual' })).toBeNull()
+        expect(screen.getAllByRole('button', { name: 'Add a manual' })).toHaveLength(1)
         expect(generateCalls(server)).toContain('home')
     })
 
@@ -125,29 +154,34 @@ describe('Home composed by the document', () => {
         await press('Add a manual')
         await waitFor(() => expect(view.getPathname()).toBe('/add'))
         expect(controller.current?.session.pages).toHaveLength(0)
-        expect(await screen.findByText('Take a photo of each manual page.')).toBeTruthy()
+        expect(await screen.findByText('Photograph each page of your manual, one at a time.')).toBeTruthy()
         expect(screen.getByTestId('take-page-photo')).toBeTruthy()
     })
 
     it('keeps the native Home when the document cannot be composed', async () => {
         await mount([], { screens: { failing: ['home'] } })
-        expect(await screen.findByRole('button', { name: 'Add manual' })).toBeTruthy()
-        expect(screen.getByText('Build furniture with step-by-step help.')).toBeTruthy()
+        expect(await screen.findByRole('button', { name: 'Add a manual' })).toBeTruthy()
+        expect(screen.getByText('Add a manual to start building.')).toBeTruthy()
         expect(screen.queryByTestId('generated-body')).toBeNull()
     })
 
     it('keeps the native Home usable after the grace period and does not swap a late document under the person', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
-        const { store } = await mount([], { screens: { gate: gate.promise } })
-        expect(screen.getByTestId('screen-pending')).toBeTruthy()
+        const { store, view, server } = await mount([], { screens: { generated: ['home'], gate: gate.promise } })
+        expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(8_001))
-        expect(screen.queryByTestId('screen-pending')).toBeNull()
-        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
+        expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
         await act(async () => gate.resolve())
-        expect(screen.queryByText('Turn your paper manual into steps.')).toBeNull()
-        expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
-        expect(store?.shownCounts()).toEqual({ generated: 0, fallback: 0, shell: 0 })
+        expect(screen.getByText('Add a manual to start building.')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
+        const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'home')!
+        await waitFor(() =>
+            expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.source).toBe('generated'),
+        )
+        expect(hostCounts(view).generated).toBe(0)
+        expect(hostCounts(view).fallback).toBeGreaterThan(0)
     })
 })
 
@@ -156,14 +190,14 @@ describe('Guide composed by the document', () => {
         const { server, view, controller } = await mount([entry('flow-manual', 'reviewed', 3)])
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
-        expect(await screen.findByText(/Step 1: /u)).toBeTruthy()
+        expect(await screen.findByText(/^Step 1 of \d+$/u)).toBeTruthy()
         await waitFor(() => expect(server.requests.some((request) => request.op === 'progress')).toBe(true))
         const precomputes = server.requests.filter((request) => request.op === 'precompute')
         expect(precomputes).toHaveLength(1)
         await act(async () => controller.step(1))
-        expect(await screen.findByText(/Step 2: /u)).toBeTruthy()
+        expect(await screen.findByText(/^Step 2 of \d+$/u)).toBeTruthy()
         await act(async () => controller.step(2))
-        expect(await screen.findByText(/Step 3: /u)).toBeTruthy()
+        expect(await screen.findByText(/^Step 3 of \d+$/u)).toBeTruthy()
         // Steps 2 and 3 came from the background job, not from one request per step.
         expect(generateCalls(server).filter((kind) => kind === 'guide').length).toBeLessThanOrEqual(1)
     })
@@ -172,7 +206,7 @@ describe('Guide composed by the document', () => {
         const { view, controller } = await mount([entry()])
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         expect(screen.getByTestId('guide-primary')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Ask about this step' })).toBeTruthy()
         await press('Take photo')
@@ -185,19 +219,22 @@ describe('Result composed after an immediate verdict', () => {
         const mounted = await mount([entry()], options)
         await press('Continue building')
         await waitFor(() => expect(mounted.view.getPathname()).toBe('/guide/flow-manual'))
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         return mounted
     }
-    const photo = async (controller: CaptureController): Promise<void> => {
+    const photo = async (controller: CaptureController, loaded = true): Promise<void> => {
         await press('Take photo')
         await act(async () => controller.shutter(async () => source))
+        if (loaded) await loadPhoto()
     }
 
     it('shows the verdict at once, then the composed result screen; the held verdict is never changed', async () => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
         let hold = false
-        const { controller, server } = await atGuide({
+        const { controller, server, view } = await atGuide({
             screens: {
+                generated: ['result'],
                 get gate() {
                     return hold ? gate.promise : undefined
                 },
@@ -205,13 +242,21 @@ describe('Result composed after an immediate verdict', () => {
             replies: { check: { reason: 'The groove faces inward.' } },
         })
         hold = true
-        await photo(controller)
+        await photo(controller, false)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
-        expect(await screen.findByText('Looks right. The groove faces inward.')).toBeTruthy()
-        expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy()
+        expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+        expect(screen.queryByText('The groove faces inward.')).toBeNull()
+        await loadPhoto()
+        expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
+        const heldCapture = controller.getSnapshot().capture?.binding.captureId
+        await act(async () => jest.advanceTimersByTime(9_001))
+        expect(hostCounts(view).generated).toBe(0)
+        expect(screen.getByText('The groove faces inward.')).toBeTruthy()
         await act(async () => gate.resolve())
-        expect(await screen.findByText('Looks right')).toBeTruthy()
-        expect(screen.queryByTestId('result-icon', { hidden: true })).toBeNull()
+        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
+        expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
+        expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+        expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldCapture)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
         expect(generateCalls(server)).toContain('result')
         const resultRequest = server.requests.find((request) => request.op === 'generate' && request.kind === 'result')
@@ -226,34 +271,36 @@ describe('Result composed after an immediate verdict', () => {
     })
 
     it('refuses a result document whose banner names another verdict and keeps the native result', async () => {
-        const { controller } = await atGuide({
+        const { controller, store, server, view } = await atGuide({
             screens: {
+                generated: ['result'],
                 transform: (document) =>
                     document.kind === 'result'
                         ? {
                               ...document,
-                              body: document.body.map((node) =>
-                                  node.type === 'ResultBanner' ? { ...node, verdict: 'refuse' as const } : node,
+                              facts: document.facts.map((fact) =>
+                                  fact.kind === 'verdict' ? { ...fact, text: 'Not quite right' } : fact,
                               ),
                           }
                         : document,
             },
         })
         await photo(controller)
-        await waitFor(() => expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy())
-        await flush()
-        expect(screen.queryByText('Not yet')).toBeNull()
-        expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy()
+        const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
+        await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('invalid_output'))
+        expect(screen.queryByText('Not quite right')).toBeNull()
+        expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+        expect(hostCounts(view).generated).toBe(0)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
     })
 
     it('keeps the native result when the composed one cannot be made', async () => {
-        const { controller } = await atGuide({ screens: { failing: ['result'] } })
+        const { controller, store, server } = await atGuide({ screens: { failing: ['result'] } })
         await photo(controller)
-        await waitFor(() => expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy())
-        await flush()
-        expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy()
-        expect(screen.queryByText('Looks right')).toBeNull()
+        const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
+        await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('provider_error'))
+        expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+        expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
     })
 })
 
@@ -262,121 +309,100 @@ describe('J1: show how Meta AI built this', () => {
         const mounted = await mount([entry()], { screens: { generated: ['guide'] }, ...options })
         await press('Continue building')
         await waitFor(() => expect(mounted.view.getPathname()).toBe('/guide/flow-manual'))
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         return mounted
     }
     const openJudge = async (): Promise<void> => {
         await press('More')
         await fireEvent.press(await screen.findByTestId('judge-entry'))
-        await screen.findByTestId('judge-details')
+        await screen.findByRole('switch', { name: 'Show how Meta AI built this' })
+    }
+    const closeSheets = async (): Promise<void> => {
+        await fireEvent.press(screen.getByTestId('close-sheet'))
+        await waitFor(() => expect(screen.queryByRole('switch', { name: 'Show how Meta AI built this' })).toBeNull())
+        const moreClose = screen.queryByTestId('close-sheet')
+        if (moreClose !== null) await fireEvent.press(moreClose)
+        await waitFor(() => expect(screen.queryByTestId('close-sheet')).toBeNull())
+    }
+    const guide = (): ReturnType<typeof within> => within(screen.getByTestId('guide-screen', { hidden: true }))
+    const toggle = (): ReturnType<typeof screen.getByRole> =>
+        screen.getByRole('switch', { name: 'Show how Meta AI built this' })
+    const showDetails = async (): Promise<void> => {
+        await openJudge()
+        await fireEvent.press(toggle())
+        await closeSheets()
+        await fireEvent.press(await guide().findByTestId('judge-summary-details'))
+        await guide().findByTestId('judge-details')
     }
 
     it('is off by default: no judge words and no attribution on a normal screen, only a toggle behind About this check', async () => {
         await atGuideWithJudge()
-        expect(screen.queryByTestId('attribution-card')).toBeNull()
+        expect(screen.queryByTestId('judge-summary')).toBeNull()
         expect(screen.queryByTestId('judge-compare')).toBeNull()
         expect(screen.queryByText('Same photo, in the order it arrived')).toBeNull()
         expect(screen.queryByText(/muse|wonder|spark|meta ai|effort|tokens/iu)).toBeNull()
         await openJudge()
-        const toggle = screen.getByRole('switch', { name: 'Show how Meta AI built this' })
-        expect(toggle.props.accessibilityState).toMatchObject({ checked: false })
-        expect(screen.queryByTestId('attribution-card')).toBeNull()
+        expect(toggle().props.accessibilityState).toMatchObject({ checked: false })
+        expect(screen.queryByTestId('judge-summary')).toBeNull()
     })
 
-    // Home stays mounted under the Guide and the More sheet has its own intro, so the layer is read in the Guide's own panel.
-    const guide = (): ReturnType<typeof within> => within(screen.getByTestId('guide-panel', { hidden: true }))
-    const toggle = (): ReturnType<typeof screen.getByRole> =>
-        screen.getByRole('switch', { name: 'Show how Meta AI built this' })
-
     it('turns the current screen attribution on and off, showing only what the document recorded and Not recorded for the rest', async () => {
-        await atGuideWithJudge()
+        // Explicit upstream-observation TEST INPUT. This is never synthetic-model or native/provider proof.
+        await atGuideWithJudge({ screens: { generated: ['guide'], recordedMetadata: true } })
+        await showDetails()
+        expect(guide().getByText('Source: generated')).toBeTruthy()
+        expect(guide().getByText('Evidence: live')).toBeTruthy()
+        expect(guide().getByText('Model: muse-wonder-1.0')).toBeTruthy()
+        expect(guide().getByText('Effort: max')).toBeTruthy()
+        for (const text of [
+            'Before provider: 15 ms',
+            'Provider time: 3400 ms',
+            'Validation: 5 ms',
+            'Server total: 3420 ms',
+            'Input tokens: 1200',
+            'Cached input tokens: 0',
+            'Output tokens: 900',
+            'Reasoning tokens: 700',
+        ])
+            expect(guide().getByText(text)).toBeTruthy()
+        expect(guide().getByText('This screen, all hosts: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Session, all hosts: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Mean across routes: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Session, excluding declared native internals: Not recorded')).toBeTruthy()
+        expect(guide().getByText(/Count unavailable: disconnected|Not counted on this device/u)).toBeTruthy()
+        expect(guide().queryByText(/\d+ elements/u)).toBeNull()
         await openJudge()
         await fireEvent.press(toggle())
-        expect(await guide().findByTestId('attribution-card', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Source: Composed by the model', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Evidence: Live model run', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Model: muse-wonder-1.0', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Effort: max', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Time: total 3420 ms, model 3400 ms, checking 5 ms', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Tokens: in 1200, cached 0, out 900, reasoning 700', { hidden: true })).toBeTruthy()
-        // The test renderer has no public native view tree, so the honest count is "Not recorded" with its reason, never a number.
-        expect(
-            guide().getByText(/^On-screen elements, all open screens: Not recorded \(.+\)$/u, { hidden: true }),
-        ).toBeTruthy()
-        expect(guide().getByText(/^Whole session: Not recorded \(.+\)$/u, { hidden: true })).toBeTruthy()
-        expect(guide().queryByText(/\d+ elements/u, { hidden: true })).toBeNull()
-        expect(
-            guide().getByText(/Screens this session: \d+ generated, \d+ app-built, \d+ native/u, { hidden: true }),
-        ).toBeTruthy()
-        await fireEvent.press(toggle())
-        await waitFor(() => expect(guide().queryByTestId('attribution-card', { hidden: true })).toBeNull())
+        await closeSheets()
+        await waitFor(() => expect(guide().queryByTestId('judge-summary')).toBeNull())
     })
 
     it.each([false, true])('says Not recorded for a synthetic document (generated source: %s)', async (generated) => {
-        await atGuideWithJudge({
-            screens: generated
-                ? {
-                      generated: ['guide'],
-                      transform: (document): ScreenDocument => ({
-                          ...document,
-                          metadata: {
-                              ...document.metadata,
-                              evidence: 'synthetic-fixture',
-                              model: null,
-                              effort: null,
-                              timing: {
-                                  timeToProviderMs: null,
-                                  providerMs: null,
-                                  parseValidateMs: null,
-                                  totalMs: null,
-                              },
-                              usage: {
-                                  inputTokens: null,
-                                  cachedTokens: null,
-                                  outputTokens: null,
-                                  reasoningTokens: null,
-                              },
-                          },
-                      }),
-                  }
-                : {},
-        })
-        await openJudge()
-        await fireEvent.press(toggle())
-        await guide().findByTestId('attribution-card', { hidden: true })
-        expect(
-            guide().getByText(
-                generated
-                    ? 'Source: Simulated composition (generated source)'
-                    : 'Source: Built by the app from the manual (fixture)',
-                { hidden: true },
-            ),
-        ).toBeTruthy()
-        expect(guide().getByText('Evidence: Simulated (fixture, no model call)', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Model: Not recorded', { hidden: true })).toBeTruthy()
-        expect(guide().getByText('Effort: Not recorded', { hidden: true })).toBeTruthy()
-        expect(
-            guide().getByText('Time: total Not recorded, model Not recorded, checking Not recorded', { hidden: true }),
-        ).toBeTruthy()
-        expect(
-            guide().getByText(
-                'Tokens: in Not recorded, cached Not recorded, out Not recorded, reasoning Not recorded',
-                {
-                    hidden: true,
-                },
-            ),
-        ).toBeTruthy()
+        await atGuideWithJudge({ screens: generated ? { generated: ['guide'] } : {} })
+        await showDetails()
+        expect(guide().getByText(`Source: ${generated ? 'generated' : 'fallback'}`)).toBeTruthy()
+        expect(guide().getByText('Evidence: Simulated fixture · no model call')).toBeTruthy()
+        expect(guide().getByText('Model: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Effort: Not recorded')).toBeTruthy()
+        for (const key of [
+            'Before provider',
+            'Provider time',
+            'Validation',
+            'Server total',
+            'Input tokens',
+            'Cached input tokens',
+            'Output tokens',
+            'Reasoning tokens',
+        ])
+            expect(guide().getByText(`${key}: Not recorded`)).toBeTruthy()
     })
 
     it('names a block and where it came from when it is tapped, while the layer is on', async () => {
         await atGuideWithJudge()
-        await openJudge()
-        await fireEvent.press(toggle())
-        await guide().findByTestId('attribution-card', { hidden: true })
-        await fireEvent.press(
-            guide().getAllByLabelText(/Instruction\. Show how this part was built/u, { hidden: true })[0]!,
-        )
-        expect(await guide().findByText('Instruction · generated by the model', { hidden: true })).toBeTruthy()
+        await showDetails()
+        const fact = guide().getByText('Groove faces inward toward the divider.')
+        await fireEvent(fact, 'touchEnd', { stopPropagation: jest.fn() })
+        expect(await guide().findByText('Text · generated')).toBeTruthy()
     })
 })
 
@@ -393,38 +419,45 @@ describe('J2: compare two manuals', () => {
         await waitFor(() => expect(view.getPathname()).toBe('/compare'))
         await waitFor(() => expect(screen.queryByTestId('more-sheet')).toBeNull())
     })
-    const entries = (): LibraryEntry[] => [
-        entry('manual-a', 'reviewed', 2, 'Alpha'),
-        entry('manual-b', 'reviewed', 3, 'Beta'),
-        entry('manual-c', 'unreviewed', 2, 'Gamma'),
-    ]
-    const different = {
-        generated: ['guide'] as const,
-        // The second manual gets a different composition from the same renderer: another block and another button.
-        transform: (document: ScreenDocument): ScreenDocument =>
-            document.bound.manualId === 'manual-b'
+    const entries = (): LibraryEntry[] => {
+        const second = entry('manual-b', 'reviewed', 3, 'Beta')
+        second.session.reviewedSteps[0]!.safetyNotes = [
+            {
+                noteId: 'lift',
+                note: {
+                    state: 'known',
+                    value: 'Two people should lift this.',
+                    sourceRefs: [{ pageId: second.session.pages[0]!.pageId, region: null }],
+                },
+            },
+        ]
+        return [entry('manual-a', 'reviewed', 2, 'Alpha'), second, entry('manual-c', 'unreviewed', 2, 'Gamma')]
+    }
+    const different: FixtureServerOptions = {
+        generated: ['guide'],
+        arrange: (proposal, inputs) =>
+            inputs.session?.manualId === 'manual-b'
                 ? {
-                      ...document,
-                      body: [
-                          ...document.body,
-                          {
-                              type: 'Warning' as const,
-                              text: 'Two people should lift this.',
-                              tone: 'critical' as const,
-                              citations: [],
-                          },
-                      ],
-                      bar: { ...document.bar, primary: { ...document.bar.primary, label: 'Snap a photo' } },
+                      ...proposal,
+                      body: {
+                          type: 'Card',
+                          surface: 'raised',
+                          tone: 'neutral',
+                          padding: 'md',
+                          children: [proposal.body],
+                      },
+                      bar: { ...proposal.bar, primary: { ...proposal.bar.primary, label: 'Take a photo' } },
                   }
-                : document,
+                : proposal,
     }
 
     it('keeps a direct link closed while the device judge toggle is off', async () => {
         await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: false }))
         await mount(entries(), { screens: different })
         await testRouter.push('/compare')
-        expect(await screen.findByText('Turn on the judge view in More to compare manuals.')).toBeTruthy()
-        expect(screen.queryByTestId('compare-screen')).toBeNull()
+        expect(await screen.findByText('Your manuals')).toBeTruthy()
+        expect(screen.queryByTestId('compare-choose-manual-a')).toBeNull()
+        expect(screen.queryByTestId('compare-panes')).toBeNull()
     })
 
     it('is reachable from About this check and lists real library manuals, finished ones only', async () => {
@@ -448,12 +481,16 @@ describe('J2: compare two manuals', () => {
         const b = await screen.findByTestId('compare-pane-manual-b')
         expect(a).toBeTruthy()
         expect(b).toBeTruthy()
-        expect(await screen.findByText('Alpha 1: Stand the side panel upright')).toBeTruthy()
-        expect(await screen.findByText('Beta 1: Stand the side panel upright')).toBeTruthy()
+        expect((await within(a).findAllByText('Alpha 1: Stand the side panel upright')).length).toBeGreaterThan(0)
+        expect((await within(b).findAllByText('Beta 1: Stand the side panel upright')).length).toBeGreaterThan(0)
         expect(screen.getAllByText('Two people should lift this.')).toHaveLength(1)
-        expect(screen.getByText(/Main button: Take photo/u)).toBeTruthy()
-        expect(screen.getByText(/Main button: Snap a photo/u)).toBeTruthy()
-        expect(screen.getAllByText(/Composed by muse-wonder-1.0 at max effort/u)).toHaveLength(2)
+        expect(within(a).getByRole('button', { name: 'Take photo' }).props.accessibilityState).toMatchObject({
+            disabled: true,
+        })
+        expect(within(b).getByRole('button', { name: 'Take a photo' }).props.accessibilityState).toMatchObject({
+            disabled: true,
+        })
+        expect(screen.getAllByText('Simulated fixture · no model call')).toHaveLength(2)
         const composed = server.requests.flatMap((request) =>
             request.op === 'generate' ? [request.session?.manualId] : [],
         )
@@ -476,7 +513,7 @@ describe('J2: compare two manuals', () => {
         expect(screen.getByTestId('compare-panes').props.style).toEqual(
             expect.arrayContaining([expect.objectContaining({ flexDirection: direction })]),
         )
-        expect(screen.getByTestId('compare-screen')).toBeTruthy()
+        expect(screen.getByTestId('compare-panes')).toBeTruthy()
     })
 })
 
@@ -522,14 +559,17 @@ describe('J3: the same photo, in the order each part arrived', () => {
         const mounted = await mount([entry()], { screens, replies })
         await press('Continue building')
         await waitFor(() => expect(mounted.view.getPathname()).toBe('/guide/flow-manual'))
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         await press('Take photo')
         await act(async () => mounted.controller.shutter(async () => source))
+        await loadPhoto()
         return mounted
     }
     const openJudge = async (): Promise<void> => {
         await press('More')
+        await loadPhoto() // The newly mounted contextual More must load its own exact held-photo node.
         await fireEvent.press(await screen.findByTestId('judge-entry'))
+        await fireEvent.press((await screen.findAllByTestId('judge-summary-details')).at(-1)!)
         await screen.findByTestId('judge-details')
     }
     // The frozen photo draws its overlays once it has a measured width, as on a device.
@@ -542,7 +582,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
     it('shows verdict, composed result screen and precise mask, each with what actually happened', async () => {
         const { controller } = await atResult(
             { check: { model: 'muse-spark-1.3' }, followUps: offers, locate },
-            { generated: ['result'] },
+            { generated: ['result'], recordedMetadata: true },
         )
         await waitFor(() => expect(controller.getSnapshot().stages?.segments.status).toBe('landed'))
         await measurePhoto()
@@ -553,7 +593,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
         // The three later stages are numbered by when they really arrived, so each is found by its own words.
         expect(
             details.getByText(
-                /^\d\. Result screen: Landed \(model-composed\), server total 3420 ms, model muse-wonder-1\.0, effort max$/u,
+                /^\d\. Result screen: Model-composed, model muse-wonder-1\.0, effort max, provider 3420 ms$/u,
             ),
         ).toBeTruthy()
         expect(
@@ -593,12 +633,17 @@ describe('J3: the same photo, in the order each part arrived', () => {
     })
 
     it('says a stage was skipped or never offered instead of implying it succeeded', async () => {
-        const { controller } = await atResult({}, { failing: ['result'] })
+        const { controller, store, server } = await atResult({}, { failing: ['result'] })
+        const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
+        await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('provider_error'))
+        await flush()
         expect(controller.getSnapshot().stages).toBeUndefined()
         await openJudge()
         const details = within(screen.getByTestId('judge-details', { hidden: true }))
         expect(
-            details.getByText(/^2\. Result screen: Skipped, the native result is shown \(failed, provider_error\)/u),
+            details.getByText(
+                /^2\. Result screen: App fallback \(provider_error\), model Not recorded, effort Not recorded, provider Not recorded$/u,
+            ),
         ).toBeTruthy()
         expect(details.getByText('3. Precise mask: Not offered')).toBeTruthy()
     })
@@ -611,7 +656,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
         await waitFor(() => expect(controller.getSnapshot().stages?.segments.status).toBe('landed'))
         await measurePhoto()
         expect(await screen.findByTestId('segment-mask', { hidden: true })).toBeTruthy()
-        await press('Take another photo')
+        await press('Retake photo')
         await waitFor(() => expect(screen.queryByTestId('segment-mask', { hidden: true })).toBeNull())
     })
 })
@@ -622,23 +667,27 @@ describe('every other screen is composed from its own document', () => {
         const { view, controller } = await mount([], { replies: { parse: gate.promise } })
         await press('Add a manual')
         await waitFor(() => expect(view.getPathname()).toBe('/add'))
-        expect(await screen.findByText('Take a photo of each manual page.')).toBeTruthy()
+        expect(await screen.findByText('Photograph each page of your manual, one at a time.')).toBeTruthy()
         expect(screen.getByTestId('take-page-photo')).toBeTruthy()
         expect(screen.getByTestId('choose-pages')).toBeTruthy()
         await act(async () => controller.importPages(async () => [source]))
-        expect(await screen.findByText('Add every page, even the parts list.')).toBeTruthy()
+        expect(await screen.findByText('1 manual page')).toBeTruthy()
         expect(screen.getByTestId('read-manual')).toBeTruthy()
         expect(screen.getByTestId('add-page')).toBeTruthy()
-        await press('Read my manual')
+        await press('Read manual')
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/reading\//u))
-        expect(await screen.findByText('Reading each page. This can take a minute.')).toBeTruthy()
+        expect(await screen.findByText('Reading your manual. This can take a minute.')).toBeTruthy()
         // While it reads, the only honest controls are the native ones: stop is never replaced.
-        expect(screen.getByTestId('cancel-reading')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Back' }).props.accessibilityState).toMatchObject({ disabled: false })
+        await press('Back')
+        expect(await screen.findByRole('button', { name: 'Stop reading' })).toBeTruthy()
+        await press('Keep reading')
+        expect(view.getPathname()).toMatch(/^\/reading\//u)
         await act(async () => gate.resolve())
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/check\//u))
         expect(await screen.findByText('Check what we read before you start building.')).toBeTruthy()
-        expect(screen.getByTestId('quick-check-start').props.accessibilityLabel).toBe('Start building')
-        await press('Start building')
+        expect(screen.getByTestId('quick-check-start').props.accessibilityLabel).toBe('Looks right')
+        await press('Looks right')
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/guide\//u))
         expect(controller.current?.session.reviewStatus).toBe('reviewed')
     })
@@ -650,35 +699,60 @@ describe('every other screen is composed from its own document', () => {
         const { view } = await mount([finished])
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/done/flow-manual'))
-        expect(await screen.findByText('You finished all 2 steps.')).toBeTruthy()
-        await press('Back to Home')
+        expect(await screen.findByText('2 of 2 steps marked done')).toBeTruthy()
+        await press('Home')
         await waitFor(() => expect(view.getPathname()).toBe('/'))
     })
 
     it('composes the error screen for a failed check without hiding the cause or the way back', async () => {
         const { controller } = await mount([entry()], { replies: { failCheck: true } })
         await press('Continue building')
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         await press('Take photo')
         await act(async () => controller.shutter(async () => source))
-        expect(await screen.findByText('Smart help is unavailable right now. Try again in a moment.')).toBeTruthy()
+        expect(
+            await screen.findByText('We could not reach the checker. Check your connection and try again.'),
+        ).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
         expect(controller.getSnapshot().check).toBeNull()
     })
 
     it('composes the answer and keeps the question, photo and held verdict', async () => {
-        const { controller } = await mount([entry()])
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
+        const gate = deferred<void>()
+        let hold = false
+        const { controller, view } = await mount([entry()], {
+            screens: {
+                generated: ['answer'],
+                get gate() {
+                    return hold ? gate.promise : undefined
+                },
+            },
+        })
         await press('Continue building')
-        await screen.findByText(/Step 1: /u)
+        await screen.findByText(/^Step 1 of \d+$/u)
         await press('Take photo')
         await act(async () => controller.shutter(async () => source))
+        await loadPhoto()
         await act(async () => {
             controller.targetChanged({ kind: 'part', partId: 'side-panel' })
             controller.questionChanged('Which way?')
         })
+        hold = true
         await act(async () => controller.ask())
         expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Back to the step' })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+        const heldPhoto = controller.getSnapshot().capture?.binding.captureId
+        await act(async () => jest.advanceTimersByTime(9_001))
+        expect(hostCounts(view).generated).toBe(0)
+        expect(screen.getByText('The groove faces inward.')).toBeTruthy()
+        await act(async () => gate.resolve())
+        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
+        expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)
+        await press('Back to the guide')
+        expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
+        expect(controller.getSnapshot().answer?.answer).toBe('The groove faces inward.')
+        expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
         expect(controller.getSnapshot().question).toBe('Which way?')
     })
@@ -725,11 +799,24 @@ describe('mandatory manual facts stay visible whatever happened to the document'
         [
             'the document says nothing about it',
             {
-                transform: (document: ScreenDocument): ScreenDocument => ({
-                    ...document,
-                    body: document.body.filter((node) => node.type !== 'ManualDirections'),
-                    manualFacts: document.manualFacts?.map((fact) => ({ ...fact, placement: 'remainder' as const })),
-                }),
+                arrange: (proposal: ScreenProposalV2, inputs: ScreenContextInputsV2): ScreenProposalV2 => {
+                    const required = new Set(documentMaterialV2(inputs).requirements.facts)
+                    const omit = (node: ScreenNodeV2): ScreenNodeV2 =>
+                        'children' in node
+                            ? {
+                                  ...node,
+                                  children: node.children
+                                      .filter(
+                                          (child) =>
+                                              child.type !== 'Text' ||
+                                              child.content.kind !== 'fact' ||
+                                              !required.has(child.content.factId),
+                                      )
+                                      .map(omit),
+                              }
+                            : node
+                    return { ...proposal, body: omit(proposal.body) }
+                },
             },
         ],
         ['the document is the placed directions block', {}],
@@ -753,12 +840,12 @@ describe('mandatory manual facts stay visible whatever happened to the document'
         expect(await screen.findByText(text!)).toBeTruthy()
     })
 
-    it('is not added to the original screen when generated screens are off', async () => {
+    it('keeps safety visible once in the complete local document when generation is off', async () => {
         const { view } = await mount([classified()], { screens: 'off' })
-        await press('Keep building')
+        await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         expect(screen.queryByTestId('mandatory-fact')).toBeNull()
-        expect(screen.queryByText(WARNING)).toBeNull()
+        expect(screen.getAllByText(WARNING)).toHaveLength(1)
     })
 })
 
@@ -766,15 +853,29 @@ describe('a late document is used on the next visit, never swapped in under the 
     it('keeps the native Home while it is in front, and shows the document when Home is next focused', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
-        const { view } = await mount([entry()], { screens: { gate: gate.promise } })
-        await act(async () => jest.advanceTimersByTime(8_001))
+        const { view } = await mount([entry()], { screens: { generated: ['home', 'guide'], gate: gate.promise } })
+        await act(async () => jest.advanceTimersByTime(4_000))
+        await testRouter.push('/guide/flow-manual')
+        await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
+        await act(async () => jest.advanceTimersByTime(20_000))
+        expect(
+            within(screen.getByTestId('library-screen', { hidden: true })).getByText(STATE_COPY_V2.pending.heading, {
+                hidden: true,
+            }),
+        ).toBeTruthy()
+        await testRouter.back('/')
+        await waitFor(() => expect(view.getPathname()).toBe('/'))
+        await act(async () => jest.advanceTimersByTime(3_999))
+        expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
+        await act(async () => jest.advanceTimersByTime(2))
         await act(async () => gate.resolve())
         await flush()
-        expect(screen.queryByText('Turn your paper manual into steps.')).toBeNull()
-        await press('Keep building')
+        expect(hostCounts(view).generated).toBe(0)
+        await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         jest.useRealTimers()
         await testRouter.back('/')
         expect(await screen.findByRole('button', { name: 'Continue building' })).toBeTruthy()
+        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
     })
 })

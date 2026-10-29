@@ -33,12 +33,12 @@ export function SettingsSections({
                 <Body>{PRIVACY_COPY.read}</Body>
                 <Body>{PRIVACY_COPY.check}</Body>
                 <Body>{PRIVACY_COPY.ask}</Body>
-                <Caption>Each request is sent once. A stopped request is not repeated on its own.</Caption>
+                <Caption>{PRIVACY_COPY.once}</Caption>
             </Stack>
             <Stack gap="xs">
                 <Heading>Camera and photos</Heading>
                 <Body>{PRIVACY_COPY.camera}</Body>
-                <Body>Photos you choose from your library stay on this phone until you send them.</Body>
+                <Body>{PRIVACY_COPY.library}</Body>
                 <AppButton label="Open device settings" onPress={onOpenDeviceSettings} />
             </Stack>
         </Stack>
