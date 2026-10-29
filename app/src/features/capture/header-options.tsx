@@ -51,7 +51,6 @@ export type HeaderStyle = {
     headerTintColor: string
     headerShadowVisible: false
     contentStyle: { backgroundColor: string }
-    statusBarStyle: 'light' | 'dark'
 }
 
 /** The native header coloured from a palette, so light and dark both read as one surface with the canvas. */
@@ -61,8 +60,12 @@ export function headerStyleFor(colors: Colors): HeaderStyle {
         headerTintColor: colors.accentInk,
         headerShadowVisible: false,
         contentStyle: { backgroundColor: colors.canvas },
-        statusBarStyle: colors.canvas === darkColors.canvas ? 'light' : 'dark',
     }
+}
+
+/** Expo Go owns native status-bar configuration; use Expo's mounted prop stack rather than native Stack traits. */
+export function statusBarStyleFor(colors: Colors, camera = false): 'light' | 'dark' {
+    return camera || colors.canvas === darkColors.canvas ? 'light' : 'dark'
 }
 
 export type ScreenOptions = Exclude<

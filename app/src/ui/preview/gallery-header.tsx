@@ -53,7 +53,6 @@ export function galleryHeaderOptions(args: {
         return {
             ...style,
             headerShown: false,
-            statusBarStyle: state.route === 'camera' ? 'light' : style.statusBarStyle,
         }
     }
     if (id === 'settings') {

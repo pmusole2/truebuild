@@ -4,7 +4,7 @@ import type { ReactElement } from 'react'
 import { Platform } from 'react-native'
 import type { SharedValue } from 'react-native-reanimated'
 import { darkColors, lightColors } from '../../theme/tokens'
-import { headerStyleFor, type ScreenOptions } from '../../features/capture/header-options'
+import { statusBarStyleFor, type ScreenOptions } from '../../features/capture/header-options'
 import { galleryHeaderOptions } from './gallery-header'
 import { workflowPreviewFixture, WORKFLOW_PREVIEW_CASES, type WorkflowPreviewCase } from './workflow-fixtures'
 
@@ -40,11 +40,12 @@ function optionsFor(
 
 describe('gallery native header', () => {
     it('restores themed status icons after leaving the dark camera viewport', () => {
-        expect(headerStyleFor(lightColors).statusBarStyle).toBe('dark')
-        expect(headerStyleFor(darkColors).statusBarStyle).toBe('light')
-        expect(optionsFor('camera-denied').options.statusBarStyle).toBe('light')
-        const returned = { ...optionsFor('camera-check').options, ...optionsFor('home-empty').options }
-        expect(returned.statusBarStyle).toBe('dark')
+        expect(statusBarStyleFor(lightColors)).toBe('dark')
+        expect(statusBarStyleFor(darkColors)).toBe('light')
+        expect(statusBarStyleFor(lightColors, true)).toBe('light')
+        // Native Stack traits require an Info.plist setting unavailable in Expo Go; leave them unset.
+        expect(optionsFor('camera-denied').options.statusBarStyle).toBeUndefined()
+        expect(optionsFor('home-empty').options.statusBarStyle).toBeUndefined()
     })
     it('resets Camera and Home overrides when switching back to Guide on the same native route', () => {
         const merged = {

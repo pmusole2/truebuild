@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Platform } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
+import { StatusBar } from 'expo-status-bar'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
 import { MediaRejectedError } from '../../media/media-errors'
 import { FixedBottomBar } from '../../ui/bottom-bar'
@@ -375,14 +376,17 @@ export function CameraRoute(): ReactElement {
         return <Redirect href="/" />
     }
     return (
-        <CameraScreen
-            busy={state.pending !== null}
-            intent={state.cameraIntent}
-            guide={assemblyGuide(entry, state)}
-            onCancel={controller.cancel}
-            onCapture={(take): void => {
-                void controller.shutter(take)
-            }}
-        />
+        <>
+            <StatusBar style="light" />
+            <CameraScreen
+                busy={state.pending !== null}
+                intent={state.cameraIntent}
+                guide={assemblyGuide(entry, state)}
+                onCancel={controller.cancel}
+                onCapture={(take): void => {
+                    void controller.shutter(take)
+                }}
+            />
+        </>
     )
 }

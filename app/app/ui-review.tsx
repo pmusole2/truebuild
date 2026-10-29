@@ -1,6 +1,7 @@
 import { useMemo, type ReactElement } from 'react'
 import { Stack, useLocalSearchParams } from 'expo-router'
-import { useCompactTitles } from '../src/features/capture/header-options'
+import { StatusBar } from 'expo-status-bar'
+import { statusBarStyleFor, useCompactTitles } from '../src/features/capture/header-options'
 import { useHomeTitle } from '../src/features/capture/library-screen'
 import { useQuickProgress } from '../src/features/capture/review-screen'
 import { useMoreState } from '../src/features/capture/screen-header'
@@ -31,6 +32,7 @@ export default function WorkflowReviewRoute(): ReactElement | null {
     const native = params.controls === 'hidden'
     return (
         <>
+            <StatusBar style={statusBarStyleFor(colorsFor(scheme), fixture.state.route === 'camera')} />
             <Stack.Screen
                 options={
                     native
