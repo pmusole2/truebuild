@@ -73,9 +73,10 @@ export function PinnedTitle({ scrollY, title }: { scrollY: SharedValue<number>; 
 }
 
 function CollapsingTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
+    const { reduceMotion } = useFeedback()
     const style = useAnimatedStyle(() => {
         const progress = collapseProgress(scrollY.value)
-        return { opacity: 1 - progress, transform: [{ scale: 1 - progress * 0.2 }] }
+        return { opacity: 1 - progress, transform: [{ scale: reduceMotion ? 1 : 1 - progress * 0.2 }] }
     })
     return (
         <Animated.View testID="collapsing-title" style={[styles.collapsing, style]}>

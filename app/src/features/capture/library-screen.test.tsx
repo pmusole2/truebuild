@@ -207,6 +207,32 @@ describe('iOS heading collapse', () => {
 })
 
 describe('collapsing title', () => {
+    it('restores identity scale on Android when reduced motion is enabled mid-scroll', async () => {
+        const { state } = workflowPreviewFixture('home-populated')
+        const scrollY = { value: COLLAPSE_DISTANCE / 2 }
+        const view = (reduceMotion: boolean): ReactElement => (
+            <FeedbackProvider reduceMotion={reduceMotion}>
+                <LibraryScreen
+                    state={state}
+                    controller={INERT_WORKFLOW_CONTROLLER}
+                    chrome="native"
+                    largeTitle="content"
+                    scrollY={scrollY as unknown as SharedValue<number>}
+                />
+            </FeedbackProvider>
+        )
+        const { rerender } = await render(view(false))
+        expect(StyleSheet.flatten(screen.getByTestId('collapsing-title').props.style)).toMatchObject({
+            opacity: 0.5,
+            transform: [{ scale: 0.9 }],
+        })
+        await rerender(view(true))
+        expect(StyleSheet.flatten(screen.getByTestId('collapsing-title').props.style)).toMatchObject({
+            opacity: 0.5,
+            transform: [{ scale: 1 }],
+        })
+    })
+
     it('is fully open at rest, fully collapsed after the collapse distance, and proportional between', () => {
         expect(collapseProgress(0)).toBe(0)
         expect(collapseProgress(COLLAPSE_DISTANCE / 2)).toBe(0.5)
