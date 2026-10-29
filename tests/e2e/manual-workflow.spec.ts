@@ -167,9 +167,10 @@ test('an unknown critical fact is asked as one honest question and blocks starti
     })
     // The address is the Quick check's own: reloading opens it with the stored plan.
     await page.reload()
-    await expect(page.getByText('Which way should the part face in step 1?', { exact: true })).toBeVisible({
+    await expect(page.getByText('Which way should it face?', { exact: true })).toBeVisible({
         timeout: 60_000,
     })
+    await expect(page.getByRole('progressbar', { name: 'Question 1 of 1', exact: true })).toBeVisible()
     await expect(page.getByText('The manual says: Arrow is not visible in the photo.', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start building', exact: true })).toHaveCount(0)
     // The default card is the picture, the question and Let me fix it: no form until that is tapped.
@@ -225,7 +226,7 @@ test('camera access is requested only on demand: without permission the screen e
     await page.getByRole('button', { name: 'Add manual', exact: true }).click()
     await page.getByRole('button', { name: 'Take photo', exact: true }).click()
     await expect(
-        page.getByText('We need the camera to take photos of your manual and your work.', { exact: true }),
+        page.getByText('We need the camera for photos of your manual and work.', { exact: true }),
     ).toBeVisible()
     await page.getByRole('button', { name: 'Go back', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Choose pages from photos', exact: true })).toBeVisible()
