@@ -9,8 +9,7 @@ import type { LibraryEntry } from './library'
 
 // Keep reference abbreviations and dotted initials attached to their following clause. Splitting at "Fig." or "p."
 // would drop factual page/position instructions when the surface chooses the first sentence or applies its word budget.
-const ABBREVIATION_END =
-    /(?:\b(?:figs?|pp?|e\.g|i\.e|vs|approx|dr|mr|mrs|ms|prof|vol|rev)\.|(?:\b\p{L}\.){2,})$/iu
+const ABBREVIATION_END = /(?:\b(?:figs?|pp?|e\.g|i\.e|vs|approx|dr|mr|mrs|ms|prof|vol|rev)\.|(?:\b\p{L}\.){2,})$/iu
 
 function sentenceParts(text: string): string[] {
     const complete: string[] = []
