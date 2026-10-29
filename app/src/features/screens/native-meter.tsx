@@ -151,7 +151,7 @@ export function MeterTriggers(): null {
     const coach = useCoach()
     const { showBuilt } = useJudge()
     const window = useWindowDimensions()
-    const screens = workflow?.screens ?? null
+    const screens = workflow?.documents ?? null
     const documents = useSyncExternalStore(
         screens?.subscribe ?? none,
         screens?.getVersion ?? ((): number => 0),
@@ -222,11 +222,49 @@ export function MeterTriggers(): null {
                     ...measurement,
                     sampleMs,
                     session: {
+                        metricsVersion: session.metricsVersion,
                         status: session.status,
                         sampleCount: session.sampleCount,
                         counts: session.counts,
+                        rawTextCounts: session.rawTextCounts,
                         generatedShare: session.generatedShare,
+                        reason: session.reason,
+                        strictStatus: session.strictStatus,
+                        strictCounts: session.strictCounts,
+                        strictRawTextCounts: session.strictRawTextCounts,
+                        strictGeneratedShare: session.strictGeneratedShare,
+                        strictReason: session.strictReason,
                         minimumScreenGeneratedShare: session.minimumScreenGeneratedShare,
+                        meanRouteGeneratedShare: session.meanRouteGeneratedShare,
+                        meanRouteStrictGeneratedShare: session.meanRouteStrictGeneratedShare,
+                        exclusions: session.exclusions,
+                        routes: session.routes.map(
+                            ({
+                                route,
+                                status,
+                                sampleCount,
+                                counts,
+                                generatedShare,
+                                reason,
+                                strictStatus,
+                                strictCounts,
+                                strictGeneratedShare,
+                                strictReason,
+                                exclusions,
+                            }) => ({
+                                route,
+                                status,
+                                sampleCount,
+                                counts,
+                                generatedShare,
+                                reason,
+                                strictStatus,
+                                strictCounts,
+                                strictGeneratedShare,
+                                strictReason,
+                                exclusions,
+                            }),
+                        ),
                     },
                 }),
             )

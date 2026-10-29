@@ -60,7 +60,7 @@ export function ManualLibraryBlock({
                 nativeID={mark}
                 entry={shown[0]!}
                 pageUris={state.pageUris}
-                resumable={!state.storageReadOnly}
+                resumable={context.readOnly !== true && !state.storageReadOnly}
                 showProgress={node.showProgress}
             />
         )
@@ -73,8 +73,10 @@ export function ManualLibraryBlock({
                     entry={entry}
                     pageUris={state.pageUris}
                     showProgress={node.showProgress && node.layout === 'cards'}
-                    disabled={state.pending !== null}
-                    onOpen={(): void => live.nav.openStop(entry)}
+                    disabled={context.readOnly === true || state.pending !== null}
+                    onOpen={(): void => {
+                        if (context.readOnly !== true) live.nav.openStop(entry)
+                    }}
                 />
             ))}
         </View>
@@ -211,7 +213,7 @@ export function FactEditorBlock({
             session={entry.session}
             state={live.state}
             controller={live.controller}
-            busy={live.state.pending !== null || live.state.storageReadOnly}
+            busy={context.readOnly === true || live.state.pending !== null || live.state.storageReadOnly}
             onDone={(): void => live.closeSheet?.()}
             labels={{ label: node.label, save: node.saveLabel, cancel: node.cancelLabel }}
         />

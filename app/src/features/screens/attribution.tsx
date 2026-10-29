@@ -2,7 +2,7 @@ import { useSyncExternalStore, type ReactElement } from 'react'
 import { View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { router } from 'expo-router'
-import type { ScreenMetadata } from '@truebuild/contracts'
+import type { ScreenMetadata, ScreenDocumentV2 } from '@truebuild/contracts'
 import type { CheckStages, StageStatus } from '../capture/controller'
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { FrozenPhoto } from '../assembly/frozen-photo'
@@ -148,7 +148,25 @@ function HostCounts(): ReactElement {
                 value={screen === undefined ? NOT_RECORDED : percent(screen.minimumGeneratedShare)}
             />
             <Row label="Whole session" value={sessionLine(session)} />
-            <Caption>{`Counts ${NATIVE_HOST_METER_SCOPE}. The native header, keyboard and system views are not in these counts.`}</Caption>
+            <Row
+                label="Whole session, strict (capability internals excluded)"
+                value={
+                    session === null || session.strictGeneratedShare === null
+                        ? NOT_RECORDED
+                        : `${percent(session.strictGeneratedShare)} generated`
+                }
+            />
+            <Row
+                label="Mean per route"
+                value={
+                    session === null ||
+                    session.meanRouteGeneratedShare === null ||
+                    session.meanRouteStrictGeneratedShare === null
+                        ? NOT_RECORDED
+                        : `${percent(session.meanRouteGeneratedShare)} generated, ${percent(session.meanRouteStrictGeneratedShare)} strict`
+                }
+            />
+            <Caption>{`Counts ${NATIVE_HOST_METER_SCOPE}. Navigation hosts are included; physical keyboard and system views are outside this scope.`}</Caption>
             <Caption>Use Count again after opening details or inspecting a component.</Caption>
             <AppButton testID="judge-measure" label="Count again" variant="quiet" onPress={measureNow} />
         </>
@@ -283,10 +301,14 @@ export function StagesPanel({
     check,
     stages,
     resultSlot,
+    resultDocument,
+    resultArrivedAt,
 }: {
     readonly check: { readonly model?: string; readonly decision: string; readonly evidence?: string } | null
     readonly stages: CheckStages | null | undefined
     readonly resultSlot: ScreenSlot | undefined
+    readonly resultDocument?: ScreenDocumentV2 | null
+    readonly resultArrivedAt?: number | null
 }): ReactElement | null {
     const { showBuilt } = useJudge()
     const workflow = useOptionalWorkflow()
@@ -303,7 +325,13 @@ export function StagesPanel({
         sameHeldPhoto && stages != null && stages.captureId === capture.binding.captureId
             ? stages.masks.filter((mark) => mark.mask !== undefined)
             : []
-    const readyAt = resultSlot?.status === 'ready' ? (workflow?.screens?.readyAt(resultSlot.key) ?? null) : null
+    const sameDocument =
+        resultDocument?.kind === 'result' && resultDocument.bound.captureId === capture?.binding.captureId
+    const readyAt = sameDocument
+        ? (resultArrivedAt ?? null)
+        : resultSlot?.status === 'ready'
+          ? (workflow?.screens?.readyAt(resultSlot.key) ?? null)
+          : null
     const resultAt =
         readyAt !== null && stages?.publishedAt !== undefined ? Math.max(0, readyAt - stages.publishedAt) : null
     const maskAt = stages == null ? null : arrival(stages.segments)
@@ -321,9 +349,11 @@ export function StagesPanel({
             id: 'result' as const,
             at: resultAt,
             label: 'Result screen',
-            identity: `result:${resultSlot?.status ?? 'none'}`,
+            identity: `result:${sameDocument ? resultDocument.screenId : (resultSlot?.status ?? 'none')}`,
             scope: phoneScope(resultAt),
-            value: resultScreenWord(resultSlot),
+            value: sameDocument
+                ? `${resultDocument.metadata.source === 'fallback' ? `App fallback (${resultDocument.metadata.fallbackReason ?? 'Not recorded'})` : resultDocument.metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture composition, no model call' : 'Model-composed'}, model ${resultDocument.metadata.model ?? NOT_RECORDED}, effort ${resultDocument.metadata.effort ?? NOT_RECORDED}, provider ${ms(resultDocument.metadata.timing.totalMs)}`
+                : resultScreenWord(resultSlot),
         },
         {
             id: 'mask' as const,

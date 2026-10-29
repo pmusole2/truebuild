@@ -40,6 +40,8 @@ export function FixedBottomBar({
     secondary,
     reason,
     testID = 'bottom-bar',
+    nativeID,
+    reasonNativeID,
     placement = 'flow',
     onHeight,
 }: {
@@ -47,6 +49,10 @@ export function FixedBottomBar({
     readonly secondary?: BarAction
     readonly reason?: string | null
     readonly testID?: string
+    /** Render-origin marker for the bar as a whole, when a document composed it. */
+    readonly nativeID?: string
+    /** A press-time guard's explanation may have a different source than the composed action. */
+    readonly reasonNativeID?: string
     // 'overlay' floats the bar over the bottom edge so a scroll view above can fill the whole screen (the iOS large title
     // only collapses with a full-screen scroll view). The screen then pads its content by the height reported here.
     readonly placement?: 'flow' | 'overlay'
@@ -79,6 +85,7 @@ export function FixedBottomBar({
     return (
         <View
             testID={testID}
+            nativeID={nativeID}
             onLayout={onHeight === undefined ? undefined : (event): void => onHeight(event.nativeEvent.layout.height)}
             style={[
                 styles.bar,
@@ -88,6 +95,7 @@ export function FixedBottomBar({
         >
             {reason === undefined || reason === null ? null : large ? (
                 <ScrollView
+                    nativeID={reasonNativeID}
                     accessibilityLiveRegion="polite"
                     style={{ maxHeight: Math.round(height * REASON_MAX_RATIO) }}
                     contentContainerStyle={styles.reason}
@@ -95,7 +103,7 @@ export function FixedBottomBar({
                     <Callout tone="muted">{reason}</Callout>
                 </ScrollView>
             ) : (
-                <View accessibilityLiveRegion="polite" style={styles.reason}>
+                <View nativeID={reasonNativeID} accessibilityLiveRegion="polite" style={styles.reason}>
                     <Callout tone="muted">{reason}</Callout>
                 </View>
             )}

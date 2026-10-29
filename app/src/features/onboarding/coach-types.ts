@@ -14,6 +14,8 @@ export type CoachCandidate = {
     readonly kind: CoachKind
     readonly heading: string
     readonly sentence: string
+    /** The exact authored CoachMark node's source; overlay mechanics keep their own shell source. */
+    readonly textOrigin?: 'generated' | 'fallback' | 'shell'
 }
 
 /** Which overlay host draws the tip: the shared window overlay, or the screen's own (the full-screen camera). */

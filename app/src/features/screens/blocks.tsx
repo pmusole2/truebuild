@@ -39,6 +39,7 @@ import { partSourceRefs } from './part-source'
 import { originId, type RenderOrigin } from './render-origin'
 
 export type BlockContext = {
+    readonly readOnly?: boolean
     /** Server-owned origin of the component at a document path (`body.2`, `body.0.children.1`); never chosen by the model. */
     readonly originOf: (path: string) => RenderOrigin
     /** Whole-document origin, for words used in the judge layer. */

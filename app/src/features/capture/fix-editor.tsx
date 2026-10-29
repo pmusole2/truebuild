@@ -48,11 +48,13 @@ export function FixEditor({
     const accept = async (
         resolution: Parameters<WorkflowScreenProps['controller']['acceptStepFacts']>[2],
     ): Promise<void> => {
+        if (busy) return
         if (await controller.acceptStepFacts(binding, step.stepId, resolution)) {
             onDone()
         }
     }
     const save = async (): Promise<void> => {
+        if (busy) return
         if (question.kind === 'orientation') {
             const description = text.trim()
             if (description.length === 0) {

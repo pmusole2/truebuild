@@ -77,7 +77,7 @@ export function TextFactSources({ text, context }: { text: string; context: Bloc
 }
 
 /** One manual fact, in the manual's own complete words. Safety is a notice; other directions read as text. */
-function Fact({
+export function Fact({
     fact,
     emphasis,
     nativeID,

@@ -1,4 +1,6 @@
 import {
+    createContext,
+    useContext,
     useCallback,
     useEffect,
     useMemo,
@@ -38,6 +40,12 @@ import { useFeedback } from './feedback'
 import { SPRING_GENTLE, timing } from './motion'
 import { useLargeText } from './large-text'
 import { Body, Heading } from './text'
+import { useDocumentOwnershipId } from '../features/documents/ownership'
+const SheetDismissContext = createContext<(() => void) | null>(null)
+/** A document's own Back/Close action uses the same native dismissal motion and single-use latch as the grabber. */
+export function useSheetDismiss(): (() => void) | null {
+    return useContext(SheetDismissContext)
+}
 
 /** Resting heights as a share of the window: a peek, a tall default and a near-full sheet. */
 export type SheetDetent = 'peek' | 'tall' | 'full'
@@ -114,6 +122,7 @@ export function BottomSheet({
     initialDetent,
     testID = 'bottom-sheet',
     scrollTestID = 'bottom-sheet-scroll',
+    documentFrame = false,
 }: {
     readonly visible: boolean
     readonly title: string
@@ -126,9 +135,13 @@ export function BottomSheet({
     readonly initialDetent?: SheetDetent
     readonly testID?: string
     readonly scrollTestID?: string
+    /** A complete document owns header, content scrolling and bar; keep only native sheet mechanics. */
+    readonly documentFrame?: boolean
 }): ReactElement {
+    const documentId = useDocumentOwnershipId()
     return (
         <Modal
+            nativeID={documentFrame && documentId !== null ? `truebuild-document-root:${documentId}` : undefined}
             visible={visible}
             transparent={true}
             animationType="none"
@@ -145,6 +158,7 @@ export function BottomSheet({
                     initialDetent={initialDetent}
                     testID={testID}
                     scrollTestID={scrollTestID}
+                    documentFrame={documentFrame}
                 >
                     {children}
                 </SheetFrame>
@@ -162,6 +176,7 @@ export function MoreSheet(props: {
     readonly children: ReactNode
     readonly detents?: readonly SheetDetent[]
     readonly initialDetent?: SheetDetent
+    readonly documentFrame?: boolean
 }): ReactElement {
     const { title = 'More', ...rest } = props
     return <BottomSheet {...rest} title={title} testID="more-sheet" scrollTestID="more-sheet-scroll" />
@@ -176,6 +191,7 @@ function SheetFrame({
     initialDetent,
     testID,
     scrollTestID,
+    documentFrame,
 }: {
     readonly title: string
     readonly compactTitle: string | undefined
@@ -185,8 +201,10 @@ function SheetFrame({
     readonly initialDetent: SheetDetent | undefined
     readonly testID: string
     readonly scrollTestID: string
+    readonly documentFrame: boolean
 }): ReactElement {
     const { colors, scheme } = useTheme()
+    const documentId = useDocumentOwnershipId()
     const { reduceMotion } = useFeedback()
     const { height } = useWindowDimensions()
     const insets = useSafeAreaInsets()
@@ -368,7 +386,10 @@ function SheetFrame({
                 testID={testID}
                 style={[
                     styles.sheet,
-                    { backgroundColor: colors.surface, paddingBottom: space.md + (overlap > 0 ? 0 : insets.bottom) },
+                    {
+                        backgroundColor: colors.surface,
+                        paddingBottom: documentFrame ? 0 : space.md + (overlap > 0 ? 0 : insets.bottom),
+                    },
                     boxStyle,
                     slideStyle,
                 ]}
@@ -393,27 +414,40 @@ function SheetFrame({
                 >
                     <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
                 </View>
-                <View style={styles.header}>
+                {documentFrame ? (
                     <View
                         ref={attachMeterRoot}
-                        accessible={true}
-                        accessibilityRole={large && compactTitle !== undefined ? 'header' : undefined}
-                        accessibilityLabel={large && compactTitle !== undefined ? title : undefined}
-                        style={styles.titleWrap}
+                        collapsable={false}
+                        nativeID={documentId === null ? undefined : `truebuild-document-content-boundary:${documentId}`}
+                        style={{ flex: 1, minHeight: 0 }}
                     >
-                        <Heading>{large && compactTitle !== undefined ? compactTitle : title}</Heading>
+                        <SheetDismissContext.Provider value={close}>{children}</SheetDismissContext.Provider>
                     </View>
-                    <IconButton label="Close sheet" icon="close" onPress={close} />
-                </View>
-                <ScrollView
-                    testID={scrollTestID}
-                    style={styles.scroll}
-                    contentContainerStyle={styles.scrollContent}
-                    keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled={true}
-                >
-                    {children}
-                </ScrollView>
+                ) : (
+                    <>
+                        <View style={styles.header}>
+                            <View
+                                ref={attachMeterRoot}
+                                accessible={true}
+                                accessibilityRole={large && compactTitle !== undefined ? 'header' : undefined}
+                                accessibilityLabel={large && compactTitle !== undefined ? title : undefined}
+                                style={styles.titleWrap}
+                            >
+                                <Heading>{large && compactTitle !== undefined ? compactTitle : title}</Heading>
+                            </View>
+                            <IconButton label="Close sheet" icon="close" onPress={close} />
+                        </View>
+                        <ScrollView
+                            testID={scrollTestID}
+                            style={styles.scroll}
+                            contentContainerStyle={styles.scrollContent}
+                            keyboardShouldPersistTaps="handled"
+                            nestedScrollEnabled={true}
+                        >
+                            {children}
+                        </ScrollView>
+                    </>
+                )}
             </Animated.View>
         </View>
     )

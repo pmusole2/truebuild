@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react'
-import { Text } from 'react-native'
+import { Text, type StyleProp, type TextStyle } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps, type TypeRole } from '../theme/typography'
 import type { Colors } from '../theme/tokens'
@@ -24,6 +24,7 @@ type TypeProps = {
     readonly numberOfLines?: number
     // Render-origin marker for a text composed from a screen document; see features/screens/render-origin.
     readonly nativeID?: string
+    readonly style?: StyleProp<TextStyle>
 }
 
 function Typeset({
@@ -33,6 +34,7 @@ function Typeset({
     children,
     numberOfLines,
     nativeID,
+    style,
 }: TypeProps & { readonly role: TypeRole; readonly header?: boolean }): ReactElement {
     const { colors } = useTheme()
     const type = typeProps(role)
@@ -42,7 +44,7 @@ function Typeset({
             accessibilityRole={header ? 'header' : undefined}
             maxFontSizeMultiplier={type.maxFontSizeMultiplier}
             numberOfLines={numberOfLines}
-            style={[type.style, { color: colors[TONE_TOKEN[tone]] }]}
+            style={[type.style, { color: colors[TONE_TOKEN[tone]] }, style]}
         >
             {children}
         </Text>
