@@ -10,6 +10,8 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
+import { wireProposalSchema } from './document-wire'
+
 // Provider grounding refers to the exact auto-oriented image sent, on Meta's 0–1000 grid.
 // Only small edge overruns are tolerated; inversion, zero area and gross coordinates are refused.
 const gridCoordinate = z.number().finite().min(-10).max(1010)
@@ -320,6 +322,8 @@ export const metaOutputSchemas = {
     ),
     overlay: strictSchema(z.toJSONSchema(providerOverlaySchema, { target: 'draft-7', io: 'input' })),
     screen: strictSchema(z.toJSONSchema(providerScreenProposalSchema, { target: 'draft-7', io: 'input' })),
+    // Version 2 document: a flat node table (finite, no recursion); the server rebuilds the tree (see document-wire.ts).
+    document: strictSchema(z.toJSONSchema(wireProposalSchema, { target: 'draft-7', io: 'input' })),
 }
 
 /** Wire schema of the verdict-only Spark call (same `truebuild_check` name; no geometry property exists in it). */

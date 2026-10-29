@@ -224,7 +224,7 @@ describe('generation, validation, repair and fallback', (): void => {
             model: 'muse-spark-1.3',
             store: false,
             stream: false,
-            max_output_tokens: 8000,
+            max_output_tokens: 32000,
             reasoning: { effort: 'max' },
             text: { format: { type: 'json_schema', name: 'truebuild_screen', strict: true } },
         })

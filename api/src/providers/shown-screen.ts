@@ -1,11 +1,19 @@
-import { MANUAL_FACT_LIMIT, SCREEN_LIMITS } from '@truebuild/contracts'
+import { DOCUMENT_V2_LIMITS, MANUAL_FACT_LIMIT, SCREEN_LIMITS } from '@truebuild/contracts'
 import { z } from 'zod'
 
 /**
- * What a person was actually shown on a generated step page, as the server hands it to a check, question or overlay
- * call. It is derived only from the published, validated document the server issued and is re-verified against the
- * current manual before it is sent: the model never sees a draft, a client-supplied text or geometry that is not the
- * manual's own. Every list is bounded by the screen catalog, so this payload is finite by construction.
+ * Blocks of one projected page. A version 1 page has at most `SCREEN_LIMITS.totalNodes`; a version 2 page is a tree, and a
+ * page beyond this bound is not projected (its facts still are), so the provider payload stays finite. PROVISIONAL.
+ */
+export const SHOWN_BLOCK_LIMIT = 160
+
+/**
+ * What a generated step page was composed to show, as the server hands it to a check, question or overlay call. It is the
+ * published composition (order, layout, parts, figure, citations), NOT a claim about pixels: scrolling, a closed section
+ * or the device decide what was actually in view, and a closed section is marked `collapsed`. It is derived only from the
+ * published, validated document the server issued and is re-verified against the current manual before it is sent: the
+ * model never sees a draft, a client-supplied text or geometry that is not the manual's own. Every list is bounded, so
+ * this payload is finite by construction.
  */
 const box = z.strictObject({
     x: z.number().min(0).max(1),
@@ -22,8 +30,11 @@ const shownAction = z.strictObject({
 })
 
 export const shownBlockSchema = z.strictObject({
-    /** Canonical component path in the document: `body.<i>` or `body.<i>.children.<j>`. */
-    path: z.string().regex(/^body\.\d{1,2}(?:\.children\.\d)?$/u),
+    /**
+     * Canonical component path in the document: `body.<i>` or `body.<i>.children.<j>` (version 1), or `body` followed by
+     * the child indexes (`body.0.2`, version 2).
+     */
+    path: z.string().regex(/^body(?:\.(?:children\.)?\d{1,2})*$/u),
     type: z.string().min(1).max(32),
     /** `generated`: the model chose it and the server accepted it unchanged. `fallback`: the server wrote or changed it. */
     origin: z.enum(['generated', 'fallback']),
@@ -48,19 +59,29 @@ export const shownBlockSchema = z.strictObject({
         })
         .optional(),
     /** Manual pages and figure regions this block cites. */
-    sources: z.array(sourceRef).max(SCREEN_LIMITS.citations).optional(),
+    sources: z.array(sourceRef).max(DOCUMENT_V2_LIMITS.citationIndexes).optional(),
+    /** A collapsible section that starts closed: its children were composed but are not shown until it is opened. */
+    collapsed: z.literal(true).optional(),
 })
 export type ShownBlock = z.infer<typeof shownBlockSchema>
 
-export const shownScreenSchema = z.strictObject({
+const shownScreenFields = {
     header: z
         .strictObject({ title: z.string().min(1).max(200), subtitle: z.string().min(1).max(200).nullable() })
         .optional(),
     bar: z.strictObject({ primary: shownAction, secondary: shownAction.nullable() }).optional(),
-    /** Every body block, containers first then their children, in document order. */
-    blocks: z.array(shownBlockSchema).max(SCREEN_LIMITS.totalNodes),
     /** Required manual facts the document did not place in its body; the app shows them in the mandatory section. */
     remainderFactIds: z.array(z.string().min(1).max(160)).max(MANUAL_FACT_LIMIT),
+}
+/** A version 1 page: at most `SCREEN_LIMITS.totalNodes` blocks, every body block in document order. */
+export const shownScreenSchema = z.strictObject({
+    ...shownScreenFields,
+    blocks: z.array(shownBlockSchema).max(SCREEN_LIMITS.totalNodes),
+})
+/** A version 1 or version 2 page (a tree), bounded by `SHOWN_BLOCK_LIMIT`; what a provider call accepts. */
+export const shownScreenV2Schema = z.strictObject({
+    ...shownScreenFields,
+    blocks: z.array(shownBlockSchema).max(SHOWN_BLOCK_LIMIT),
 })
 export type ShownScreen = z.infer<typeof shownScreenSchema>
 

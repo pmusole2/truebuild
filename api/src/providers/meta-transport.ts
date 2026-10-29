@@ -2,7 +2,7 @@ import type { Deadline } from '../server/deadline'
 
 export const RETRY_STATUSES = new Set([429, 500, 503])
 export interface ProviderMetrics {
-    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'overlay'
+    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'document' | 'overlay'
     /** The configured request target, never a claim about what answered; see `modelIdentity`. */
     model: string
     /** Whether the provider's own response reported `model`. Absent on events logged before any response body. */

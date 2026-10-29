@@ -56,8 +56,9 @@ import {
     providerVerdictSchema,
     metaVerdictOutputSchema,
 } from './meta-schemas'
+import { DOCUMENT_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
-import { SHOWN_FACT_LIMIT, shownScreenSchema, type ShownScreen } from './shown-screen'
+import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
 
 export const SPARK_MODELS = ['muse-spark-1.3'] as const
 export type SparkModel = (typeof SPARK_MODELS)[number]
@@ -239,6 +240,8 @@ export interface MetaProvider {
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
     secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     generateScreen?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
+    /** Version 2 whole-screen document: returns the flat wire value of a completed response (see document-wire.ts). */
+    generateDocument?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
     overlay?(input: OverlayInput, signal: AbortSignal): Promise<OverlayGeneration>
 }
 
@@ -282,7 +285,7 @@ const screenInputSchema = z.strictObject({
     facts: z
         .array(z.strictObject({ id: z.string().max(160), kind: z.string().max(32), text: z.string().max(2_000) }))
         .max(SHOWN_FACT_LIMIT),
-    shown: shownScreenSchema.optional(),
+    shown: shownScreenV2Schema.optional(),
 })
 const observationSchema = z.strictObject({
     mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
@@ -788,6 +791,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             case 'overlay':
                 return 'overlay'
             case 'screen':
+            case 'document':
                 return 'screens'
         }
     }
@@ -815,24 +819,27 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 ? PARSE_INSTRUCTIONS
                 : operation === 'screen'
                   ? SCREEN_INSTRUCTIONS
-                  : operation === 'overlay'
-                    ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
-                    : withLayout
-                      ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
-                      : INSTRUCTIONS
+                  : operation === 'document'
+                    ? DOCUMENT_INSTRUCTIONS
+                    : operation === 'overlay'
+                      ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
+                      : withLayout
+                        ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
+                        : INSTRUCTIONS
         const baseInstructions =
             language === undefined
                 ? operationInstructions
                 : `${operationInstructions} ${parseLanguageInstructions(language)}`
         const manualImages = operation === 'parse' ? images : images.slice(0, -1)
-        const observation = operation === 'parse' || operation === 'screen' ? [] : images.slice(-1)
+        const textOnly = operation === 'screen' || operation === 'document'
+        const observation = operation === 'parse' || textOnly ? [] : images.slice(-1)
         const imagePart = (image: ValidatedImage): { type: 'input_image'; image_url: string } => ({
             type: 'input_image',
             image_url: `data:image/jpeg;base64,${Buffer.from(image.bytes).toString('base64')}`,
         })
         const content = [
             { type: 'input_text', text: JSON.stringify({ manualContext: stable }) },
-            ...(operation === 'screen' ? [] : manualImages.map(imagePart)),
+            ...(textOnly ? [] : manualImages.map(imagePart)),
             {
                 type: 'input_text',
                 text: JSON.stringify({
@@ -898,7 +905,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
             },
             // A parse or screen has at most two semantic attempts, each with exactly one HTTP dispatch.
-            secondary || operation === 'parse' || operation === 'screen' ? 1 : 3,
+            secondary || operation === 'parse' || textOnly ? 1 : 3,
             transportObservation,
         )
 
@@ -1296,6 +1303,27 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     input.repairIssues === undefined
                         ? undefined
                         : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
+                    false,
+                    input.stage,
+                )
+                return { value, telemetry }
+            })
+        },
+
+        async generateDocument(input, signal): Promise<ScreenGeneration> {
+            const stagePolicy = policy.stages[input.stage]
+            return execute(stagePolicy.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
+                const { value, telemetry } = await dispatchDetailed(
+                    'document',
+                    { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
+                    [],
+                    z.unknown(),
+                    deadline,
+                    stagePolicy.model,
+                    false,
+                    input.repairIssues === undefined
+                        ? undefined
+                        : { instructions: DOCUMENT_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
                     false,
                     input.stage,
                 )

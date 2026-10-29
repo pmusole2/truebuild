@@ -103,7 +103,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             expect(body.reasoning).toEqual({ effort: 'low' })
         })
 
-        it('sends the byte-identical cf2260d ask request, same cap and one dispatch', async (): Promise<void> => {
+        it('preserves cf2260d ask instructions and schema with quality output headroom and one dispatch', async (): Promise<void> => {
             const { provider, bodies, fetchImpl } = mocked(answer)
             await provider.answerQuestion(await askInput(), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -111,7 +111,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             expect(Object.keys(body)).toEqual(CF2260D.keys)
             expect(sha(body.instructions)).toBe(CF2260D.instructionsSha)
             expect(sha(JSON.stringify(body.text.format.schema))).toBe(CF2260D.questionSchemaSha)
-            expect(body.max_output_tokens).toBe(8000)
+            expect(body.max_output_tokens).toBe(32000)
         })
 
         it('returns no layout or region even if a stray reply carried them', async (): Promise<void> => {
@@ -155,7 +155,7 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             await provider.answerQuestion(await askInput(), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(1)
             expect(bodies[0]!.text.format.schema).toEqual(metaLayoutOutputSchemas.question)
-            expect(bodies[0]!.max_output_tokens).toBe(8000)
+            expect(bodies[0]!.max_output_tokens).toBe(32000)
             expect(bodies[0]!.instructions).toContain('nextPartRegion')
         })
 

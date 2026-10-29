@@ -1,3 +1,4 @@
+import { SCREEN_CATALOG_V2_VERSION, SCREEN_DOCUMENT_V2_VERSION } from '@truebuild/contracts'
 import { Hono, type Context } from 'hono'
 
 import { DEMO_LABEL } from './providers/types'
@@ -14,10 +15,13 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/checks', 'POST'],
     ['/api/checks/second-opinion', 'POST'],
     ['/api/checks/overlay', 'POST'],
+    ['/api/checks/overlay/result', 'POST'],
+    ['/api/checks/overlay/cancel', 'POST'],
     ['/api/questions', 'POST'],
     ['/api/questions/result', 'POST'],
     ['/api/questions/cancel', 'POST'],
     ['/api/screens', 'POST'],
+    ['/api/screens/v2', 'POST'],
     ['/api/segments', 'POST'],
 ])
 
@@ -53,6 +57,12 @@ const routes = new Hono<ApiEnv>()
             secondOpinionModel: context.get('runtime').secondOpinionModel,
             aiPolicy: describeAiPolicy(context.get('runtime').policy),
             followUps: { overlay: context.get('runtime').overlay, segments: context.get('runtime').segments },
+            // Secret-free: the whole-screen document version this server speaks and where, never a key or a model detail.
+            screensV2: {
+                documentVersion: SCREEN_DOCUMENT_V2_VERSION,
+                catalogVersion: SCREEN_CATALOG_V2_VERSION,
+                route: '/api/screens/v2',
+            },
             samModel: context.get('runtime').samModel,
             checkContext: context.get('runtime').checkContext,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
@@ -63,7 +73,14 @@ const routes = new Hono<ApiEnv>()
         context.get('runtime').model.secondOpinion(context.req.raw),
     )
     .post('/api/checks/overlay', (context): Promise<Response> => context.get('runtime').model.overlay(context.req.raw))
+    .post('/api/checks/overlay/result', (context): Promise<Response> =>
+        context.get('runtime').model.overlayResult(context.req.raw),
+    )
+    .post('/api/checks/overlay/cancel', (context): Promise<Response> =>
+        context.get('runtime').model.overlayCancel(context.req.raw),
+    )
     .post('/api/screens', (context): Promise<Response> => context.get('runtime').model.screens(context.req.raw))
+    .post('/api/screens/v2', (context): Promise<Response> => context.get('runtime').model.screensV2(context.req.raw))
     .post('/api/questions/result', (context): Promise<Response> =>
         context.get('runtime').model.questionResult(context.req.raw),
     )

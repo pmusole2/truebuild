@@ -13,8 +13,8 @@ export function defaultWire(
     secondary: boolean,
 ): { effort: (typeof AI_EFFORTS)[number]; maxOutputTokens: number } {
     if (operation === 'parse') return { effort: 'max', maxOutputTokens: 48_000 }
-    if (operation === 'question') return { effort: 'max', maxOutputTokens: 8_000 }
-    if (operation === 'overlay' || operation === 'screen') return { effort: 'max', maxOutputTokens: 8_000 }
+    if (operation === 'question' || operation === 'overlay') return { effort: 'max', maxOutputTokens: 32_000 }
+    if (operation === 'screen') return { effort: 'max', maxOutputTokens: model === 'muse-wonder-1.0' ? 48_000 : 32_000 }
     // check: Spark verdict is low and provisional; the stronger second opinion is max.
     return secondary || model === 'muse-wonder-1.0'
         ? { effort: 'max', maxOutputTokens: 32_000 }

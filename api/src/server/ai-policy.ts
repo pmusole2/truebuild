@@ -117,22 +117,24 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
             deadlineMs: PARSE_DEFAULT_OVERALL_MS,
             model: defaults.parseModel,
         },
-        screens: { effort: 'max', maxOutputTokens: 8_000, deadlineMs: 20_000, model: defaults.verdictModel },
-        'step-pages': { effort: 'max', maxOutputTokens: 8_000, deadlineMs: 45_000, model: wonder },
+        // Full documents include all state variants. Fixture wire sizes are measured locally; live token usage and
+        // reasoning needs are not. These are quality headroom, not provider maxima or a guarantee of completeness.
+        screens: { effort: 'max', maxOutputTokens: 32_000, deadlineMs: 20_000, model: defaults.verdictModel },
+        'step-pages': { effort: 'max', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
         verdict: {
             effort: 'low',
             maxOutputTokens: 1_500,
             deadlineMs: defaults.checkTimeoutMs,
             model: defaults.verdictModel,
         },
-        overlay: { effort: 'max', maxOutputTokens: 8_000, deadlineMs: 60_000, model: wonder },
+        overlay: { effort: 'max', maxOutputTokens: 32_000, deadlineMs: 60_000, model: wonder },
         'second-opinion': {
             effort: 'max',
             maxOutputTokens: 32_000,
             deadlineMs: 60_000,
             model: defaults.secondOpinionModel,
         },
-        questions: { effort: 'max', maxOutputTokens: 8_000, deadlineMs: 60_000, model: defaults.verdictModel },
+        questions: { effort: 'max', maxOutputTokens: 32_000, deadlineMs: 60_000, model: defaults.verdictModel },
     }
     const stages = {} as Record<PolicyStage, StagePolicy>
     for (const stage of POLICY_STAGES) {

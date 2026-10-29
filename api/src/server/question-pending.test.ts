@@ -163,7 +163,7 @@ describe('slow questions', (): void => {
         expect((await job('result', pending.ticket)).status).toBe(200)
         expect(mock.requests.filter((request) => request.operation === 'question')).toHaveLength(1)
         // The question ran with the dedicated quality policy.
-        expect(mock.wireRequests[0]).toMatchObject({ reasoning: { effort: 'max' }, max_output_tokens: 8000 })
+        expect(mock.wireRequests[0]).toMatchObject({ reasoning: { effort: 'max' }, max_output_tokens: 32000 })
     })
 
     it('lets the loopback mock hold the answer itself, which is what the launcher flag does', async (): Promise<void> => {

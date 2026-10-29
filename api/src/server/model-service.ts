@@ -13,17 +13,22 @@ import {
     matchesBinding,
     parsedManualSchema,
     questionResultSchema,
+    screenContextJsonV2,
+    screenManualJsonV2,
     screensResultSchema,
     segmentEventSchema,
+    type ScreenContextInputsV2,
     type ApiResult,
     type CheckResult,
     type StandardModel,
     type CaptureBinding,
     type ManualBinding,
+    type ManualSession,
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
     MAX_PARSE_PAGES,
+    MODEL_METADATA_MAX_BYTES,
     PARSE_SPLIT_MESSAGE,
     selectCompactStepSourcePageIds,
     modelCheckMetadataSchema,
@@ -33,8 +38,11 @@ import {
     modelQuestionJobMetadataSchema,
     modelQuestionMetadataSchema,
     modelScreensMetadataSchema,
+    modelScreensV2MetadataSchema,
     modelSegmentMetadataSchema,
     overlayResultSchema,
+    screensV2ResultSchema,
+    type ModelScreensV2Metadata,
     pendingResultSchema,
     type OverlayResult,
     type ModelOverlayMetadata,
@@ -74,6 +82,7 @@ import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, type AiPolicy } from './ai-po
 import { PARSE_ROUTE_MARGIN_MS } from './parse-budget'
 import { readBoundedJson, InvalidBodyError } from './json-body'
 import { DuplicateQuestionError, QuestionJobs, type QuestionIdentity, type StoredResponse } from './question-jobs'
+import { createDocumentService, type DocumentFixtureGenerator } from './documents/service'
 import {
     createScreenService,
     type BackgroundWork,
@@ -402,7 +411,7 @@ async function checkFiles(
     metadata: ModelCheckMetadata,
     files: Map<string, File>,
     deadline: Deadline,
-    screens?: ScreenService,
+    screens?: Pick<ScreenService, 'resolveStepScreen'>,
 ): Promise<CheckStepInput> {
     exactModelFiles(files, [...metadata.sourcePageIds.map((_page, index) => `source-${index}`), 'observation'], true)
     const sourceImages: CheckStepInput['sourceImages'] = []
@@ -495,6 +504,8 @@ export function createModelHandlers(options: {
     precomputeConcurrency?: number
     /** Explicit synthetic screen composition source (fixture runtime / tests only). Ignored when a provider exists. */
     screenFixtures?: ScreenFixtureGenerator | null
+    /** Explicit synthetic version 2 document source (fixture runtime / tests only). Ignored when a provider exists. */
+    documentFixtures?: DocumentFixtureGenerator | null
     /** How long a question request waits for its answer before returning a 202 ticket. */
     questionSyncWaitMs?: number
 }): {
@@ -502,12 +513,16 @@ export function createModelHandlers(options: {
     check: Handler
     secondOpinion: Handler
     overlay: Handler
+    overlayResult: Handler
+    overlayCancel: Handler
     question: Handler
     questionResult: Handler
     questionCancel: Handler
     segment: Handler
     screens: Handler
+    screensV2: Handler
     screenService: ScreenService
+    documentService: ReturnType<typeof createDocumentService>
     options: typeof modelOptions
 } {
     const { provider, samProvider, auth, counter, allowedOrigins } = options
@@ -559,6 +574,25 @@ export function createModelHandlers(options: {
             : { precomputeConcurrency: options.precomputeConcurrency }),
     })
 
+    const documentService = createDocumentService({
+        provider: provider?.generateDocument ? provider : null,
+        fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
+        policy,
+        runtimeMode: options.runtimeMode ?? 'meta',
+        work: createBackgroundWork(counter, gate),
+        ...(options.precomputeConcurrency === undefined
+            ? {}
+            : { precomputeConcurrency: options.precomputeConcurrency }),
+    })
+    const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+    /** A version 2 document (guide or camera) names itself first; any other screen id is a version 1 page. */
+    const stepScreens: Pick<ScreenService, 'resolveStepScreen'> = {
+        resolveStepScreen: (session, stepId, screen) => {
+            const v2 = documentService.resolveStepScreen(session, stepId, screen)
+            return v2 !== null ? v2 : screenService.resolveStepScreen(session, stepId, screen)
+        },
+    }
+
     /** Drops everything a provider reported about itself: in the fixture runtime nothing was observed. */
     const unobserved = <V extends { model?: unknown; telemetry?: unknown; evidence?: unknown }>(
         value: V,
@@ -577,7 +611,7 @@ export function createModelHandlers(options: {
         metadata: ModelCheckMetadata,
         files: Map<string, File>,
         deadline: Deadline,
-    ): Promise<CheckStepInput> => checkFiles(metadata, files, deadline, screenService)
+    ): Promise<CheckStepInput> => checkFiles(metadata, files, deadline, stepScreens)
 
     function jsonHandler<M extends Identity, I, T>(
         schema: z.ZodType<M>,
@@ -644,7 +678,9 @@ export function createModelHandlers(options: {
                 const response = Response.json(
                     {
                         status: 'ok',
-                        mode: 'model',
+                        // Overlay's explicit fixture contract carries no model/effort. Its transport envelope must
+                        // agree so the strict client cannot credit synthetic geometry as a live model response.
+                        mode: fixtureProvider && policy.route === 'overlay' ? 'fixture' : 'model',
                         requestId: metadata.requestId,
                         binding: metadata.binding,
                         value: policy.present?.(published?.value ?? value.data) ?? published?.value ?? value.data,
@@ -834,14 +870,15 @@ export function createModelHandlers(options: {
         },
     )
 
-    const overlay = jsonHandler(
+    const overlayIdentify = new AsyncLocalStorage<(identity: QuestionIdentity) => void>()
+    const overlayRun = jsonHandler(
         modelOverlayMetadataSchema,
         overlayResultSchema,
         policy.stages.overlay.deadlineMs,
         async (metadata: ModelOverlayMetadata, files, deadline): Promise<OverlayInput> => {
             if (!offerOverlay) throw new AdmissionError('unconfigured', 503)
             // A newer revision of this manual supersedes the photo's session before any ticket is spent.
-            if (!screenService.observe(metadata.binding.manualId, metadata.binding.revision)) {
+            if (!observeRevision(metadata.binding.manualId, metadata.binding.revision)) {
                 throw new AdmissionError('invalid_input', 409)
             }
             const input = await prepareCheck(metadata, files, deadline)
@@ -882,7 +919,14 @@ export function createModelHandlers(options: {
         () => true,
         undefined,
         undefined,
-        { maxAttempts: 1, route: 'overlay', path: 'overlay' },
+        {
+            maxAttempts: 1,
+            route: 'overlay',
+            path: 'overlay',
+            onMetadata: (metadata): void => {
+                overlayIdentify.getStore()?.({ requestId: metadata.requestId, binding: metadata.binding })
+            },
+        },
     )
 
     const delay = (milliseconds: number): Promise<void> =>
@@ -890,8 +934,8 @@ export function createModelHandlers(options: {
             const timer = setTimeout(resolve, milliseconds)
             timer.unref?.()
         })
-    /** A terminal question outcome, collected gracefully (HTTP 200, `unavailable`), never as a gateway timeout. */
-    const terminalQuestion = (kind: 'expired' | 'failed', identity: QuestionIdentity | undefined): StoredResponse => ({
+    /** A terminal job outcome, collected gracefully (HTTP 200, `unavailable`), never as a gateway timeout. */
+    const terminalJob = (kind: 'expired' | 'failed', identity: QuestionIdentity | undefined): StoredResponse => ({
         status: 200,
         body: JSON.stringify(fail(kind === 'expired' ? 'timeout' : 'provider_error', identity)),
         headers: [
@@ -899,38 +943,16 @@ export function createModelHandlers(options: {
             ['cache-control', 'no-store'],
         ],
     })
-    const questionJobs: QuestionJobs = new QuestionJobs({
-        processingMs: policy.stages.questions.deadlineMs,
-        terminal: terminalQuestion,
-        // Before any provider work: an older revision is rejected, a newer one cancels older work of the manual.
-        onIdentity: (identity, job): void => {
-            const { manualId, revision } = identity.binding
-            if (!screenService.observe(manualId, revision))
-                throw new AdmissionError('invalid_input', 409, undefined, identity)
-            questionJobs.supersede(manualId, revision, job.ticket)
-        },
-    })
+    /** A newer revision of either screen generation supersedes older work; an older one is stale. */
+    const observeRevision = (manualId: string, revision: number): boolean => {
+        const current = screenService.observe(manualId, revision)
+        return documentService.observe(manualId, revision) && current
+    }
     const questionSyncWaitMs = options.questionSyncWaitMs ?? 8_000
     const storedResponse = (request: Request, stored: StoredResponse): Response =>
         corsResponse(
             request,
             new Response(stored.body, { status: stored.status, headers: new Headers(stored.headers) }),
-            allowedOrigins,
-        )
-    const pendingResponse = (request: Request, job: ReturnType<typeof questionJobs.start> & object): Response =>
-        corsResponse(
-            request,
-            Response.json(
-                pendingResultSchema.parse({
-                    status: 'pending',
-                    requestId: job.identity!.requestId,
-                    binding: job.identity!.binding,
-                    ticket: job.ticket,
-                    retryAfterMs: 1_500,
-                    expiresInMs: questionJobs.remainingMs(job),
-                }),
-                { status: 202, headers: { 'cache-control': 'no-store' } },
-            ),
             allowedOrigins,
         )
     const rejected = (request: Request, error: unknown, identity?: Identity): Response => {
@@ -948,56 +970,6 @@ export function createModelHandlers(options: {
         auth.authenticate(request)
         if (!isAllowedOrigin(request, allowedOrigins)) throw new AuthenticationError()
     }
-
-    /**
-     * A slow question keeps running server-side for its own budget. A request that is not answered within the sync
-     * wait gets a 202 ticket (never a 504); collect it with `questionResult`, or cancel it.
-     */
-    const question: Handler = async (request): Promise<Response> => {
-        try {
-            authorize(request)
-        } catch (error) {
-            await request.body?.cancel().catch((): void => {})
-            return rejected(request, error)
-        }
-        const job = questionJobs.start(async (signal, identify) => {
-            const init: StreamingInit = {
-                method: request.method,
-                headers: request.headers,
-                body: request.body,
-                signal,
-                duplex: 'half',
-            }
-            const forwarded = new Request(request.url, init)
-            let known: QuestionIdentity | undefined
-            const tracked = (identity: QuestionIdentity): void => {
-                try {
-                    identify(identity)
-                } catch (error) {
-                    // The same original request is already owned by a job: reject before any provider dispatch.
-                    if (error instanceof DuplicateQuestionError) {
-                        throw new AdmissionError('duplicate_request', 409, undefined, identity)
-                    }
-                    throw error
-                }
-                known = identity
-            }
-            const response = await questionIdentify.run(tracked, () => questionRun(forwarded))
-            const body = await response.text()
-            // A processing-deadline expiry is a terminal outcome the person can collect, not a gateway timeout.
-            if (response.status === 504) return terminalQuestion('expired', known)
-            return { status: response.status, body, headers: [...response.headers] }
-        })
-        if (!job) {
-            await request.body?.cancel().catch((): void => {})
-            return rejected(request, new BudgetError())
-        }
-        await Promise.race([job.settled, delay(questionSyncWaitMs)])
-        if (!job.stored && !job.identity) await Promise.race([job.identified, job.settled])
-        if (job.stored) return storedResponse(request, job.stored)
-        return job.identity ? pendingResponse(request, job) : rejected(request, new ModelBodyError(400))
-    }
-
     async function jobRequest(request: Request): Promise<z.infer<typeof modelQuestionJobMetadataSchema>> {
         authorize(request)
         let body: unknown
@@ -1013,36 +985,149 @@ export function createModelHandlers(options: {
         return parsed.data
     }
 
-    const questionResult: Handler = async (request): Promise<Response> => {
-        try {
-            const metadata = await jobRequest(request)
-            const job = questionJobs.find(metadata.ticket, metadata.requestId, metadata.binding)
-            if (!job) return rejected(request, new ModelBodyError(400), metadata)
-            if (!job.stored) await Promise.race([job.settled, delay(Math.min(questionSyncWaitMs, 5_000))])
-            if (job.stored) return storedResponse(request, job.stored)
-            return job.finishedAt === undefined
-                ? pendingResponse(request, job)
-                : rejected(request, new RequestStoppedError('cancelled'), metadata)
-        } catch (error) {
-            return rejected(request, error)
-        }
-    }
-
-    const questionCancel: Handler = async (request): Promise<Response> => {
-        try {
-            const metadata = await jobRequest(request)
-            if (!questionJobs.cancel(metadata.ticket, metadata.requestId, metadata.binding)) {
-                return rejected(request, new ModelBodyError(400), metadata)
-            }
-            return corsResponse(
+    /**
+     * Job custody shared by slow questions and overlays. One original request (request id and exact capture binding)
+     * owns at most one job: it runs server-side for its own budget, and a request that is not answered within the sync
+     * wait gets a 202 ticket (never a 504) to collect with `result`, or to `cancel`. A timeout is collected as a 200
+     * `unavailable`; a late arrival is collected like any answer. A repeat is refused before any provider dispatch.
+     */
+    function jobEndpoints(
+        jobs: QuestionJobs,
+        run: Handler,
+        identifyStore: AsyncLocalStorage<(identity: QuestionIdentity) => void>,
+    ): { start: Handler; result: Handler; cancel: Handler } {
+        const pendingResponse = (request: Request, job: NonNullable<ReturnType<typeof jobs.start>>): Response =>
+            corsResponse(
                 request,
-                new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } }),
+                Response.json(
+                    pendingResultSchema.parse({
+                        status: 'pending',
+                        requestId: job.identity!.requestId,
+                        binding: job.identity!.binding,
+                        ticket: job.ticket,
+                        retryAfterMs: 1_500,
+                        expiresInMs: jobs.remainingMs(job),
+                    }),
+                    { status: 202, headers: { 'cache-control': 'no-store' } },
+                ),
                 allowedOrigins,
             )
-        } catch (error) {
-            return rejected(request, error)
+        const start: Handler = async (request): Promise<Response> => {
+            try {
+                authorize(request)
+            } catch (error) {
+                await request.body?.cancel().catch((): void => {})
+                return rejected(request, error)
+            }
+            const job = jobs.start(async (signal, identify) => {
+                const init: StreamingInit = {
+                    method: request.method,
+                    headers: request.headers,
+                    body: request.body,
+                    signal,
+                    duplex: 'half',
+                }
+                const forwarded = new Request(request.url, init)
+                let known: QuestionIdentity | undefined
+                const tracked = (identity: QuestionIdentity): void => {
+                    try {
+                        identify(identity)
+                    } catch (error) {
+                        // The same original request is already owned by a job: reject before any provider dispatch.
+                        if (error instanceof DuplicateQuestionError) {
+                            throw new AdmissionError('duplicate_request', 409, undefined, identity)
+                        }
+                        throw error
+                    }
+                    known = identity
+                }
+                const response = await identifyStore.run(tracked, () => run(forwarded))
+                const body = await response.text()
+                // A processing-deadline expiry is a terminal outcome the person can collect, not a gateway timeout.
+                if (response.status === 504) return terminalJob('expired', known)
+                return { status: response.status, body, headers: [...response.headers] }
+            })
+            if (!job) {
+                await request.body?.cancel().catch((): void => {})
+                return rejected(request, new BudgetError())
+            }
+            await Promise.race([job.settled, delay(questionSyncWaitMs)])
+            if (!job.stored && !job.identity) await Promise.race([job.identified, job.settled])
+            if (job.stored) return storedResponse(request, job.stored)
+            return job.identity ? pendingResponse(request, job) : rejected(request, new ModelBodyError(400))
         }
+        const result: Handler = async (request): Promise<Response> => {
+            try {
+                const metadata = await jobRequest(request)
+                const job = jobs.find(metadata.ticket, metadata.requestId, metadata.binding)
+                if (!job) return rejected(request, new ModelBodyError(400), metadata)
+                if (!job.stored) await Promise.race([job.settled, delay(Math.min(questionSyncWaitMs, 5_000))])
+                if (job.stored) return storedResponse(request, job.stored)
+                return job.finishedAt === undefined
+                    ? pendingResponse(request, job)
+                    : rejected(request, new RequestStoppedError('cancelled'), metadata)
+            } catch (error) {
+                return rejected(request, error)
+            }
+        }
+        const cancel: Handler = async (request): Promise<Response> => {
+            try {
+                const metadata = await jobRequest(request)
+                if (!jobs.cancel(metadata.ticket, metadata.requestId, metadata.binding)) {
+                    return rejected(request, new ModelBodyError(400), metadata)
+                }
+                return corsResponse(
+                    request,
+                    new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } }),
+                    allowedOrigins,
+                )
+            } catch (error) {
+                return rejected(request, error)
+            }
+        }
+        return { start, result, cancel }
     }
+
+    const questionJobs: QuestionJobs = new QuestionJobs({
+        processingMs: policy.stages.questions.deadlineMs,
+        terminal: terminalJob,
+        // Before any provider work: an older revision is rejected, a newer one cancels older work of the manual.
+        onIdentity: (identity, job): void => {
+            const { manualId, revision } = identity.binding
+            if (!observeRevision(manualId, revision))
+                throw new AdmissionError('invalid_input', 409, undefined, identity)
+            questionJobs.supersede(manualId, revision, job.ticket)
+        },
+    })
+    const overlayJobs: QuestionJobs = new QuestionJobs({
+        processingMs: policy.stages.overlay.deadlineMs,
+        terminal: terminalJob,
+        onIdentity: (identity, job): void => {
+            const { manualId, revision } = identity.binding
+            if (!observeRevision(manualId, revision))
+                throw new AdmissionError('invalid_input', 409, undefined, identity)
+            overlayJobs.supersede(manualId, revision, job.ticket)
+        },
+    })
+    /**
+     * A screen request (either generation) for a newer revision of a manual cancels that manual's older running question
+     * and overlay jobs now, not only when another job later arrives: their photo and verdict belong to a manual state the
+     * person has already left. An aborted job stores a terminal `unavailable`, so nothing is published late.
+     */
+    const supersedeFollowUps = (session: ManualSession | null): void => {
+        if (session === null) return
+        observeRevision(session.manualId, session.revision)
+        questionJobs.supersede(session.manualId, session.revision, '')
+        overlayJobs.supersede(session.manualId, session.revision, '')
+    }
+    const questions = jobEndpoints(questionJobs, questionRun, questionIdentify)
+    const overlays = jobEndpoints(overlayJobs, overlayRun, overlayIdentify)
+    const question = questions.start
+    const questionResult = questions.result
+    const questionCancel = questions.cancel
+    const overlay = overlays.start
+    const overlayResult = overlays.result
+    const overlayCancel = overlays.cancel
 
     const screens: Handler = async (request): Promise<Response> => {
         let execution: Execution | undefined
@@ -1053,10 +1138,16 @@ export function createModelHandlers(options: {
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
             )
             execution = admit(request, auth, route, allowedOrigins)
-            const parsed = await readModelMultipart(request, modelScreensMetadataSchema, 1_048_576, execution.deadline)
+            const parsed = await readModelMultipart(
+                request,
+                modelScreensMetadataSchema,
+                MODEL_METADATA_MAX_BYTES + 65_536,
+                execution.deadline,
+            )
             exactModelFiles(parsed.files, [], false)
             metadata = parsed.metadata
             execution.check()
+            if (metadata.op === 'generate' || metadata.op === 'precompute') supersedeFollowUps(metadata.session)
             const inputs = {
                 kind: metadata.kind ?? 'home',
                 session: metadata.session,
@@ -1125,6 +1216,163 @@ export function createModelHandlers(options: {
                           stage: meta.stage,
                           cacheHit: meta.cacheHit,
                           repaired: meta.repaired,
+                          ...meta.timing,
+                          ...meta.usage,
+                      }),
+            })
+            return corsResponse(
+                request,
+                Response.json(body, { headers: { 'cache-control': 'no-store' } }),
+                allowedOrigins,
+            )
+        } catch (error) {
+            const failure = errorResult(error, execution)
+            return corsResponse(
+                request,
+                Response.json(
+                    {
+                        status: 'unavailable',
+                        requestId: metadata?.requestId ?? 'invalid-request',
+                        binding: null,
+                        code: failure.code,
+                        retryable: false,
+                    },
+                    { status: failure.status, headers: { 'cache-control': 'no-store' } },
+                ),
+                allowedOrigins,
+            )
+        } finally {
+            execution?.dispose()
+        }
+    }
+
+    /**
+     * Version 2 whole-screen documents. Bound to the full state: the supplied session must hash to `manualHash` and,
+     * for `generate`, the recomputed context key must equal the client's; a mismatch is a client bug (400), never a
+     * silently different document.
+     */
+    const screensV2: Handler = async (request): Promise<Response> => {
+        let execution: Execution | undefined
+        let metadata: ModelScreensV2Metadata | undefined
+        try {
+            const route = Math.min(
+                MAX_DEADLINE_MS,
+                Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
+            )
+            execution = admit(request, auth, route, allowedOrigins)
+            const parsed = await readModelMultipart(
+                request,
+                modelScreensV2MetadataSchema,
+                MODEL_METADATA_MAX_BYTES + 65_536,
+                execution.deadline,
+            )
+            exactModelFiles(parsed.files, [], false)
+            metadata = parsed.metadata
+            execution.check()
+            if (metadata.session !== null && sha256(screenManualJsonV2(metadata.session)) !== metadata.manualHash) {
+                throw new AdmissionError('invalid_input', 400)
+            }
+            const inputs: ScreenContextInputsV2 = {
+                kind: metadata.kind ?? 'home',
+                session: metadata.session,
+                stepId: metadata.stepId,
+                captureId: metadata.captureId,
+                result: metadata.result,
+                failure: metadata.failure,
+                completedStepIds: metadata.completedStepIds,
+                uiState: metadata.uiState,
+                ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
+            }
+            let value: Extract<z.infer<typeof screensV2ResultSchema>, { status: 'ok' }>['value'] = {
+                document: null,
+                progress: null,
+                documents: [],
+            }
+            if (metadata.op === 'generate') {
+                if (sha256(screenContextJsonV2(inputs)) !== metadata.contextKey) {
+                    throw new AdmissionError('invalid_input', 400)
+                }
+                supersedeFollowUps(metadata.session)
+                try {
+                    const active = execution
+                    const document = await admission.run({ start: active.startedAt }, () =>
+                        documentService.generate(inputs, active.deadline.signal),
+                    )
+                    value = { ...value, document }
+                } catch (error) {
+                    execution.check()
+                    // A slow generation never blocks the screen: the complete deterministic document is returned.
+                    if (!(error instanceof RequestStoppedError)) throw error
+                    value = { ...value, document: documentService.fallback(inputs, 'timeout') }
+                }
+            } else if (metadata.op === 'precompute') {
+                supersedeFollowUps(metadata.session)
+                value = {
+                    ...value,
+                    progress: documentService.precompute({
+                        session: metadata.session!,
+                        focusKey: metadata.focusKey,
+                        uiState: metadata.uiState,
+                        completedStepIds: metadata.completedStepIds,
+                        requestedKinds: metadata.requestedKinds,
+                    }),
+                }
+            } else if (metadata.op === 'progress') {
+                const read = documentService.progress(
+                    metadata.binding!.manualId,
+                    metadata.binding!.revision,
+                    metadata.want,
+                    documentService.jobContextKey({
+                        session: metadata.session!,
+                        focusKey: null,
+                        uiState: metadata.uiState,
+                        completedStepIds: metadata.completedStepIds,
+                        requestedKinds: metadata.requestedKinds,
+                    }),
+                )
+                value = { ...value, progress: read.progress, documents: read.documents }
+            } else {
+                value = {
+                    ...value,
+                    progress: documentService.cancel(
+                        metadata.binding!.manualId,
+                        metadata.binding!.revision,
+                        documentService.jobContextKey({
+                            session: metadata.session!,
+                            focusKey: null,
+                            uiState: metadata.uiState,
+                            completedStepIds: metadata.completedStepIds,
+                            requestedKinds: metadata.requestedKinds,
+                        }),
+                    ),
+                }
+            }
+            execution.check()
+            const body = screensV2ResultSchema.parse({
+                status: 'ok',
+                requestId: metadata.requestId,
+                mode: options.runtimeMode === 'fixture' ? 'fixture' : 'model',
+                value,
+            })
+            const meta = value.document?.metadata
+            logOutcome({
+                route: 'screens-v2',
+                outcome: 'ok',
+                http: 200,
+                op: metadata.op,
+                kind: metadata.kind,
+                ...(meta === undefined
+                    ? {}
+                    : {
+                          source: meta.source,
+                          evidence: meta.evidence,
+                          fallbackReason: meta.fallbackReason,
+                          model: meta.model,
+                          effort: meta.effort,
+                          stage: meta.stage,
+                          cacheHit: meta.cacheHit,
+                          repaired: meta.repaired,
+                          rejectedIssues: meta.rejectedIssues,
                           ...meta.timing,
                           ...meta.usage,
                       }),
@@ -1314,12 +1562,16 @@ export function createModelHandlers(options: {
         check,
         secondOpinion,
         overlay,
+        overlayResult,
+        overlayCancel,
         question,
         questionResult,
         questionCancel,
         segment,
         screens,
+        screensV2,
         screenService,
+        documentService,
         options: modelOptions,
     }
 }

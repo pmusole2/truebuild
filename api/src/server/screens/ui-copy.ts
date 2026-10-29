@@ -22,6 +22,7 @@ export const ACTION_LABELS: Labels = {
         guide: ['Continue building', 'Back to step', 'Continue', 'Back to the guide'],
         done: ['Finish', 'Done'],
         more: ['More'],
+        back: ['Back', 'Close'],
     },
     capture: {
         'take-photo': ['Take photo', 'Take a photo', 'Photo'],
@@ -39,6 +40,7 @@ export const ACTION_LABELS: Labels = {
         facts: ['Looks right', 'Yes, looks right'],
         step: ['Next step', 'Go to the next step'],
         manual: ['Finish manual'],
+        'camera-permission': ['Allow camera'],
     },
     retry: {
         'last-action': ['Try again', 'Retry'],
@@ -46,14 +48,16 @@ export const ACTION_LABELS: Labels = {
         check: ['Check again'],
         question: ['Ask again'],
         screen: ['Try again', 'Refresh'],
+        camera: ['Try camera again'],
     },
     'open-details': {
         step: ['Step details', 'Details'],
         result: ['Details', 'Why?'],
         sources: ['See the manual', 'Manual pages'],
         'about-check': ['About this check'],
+        'device-settings': ['Open settings', 'Open device settings'],
     },
-    'show-tips': { screen: ['Show tips', 'Tips'] },
+    'show-tips': { screen: ['Show tips', 'Tips', 'Show tips again'] },
 }
 
 function labelsFor(intent: AppIntent): readonly string[] {

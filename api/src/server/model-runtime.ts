@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto'
 
 import type { ProviderMetrics } from '../providers/meta-transport'
 import { createFixtureProvider } from '../providers/fixture'
+import { createDocumentFixtureGenerator } from '../providers/document-fixtures'
 import { createScreenFixtureGenerator } from '../providers/screen-fixtures'
+import type { DocumentFixtureGenerator } from './documents/service'
 import type { ScreenFixtureGenerator } from './screens/service'
 import {
     createMetaProvider,
@@ -93,6 +95,8 @@ export interface RuntimeOptions {
      * wires the bundled one by default; a live (`meta`) runtime never uses one, configured or not.
      */
     screenFixtures?: ScreenFixtureGenerator | null
+    /** Explicit synthetic version 2 document source (same confinement as `screenFixtures`). */
+    documentFixtures?: DocumentFixtureGenerator | null
 }
 
 export function createRuntimeFromEnvironment(
@@ -228,6 +232,8 @@ export function createRuntimeFromEnvironment(
             // Synthetic sources are confined to fixture mode, including explicitly injected test sources.
             screenFixtures:
                 mode === 'fixture' ? (runtimeOptions.screenFixtures ?? createScreenFixtureGenerator()) : null,
+            documentFixtures:
+                mode === 'fixture' ? (runtimeOptions.documentFixtures ?? createDocumentFixtureGenerator()) : null,
             provider: configured
                 ? createMetaProvider({ ...providerOptions, runParseRepair: runModelParseRepair })
                 : null,
