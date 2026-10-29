@@ -902,6 +902,11 @@ function Node(props: NodeProps): ReactElement {
     return (
         <View
             nativeID={originId('shell')}
+            style={
+                props.node.type === 'Scroll' && props.path === `${props.environment.prefix}body`
+                    ? styles.grow
+                    : undefined
+            }
             accessible={false}
             onTouchEnd={(event): void => {
                 event.stopPropagation()
@@ -1421,6 +1426,13 @@ export function NativeDocumentRenderer({
         previousStep.current = stepIndex
     }, [stepIndex])
     const stepMotion = useStepTransition(`${document.bound.manualId}:${document.bound.stepId}`, direction, mayMove)
+    // A new workflow page starts at the top. Variants, local disclosures and later compositions keep their scroller.
+    const bodyPage = JSON.stringify([
+        document.kind,
+        document.bound.manualId,
+        document.bound.stepId,
+        document.kind === 'result' || document.kind === 'answer' ? document.bound.captureId : null,
+    ])
     const [loadedCapture, setLoadedCapture] = useState<string | null>(null)
     const matchesCapture = captureMatchesDocument(document, bindings.capture)
     const expectedPhoto =
@@ -1522,6 +1534,7 @@ export function NativeDocumentRenderer({
                 </View>
             ) : null}
             <Animated.View
+                key={bodyPage}
                 nativeID={marked(environment, `${selected.prefix}body`)}
                 style={[styles.grow, fade, stepMotion]}
             >

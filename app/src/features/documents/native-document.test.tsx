@@ -35,7 +35,11 @@ function wrap(child: ReactElement, haptics?: HapticPort): ReactElement {
         </ThemeProvider>
     )
 }
-function compose(inputs: ScreenContextInputsV2, extras: ScreenNodeV2[] = []): ScreenDocumentV2 {
+function compose(
+    inputs: ScreenContextInputsV2,
+    extras: ScreenNodeV2[] = [],
+    source: 'generated' | 'fallback' = 'generated',
+): ScreenDocumentV2 {
     const material = documentMaterialV2(inputs)
     const proposal = composeProposalV2(material)
     return screenDocumentV2Schema.parse(
@@ -48,7 +52,7 @@ function compose(inputs: ScreenContextInputsV2, extras: ScreenNodeV2[] = []): Sc
                         ? proposal.body
                         : { type: 'Stack', gap: 'md', align: 'stretch', children: [...extras, proposal.body] },
             },
-            { source: 'generated', evidence: 'synthetic-fixture', fallbackReason: null },
+            { source, evidence: 'synthetic-fixture', fallbackReason: source === 'generated' ? null : 'disabled' },
             { sha256Hex, now: () => new Date('2026-10-29T00:00:00Z') },
         ),
     )
@@ -160,6 +164,105 @@ describe('the actual v2 catalog renderer', () => {
         expect(header.queryAll((node) => node.props.maxFontSizeMultiplier === 0).length).toBeGreaterThan(0)
     })
 
+    it.each(['kind', 'manual', 'step', 'result capture', 'answer capture'] as const)(
+        'starts a fresh native body scroller when the workflow page changes its %s',
+        async (change) => {
+            const { inputs, bindings } = await setup(true)
+            const held = change.endsWith('capture')
+            const initial: ScreenContextInputsV2 = {
+                ...inputs,
+                kind: change === 'answer capture' ? 'answer' : held ? 'result' : 'guide',
+                captureId: held ? inputs.captureId : null,
+                result:
+                    change === 'answer capture'
+                        ? {
+                              kind: 'question',
+                              question: 'Which way does the groove face?',
+                              value: {
+                                  answer: 'The groove faces inward.',
+                                  sourceRefs: bindings.live!.state.check!.sourceRefs,
+                                  missingEvidence: [],
+                              },
+                          }
+                        : held
+                          ? inputs.result
+                          : null,
+            }
+            const next: ScreenContextInputsV2 =
+                change === 'kind'
+                    ? inputs
+                    : change === 'manual'
+                      ? { ...initial, session: { ...initial.session!, manualId: 'next-manual' } }
+                      : change === 'step'
+                        ? { ...initial, stepId: initial.session!.reviewedSteps[1]!.stepId }
+                        : { ...initial, captureId: 'next-capture' }
+            const extras: ScreenNodeV2[] =
+                change === 'step' ? [{ type: 'Icon', name: 'info', size: 'sm', tone: 'neutral' }] : []
+            const view = await render(
+                wrap(<DocumentRenderer document={compose(initial, extras)} bindings={bindings} />),
+            )
+            const body = screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!
+            const header = screen.getByTestId('document-header-copy')
+            const bar = screen.getByTestId('bottom-bar')
+            await fireEvent.scroll(body, { nativeEvent: { contentOffset: { x: 0, y: 500 } } })
+            await view.rerender(wrap(<DocumentRenderer document={compose(next, extras)} bindings={bindings} />))
+            expect(screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]).not.toBe(
+                body,
+            )
+            expect(screen.getByTestId('document-header-copy')).toBe(header)
+            expect(screen.getByTestId('bottom-bar')).toBe(bar)
+            if (change === 'kind') {
+                expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+                expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
+            }
+        },
+    )
+
+    it('keeps the native scroller and an open local disclosure across a new composition of the same page', async () => {
+        const { inputs, bindings } = await setup()
+        const section: ScreenNodeV2 = {
+            type: 'Section',
+            title: { kind: 'bound', key: 'manual-title' },
+            collapsible: true,
+            initiallyOpen: false,
+            children: [
+                {
+                    type: 'Text',
+                    content: { kind: 'literal', text: 'More' },
+                    role: 'caption',
+                    emphasis: 'normal',
+                    tone: 'neutral',
+                    align: 'start',
+                },
+            ],
+        }
+        const fallback = compose(inputs, [section], 'fallback')
+        const generated = compose(inputs, [section])
+        expect(fallback.screenId).not.toBe(generated.screenId)
+        const view = await render(wrap(<DocumentRenderer document={fallback} bindings={bindings} />))
+        const body = screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!
+        const disclosure = screen.getByRole('button', { name: inputs.session!.title })
+        await fireEvent.press(disclosure)
+        expect(disclosure.props.accessibilityState.expanded).toBe(true)
+        await view.rerender(wrap(<DocumentRenderer document={generated} bindings={bindings} />))
+        expect(screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]).toBe(body)
+        expect(screen.getByRole('button', { name: inputs.session!.title }).props.accessibilityState.expanded).toBe(true)
+    })
+
+    it('gives an inspected authored body scroller its allocated viewport even with its source disclosure open', async () => {
+        const { inputs, bindings } = await setup()
+        const document = compose(inputs)
+        await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, inspect: true }} />))
+        const body = screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!
+        const inspector = body.parent!
+        expect(inspector.props.onTouchEnd).toEqual(expect.any(Function))
+        expect(StyleSheet.flatten(inspector.props.style)).toEqual(expect.objectContaining({ flex: 1, minWidth: 0 }))
+        await fireEvent(inspector, 'touchEnd', { stopPropagation: jest.fn() })
+        expect(screen.getByText('Scroll · generated')).toBeTruthy()
+        expect(screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]).toBe(body)
+        expect(StyleSheet.flatten(inspector.props.style)).toEqual(expect.objectContaining({ flex: 1 }))
+    })
+
     it('leaves both Android system edges to Back while claiming a real centre step swipe', async () => {
         const platform = jest.replaceProperty(Platform, 'OS', 'android')
         const create = jest.spyOn(PanResponder, 'create')
@@ -263,7 +366,9 @@ describe('the actual v2 catalog renderer', () => {
 
     it('waits for the new native image when a deeper composition moves the same held photo', async () => {
         const { inputs, bindings } = await setup(true)
-        const view = await render(wrap(<DocumentRenderer document={compose(inputs)} bindings={bindings} />))
+        const document = compose(inputs)
+        const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+        const body = screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!
         await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
             nativeEvent: { layout: { width: 300, height: 200 } },
         })
@@ -292,7 +397,9 @@ describe('the actual v2 catalog renderer', () => {
                 { sha256Hex, now: () => new Date('2026-10-29T00:00:00Z') },
             ),
         )
+        expect(next.screenId).not.toBe(document.screenId)
         await view.rerender(wrap(<DocumentRenderer document={next} bindings={bindings} />))
+        expect(screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]).toBe(body)
         expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
         await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
             nativeEvent: { layout: { width: 300, height: 200 } },
@@ -303,11 +410,12 @@ describe('the actual v2 catalog renderer', () => {
 
     it('binds the sole camera primary to the shutter instead of reopening the camera', async () => {
         const { inputs, bindings, run } = await setup()
-        const document = compose({
+        const cameraInputs: ScreenContextInputsV2 = {
             ...inputs,
             kind: 'camera',
             uiState: { camera: { mode: 'build-photo', permission: 'granted' } },
-        })
+        }
+        const document = compose(cameraInputs)
         const capture = jest.fn()
         const mounted = jest.fn()
         const unmounted = jest.fn()
@@ -323,6 +431,7 @@ describe('the actual v2 catalog renderer', () => {
             camera: { permission: 'granted' as const, ready: true, capture, preview: <CameraPreview /> },
         }
         const view = await render(wrap(<DocumentRenderer document={document} bindings={cameraBindings} />))
+        const preview = screen.getByTestId('raw-camera-preview')
         expect(screen.getAllByTestId('camera-shutter')).toHaveLength(1)
         await fireEvent.press(screen.getByTestId('camera-shutter'))
         expect(capture).toHaveBeenCalledTimes(1)
@@ -335,6 +444,12 @@ describe('the actual v2 catalog renderer', () => {
         expect(capture).toHaveBeenCalledTimes(1)
         await view.rerender(wrap(<DocumentRenderer document={document} bindings={cameraBindings} variant="pending" />))
         expect(screen.getByTestId('camera-shutter')).toBeEnabled()
+        expect(mounted).toHaveBeenCalledTimes(1)
+        expect(unmounted).not.toHaveBeenCalled()
+        const next = compose(cameraInputs, [], 'fallback')
+        expect(next.screenId).not.toBe(document.screenId)
+        await view.rerender(wrap(<DocumentRenderer document={next} bindings={cameraBindings} />))
+        expect(screen.getByTestId('raw-camera-preview')).toBe(preview)
         expect(mounted).toHaveBeenCalledTimes(1)
         expect(unmounted).not.toHaveBeenCalled()
     })
