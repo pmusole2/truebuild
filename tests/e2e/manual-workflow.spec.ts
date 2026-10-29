@@ -239,7 +239,7 @@ test('camera access is requested only on demand: without permission the screen e
 
 test('a local library that cannot be read keeps its data, says so, and offers an explicit retry', async ({ page }) => {
     await page.addInitScript(() => {
-        const probe = { writes: 0 }
+        const probe = { reads: 0, writes: 0 }
         Object.defineProperty(window, '__truebuildStorageProbe', { value: probe })
         const originalSet = Storage.prototype.setItem
         Storage.prototype.setItem = function (key: string, value: string): void {
@@ -251,6 +251,7 @@ test('a local library that cannot be read keeps its data, says so, and offers an
         const original = Storage.prototype.getItem
         Storage.prototype.getItem = function (key: string): string | null {
             if (String(key).startsWith('truebuild/')) {
+                probe.reads += 1
                 throw new Error('storage unavailable (test fault injection)')
             }
             return original.call(this, key)
@@ -268,8 +269,14 @@ test('a local library that cannot be read keeps its data, says so, and offers an
             () => (window as unknown as { __truebuildStorageProbe: { writes: number } }).__truebuildStorageProbe.writes,
         )
     expect(await writeCount()).toBe(0)
+    const readCount = (): Promise<number> =>
+        page.evaluate(
+            () => (window as unknown as { __truebuildStorageProbe: { reads: number } }).__truebuildStorageProbe.reads,
+        )
+    const readsBeforeRetry = await readCount()
     await retry.click()
     await expect(retry).toBeEnabled()
+    expect(await readCount()).toBeGreaterThan(readsBeforeRetry)
     expect(await writeCount()).toBe(0)
 })
 

@@ -297,11 +297,24 @@ describe('unavailable states', () => {
         })
         expect(screen.getByText('We could not save on this phone. Your earlier work is safe.')).toBeTruthy()
         expect(screen.queryByText(/could not open/u)).toBeNull()
+        expect(screen.queryByText('Pick up where you left off.')).toBeNull()
         const retry = screen.getByRole('button', { name: 'Try again' })
         expect(within(screen.getByTestId('bottom-bar')).getByRole('button', { name: 'Try again' })).toBe(retry)
         await fireEvent.press(retry)
         expect(restore).toHaveBeenCalledTimes(1)
         expect(createManual).not.toHaveBeenCalled()
+    })
+
+    it('keeps recovery paused while another request is pending', async () => {
+        const { restore } = await setup('home-populated', {
+            storageReadOnly: true,
+            pending: 'Asking about frozen photo…',
+        })
+        const retry = screen.getByRole('button', { name: 'Try again' })
+        expect(retry.props.accessibilityState.disabled).toBe(true)
+        expect(screen.getByText('Wait for the current request to finish.')).toBeTruthy()
+        await fireEvent.press(retry)
+        expect(restore).not.toHaveBeenCalled()
     })
 })
 

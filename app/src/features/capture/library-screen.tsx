@@ -192,7 +192,7 @@ export function LibraryScreen({
     const nav = navProp ?? defaultNav(controller)
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     const failed = !state.loading && state.storageReadOnly
-    const hint = failed ? null : addHint(state)
+    const hint = failed ? (state.pending === null ? null : 'Wait for the current request to finish.') : addHint(state)
     const recoveryCopy =
         state.notice === null
             ? 'Your saved builds need another try.'
@@ -217,6 +217,7 @@ export function LibraryScreen({
                 label: 'Try again',
                 compactLabel: 'Retry',
                 testID: 'retry-library',
+                disabled: state.pending !== null,
                 onPress: (): void => {
                     void controller.restore()
                 },
@@ -272,7 +273,9 @@ export function LibraryScreen({
                         <Instruction>Build furniture with step-by-step help.</Instruction>
                     </View>
                 ) : null}
-                {sole === undefined ? null : <ContinueCard entry={sole} pageUris={state.pageUris} />}
+                {sole === undefined ? null : (
+                    <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
+                )}
                 {entries.length > 1
                     ? entries.map((entry) => (
                           <ManualRow
@@ -341,9 +344,11 @@ function ManualThumb({
 function ContinueCard({
     entry,
     pageUris,
+    resumable,
 }: {
     entry: LibraryEntry
     pageUris: LibraryProps['state']['pageUris']
+    resumable: boolean
 }): ReactElement {
     const total = entry.session.reviewedSteps.length
     const completed = entry.completedStepIds.length
@@ -362,7 +367,7 @@ function ContinueCard({
                                 total={total}
                             />
                         )}
-                        <Instruction>Pick up where you left off.</Instruction>
+                        {resumable ? <Instruction>Pick up where you left off.</Instruction> : null}
                     </Stack>
                 </View>
             </View>
