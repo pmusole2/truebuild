@@ -271,11 +271,30 @@ const factEditorListed = (node: ScreenNodeV2): boolean =>
         inList(FACT_EDITOR_COPY_V2.cancel, node.cancelLabel))
 
 /**
+ * The persistent header of a busy variant states the activity the app is actually doing, in the activity's own listed
+ * heading (`Still thinking…`, `Taking a closer look…`): a native sheet keeps its scroll offset while busy, so the body's
+ * heading can be off screen and a header that kept the ready title would misstate the screen. Applies only where the
+ * context names the activity (`ui.busy`); machine code `<prefix>header:busy_header_mismatch`.
+ */
+export function busyHeaderIssuesV2(document: DocumentLike, material: DocumentMaterialV2): string[] {
+    const activity = material.inputs.uiState?.busy?.activity
+    if (activity === undefined) return []
+    const issues: string[] = []
+    for (const { name, prefix, variant } of variantsOfV2(document)) {
+        const { title } = variant.header
+        if (name === 'busy' && !(title.kind === 'literal' && inList([BUSY_COPY_V2[activity].heading], title.text))) {
+            issues.push(`${prefix}header:busy_header_mismatch`)
+        }
+    }
+    return issues
+}
+
+/**
  * `<path>:literal_not_listed` for every literal that is not interface copy of this screen, in the header, subtitle, body,
  * bar, overlays and every state variant. Pure and portable: the server gate and a request-bound client run the same rule.
  */
 export function literalIssuesV2(document: DocumentLike, material: DocumentMaterialV2): string[] {
-    const issues = new Set<string>()
+    const issues = new Set<string>(busyHeaderIssuesV2(document, material))
     for (const { name, prefix, variant } of variantsOfV2(document)) {
         const allowed = allowedLiteralsV2(material, name)
         for (const ref of [variant.header.title, variant.header.subtitle]) {

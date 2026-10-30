@@ -657,8 +657,8 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
         case 'completion':
             return [
                 text(bound('completion-summary'), { role: 'heading' }),
+                // One indicator of the build count: a Progress and a Meter of the same binding would publish it twice.
                 { type: 'Progress', binding: 'build', label: null },
-                { type: 'Meter', binding: 'build', label: null, tone: 'success' },
             ]
         case 'error':
             return [
@@ -806,13 +806,17 @@ function overlaysOf(material: DocumentMaterialV2): OverlayV2[] {
 /**
  * The header of a state variant. A screen whose ready title is a claim about the person's work (a verdict, a finished
  * build) never lends that title to a state variant: it shows the calm state heading instead. Other screens keep theirs.
+ * A busy variant that names its activity leads with that activity's heading on every screen.
  */
 function stateHeader(
     state: VariantState,
     material: DocumentMaterialV2,
     ready: ScreenVariantV2,
 ): ScreenVariantV2['header'] {
-    const { kind } = material.inputs
+    const { kind, uiState } = material.inputs
+    // A busy screen's fixed header names what the app is doing (the body's own heading may be scrolled out of sight).
+    const activity = state === 'busy' ? uiState?.busy?.activity : undefined
+    if (activity !== undefined) return { ...ready.header, title: lit(BUSY_COPY_V2[activity].heading), actions: [] }
     if (kind !== 'result' && kind !== 'completion') return { ...ready.header, actions: [] }
     const title = kind === 'completion' ? lit('Your build') : lit(STATE_COPY_V2[state].heading)
     return { ...ready.header, title, actions: [] }
