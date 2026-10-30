@@ -43,7 +43,7 @@ function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
     })
 }
 
-const arrangement = (manualId: string | null): 'stacked' | 'cards' =>
+export const fixtureArrangement = (manualId: string | null): 'stacked' | 'cards' =>
     Array.from(manualId ?? '').reduce((sum, character) => sum + (character.codePointAt(0) ?? 0), 0) % 2 === 0
         ? 'stacked'
         : 'cards'
@@ -56,11 +56,16 @@ const card = (child: ScreenNodeV2): ScreenNodeV2 => ({
     children: [child],
 })
 
+/**
+ * Puts each child of the body's Stack on its own card. Whatever follows the Stack in the Scroll (the builder's
+ * "Manual pages" coverage section, which carries a held result's mandatory citations) is kept as it is: dropping it
+ * would delete a required witness from the arrangement.
+ */
 function rearrange(variant: ScreenVariantV2): ScreenVariantV2 {
     const body = variant.body
-    const inner = body.type === 'Scroll' ? body.children[0] : undefined
+    const [inner, ...rest] = body.type === 'Scroll' ? body.children : []
     if (body.type !== 'Scroll' || inner === undefined || inner.type !== 'Stack') return variant
-    return { ...variant, body: { ...body, children: [{ ...inner, children: inner.children.map(card) }] } }
+    return { ...variant, body: { ...body, children: [{ ...inner, children: inner.children.map(card) }, ...rest] } }
 }
 
 function withoutFacts(node: ScreenNodeV2, drop: ReadonlySet<string>): ScreenNodeV2 {
@@ -83,7 +88,7 @@ export function createDocumentFixtureGenerator(): DocumentFixtureGenerator {
             if (index > 0) await wait(DOCUMENT_STEP_DELAY_MS, signal)
         }
         let proposal: ScreenProposalV2 = buildFallbackProposalV2(context.material)
-        if (arrangement(manualId) === 'cards') {
+        if (fixtureArrangement(manualId) === 'cards') {
             proposal = { ...proposal, ...rearrange(proposal) }
             // The camera stays mounted while its screen waits: its waiting variants take the same arrangement, so the
             // CameraView keeps one spine in the ready, busy and pending variants.
