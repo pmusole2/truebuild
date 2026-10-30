@@ -7,6 +7,7 @@ import { Skeleton } from '../../ui/skeleton'
 import { radius } from '../../theme/tokens'
 
 const SVG_DATA_URI = /^data:image\/svg\+xml(?:;charset=utf-8)?,/iu
+const MANUAL_PAGE_PIXELS = 'truebuild-capability-internals:ManualPage'
 
 /** The XML of an inline SVG data URI, or null for any other source (stored pages are always PNG or JPEG bytes). */
 export function inlineSvgXml(uri: string): string | null {
@@ -38,11 +39,20 @@ export function ManualImage({
     if (xml !== null) {
         return (
             <View accessible={true} accessibilityLabel={label} accessibilityRole="image" style={style}>
-                <SvgXml xml={xml} width="100%" height="100%" preserveAspectRatio="none" />
+                <SvgXml nativeID={MANUAL_PAGE_PIXELS} xml={xml} width="100%" height="100%" preserveAspectRatio="none" />
             </View>
         )
     }
-    return <Image source={{ uri }} accessibilityLabel={label} resizeMode="stretch" style={style} />
+    // Only decoded manual pixels are intrinsic. The document's frame, controls and labels remain counted.
+    return (
+        <Image
+            nativeID={MANUAL_PAGE_PIXELS}
+            source={{ uri }}
+            accessibilityLabel={label}
+            resizeMode="stretch"
+            style={style}
+        />
+    )
 }
 
 /** A local manual page at its own aspect ratio. Until the local file is read it shows a skeleton, not a blank box. */

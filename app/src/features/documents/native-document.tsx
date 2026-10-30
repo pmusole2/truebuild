@@ -65,7 +65,6 @@ import { CoachTarget, useCoachAttention, useCoachScope } from '../onboarding/coa
 const gap = (token: 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl'): number => (token === 'none' ? 0 : space[token])
 const align = { start: 'flex-start', end: 'flex-end', center: 'center', stretch: 'stretch' } as const
 const tone = { neutral: 'default', info: 'accent', success: 'pass', caution: 'caution', critical: 'refuse' } as const
-const capability = (type: string): string => `truebuild-capability-internals:${type}`
 const TIMING_LABELS = {
     timeToProviderMs: 'Before provider',
     providerMs: 'Provider time',
@@ -724,7 +723,7 @@ function Photo({
             >
                 <View nativeID={mark} style={StyleSheet.absoluteFill}>
                     <Image
-                        nativeID={capability('ManualPage')}
+                        nativeID={mark}
                         testID="frozen-photo-image"
                         source={{ uri: bytesToDataUri(observation.bytes, observation.mimeType) }}
                         resizeMode="stretch"

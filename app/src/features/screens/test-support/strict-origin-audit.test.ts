@@ -78,6 +78,28 @@ describe('strict composed-marker host audit', () => {
         expect(result.counts).toEqual({ generated: 0, fallback: 1, shell: 1, total: 2 })
         expect(result.hosts[1]).toMatchObject({ origin: 'shell', originSource: 'explicit-marker', originPath: '$/0' })
     })
+    it.each(['RNSVGSvgView', 'RN:RNSVGSvgViewAndroid'])(
+        'excludes actual manual SVG pixels under %s while retaining its outside label',
+        (type) => {
+            const svg = host(
+                'truebuild-capability-internals:ManualPage',
+                [host(undefined, [host(undefined, [], 'RNSVGPath')], 'RNSVGGroup')],
+                type,
+            )
+            const result = auditDocumentHosts(root([host(undefined, ['Manual page'], 'Text'), svg]), [document])
+            expect(result.failures).toEqual([])
+            expect(result.counts).toEqual({ generated: 0, fallback: 2, shell: 0, total: 2 })
+            expect(result.exclusions.ManualPage.total).toBe(3)
+        },
+    )
+    it('refuses SVG roots masquerading as cameras and layout children inside a manual SVG boundary', () => {
+        for (const invalid of [
+            host('truebuild-capability-internals:CameraView', [], 'RNSVGSvgView'),
+            host('truebuild-capability-internals:ManualPage', [host(undefined, [], 'View')], 'RNSVGSvgView'),
+            host('truebuild-capability-internals:ManualPage', [], 'RNSVGPath'),
+        ])
+            expect(auditDocumentHosts(root([invalid]), [document]).status).toBe('unavailable')
+    })
     it('rejects a generated marker forged onto a schema-valid fallback document identity', () => {
         const tree = host(`truebuild-document-root:${document.screenId}|truebuild-render-origin:generated`, [host()])
         expect(auditDocumentHosts(tree, [document]).failures).toContainEqual(

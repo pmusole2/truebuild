@@ -48,8 +48,11 @@ function count(target: RenderOriginCounts, origin: NativeMeterOrigin | null): vo
     target.total++
     if (origin !== null) target[origin]++
 }
-const pixels = (type: string): boolean =>
-    /^(?:RN:)?(?:Image|RCTImageView|CameraView|ExpoCamera|ExpoCameraView)$/u.test(type)
+const svgRoot = (type: string): boolean => /^(?:RN:)?RNSVGSvgView(?:Android)?$/u.test(type)
+const svgPixels = (type: string): boolean => /^(?:RN:)?RNSVG[A-Za-z]+$/u.test(type)
+const pixels = (type: string, capability: 'CameraView' | 'ManualPage'): boolean =>
+    /^(?:RN:)?(?:Image|RCTImageView)$/u.test(type) ||
+    (capability === 'ManualPage' ? svgRoot(type) : /^(?:RN:)?(?:CameraView|ExpoCamera|ExpoCameraView)$/u.test(type))
 const navigation = (type: string): boolean => /^(?:RN:)?(?:RNSScreen.*|RNCSafeArea.*|RCTRootView|RootView)$/u.test(type)
 interface State {
     readonly owner: string | null
@@ -57,6 +60,7 @@ interface State {
     readonly origin: NativeMeterOrigin | null
     readonly originPath: string | null
     readonly exclusion: 'CameraView' | 'ManualPage' | null
+    readonly manualSvg: boolean
 }
 /**
  * Synthetic host membership audit, not a native meter. No default shell, source conversion, or origin-only ownership.
@@ -140,11 +144,16 @@ export function auditDocumentHosts(
         )
             failures.push({ path, hostType: node.type, reason: 'document-source-mismatch' })
         let exclusion = inherited.exclusion
+        let manualSvg = inherited.manualSvg
         if (parsed?.capability === 'CameraView' || parsed?.capability === 'ManualPage') {
-            if (!pixels(node.type)) failures.push({ path, hostType: node.type, reason: 'invalid-capability-boundary' })
-            else exclusion = parsed.capability
+            if (!pixels(node.type, parsed.capability))
+                failures.push({ path, hostType: node.type, reason: 'invalid-capability-boundary' })
+            else {
+                exclusion = parsed.capability
+                manualSvg = parsed.capability === 'ManualPage' && svgRoot(node.type)
+            }
         }
-        if (exclusion !== null && !pixels(node.type))
+        if (exclusion !== null && !(pixels(node.type, exclusion) || (manualSvg && svgPixels(node.type))))
             failures.push({ path, hostType: node.type, reason: 'invalid-capability-boundary' })
         if (exclusion === null) {
             if (owner === null) failures.push({ path, hostType: node.type, reason: 'unowned-host' })
@@ -171,18 +180,26 @@ export function auditDocumentHosts(
         })
         const boundary = parsed?.documentContentBoundary != null
         const state: State = boundary
-            ? { owner: null, navigationOwner: false, origin: null, originPath: null, exclusion }
+            ? { owner: null, navigationOwner: false, origin: null, originPath: null, exclusion, manualSvg }
             : {
                   owner,
                   navigationOwner,
                   origin: originPath === null ? null : effective.childOrigin,
                   originPath,
                   exclusion,
+                  manualSvg,
               }
         node.children.forEach((child, index) => visit(child, `${path}/${index}`, state))
     }
     if (tree !== null)
-        visit(tree, '$', { owner: null, navigationOwner: false, origin: null, originPath: null, exclusion: null })
+        visit(tree, '$', {
+            owner: null,
+            navigationOwner: false,
+            origin: null,
+            originPath: null,
+            exclusion: null,
+            manualSvg: false,
+        })
     return {
         status: failures.length === 0 ? 'measured' : 'unavailable',
         counts: resultCounts,

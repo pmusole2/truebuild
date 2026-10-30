@@ -20,6 +20,7 @@ import { sha256Hex } from './sha256'
 import type { FrameBindings } from './types'
 import { entry, runtime, source } from '../screens/test-support/route-harness'
 import { defaultNav } from '../capture/screen-nav'
+import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -559,6 +560,11 @@ describe('the actual v2 catalog renderer', () => {
             const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
             expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
             const waitingImage = screen.getByTestId('frozen-photo-image')
+            // A held build photo is catalog Image content, never a manual-page capability exclusion.
+            expect(parseNativeMeterMarkers(waitingImage.props.nativeID)).toMatchObject({
+                origin: 'generated',
+                capability: null,
+            })
             await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
                 nativeEvent: { layout: { width: 300, height: 200 } },
             })
