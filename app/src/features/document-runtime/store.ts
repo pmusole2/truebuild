@@ -320,6 +320,58 @@ export class DocumentStore {
         this.publish()
         return held.entry
     }
+    /**
+     * A loading/navigation boundary may await an actual complete composition before presenting a factual route.
+     * This never upgrades a pending/fallback document, changes its origin, or invents a usable donor on a cold start.
+     */
+    waitForGenerated(
+        inputs: ScreenContextInputsV2,
+        options: { readonly timeoutMs?: number; readonly signal?: AbortSignal } = {},
+    ): Promise<ScreenDocumentV2 | null> {
+        const timeoutMs = options.timeoutMs ?? DOCUMENT_COLLECTION_DEADLINE_MS
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > DOCUMENT_COLLECTION_DEADLINE_MS)
+            throw new Error('invalid_document_wait_limit')
+        if (options.signal?.aborted === true || this.disposed || this.stale(inputs.session))
+            return Promise.resolve(null)
+        this.request(inputs)
+        const key = documentKey(inputs)
+        return new Promise((resolve) => {
+            let stopped = false
+            let unsubscribe = (): void => {}
+            const finish = (document: ScreenDocumentV2 | null): void => {
+                if (stopped) return
+                stopped = true
+                clearTimeout(timer)
+                unsubscribe()
+                options.signal?.removeEventListener('abort', aborted)
+                resolve(document)
+            }
+            const aborted = (): void => finish(null)
+            const check = (): void => {
+                if (this.disposed || options.signal?.aborted === true || this.stale(inputs.session)) {
+                    finish(null)
+                    return
+                }
+                const held = this.held.get(key)
+                if (
+                    held?.entry.status === 'ready' &&
+                    held.entry.document.metadata.source === 'generated' &&
+                    documentMatchesInputs(held.entry.document, inputs)
+                ) {
+                    finish(held.entry.document)
+                    return
+                }
+                const collecting = [...this.jobs.values()].some((job) =>
+                    documentPrecomputeInputs(job).some((item) => documentKey(item.inputs) === key),
+                )
+                if (!collecting && (held?.entry.status === 'ready' || this.evicted.has(key))) finish(null)
+            }
+            const timer = setTimeout(() => finish(null), timeoutMs)
+            unsubscribe = this.subscribe(check)
+            options.signal?.addEventListener('abort', aborted, { once: true })
+            check()
+        })
+    }
     private trimCache(): void {
         while (
             this.held.size > MAX_ENTRIES ||
@@ -465,6 +517,7 @@ export class DocumentStore {
         try {
             let response = await this.control({ ...common, op: 'precompute', focusKey }, job.abort.signal)
             const received = new Set<string>()
+            let previousWant: readonly string[] = []
             for (let poll = 0; poll <= (this.options.maxPolls ?? DOCUMENT_PROGRESS_MAX_POLLS); poll++) {
                 if (
                     job.abort.signal.aborted ||
@@ -511,12 +564,15 @@ export class DocumentStore {
                 )
                 if (remaining.length === 0) return
                 if (poll === (this.options.maxPolls ?? DOCUMENT_PROGRESS_MAX_POLLS)) return
-                await pause(this.options.pollMs ?? DOCUMENT_PROGRESS_POLL_MS, job.abort.signal)
-                if (job.abort.signal.aborted) return
                 const want = remaining
                     .filter((item) => ['ready', 'fallback'].includes(item.state))
                     .slice(0, 8)
                     .map((item) => item.key)
+                // Collect newly completed real payloads immediately. Only unfinished/repeated work waits for a poll.
+                if (!want.some((name) => !previousWant.includes(name)))
+                    await pause(this.options.pollMs ?? DOCUMENT_PROGRESS_POLL_MS, job.abort.signal)
+                if (job.abort.signal.aborted) return
+                previousWant = want
                 response = await this.control(
                     { ...common, op: 'progress', want, jobContextKey: job.context },
                     job.abort.signal,
@@ -526,7 +582,10 @@ export class DocumentStore {
             /* Collection ends quietly; on-demand requests retain a complete fallback. */
         } finally {
             clearTimeout(deadline)
-            if (this.jobs.get(key) === job) this.jobs.delete(key)
+            if (this.jobs.get(key) === job) {
+                this.jobs.delete(key)
+                if (!this.disposed) this.publish()
+            }
         }
     }
     private async cancelJob(job: Job): Promise<void> {
@@ -605,6 +664,7 @@ export class DocumentStore {
         this.attemptedJobs.clear()
         this.guides.clear()
         this.warmQueue.clear()
+        this.publish()
         this.listeners.clear()
     }
 }

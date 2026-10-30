@@ -1,0 +1,284 @@
+{
+    "header": {
+        "title": { "kind": "literal", "text": "Camera access needed" },
+        "subtitle": null,
+        "back": { "label": "Close", "icon": "chevronLeft", "intent": { "intent": "navigate", "target": "back" } },
+        "actions": []
+    },
+    "body": {
+        "type": "Scroll",
+        "axis": "vertical",
+        "children": [
+            {
+                "type": "Stack",
+                "gap": "md",
+                "align": "stretch",
+                "children": [
+                    {
+                        "type": "Card",
+                        "surface": "tinted",
+                        "tone": "neutral",
+                        "padding": "md",
+                        "children": [
+                            { "type": "Icon", "name": "camera", "tone": "info", "size": "md" },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "Allow the camera to take a photo." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Text",
+                        "content": { "kind": "bound", "key": "privacy-camera" },
+                        "role": "caption",
+                        "emphasis": "quiet",
+                        "tone": "neutral",
+                        "align": "start"
+                    }
+                ]
+            }
+        ]
+    },
+    "bar": {
+        "primary": {
+            "type": "PrimaryAction",
+            "label": "Allow camera",
+            "icon": "camera",
+            "intent": { "intent": "confirm", "target": "camera-permission" }
+        },
+        "secondary": null
+    },
+    "overlays": [],
+    "states": {
+        "busy": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "Camera access needed" },
+                "back": {
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Card",
+                                "surface": "tinted",
+                                "tone": "neutral",
+                                "padding": "md",
+                                "children": [
+                                    { "type": "Icon", "name": "camera", "tone": "info", "size": "md" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Allow the camera to take a photo." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "role": "caption",
+                                "emphasis": "quiet",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            { "type": "Progress", "binding": "build", "label": null },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Please wait",
+                    "icon": null,
+                    "intent": { "intent": "confirm", "target": "camera-permission" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "pending": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "Camera access needed" },
+                "back": {
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Card",
+                                "surface": "tinted",
+                                "tone": "neutral",
+                                "padding": "md",
+                                "children": [
+                                    { "type": "Icon", "name": "camera", "tone": "info", "size": "md" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Allow the camera to take a photo." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "role": "caption",
+                                "emphasis": "quiet",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Allow camera",
+                    "icon": "camera",
+                    "intent": { "intent": "confirm", "target": "camera-permission" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "empty": null,
+        "error": {
+            "header": {
+                "title": { "kind": "literal", "text": "Something went wrong" },
+                "subtitle": null,
+                "back": {
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "Try again in a moment." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "caution",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "role": "caption",
+                                "emphasis": "quiet",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "recovery": {
+            "header": {
+                "title": { "kind": "literal", "text": "Let us get you back on track" },
+                "subtitle": null,
+                "back": {
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Try again, or go back home." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "neutral",
+                        "align": "start"
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "confirming": null
+    }
+}

@@ -1,0 +1,21 @@
+{
+    "evidence": "synthetic-fixture",
+    "model": null,
+    "effort": null,
+    "authoring": {
+        "model": "gpt-6.1-sol",
+        "effort": "ultra",
+        "recordedAt": "2026-10-30T15:40:26.000Z",
+        "fixtureId": "recorded-camera-page-allow-sol-v1"
+    },
+    "recordedAt": "2026-10-30T15:40:26.000Z",
+    "promptVersion": 0,
+    "repaired": false,
+    "taskReference": "close95 actual Sol page-camera access closure: recorded-camera-page-allow; full manual-page nonfactual allow composition",
+    "inputPrompt": "Beforeindependentreview extend sameAPPraw slice to first-launch PAGE-camera access states too (currentrecordselectorgrantedonly wouldleaveactualfirstlive undetermined/denied/failedUI fallback; proofcameraonlygrantedhidesit). Preserve your19-family freezeandgoldens byhash archive before this followup. Add6 genuinely model-authored raw families: recorded-camera-page-allow(+allow-saving), -settings(+settings-saving), -retry(+retry-saving). UseactualcameraAccessV2 semantics: missingpermissionwinsallow; deniedcanAskAgaintrueallow; deniedfalseSettings; grantedfailedtrueRetry. No rawCameraViewinANYvariantwhenaccessnotready; readyprimaryonlyearnedAllowcamera/OpenSettings/Retrycamera; errors/recoverycameraRetryifrequiredelseearnedBack/Home, sharedgatesstrict. Do notchangeUIcopyregistry/API/contracts; useexistingCAMERA_ACCESS_COPY_V2/privacyboundkeys +catalogcomponents, usefulplainpermission/privacyexplanation,no filler or minhosttarget. Stablegeneratedwholevariants, knownactivitysavingseparate; metadataactualselfattestedSol/ultraUTC/null inference. ModeMANUAL-PAGEonlyfacts0/stepnull/capture/resultnull guard; fullsharedsemanticverify everycontext; don'tfakegrantedpermission. RootNavownerwillclearpage-camera stalebuildstep/cap identity (actualcodebug), currentselectorallowsreviewedsessioniffacts0 viafullgate alreadygood. Neednegativecrossaccessrecordcorruptiontests andcurrentCameraPermissionwitness checks. Inventory25 instead19 rootupdatesAPIfrozenlist whennewrecordsstrictvalid. NOchanges toprevious19unlessbugfounddiscuss; metadataupdateonlynew6 dates/pins; maintaincanonicalhash/rawtreeindependentoracles andruntimeprojectionprivacy. Camera tipsRootnow2icon/TextRows image/search inclCompletionUIcopy/prompt15, rootnewtests165pass. Store/navigationhelper alreadyfrozen no edits needed: app_state_integration ownsNavcallerfiles now; leavewaitForGenerated/storered-greenownedworkunchanged. Thisisrealfirst-launchclosedconsentpath requirement, no newintent/capability/APIparams/deps/services/device/paid/env/keys/commits/delegates. Afternew6 passpublishcompactupdatedhandoff/freeze; no native95 claim.\n",
+    "inputPromptSha256": "a59910c88fc1622c21d4e2ab7cdbdfeb7a2e3c36affa0414909deb551540254c",
+    "rawJsonSha256": "93ea74fffe84bd96f5bbf10497ab292ea3e929fecd647b9873902632659cd968",
+    "timingMs": null,
+    "tokens": null,
+    "binding": "Complete raw model-authored manual-page camera access composition. Select only the current cameraAccessV2 witness with no step, capture, result, companion or failure payload. Permission absence takes precedence over a failed flag. No raw CameraView or coach in any variant. Ready primary is only the earned permission/settings/retry action; failed-camera errors/recovery lead with retry. Saving busy title is separately authored. All other source families remain exact. Assembly must preserve this whole tree and pass unchanged shared server/client semantic gates. Actual author self-attestation only; no provider receipt, timing or usage."
+}

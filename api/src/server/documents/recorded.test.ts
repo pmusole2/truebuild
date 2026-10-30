@@ -27,7 +27,7 @@ import { recordedDocumentForTest } from '../../../../app/src/features/documents/
 const RECORDED = new URL('../../../../app/src/features/documents/recorded/', import.meta.url)
 const read = (name: string): unknown => JSON.parse(readFileSync(fileURLToPath(new URL(name, RECORDED)), 'utf8'))
 const names = readdirSync(RECORDED)
-// Canonical digests of the exact pre-packaging publications, preserved before removal of unused build artifacts.
+// Canonical publication oracles. Historical originals, intentional revisions and new families retain separate archives.
 const publicationHashes = read('publication-hashes.json') as Record<string, string>
 const layout = names
     .filter((name) => name.endsWith('.proposal.json'))
@@ -49,12 +49,22 @@ const EXPECTED_FAMILIES = [
     'recorded-pages-saving',
     'recorded-pages-cancelled-saving',
     'recorded-reading-saving',
+    'recorded-more-global',
+    'recorded-judge-global',
+    'recorded-camera-page',
+    'recorded-camera-page-saving',
+    'recorded-camera-page-allow',
+    'recorded-camera-page-allow-saving',
+    'recorded-camera-page-settings',
+    'recorded-camera-page-settings-saving',
+    'recorded-camera-page-retry',
+    'recorded-camera-page-retry-saving',
 ].sort()
 
 describe('recorded generations in the app', () => {
-    it('checks all fifteen expected raw source families', () => {
+    it('checks all twenty-five expected raw source families', () => {
         expect(layout).toEqual(EXPECTED_FAMILIES)
-        expect(layout).toHaveLength(15)
+        expect(layout).toHaveLength(25)
         expect(Object.keys(publicationHashes).sort()).toEqual(EXPECTED_FAMILIES)
     })
 

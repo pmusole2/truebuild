@@ -41,7 +41,7 @@ const ARTIFACTS = readdirSync(here)
 
 /** These launch samples have no step, photo result or failure; future contexts need their own explicit contract. */
 const launchInputsSchema = z.strictObject({
-    kind: z.enum(['home', 'add', 'pages', 'reading']),
+    kind: z.enum(['home', 'add', 'pages', 'reading', 'more', 'judge', 'camera']),
     session: manualSessionSchema.nullable(),
     stepId: z.null(),
     captureId: z.null(),

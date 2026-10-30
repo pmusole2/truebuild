@@ -1,5 +1,6 @@
 import {
     assembleDocumentV2,
+    cameraAccessV2,
     documentMaterialV2,
     recordedDocumentFactsV2,
     recordedProvenanceV2Schema,
@@ -41,6 +42,26 @@ import stoppedSaving from '../documents/recorded/recorded-pages-cancelled-saving
 import stoppedSavingProvenance from '../documents/recorded/recorded-pages-cancelled-saving.runtime.json'
 import readingSaving from '../documents/recorded/recorded-reading-saving.proposal.json'
 import readingSavingProvenance from '../documents/recorded/recorded-reading-saving.runtime.json'
+import globalMore from '../documents/recorded/recorded-more-global.proposal.json'
+import globalMoreProvenance from '../documents/recorded/recorded-more-global.runtime.json'
+import globalJudge from '../documents/recorded/recorded-judge-global.proposal.json'
+import globalJudgeProvenance from '../documents/recorded/recorded-judge-global.runtime.json'
+import pageCamera from '../documents/recorded/recorded-camera-page.proposal.json'
+import pageCameraProvenance from '../documents/recorded/recorded-camera-page.runtime.json'
+import pageCameraSaving from '../documents/recorded/recorded-camera-page-saving.proposal.json'
+import pageCameraSavingProvenance from '../documents/recorded/recorded-camera-page-saving.runtime.json'
+import pageCameraAllow from '../documents/recorded/recorded-camera-page-allow.proposal.json'
+import pageCameraAllowProvenance from '../documents/recorded/recorded-camera-page-allow.runtime.json'
+import pageCameraAllowSaving from '../documents/recorded/recorded-camera-page-allow-saving.proposal.json'
+import pageCameraAllowSavingProvenance from '../documents/recorded/recorded-camera-page-allow-saving.runtime.json'
+import pageCameraSettings from '../documents/recorded/recorded-camera-page-settings.proposal.json'
+import pageCameraSettingsProvenance from '../documents/recorded/recorded-camera-page-settings.runtime.json'
+import pageCameraSettingsSaving from '../documents/recorded/recorded-camera-page-settings-saving.proposal.json'
+import pageCameraSettingsSavingProvenance from '../documents/recorded/recorded-camera-page-settings-saving.runtime.json'
+import pageCameraRetry from '../documents/recorded/recorded-camera-page-retry.proposal.json'
+import pageCameraRetryProvenance from '../documents/recorded/recorded-camera-page-retry.runtime.json'
+import pageCameraRetrySaving from '../documents/recorded/recorded-camera-page-retry-saving.proposal.json'
+import pageCameraRetrySavingProvenance from '../documents/recorded/recorded-camera-page-retry-saving.runtime.json'
 import { sha256Hex } from '../documents/sha256'
 
 interface Recording {
@@ -62,6 +83,7 @@ function recordingFor(inputs: ScreenContextInputsV2): Recording | null {
         inputs.result !== null ||
         inputs.failure !== null ||
         inputs.companionAnswer != null ||
+        inputs.uiState?.capture != null ||
         (inputs.kind === 'home' && inputs.session !== null)
     )
         return null
@@ -99,6 +121,39 @@ function recordingFor(inputs: ScreenContextInputsV2): Recording | null {
                 : saving
                   ? { proposal: readingSaving, provenance: readingSavingProvenance }
                   : { proposal: reading, provenance: readingProvenance }
+        case 'more':
+            if (
+                inputs.session !== null ||
+                inputs.uiState?.settings?.storage !== true ||
+                (inputs.uiState.language?.options.length ?? 0) === 0 ||
+                !['how-it-works', 'settings', 'tips', 'about-this-check'].every((section) =>
+                    inputs.uiState?.sections?.some((available) => available === section),
+                )
+            )
+                return null
+            return { proposal: globalMore, provenance: globalMoreProvenance }
+        case 'judge':
+            return inputs.session === null ? { proposal: globalJudge, provenance: globalJudgeProvenance } : null
+        case 'camera': {
+            const camera = inputs.uiState?.camera
+            if (camera?.mode !== 'manual-page') return null
+            const access = cameraAccessV2(camera)
+            if (access === 'allow')
+                return saving
+                    ? { proposal: pageCameraAllowSaving, provenance: pageCameraAllowSavingProvenance }
+                    : { proposal: pageCameraAllow, provenance: pageCameraAllowProvenance }
+            if (access === 'settings')
+                return saving
+                    ? { proposal: pageCameraSettingsSaving, provenance: pageCameraSettingsSavingProvenance }
+                    : { proposal: pageCameraSettings, provenance: pageCameraSettingsProvenance }
+            if (access === 'retry')
+                return saving
+                    ? { proposal: pageCameraRetrySaving, provenance: pageCameraRetrySavingProvenance }
+                    : { proposal: pageCameraRetry, provenance: pageCameraRetryProvenance }
+            return saving
+                ? { proposal: pageCameraSaving, provenance: pageCameraSavingProvenance }
+                : { proposal: pageCamera, provenance: pageCameraProvenance }
+        }
         default:
             return null
     }

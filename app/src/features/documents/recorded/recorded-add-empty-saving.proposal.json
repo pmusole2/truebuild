@@ -48,10 +48,18 @@
                                 "justify": "start",
                                 "wrap": false,
                                 "children": [
-                                    { "type": "Icon", "name": "image", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Icon",
+                                        "name": "image",
+                                        "tone": "info",
+                                        "size": "sm"
+                                    },
                                     {
                                         "type": "Text",
-                                        "content": { "kind": "literal", "text": "Keep all four corners in view." },
+                                        "content": {
+                                            "kind": "literal",
+                                            "text": "Keep all four corners in view."
+                                        },
                                         "role": "body",
                                         "emphasis": "normal",
                                         "tone": "neutral",
@@ -66,10 +74,18 @@
                                 "justify": "start",
                                 "wrap": false,
                                 "children": [
-                                    { "type": "Icon", "name": "search", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Icon",
+                                        "name": "search",
+                                        "tone": "info",
+                                        "size": "sm"
+                                    },
                                     {
                                         "type": "Text",
-                                        "content": { "kind": "literal", "text": "Check that the words are clear." },
+                                        "content": {
+                                            "kind": "literal",
+                                            "text": "Check that the words are clear."
+                                        },
                                         "role": "body",
                                         "emphasis": "normal",
                                         "tone": "neutral",
@@ -197,6 +213,66 @@
                                 "emphasis": "normal",
                                 "tone": "info",
                                 "align": "start"
+                            },
+                            {
+                                "type": "Card",
+                                "surface": "tinted",
+                                "tone": "neutral",
+                                "padding": "md",
+                                "children": [
+                                    {
+                                        "type": "Row",
+                                        "gap": "sm",
+                                        "align": "center",
+                                        "justify": "start",
+                                        "wrap": false,
+                                        "children": [
+                                            {
+                                                "type": "Icon",
+                                                "name": "image",
+                                                "tone": "info",
+                                                "size": "sm"
+                                            },
+                                            {
+                                                "type": "Text",
+                                                "content": {
+                                                    "kind": "literal",
+                                                    "text": "Keep all four corners in view."
+                                                },
+                                                "role": "body",
+                                                "emphasis": "normal",
+                                                "tone": "neutral",
+                                                "align": "start"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "type": "Row",
+                                        "gap": "sm",
+                                        "align": "center",
+                                        "justify": "start",
+                                        "wrap": false,
+                                        "children": [
+                                            {
+                                                "type": "Icon",
+                                                "name": "search",
+                                                "tone": "info",
+                                                "size": "sm"
+                                            },
+                                            {
+                                                "type": "Text",
+                                                "content": {
+                                                    "kind": "literal",
+                                                    "text": "Check that the words are clear."
+                                                },
+                                                "role": "body",
+                                                "emphasis": "normal",
+                                                "tone": "neutral",
+                                                "align": "start"
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     }
@@ -260,6 +336,66 @@
                                 "type": "Progress",
                                 "binding": "build",
                                 "label": null
+                            },
+                            {
+                                "type": "Card",
+                                "surface": "tinted",
+                                "tone": "neutral",
+                                "padding": "md",
+                                "children": [
+                                    {
+                                        "type": "Row",
+                                        "gap": "sm",
+                                        "align": "center",
+                                        "justify": "start",
+                                        "wrap": false,
+                                        "children": [
+                                            {
+                                                "type": "Icon",
+                                                "name": "image",
+                                                "tone": "info",
+                                                "size": "sm"
+                                            },
+                                            {
+                                                "type": "Text",
+                                                "content": {
+                                                    "kind": "literal",
+                                                    "text": "Keep all four corners in view."
+                                                },
+                                                "role": "body",
+                                                "emphasis": "normal",
+                                                "tone": "neutral",
+                                                "align": "start"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "type": "Row",
+                                        "gap": "sm",
+                                        "align": "center",
+                                        "justify": "start",
+                                        "wrap": false,
+                                        "children": [
+                                            {
+                                                "type": "Icon",
+                                                "name": "search",
+                                                "tone": "info",
+                                                "size": "sm"
+                                            },
+                                            {
+                                                "type": "Text",
+                                                "content": {
+                                                    "kind": "literal",
+                                                    "text": "Check that the words are clear."
+                                                },
+                                                "role": "body",
+                                                "emphasis": "normal",
+                                                "tone": "neutral",
+                                                "align": "start"
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     }

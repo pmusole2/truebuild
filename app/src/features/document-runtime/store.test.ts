@@ -58,6 +58,161 @@ const successful = (): Mock<ModelApiClient['screensV2']> =>
     )
 
 describe('whole-document runtime store', () => {
+    it.each<ScreenContextInputsV2>([
+        {
+            kind: 'more',
+            session: null,
+            stepId: null,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: {
+                sections: ['how-it-works', 'settings', 'tips', 'about-this-check'],
+                language: { options: ['en', 'es', 'fr', 'de', 'pt-BR'] },
+                settings: { storage: true },
+            },
+        },
+        {
+            kind: 'judge',
+            session: null,
+            stepId: null,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: { sections: ['how-it-works', 'settings', 'tips', 'about-this-check'] },
+        },
+        {
+            kind: 'camera',
+            session: null,
+            stepId: null,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: { camera: { mode: 'manual-page', permission: 'granted', failed: false, canAskAgain: true } },
+        },
+    ])('serves initial $kind as its genuine authored record before any network response', (context) => {
+        const screensV2 = successful()
+        const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'initial' })
+        try {
+            const entry = store.request(context)
+            expect(entry.status).toBe('ready')
+            expect(entry.document.metadata.source).toBe('generated')
+            expect(entry.document.metadata.authoring?.model).toBe('gpt-6.1-sol')
+            expect(screensV2).not.toHaveBeenCalled()
+            expect(store.readyAt(context)).toBeNull()
+        } finally {
+            store.dispose()
+        }
+    })
+    it('collects an already-ready real precompute document before the first polling delay', async () => {
+        vi.useFakeTimers()
+        const common = { session }
+        const expected = documentPrecomputeInputs(common)
+        const guide = fixture(inputs)
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) => {
+            if (metadata.op === 'generate') return documentUnavailable(metadata.requestId, 'timeout')
+            return {
+                status: 'ok',
+                requestId: metadata.requestId,
+                mode: 'fixture',
+                value: {
+                    document: null,
+                    documents: metadata.op === 'progress' ? [guide] : [],
+                    progress: {
+                        manualId: session.manualId,
+                        revision: session.revision,
+                        contextKey: documentJobContextKey(common),
+                        mode: 'full',
+                        items: expected.map((item) => ({
+                            key: item.key,
+                            kind: item.inputs.kind,
+                            stepId: item.inputs.stepId,
+                            state: item.key === 'guide:step-1' ? 'ready' : 'failed',
+                            screenId: item.key === 'guide:step-1' ? guide.screenId : null,
+                        })),
+                    },
+                },
+            }
+        })
+        const store = new DocumentStore({
+            client: { screensV2 },
+            mode: 'full',
+            id: (): string => 'eager',
+            pollMs: 10_000,
+        })
+        try {
+            store.precompute(session, 'guide:step-1')
+            await vi.advanceTimersByTimeAsync(0)
+            expect(store.peek(inputs)?.document).toEqual(guide)
+            expect(store.readyAt(inputs)).toBeTypeOf('number')
+        } finally {
+            store.dispose()
+            vi.useRealTimers()
+        }
+    })
+
+    it('offers an exact-context loading wait that resolves only to a validated generated payload', async () => {
+        let finish!: (response: ScreensV2Result) => void
+        let requestId = ''
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>((metadata) => {
+            requestId = metadata.requestId
+            return new Promise((resolve) => {
+                finish = resolve
+            })
+        })
+        const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'wait' })
+        try {
+            const waiting = store.waitForGenerated(inputs, { timeoutMs: 2_000 })
+            expect(store.peek(inputs)?.document.metadata.source).toBe('fallback')
+            const document = fixture(inputs)
+            finish(ok(document, requestId))
+            expect(await waiting).toEqual(document)
+            expect(await store.waitForGenerated(inputs)).toBe(store.peek(inputs)?.document)
+        } finally {
+            store.dispose()
+        }
+    })
+
+    it('does not return fallback or mismatched facts from a loading wait and releases cancelled waiters', async () => {
+        const wrong = fixture({ ...inputs, stepId: 'step-2' })
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) => ok(wrong, metadata.requestId))
+        const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'wrong' })
+        try {
+            expect(await store.waitForGenerated(inputs, { timeoutMs: 2_000 })).toBeNull()
+            expect(store.peek(inputs)?.document.metadata.source).toBe('fallback')
+            const controller = new AbortController()
+            controller.abort()
+            expect(
+                await store.waitForGenerated({ ...inputs, stepId: 'step-2' }, { signal: controller.signal }),
+            ).toBeNull()
+            expect(screensV2).toHaveBeenCalledTimes(1)
+        } finally {
+            store.dispose()
+        }
+    })
+
+    it('bounds loading waits and resolves them on abort, stale revision and store disposal', async () => {
+        vi.useFakeTimers()
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>(() => new Promise(() => {}))
+        try {
+            for (const stop of ['abort', 'stale', 'dispose', 'deadline'] as const) {
+                const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => stop })
+                const controller = new AbortController()
+                try {
+                    const waiting = store.waitForGenerated(inputs, { timeoutMs: 20, signal: controller.signal })
+                    if (stop === 'abort') controller.abort()
+                    if (stop === 'stale') store.invalidateManual(session.manualId, session.revision + 1)
+                    if (stop === 'dispose') store.dispose()
+                    if (stop === 'deadline') await vi.advanceTimersByTimeAsync(20)
+                    expect(await waiting).toBeNull()
+                } finally {
+                    store.dispose()
+                }
+            }
+        } finally {
+            vi.useRealTimers()
+        }
+    })
     it('serves the initial recorded Home synchronously without a network request or provider receipt', () => {
         const screensV2 = successful()
         const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'id' })
@@ -466,7 +621,7 @@ describe('whole-document runtime store', () => {
             expect(store.peek(inputs)?.document.metadata.source).toBe('fallback')
             expect(store.readyAt(inputs)).toBeNull()
             store.precompute(session, 'guide:step-1')
-            await vi.advanceTimersByTimeAsync(11)
+            await vi.advanceTimersByTimeAsync(0)
             expect(store.peek(inputs)?.document).toEqual(guide)
             expect(store.readyAt(inputs)).toBeTypeOf('number')
             expect(store.peek({ ...inputs, stepId: 'step-2' })).toBeUndefined()

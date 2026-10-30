@@ -2,12 +2,19 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
     BUSY_COPY_V2,
+    canonicalJson,
+    cameraSpineV2,
+    CAMERA_TIPS_V2,
+    CAMERA_ACCESS_COPY_V2,
+    cameraAccessV2,
     COACH_COPY_V2,
     coachTargetsForV2,
     documentMaterialV2,
     createDemoManual,
     screenProposalV2Schema,
     verifyDocumentAgainstInputsV2,
+    variantsOfV2,
+    visitVariantNodesV2,
     type ScreenContextInputsV2,
     type ScreenDocumentV2,
 } from '@truebuild/contracts'
@@ -54,6 +61,16 @@ const ARTIFACTS = [
     'recorded-pages-saving',
     'recorded-pages-cancelled-saving',
     'recorded-reading-saving',
+    'recorded-more-global',
+    'recorded-judge-global',
+    'recorded-camera-page',
+    'recorded-camera-page-saving',
+    'recorded-camera-page-allow',
+    'recorded-camera-page-allow-saving',
+    'recorded-camera-page-settings',
+    'recorded-camera-page-settings-saving',
+    'recorded-camera-page-retry',
+    'recorded-camera-page-retry-saving',
 ] as const
 
 /** Literal texts one variant shows: its header title plus every literal body node, in order. */
@@ -74,6 +91,10 @@ function variantLiteralTexts(doc: ScreenDocumentV2, name: string): string[] {
 const VARIANT_NAMES = ['ready', 'busy', 'pending', 'empty', 'error', 'recovery', 'confirming'] as const
 
 describe('synthetic Sol state proposals (explicit raw trees)', () => {
+    it.each(ARTIFACTS)('%s matches its complete canonical publication pin', (name) => {
+        const hashes = read('publication-hashes.json') as Record<string, string>
+        expect(sha256Hex(canonicalJson(recordedDocumentForTest(name)))).toBe(hashes[name])
+    })
     it.each(ARTIFACTS)('%s assembles schema-valid, verifies against its inputs, all origins generated', (name) => {
         const doc = recordedDocumentForTest(name)
         const inputs = read(`${name}.inputs.json`) as ScreenContextInputsV2
@@ -294,6 +315,17 @@ describe('raw saving-context siblings', () => {
         expect(variantLiteralTexts(doc, 'busy')).toEqual([
             BUSY_COPY_V2.saving.heading,
             'One moment, please.',
+            ...(base === 'recorded-home'
+                ? [
+                      'How it works',
+                      'Photograph your manual.',
+                      'Build one step at a time.',
+                      'Check with a photo.',
+                      'Ask when you need help.',
+                  ]
+                : base === 'recorded-add-empty'
+                  ? ['Keep all four corners in view.', 'Check that the words are clear.']
+                  : []),
             ...(base === 'recorded-reading'
                 ? ['What we look for', 'Steps', 'Parts', 'Safety notes', 'Unclear details']
                 : []),
@@ -338,9 +370,15 @@ describe('minimal runtime recording metadata', () => {
     })
 })
 
-it('ships the fifteen raw families without derived document build artifacts', () => {
+it('ships all twenty-five raw families without derived document build artifacts', () => {
     const names = readdirSync(__dirname)
-    expect(names.filter((name) => name.endsWith('.proposal.json'))).toHaveLength(15)
+    expect(
+        names
+            .filter((name) => name.endsWith('.proposal.json'))
+            .map((name) => name.replace('.proposal.json', ''))
+            .sort(),
+    ).toEqual([...ARTIFACTS].sort())
+    expect(names.filter((name) => name.endsWith('.proposal.json'))).toHaveLength(25)
     expect(
         names.filter(
             (name) =>
@@ -351,7 +389,7 @@ it('ships the fifteen raw families without derived document build artifacts', ()
     ).toEqual([])
 })
 
-describe('authored first-use guidance in ready screens', () => {
+describe('authored first-use guidance across ready and waiting screens', () => {
     it.each([
         ['recorded-home', 'home'],
         ['recorded-home-saving', 'home'],
@@ -405,7 +443,15 @@ describe('authored first-use guidance in ready screens', () => {
             expect(row.children).toHaveLength(2)
             expect(row.children[0]).toMatchObject({ type: 'Icon', name: icon })
             expect(row.children[1]).toMatchObject({ type: 'Text', role: 'body', content: { kind: 'literal', text } })
-            expect(JSON.stringify(raw.states)).not.toContain(text)
+            for (const state of ['busy', 'pending'] as const) {
+                const waiting = raw.states[state]
+                if (waiting?.body.type !== 'Scroll') throw new Error('Expected complete waiting scroll')
+                const waitingColumn = waiting.body.children[0]
+                if (waitingColumn?.type !== 'Stack') throw new Error('Expected complete waiting column')
+                expect(waitingColumn.children.at(-1)).toEqual(card)
+            }
+            for (const state of ['empty', 'error', 'recovery', 'confirming'] as const)
+                expect(JSON.stringify(raw.states[state])).not.toContain(text)
         }
         if (kind === 'add')
             expect(column.children[2]).toMatchObject({
@@ -417,6 +463,112 @@ describe('authored first-use guidance in ready screens', () => {
             })
         expect((read(`${name}.provenance.json`) as Record<string, unknown>).taskReference).toContain('first-use polish')
     })
+})
+
+describe('authored initial manual-page camera', () => {
+    it.each(['recorded-camera-page', 'recorded-camera-page-saving'] as const)(
+        '%s keeps its genuine framing guidance and camera spine stable while waiting',
+        (name) => {
+            const raw = screenProposalV2Schema.parse(read(`${name}.proposal.json`))
+            const readySpine = cameraSpineV2(raw)
+            expect(readySpine).not.toBeNull()
+            let readyCard: unknown
+            for (const state of ['ready', 'busy', 'pending'] as const) {
+                const variant = state === 'ready' ? raw : raw.states[state]
+                if (variant?.body.type !== 'Scroll') throw new Error('Expected complete camera scroll')
+                const column = variant.body.children[0]
+                if (column?.type !== 'Stack') throw new Error('Expected camera column')
+                expect(cameraSpineV2(variant)).toBe(readySpine)
+                expect(column.children[0]).toMatchObject({ type: 'CameraView', mode: 'manual-page' })
+                const card = column.children[1]
+                if (card?.type !== 'Card') throw new Error('Expected one real capture-guidance card')
+                expect(card.children).toHaveLength(2)
+                for (const [index, text] of CAMERA_TIPS_V2['manual-page'].entries()) {
+                    const row = card.children[index]
+                    if (row?.type !== 'Row') throw new Error('Expected a compact icon/text row')
+                    expect(row.children).toHaveLength(2)
+                    expect(row.children[0]).toMatchObject({ type: 'Icon', name: index === 0 ? 'image' : 'search' })
+                    expect(row.children[1]).toMatchObject({ type: 'Text', content: { kind: 'literal', text } })
+                }
+                if (state === 'ready') readyCard = card
+                else expect(card).toEqual(readyCard)
+                expect(column.children[2]).toMatchObject({
+                    type: 'Text',
+                    content: { kind: 'bound', key: 'privacy-camera' },
+                })
+            }
+            expect(raw.states.pending!.bar.primary.intent).toEqual({ intent: 'capture', target: 'take-photo' })
+            expect(raw.overlays.map((overlay) => overlay.anchor)).toEqual(['camera-shutter', 'guide-hero-frame'])
+            for (const state of ['error', 'recovery'] as const) {
+                expect(cameraSpineV2(raw.states[state]!)).toBeNull()
+            }
+        },
+    )
+})
+
+describe('authored manual-page camera consent paths', () => {
+    it.each(['allow', 'settings', 'retry'] as const)(
+        '%s and its saving sibling earn only the current camera permission action',
+        (access) => {
+            const name = `recorded-camera-page-${access}`
+            const base = screenProposalV2Schema.parse(read(`${name}.proposal.json`))
+            const saving = screenProposalV2Schema.parse(read(`${name}-saving.proposal.json`))
+            expect({ ...saving, states: { ...saving.states, busy: null } }).toEqual({
+                ...base,
+                states: { ...base.states, busy: null },
+            })
+            expect({ ...saving.states.busy, header: null }).toEqual({ ...base.states.busy, header: null })
+            expect(saving.states.busy!.header).toEqual({
+                ...base.states.busy!.header,
+                title: { kind: 'literal', text: BUSY_COPY_V2.saving.heading },
+            })
+            for (const suffix of ['', '-saving']) {
+                const family = `${name}${suffix}`
+                const inputs = read(`${family}.inputs.json`) as ScreenContextInputsV2
+                const raw = suffix === '' ? base : saving
+                const doc = recordedDocumentForTest(family)
+                expect(cameraAccessV2(inputs.uiState?.camera)).toBe(access)
+                expect(inputs.uiState?.camera?.mode).toBe('manual-page')
+                expect(doc.facts).toEqual([])
+                expect(raw.header.title).toEqual({ kind: 'literal', text: CAMERA_ACCESS_COPY_V2[access].heading })
+                expect(raw.bar.primary.intent).toEqual(
+                    access === 'allow'
+                        ? { intent: 'confirm', target: 'camera-permission' }
+                        : access === 'settings'
+                          ? { intent: 'open-details', target: 'device-settings' }
+                          : { intent: 'retry', target: 'camera' },
+                )
+                let readyCard: unknown
+                for (const state of ['ready', 'busy', 'pending'] as const) {
+                    const variant = state === 'ready' ? raw : raw.states[state]
+                    if (variant?.body.type !== 'Scroll') throw new Error('Expected complete access scroll')
+                    const column = variant.body.children[0]
+                    if (column?.type !== 'Stack') throw new Error('Expected access column')
+                    const card = column.children[0]
+                    if (card?.type !== 'Card') throw new Error('Expected one access explanation')
+                    expect(card.children).toHaveLength(2)
+                    expect(card.children[1]).toMatchObject({
+                        type: 'Text',
+                        content: { kind: 'literal', text: CAMERA_ACCESS_COPY_V2[access].detail },
+                    })
+                    expect(column.children[1]).toMatchObject({
+                        type: 'Text',
+                        content: { kind: 'bound', key: 'privacy-camera' },
+                    })
+                    if (state === 'ready') readyCard = card
+                    else expect(card).toEqual(readyCard)
+                }
+                for (const { variant, prefix } of variantsOfV2(raw)) {
+                    expect(variant.overlays).toEqual([])
+                    visitVariantNodesV2(variant, prefix, ({ node }) => expect(node.type).not.toBe('CameraView'))
+                }
+                if (access === 'retry') {
+                    expect(raw.states.error!.bar.primary.intent).toEqual({ intent: 'retry', target: 'camera' })
+                    expect(raw.states.recovery!.bar.primary.intent).toEqual({ intent: 'retry', target: 'camera' })
+                }
+            }
+        },
+    )
 })
 
 describe('authored Reading search categories', () => {

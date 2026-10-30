@@ -1,0 +1,16 @@
+{
+    "kind": "camera",
+    "session": null,
+    "stepId": null,
+    "captureId": null,
+    "result": null,
+    "failure": null,
+    "uiState": {
+        "camera": {
+            "mode": "manual-page",
+            "permission": "granted",
+            "failed": true,
+            "canAskAgain": true
+        }
+    }
+}
