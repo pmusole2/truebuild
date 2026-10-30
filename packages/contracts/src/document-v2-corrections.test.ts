@@ -8,6 +8,7 @@ import {
     VARIANT_STATES,
     captureWitnessV2,
     composeFallbackDocumentV2,
+    componentPathsV2,
     createDemoManual,
     documentMaterialV2,
     intentAllowedV2,
@@ -138,6 +139,56 @@ const messages = (document: unknown): string[] => {
     const parsed = screenDocumentV2Schema.safeParse(document)
     return parsed.success ? [] : parsed.error.issues.map((issue) => issue.message)
 }
+
+describe('withheld results cannot be opened from a collapsed disclosure', () => {
+    it.each(['result', 'answer'] as const)(
+        'rejects hidden %s text and cards in every waiting or failure state',
+        (kind) => {
+            const base = compose(inputsFor(kind))
+            const result = base.facts.find((fact) => fact.basis === 'result')!
+            for (const name of ['busy', 'pending', 'error', 'recovery'] as const) {
+                const nodes: ScreenNodeV2[] = [
+                    {
+                        type: 'Text',
+                        content: { kind: 'fact', factId: result.factId },
+                        role: 'body',
+                        emphasis: 'normal',
+                        tone: 'neutral',
+                        align: 'start',
+                    },
+                    {
+                        type: 'VerdictCard',
+                        result: kind === 'result' ? 'check' : 'question',
+                        variant: 'card',
+                        showReason: true,
+                        showRegions: false,
+                    },
+                ]
+                for (const node of nodes) {
+                    const document = clone(base)
+                    const variant = document.states[name]!
+                    if (!('children' in variant.body)) throw new Error('fixture needs a body container')
+                    variant.body.children.push({
+                        type: 'Section',
+                        title: null,
+                        collapsible: true,
+                        initiallyOpen: false,
+                        children: [node],
+                    })
+                    document.metadata.sourceMap = sourceMapV2(document)
+                    document.metadata.origins = Object.fromEntries(
+                        componentPathsV2(document).map((path) => [path, document.metadata.source]),
+                    )
+                    expect(messages(document)).toContain(
+                        node.type === 'Text'
+                            ? `The ${name} variant states the held result before it is revealed`
+                            : `The ${name} variant claims a camera it cannot have`,
+                    )
+                }
+            }
+        },
+    )
+})
 
 /**
  * Moves every node matching `pick` out of the ready body into one unopened (collapsed) section: present, but not visible.

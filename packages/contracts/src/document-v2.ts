@@ -788,7 +788,11 @@ export const documentSourceV2Schema = z.strictObject({ pageId: id, region: regio
 export type DocumentSourceV2 = z.infer<typeof documentSourceV2Schema>
 
 export const FACT_KINDS_V2 = [...MANUAL_FACT_KINDS, 'verdict', 'answer', 'missing'] as const
-export const FACT_BASES_V2 = [...MANUAL_FACT_BASES, 'result'] as const
+/**
+ * `overview`: the title of a step the quick check of a fully known manual states so the person has something to confirm
+ * (see `OVERVIEW_FACT_PREFIX_V2`). Not a direction and not a safety fact: it is required only in that ready screen.
+ */
+export const FACT_BASES_V2 = [...MANUAL_FACT_BASES, 'result', 'overview'] as const
 /**
  * A complete, source-witnessed statement the document may show by reference: the manual's own words (never clipped,
  * not subject to the model-text plain rule) or the actual validated result. Server-owned; the model only places it.
@@ -802,7 +806,20 @@ export const factV2Schema = z.strictObject({
 })
 export type FactV2 = z.infer<typeof factV2Schema>
 /** Facts of these bases must be shown in every variant that carries them (see `requirements`). */
-export const isRequiredFactV2 = (fact: Pick<FactV2, 'basis'>): boolean => fact.basis !== 'direction'
+export const isRequiredFactV2 = (fact: Pick<FactV2, 'basis'>): boolean =>
+    fact.basis !== 'direction' && fact.basis !== 'overview'
+
+/** Identity prefix of the step-title facts of a quick check's overview (`overview:step:<stepId>`). */
+export const OVERVIEW_FACT_PREFIX_V2 = 'overview:step:' as const
+/** An overview fact: required, visibly, in the ready variant of the quick check that published it, and nowhere else. */
+export const isOverviewFactV2 = (fact: Pick<FactV2, 'basis'>): boolean => fact.basis === 'overview'
+/**
+ * Parts of the overview that must be visible without opening anything; the rest of the known parts are still owed in
+ * the ready variant, but may sit behind a disclosure. (A manual has at most 256 parts: all are listed, none is dropped.)
+ */
+export const OVERVIEW_PARTS_VISIBLE_V2 = 6 as const
+/** The bound text that names the manual: the overview of a quick check owes it, visibly, in its ready variant. */
+export const OVERVIEW_TITLE_KEY_V2 = 'manual-title' as const
 
 /**
  * The result type a `result:*` fact belongs to: the verdict and its missing evidence belong to the held check; the answer
@@ -862,6 +879,12 @@ export const requirementsV2Schema = z.strictObject({
      * bound `operation-notice` text (see `noticeShownInV2`), and no other variant does.
      */
     notice: z.boolean(),
+    /**
+     * Quick check of a fully known manual: every known part of the manual (a `PieceTile` of each, the first
+     * `OVERVIEW_PARTS_VISIBLE_V2` visible, the rest possibly behind a disclosure) the ready variant must offer; else empty.
+     * A document without the field (written before it existed) owes none.
+     */
+    parts: z.array(id).max(256).default([]),
 })
 export type RequirementsV2 = z.infer<typeof requirementsV2Schema>
 
@@ -1056,6 +1079,16 @@ export interface VariantPolicyV2 {
     forbiddenPairs: AppIntent[]
     /** Facts this variant must not state (the held result, while it is not yet revealed). */
     forbiddenFacts: string[]
+    /** Overview step facts this variant must not state, visibly or not (only the ready screen of a quick check earns them). */
+    forbiddenOverview: string[]
+    /** The overview's picture, parts and manual title are not shown here either (a waiting or failing overview claims nothing). */
+    withholdOverview: boolean
+    /** The bound manual title must be visible (the overview's ready screen). */
+    title: boolean
+    /** Parts that must have a tile, visible or behind a disclosure. */
+    parts: string[]
+    /** How many of `parts` must be visible without opening anything. */
+    partsVisible: number
     /** When set, the only intents this variant may offer. */
     only: AppIntent[] | null
     /** The held photo (an `Image` of source capture) must be visible. */
@@ -1119,7 +1152,18 @@ export function variantRequirementsV2(
     // result is revealed only in `ready`, after the held photo (fail closed, not a UI patch).
     const withheld = name === 'busy' || name === 'pending' || (name !== 'ready' && requirements.capture)
     if (!withheld) {
-        return { facts: [...requirements.facts], sources: [...requirements.sources], hiddenFacts: [] }
+        // A quick check that states what was understood owes it in its ready screen only: a waiting or failing variant
+        // claims no step, so a person never sees the manual's steps before the screen that can earn them.
+        const overview = name === 'ready' ? (document?.facts ?? []).filter(isOverviewFactV2) : []
+        const cited =
+            document === undefined
+                ? []
+                : sourceResolverV2(document.sources)(overview.flatMap((fact) => fact.sourceRefs))
+        return {
+            facts: [...requirements.facts, ...overview.map((fact) => fact.factId)],
+            sources: [...new Set([...requirements.sources, ...cited])],
+            hiddenFacts: [],
+        }
     }
     const isResult = (factId: string): boolean => factId.startsWith(RESULT_FACT_PREFIX)
     const hiddenFacts = requirements.facts.filter(isResult)
@@ -1141,7 +1185,11 @@ export function variantPolicyV2(
 ): VariantPolicyV2 {
     const failing = name === 'error' || name === 'recovery'
     const confirming = name === 'confirming'
+    const ready = name === 'ready'
     const needs = variantRequirementsV2(name, requirements, document)
+    // The overview of a quick check is earned by its ready screen alone; any other variant claims none of it.
+    const overviewFacts = (document?.facts ?? []).filter(isOverviewFactV2)
+    const overview = overviewFacts.length > 0 || requirements.parts.length > 0
     // A camera that runs stays mounted while its screen waits, and a pending screen never blocks the shutter.
     const cameraReady = kind === 'camera' && requirements.nodes.includes('CameraView')
     const keepCamera = cameraReady && (name === 'busy' || name === 'pending')
@@ -1166,6 +1214,11 @@ export function variantPolicyV2(
         forbiddenIntents: failing && kind === 'camera' ? ['capture'] : [],
         forbiddenPairs: kind === 'reading' && !confirming ? [{ intent: 'navigate', target: 'reading' }] : [],
         forbiddenFacts: needs.hiddenFacts,
+        forbiddenOverview: overview && !ready ? overviewFacts.map((fact) => fact.factId) : [],
+        withholdOverview: overview && !ready,
+        title: overview && ready,
+        parts: ready ? [...requirements.parts] : [],
+        partsVisible: ready ? Math.min(OVERVIEW_PARTS_VISIBLE_V2, requirements.parts.length) : 0,
         only: confirming ? [...requirements.confirm] : null,
         capture: requirements.capture && name !== 'confirming',
         figure: name === 'ready' ? requirements.figure : null,
@@ -1292,22 +1345,60 @@ export const screenDocumentV2Schema = z
             const cited = new Set<number>()
             const offered: AppIntent[] = []
             const present = new Set<string>()
+            const heldIntents: AppIntent[] = []
+            const heldNodes = new Set<string>()
             let photo = false
             const figures = new Set<number>()
+            // What the variant holds anywhere, collapsed or not (a withheld claim is refused wherever it hides), and
+            // what it shows without opening anything (a requirement is discharged only by that).
+            const mentioned = new Set<string>()
+            const shownParts = new Set<string>()
+            const heldParts = new Set<string>()
+            let overviewMark = false
+            let titled = false
             let notices = 0
             let visibleNotices = 0
             for (const reference of [variant.header.title, variant.header.subtitle]) {
+                if (reference?.kind === 'bound' && reference.key === OVERVIEW_TITLE_KEY_V2) {
+                    titled = true
+                    overviewMark = true
+                }
                 if (reference?.kind !== 'fact') continue
                 if (!factIds.has(reference.factId)) add('A node states an unknown fact')
-                else stated.add(reference.factId)
+                else {
+                    stated.add(reference.factId)
+                    mentioned.add(reference.factId)
+                }
             }
             for (const action of [variant.header.back, ...variant.header.actions]) {
-                if (action) offered.push(action.intent)
+                if (action) {
+                    offered.push(action.intent)
+                    heldIntents.push(action.intent)
+                }
             }
             visitVariantNodesV2(variant, prefix, (entry) => {
+                heldNodes.add(entry.node.type)
+                heldIntents.push(...nodeIntentsV2(entry.node))
                 for (const reference of nodeFactIdsV2(entry.node)) {
                     if (!factIds.has(reference)) add('A node states an unknown fact')
-                    else if (!entry.hidden) stated.add(reference)
+                    else {
+                        mentioned.add(reference)
+                        if (!entry.hidden) stated.add(reference)
+                    }
+                }
+                if (entry.node.type === 'PieceTile') {
+                    heldParts.add(entry.node.partId)
+                    overviewMark = true
+                    if (!entry.hidden) shownParts.add(entry.node.partId)
+                }
+                if (entry.node.type === 'Image' || entry.node.type === 'ManualPage') overviewMark = true
+                if (
+                    nodeTextRefsV2(entry.node).some(
+                        (reference) => reference.kind === 'bound' && reference.key === OVERVIEW_TITLE_KEY_V2,
+                    )
+                ) {
+                    overviewMark = true
+                    if (!entry.hidden) titled = true
                 }
                 const indexes = nodeSourceIndexesV2(entry.node)
                 if (indexes.some((index) => index >= limit)) add('A node cites a source that does not exist')
@@ -1371,22 +1462,35 @@ export const screenDocumentV2Schema = z
             if (policy.capture && name !== 'ready' && photoSpineV2(variant) !== readyPhotoSpine) {
                 add(`The ${name} variant moves the held photo`)
             }
-            if (policy.forbiddenFacts.some((reference) => stated.has(reference))) {
+            if (policy.forbiddenFacts.some((reference) => mentioned.has(reference))) {
                 add(`The ${name} variant states the held result before it is revealed`)
             }
             if (
-                policy.forbiddenNodes.some((type) => present.has(type)) ||
-                offered.some((has) => policy.forbiddenIntents.includes(has.intent))
+                policy.forbiddenOverview.some((reference) => mentioned.has(reference)) ||
+                (policy.withholdOverview && overviewMark)
+            ) {
+                add(`The ${name} variant states the manual overview before the ready screen`)
+            }
+            if (policy.title && !titled) add(`The manual title is missing from the ${name} variant`)
+            if (policy.parts.some((partId) => !heldParts.has(partId))) {
+                add(`A required part is missing from the ${name} variant`)
+            }
+            if (policy.parts.filter((partId) => shownParts.has(partId)).length < policy.partsVisible) {
+                add(`The first parts must be visible in the ${name} variant`)
+            }
+            if (
+                policy.forbiddenNodes.some((type) => heldNodes.has(type)) ||
+                heldIntents.some((has) => policy.forbiddenIntents.includes(has.intent))
             ) {
                 add(`The ${name} variant claims a camera it cannot have`)
             }
             const same = (a: AppIntent, b: AppIntent): boolean => a.intent === b.intent && a.target === b.target
-            if (offered.some((has) => policy.forbiddenPairs.some((forbidden) => same(has, forbidden)))) {
+            if (heldIntents.some((has) => policy.forbiddenPairs.some((forbidden) => same(has, forbidden)))) {
                 add(`The ${name} variant offers an action that belongs to the confirmation`)
             }
             if (
                 policy.only !== null &&
-                offered.some((has) => !policy.only!.some((allowedIntent) => same(has, allowedIntent)))
+                heldIntents.some((has) => !policy.only!.some((allowedIntent) => same(has, allowedIntent)))
             ) {
                 add(`The ${name} variant offers more than the confirmation`)
             }

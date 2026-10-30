@@ -98,6 +98,8 @@ export const CAMERA_ACCESS_COPY_V2: Readonly<
 
 /** Said by a quick check whose question step has no usable source picture (listed only then): nothing is invented. */
 export const NO_FIGURE_COPY_V2 = 'No picture to show for this detail.'
+/** Said by the overview of a quick check when no step cites a page the manual has (listed only then). */
+export const NO_OVERVIEW_FIGURE_COPY_V2 = 'No picture to show for this manual.'
 /** Said by a step-scoped More whose step has no usable source picture (listed only then). */
 export const NO_STEP_FIGURE_COPY_V2 = 'No picture to show for this step.'
 
@@ -129,7 +131,7 @@ const KIND_COPY: Readonly<Record<ScreenKindV2, readonly string[]>> = {
     add: ['Add a manual', 'Photograph each page of your manual, one at a time.'],
     pages: ['Your pages', 'Add a page to begin.'],
     reading: ['Reading your manual', 'Reading each page. This can take a minute.'],
-    'quick-check': ['Quick check', 'Check what we read before you start building.'],
+    'quick-check': ['Quick check', 'Check what we read before you start building.', 'Steps'],
     guide: ['This step'],
     camera: ['Photograph a page', 'Take a photo'],
     result: [],
@@ -217,6 +219,14 @@ function contextCopy(material: DocumentMaterialV2, variant: CopyVariant): string
         material.requirements.figure === null
     ) {
         copy.push(NO_FIGURE_COPY_V2)
+    }
+    if (
+        inputs.kind === 'quick-check' &&
+        variant === 'ready' &&
+        material.overview &&
+        material.requirements.figure === null
+    ) {
+        copy.push(NO_OVERVIEW_FIGURE_COPY_V2)
     }
     // Listed in every variant: a waiting or failing More repeats the same figures block, so it says the same thing.
     if (inputs.kind === 'more' && material.step !== null && material.requirements.figure === null) {

@@ -3,6 +3,9 @@ import {
     SCREEN_CATALOG_V2_VERSION,
     SCREEN_DOCUMENT_V2_VERSION,
     VARIANT_STATES,
+    OVERVIEW_PARTS_VISIBLE_V2,
+    OVERVIEW_TITLE_KEY_V2,
+    isOverviewFactV2,
     componentPathsV2,
     noticeShownInV2,
     nodeTextRefsV2,
@@ -37,6 +40,7 @@ import {
     EMPTY_COPY_V2,
     FAILURE_COPY_V2,
     NO_FIGURE_COPY_V2,
+    NO_OVERVIEW_FIGURE_COPY_V2,
     NO_STEP_FIGURE_COPY_V2,
     STATE_COPY_V2,
     bindingIssuesV2,
@@ -339,6 +343,46 @@ function partNodes(material: DocumentMaterialV2): Node[] {
           ]
 }
 
+const overviewTile = (partId: string): Node => ({ type: 'PieceTile', partId, showQuantity: false, size: 'sm' })
+/** Lossless: tiles fill grids of at most `PACK` children, in order, so all of a manual's (at most 256) parts are listed. */
+const overviewGrids = (partIds: readonly string[]): Node[] =>
+    nest(
+        pack(
+            partIds.map((partId) => [overviewTile(partId)]),
+            (children) => ({ type: 'Grid', columns: 3, gap: 'sm', children }),
+        ),
+    )
+
+/**
+ * What the quick check of a fully known manual states so the person has something to confirm: the manual's own title,
+ * the picture of its first cited step (or the honest absence), each step's title by fact reference with the pages it
+ * cites, and the known parts (no count: a part's quantity belongs to a step). Nothing here is a literal about the manual.
+ */
+function overviewNodes(material: DocumentMaterialV2): Node[] {
+    if (!material.overview) return []
+    const resolve = sourceResolverV2(material.sources)
+    const steps = material.facts.filter(isOverviewFactV2)
+    const shown = material.partIds.slice(0, OVERVIEW_PARTS_VISIBLE_V2)
+    const rest = material.partIds.slice(OVERVIEW_PARTS_VISIBLE_V2)
+    return [
+        text(bound(OVERVIEW_TITLE_KEY_V2), { role: 'title', emphasis: 'strong' }),
+        ...(material.requirements.figure === null
+            ? [text(lit(NO_OVERVIEW_FIGURE_COPY_V2), { tone: 'info' })]
+            : heroImage(material)),
+        section(
+            'Steps',
+            nest(
+                pack(
+                    steps.map((fact) => factEntry(fact, resolve, true, { emphasis: 'normal', tone: 'neutral' })),
+                    (children) => card(children),
+                ),
+            ),
+        ),
+        ...(shown.length > 0 ? [section('Parts', overviewGrids(shown))] : []),
+        ...(rest.length > 0 ? [section('More detail', overviewGrids(rest), true)] : []),
+    ]
+}
+
 const heroImage = (material: DocumentMaterialV2): Node[] =>
     material.diagram[0] === undefined
         ? []
@@ -548,6 +592,7 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
             return [
                 ...(question ? [{ type: 'Progress', binding: 'review', label: bound('review-position') } as Node] : []),
                 text(lit('Check what we read before you start building.'), { role: 'heading' }),
+                ...overviewNodes(material),
                 ...(question
                     ? [
                           // The step's own picture from the manual (exact source, no invented figure), or the honest absence.
@@ -670,8 +715,12 @@ function barOf(material: DocumentMaterialV2): BarV2 {
         case 'reading':
             return { primary: primary('Back to pages', intent('navigate', 'pages'), 'chevronLeft'), secondary: null }
         case 'quick-check':
+            // The whole manual is confirmed only when the app holds the witness for it. Otherwise (a question still to
+            // answer, a clearer photo needed, nothing read yet) the way forward is the pages, as on the native screen.
             return {
-                primary: primary('Looks right', intent('confirm', 'facts'), 'check'),
+                primary: intentAllowedV2(intent('confirm', 'facts'), material)
+                    ? primary('Looks right', intent('confirm', 'facts'), 'check')
+                    : primary('Back to pages', intent('navigate', 'pages'), 'chevronLeft'),
                 secondary: secondary('Read again', intent('retry', 'reading'), 'refresh'),
             }
         case 'guide':

@@ -16,6 +16,7 @@ import {
     screenFacts,
     screenStageV2,
     sourceResolverV2,
+    variantRequirementsV2,
     type AppIntent,
     type DocumentMaterialV2,
     type ScreenBound,
@@ -100,6 +101,7 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
     const result = used.result
     const companion = resultOfKindV2(used, 'question')
     const resolve = sourceResolverV2(material.sources)
+    const ready = variantRequirementsV2('ready', material.requirements, material)
     const view = {
         stable: {
             manual: used.session && {
@@ -121,6 +123,11 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 kind: inputs.kind,
                 requiredStates: requiredStatesV2(inputs.kind, material.requirements),
                 requirements: material.requirements,
+                /** Every factId the ready screen must state: the requirements plus a quick check's overview steps. */
+                readyFacts: ready.facts,
+                /** Every source index the ready screen must cite visibly: the requirements plus the overview steps' pages. */
+                readySources: ready.sources,
+                overview: material.overview,
                 failure: inputs.failure,
                 completion: inputs.kind === 'completion' ? material.completion : null,
                 captureId: bound.captureId,

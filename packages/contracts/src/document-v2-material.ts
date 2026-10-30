@@ -4,6 +4,7 @@ import {
     HELD_QUESTION_KEY_V2,
     INTENTS_BY_KIND_V2,
     OPERATION_NOTICE_KEY_V2,
+    OVERVIEW_FACT_PREFIX_V2,
     READING_CANCELLATION_V2,
     STEP_KINDS_V2,
     isRequiredFactV2,
@@ -43,6 +44,8 @@ export interface DocumentMaterialV2 {
     stepCount: number
     /** True when the facts are the person's reviewed steps; a fresh parse never offers a build action. */
     reviewed: boolean
+    /** True when the facts include the overview of a fully known manual (quick check only, see `overviewStepsOf`). */
+    overview: boolean
     stepBound: boolean
     facts: FactV2[]
     sources: DocumentSourceV2[]
@@ -227,6 +230,22 @@ function questionStepOf(
     return question ? (facts.steps.find((candidate) => candidate.stepId === question.stepId) ?? null) : null
 }
 
+/**
+ * The steps a quick check states when there is nothing left to ask: the app holds a review state that can be confirmed
+ * and has no current question, so every critical detail is known. Null in every other case (a question to ask, a
+ * review that cannot be confirmed, no review state, no step read yet), where nothing about the manual is claimed.
+ * Steps come from the same source as every other screen: the reviewed steps, or the known raw extraction.
+ */
+function overviewStepsOf(
+    inputs: Pick<ScreenContextInputsV2, 'kind' | 'uiState'>,
+    facts: ReturnType<typeof screenFacts>,
+): readonly ManualStep[] | null {
+    const review = inputs.uiState?.review
+    if (inputs.kind !== 'quick-check' || facts === null || !review) return null
+    if (review.currentQuestion || !review.canConfirm) return null
+    return facts.steps.length > 0 ? facts.steps : null
+}
+
 /** A result or answer screen holds the person's photo: its waiting variants show that photo, not the verdict. */
 const heldPhotoRequired = (inputs: ScreenContextInputsV2): boolean =>
     (inputs.kind === 'result' || inputs.kind === 'answer' || moreScopedV2(inputs)) &&
@@ -255,6 +274,13 @@ function usedInputs(raw: ScreenContextInputsV2): ScreenContextInputsV2 {
         }) as ScreenUiStateV2 | null,
     }
 }
+
+/** A step's own source references, restricted to the pages the manual really has (a missing page is never cited). */
+const usableRefs = (step: ManualStep, session: ScreenContextInputsV2['session']): DocumentSourceV2[] =>
+    step.sourceRefs
+        .filter((ref) => session?.pages.some((page) => page.pageId === ref.pageId) === true)
+        .slice(0, 100)
+        .map((ref) => ({ pageId: ref.pageId, region: ref.region }))
 
 export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterialV2 {
     const inputs = usedInputs(raw)
@@ -295,6 +321,17 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             })
         })
     }
+    // The overview: each step's own title with the pages it cites (only pages this manual has), in manual order.
+    const overviewSteps = overviewStepsOf(inputs, facts)
+    for (const overviewStep of overviewSteps ?? []) {
+        published.push({
+            factId: `${OVERVIEW_FACT_PREFIX_V2}${overviewStep.stepId}`,
+            kind: 'title',
+            basis: 'overview',
+            text: overviewStep.title,
+            sourceRefs: usableRefs(overviewStep, session),
+        })
+    }
     if (result !== null) publishResult(result)
     const companion = result?.kind === 'check' ? resultOfKindV2(inputs, 'question') : null
     if (companion !== null) publishResult(companion)
@@ -302,7 +339,13 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
     // The picture a screen shows is its step's own source. The quick check has no step of its own (it edits one question
     // at a time), so its picture is the question step's source: only references to pages this manual really has.
     // A step-scoped More shows its own step's picture the same way (exact source, or the honest absence).
-    const figureStep = moreScopedV2(inputs) && stepBound ? step : questionStepOf(inputs, facts)
+    // The overview's picture is the first step that cites a page this manual has (never an invented or empty frame).
+    const figureStep =
+        moreScopedV2(inputs) && stepBound
+            ? step
+            : (questionStepOf(inputs, facts) ??
+              overviewSteps?.find((candidate) => usableRefs(candidate, session).length > 0) ??
+              null)
     const diagramRefs =
         figureStep === null
             ? (step?.sourceRefs ?? [])
@@ -314,17 +357,20 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
 
     const decision = result?.kind === 'check' ? result.value.decision : null
     const reviewed = facts?.reviewed ?? false
-    const partIds = (step?.parts ?? []).flatMap((part) =>
-        facts?.parts.some((candidate) => candidate.partId === part.partId && candidate.name.state === 'known')
-            ? [part.partId]
-            : [],
-    )
+    const knownPart = (partId: string): boolean =>
+        facts?.parts.some((candidate) => candidate.partId === partId && candidate.name.state === 'known') === true
+    // The overview lists every known part of the manual (at most 256, the manual's own bound): never a silent subset.
+    const partIds =
+        overviewSteps === null
+            ? (step?.parts ?? []).flatMap((part) => (knownPart(part.partId) ? [part.partId] : []))
+            : [...new Set((facts?.parts ?? []).flatMap((part) => (knownPart(part.partId) ? [part.partId] : [])))]
     return {
         inputs,
         step,
         stepIndex,
         stepCount: facts?.steps.length ?? 0,
         reviewed,
+        overview: overviewSteps !== null,
         stepBound,
         facts: published,
         sources: registry.sources,
@@ -338,6 +384,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             capture: heldPhotoRequired(inputs),
             figure: figureStep === null ? null : (diagram[0] ?? null),
             notice: operationNoticeHeld(inputs),
+            parts: overviewSteps === null ? [] : partIds,
         },
         decision,
         completion: completionWitnessed({
@@ -347,7 +394,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
         })
             ? 'witnessed'
             : 'unwitnessed',
-        partIds: partIds.slice(0, 12),
+        partIds: overviewSteps === null ? partIds.slice(0, 12) : partIds,
         diagram,
     }
 }
