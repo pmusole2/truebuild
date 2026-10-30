@@ -1,0 +1,366 @@
+{
+    "header": {
+        "title": {
+            "kind": "literal",
+            "text": "Reading your manual"
+        },
+        "subtitle": null,
+        "back": {
+            "label": "Back",
+            "icon": "chevronLeft",
+            "intent": {
+                "intent": "navigate",
+                "target": "back"
+            }
+        },
+        "actions": []
+    },
+    "body": {
+        "type": "Scroll",
+        "axis": "vertical",
+        "children": [
+            {
+                "type": "Stack",
+                "gap": "md",
+                "align": "stretch",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": {
+                            "kind": "literal",
+                            "text": "Reading each page. This can take a minute."
+                        },
+                        "role": "body",
+                        "emphasis": "strong",
+                        "tone": "neutral",
+                        "align": "start"
+                    },
+                    {
+                        "type": "Progress",
+                        "binding": "reading",
+                        "label": null
+                    }
+                ]
+            }
+        ]
+    },
+    "bar": {
+        "primary": {
+            "type": "PrimaryAction",
+            "label": "Back to pages",
+            "icon": "chevronLeft",
+            "intent": {
+                "intent": "navigate",
+                "target": "pages"
+            }
+        },
+        "secondary": null
+    },
+    "overlays": [],
+    "states": {
+        "busy": {
+            "header": {
+                "title": {
+                    "kind": "literal",
+                    "text": "Saving…"
+                },
+                "subtitle": {
+                    "kind": "literal",
+                    "text": "Reading your manual"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "One moment, please."
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Please wait",
+                    "icon": null,
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "pages"
+                    }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "pending": {
+            "header": {
+                "title": {
+                    "kind": "literal",
+                    "text": "Working on it"
+                },
+                "subtitle": {
+                    "kind": "literal",
+                    "text": "Reading your manual"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "One moment, please."
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Progress",
+                                "binding": "reading",
+                                "label": null
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Please wait",
+                    "icon": null,
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "pages"
+                    }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "empty": null,
+        "error": {
+            "header": {
+                "title": {
+                    "kind": "literal",
+                    "text": "Something went wrong"
+                },
+                "subtitle": null,
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "Try again in a moment."
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "caution",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Read again",
+                    "icon": "refresh",
+                    "intent": {
+                        "intent": "retry",
+                        "target": "reading"
+                    }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Back to pages",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "pages"
+                    }
+                }
+            },
+            "overlays": []
+        },
+        "recovery": {
+            "header": {
+                "title": {
+                    "kind": "literal",
+                    "text": "Let us get you back on track"
+                },
+                "subtitle": null,
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "Try again, or go back home."
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Read again",
+                    "icon": "refresh",
+                    "intent": {
+                        "intent": "retry",
+                        "target": "reading"
+                    }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "home"
+                    }
+                }
+            },
+            "overlays": []
+        },
+        "confirming": {
+            "header": {
+                "title": {
+                    "kind": "literal",
+                    "text": "Stop reading?"
+                },
+                "subtitle": null,
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "Reading will stop and you will go back to your pages."
+                                },
+                                "role": "body",
+                                "emphasis": "strong",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Keep reading",
+                    "icon": "arrowRight",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "reading"
+                    }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Stop reading",
+                    "icon": "close",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "pages"
+                    }
+                }
+            },
+            "overlays": []
+        }
+    }
+}

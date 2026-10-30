@@ -1,0 +1,21 @@
+{
+    "evidence": "synthetic-fixture",
+    "model": null,
+    "effort": null,
+    "authoring": {
+        "model": "gpt-6.1-sol",
+        "effort": "ultra",
+        "recordedAt": "2026-10-30T09:23:28.620Z",
+        "fixtureId": "recorded-pages-cancelled-saving-sol-v1"
+    },
+    "recordedAt": "2026-10-30T09:23:28.620Z",
+    "promptVersion": 0,
+    "repaired": false,
+    "taskReference": "close95 actual Sol raw saving-context sibling authoring: recorded-pages-cancelled-saving; preserve AI-authored recorded-pages-cancelled choices outside busy",
+    "inputPrompt": "One measured state gap needs closure, sameownedrawfolder. Native nondev log close95/logs/native-diagnostic-ios-v1-decoded.json: firstHome ready97.44%, but Addmanual persistence triggers Home saving busy (controller pending Saving on this device) -> current generic recordbusy header Workingonit mismatches earned Saving… =>32fallback/33 hosts. Cannot excludecheckpoint. Author complete RAW saving-context sibling proposals for each launch-family base where saving may happen: Home empty/single/multiple, Add, Pages/cancelledPages, Reading idle (active Reading has reading activity so keepseparate existingreading-active). Each sibling *.inputs.json has uiState.busy.activity='saving'; busy header literalexactBUSY_COPY_V2.saving.heading, body calm generic OneMoment permitted; same realcontrols/tablebindings, no inventedfacts, unchanged othermodel-authored base choices may be reused explicitly as editing AI-authored data (NEVER fallbackbuilder). Newfullproposal files <base>-saving; independently raw authored busy choice, full strictgate, actualfollowupmodeldate/hash/provenance `${family}-sol-v1`. Do NOT change existing ready primary/action orcoachavailability. Existing7base+readingactiveinputs bytes stay archived/unchanged. Root will import/select sibling records whenever actual activity saving; no runtime tree merge. Root also unifies BUSY_COPY_V2.working heading/detail with generic STATE_COPY Workingonit/OneMoment (genericworkingonly, reading/checking/saving/headings stayexact) and bumpsproviderprompt10→11 to prevent stalecopycache; doingthatnow. Need tests positivefullserver gate inputs busySaving + rawliteralexact and independentunchangedproposalpublication; current generatornames dynamicrecords buttestfamilyarray manualnewidsupdate. No runtime/contracts/meter/UI edits outsidefolder, no newdeps/listeners/inference/env/keys/commits/staging/protected/memorywrites/delegates. Target rootinterface reportearly listnewnames, then publish/check focusedsource. This is actualfixture/generative readiness bug, no source re-labeling or metadata overrides.\n\n\nActual source context reused by this editing worker: recorded-pages-cancelled.proposal.json; SHA256 e78eb4a1996950929defd3802f4bd9a9481ff62a4a54d9b3844193cb9424d030. Remaining ready controls, tips, facts/bindings and state choices are preserved; saving busy is authored as Saving… plus One moment, please., without a quantitative or reading-progress claim.",
+    "inputPromptSha256": "eaaef1a25e727d0760b9b2d9aa01ea7a9ce3f93aa6f6a56b3a81a783359923c7",
+    "rawJsonSha256": "db6896bed8d93c043a8eb5c8c17d8bf4b5954648430f30c6734324a769833f13",
+    "timingMs": null,
+    "tokens": null,
+    "binding": "Complete raw synthetic saving-context proposal edited by the actual Sol worker from the named AI-authored base. Publication must read the entire proposal unchanged, validate against its own saving inputs, and assemble with syntheticDocumentFactsV2; never merge trees or attribute provider inference/timing/tokens."
+}

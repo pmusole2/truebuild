@@ -63,8 +63,8 @@ export function useDocument(
     const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {
-        // An evicted background preview stays terminal until focus or an explicit Retry.
-        if (options.focused === true || store.cacheIssue(inputs) === null) store.request(inputs)
+        // Background preparation belongs to warmup/precompute. A hidden route must not restart cancelled work on blur.
+        if (options.focused === true) store.request(inputs)
     }, [store, key, options.focused])
     useEffect(() => (): void => local.dispose(), [local])
     useEffect(() => {

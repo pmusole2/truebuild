@@ -1,6 +1,7 @@
 import {
     canonicalJson,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
+    rebindGeneratedStatesV2,
     screenContextJsonV2,
     screenDocumentV2Schema,
     screenManualJsonV2,
@@ -23,6 +24,8 @@ import {
 } from '../../api/document-client'
 import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
+import { recordedDocument } from './recorded-runtime'
+import { futureDocumentStates } from './future-states'
 
 export type DocumentRuntimeEntry = {
     readonly status: 'pending' | 'ready'
@@ -38,6 +41,7 @@ export type DocumentStoreOptions = {
     readonly maxPolls?: number
     readonly warmupConcurrency?: number
     readonly maxDocumentBytes?: number
+    readonly recordings?: typeof recordedDocument
 }
 export interface DocumentCacheUsage {
     readonly entries: number
@@ -83,7 +87,7 @@ export function localDocument(
     now: () => number = Date.now,
 ): ScreenDocumentV2 {
     return screenDocumentV2Schema.parse(
-        composeFallbackDocumentV2(inputs, {
+        buildFallbackDocumentV2(inputs, {
             sha256Hex,
             now: () => new Date(now()),
             reason,
@@ -211,10 +215,49 @@ export class DocumentStore {
         }
         this.publish()
     }
+    /** Stop obsolete Reading work without minting another request or accepting a late completed document. */
+    cancelReading(manualId: string): void {
+        let changed = false
+        for (const [key, held] of this.held) {
+            if (held.inputs.kind !== 'reading' || held.inputs.session?.manualId !== manualId) continue
+            held.abort.abort()
+            this.held.delete(key)
+            changed = true
+        }
+        for (const [key, inputs] of this.warmQueue) {
+            if (inputs.kind === 'reading' && inputs.session?.manualId === manualId) this.warmQueue.delete(key)
+        }
+        for (const [key, job] of this.jobs) {
+            if (job.session.manualId !== manualId) continue
+            job.abort.abort()
+            this.jobs.delete(key)
+            this.attemptedJobs.delete(key)
+            void this.cancelJob(job)
+            changed = true
+        }
+        if (changed) this.publish()
+    }
     preview(inputs: ScreenContextInputsV2): DocumentRuntimeEntry {
         const enabled = this.enabled(inputs) && this.options.client !== undefined && !this.disposed
+        const recorded = enabled ? (this.options.recordings ?? recordedDocument)(inputs) : null
+        if (
+            recorded !== null &&
+            this.documentByteSize(recorded) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
+        ) {
+            return { status: 'ready', document: recorded, issue: null }
+        }
         const reason = enabled ? 'busy' : this.enabled(inputs) && !this.disposed ? 'unconfigured' : 'disabled'
-        const document = localDocument(inputs, reason, this.now)
+        const local = localDocument(inputs, reason, this.now)
+        const donors = enabled
+            ? [...this.held.values()].flatMap(({ entry }) =>
+                  entry.document.metadata.source === 'generated' ? [entry.document] : [],
+              )
+            : []
+        const document =
+            donors.length === 0
+                ? local
+                : rebindGeneratedStatesV2(inputs, local, donors, { sha256Hex, now: (): Date => new Date(this.now()) })
+                      .document
         const fits = this.documentByteSize(document) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
         return { status: enabled && fits ? 'pending' : 'ready', document, issue: fits ? null : 'budget_exhausted' }
     }
@@ -385,7 +428,7 @@ export class DocumentStore {
                 (item) => item.inputs.kind === 'guide',
             )
             guides.sort((a, b) => Number(b.key === focusKey) - Number(a.key === focusKey))
-            this.warmup(guides.map((item) => item.inputs))
+            this.warmup(guides.flatMap((item) => [item.inputs, ...futureDocumentStates(item.inputs)]))
             return
         }
         const requestedKinds: readonly PrecomputeKindV2[] | undefined = this.mode === 'steps' ? ['guide'] : undefined
@@ -398,6 +441,11 @@ export class DocumentStore {
         const job: Job = { session, abort: new AbortController(), context, uiState, completedStepIds, requestedKinds }
         this.jobs.set(key, job)
         void this.runJob(key, job, focusKey, uiState, completedStepIds)
+        this.warmup(
+            documentPrecomputeInputs({ session, uiState, completedStepIds })
+                .filter((item) => item.inputs.kind === 'guide')
+                .flatMap((item) => futureDocumentStates(item.inputs)),
+        )
     }
     private async control(request: ScreensV2Request, signal?: AbortSignal): Promise<ScreensV2Result> {
         const metadata = documentRequest(request, `documents-${this.options.id()}`)

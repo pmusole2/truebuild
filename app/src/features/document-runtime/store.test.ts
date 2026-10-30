@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import {
     assembleDocumentV2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     screenDocumentV2Schema,
@@ -36,7 +36,7 @@ const fixture = (request: ScreenContextInputsV2): ScreenDocumentV2 => {
     return screenDocumentV2Schema.parse(
         assembleDocumentV2(
             material,
-            composeProposalV2(material),
+            buildFallbackProposalV2(material),
             {
                 source: 'generated',
                 evidence: 'synthetic-fixture',
@@ -58,6 +58,63 @@ const successful = (): Mock<ModelApiClient['screensV2']> =>
     )
 
 describe('whole-document runtime store', () => {
+    it('serves the initial recorded Home synchronously without a network request or provider receipt', () => {
+        const screensV2 = successful()
+        const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'id' })
+        const home: ScreenContextInputsV2 = {
+            kind: 'home',
+            session: null,
+            stepId: null,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: { library: { entries: [], soleManualId: null } },
+        }
+        try {
+            const entry = store.request(home)
+            expect(entry.status).toBe('ready')
+            expect(entry.document.metadata).toMatchObject({
+                source: 'generated',
+                evidence: 'synthetic-fixture',
+                model: null,
+                authoring: { model: 'gpt-6.1-sol', effort: 'ultra' },
+            })
+            expect(store.readyAt(home)).toBeNull()
+            expect(screensV2).not.toHaveBeenCalled()
+        } finally {
+            store.dispose()
+        }
+    })
+
+    it('uses the real asynchronous generation protocol when the supplied recording resolver has no match', async () => {
+        const screensV2 = successful()
+        const store = new DocumentStore({
+            client: { screensV2 },
+            mode: 'full',
+            id: (): string => 'id',
+            recordings: (): null => null,
+        })
+        const home: ScreenContextInputsV2 = {
+            kind: 'home',
+            session: null,
+            stepId: null,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: { library: { entries: [], soleManualId: null } },
+        }
+        try {
+            expect(store.request(home).status).toBe('pending')
+            await vi.waitFor(() => expect(store.peek(home)?.status).toBe('ready'))
+            expect(store.peek(home)?.document.metadata.source).toBe('generated')
+            expect(store.readyAt(home)).toBeTypeOf('number')
+            expect(screensV2).toHaveBeenCalledTimes(1)
+            expect(screensV2.mock.calls[0]![0]).toMatchObject({ op: 'generate', kind: 'home' })
+        } finally {
+            store.dispose()
+        }
+    })
+
     it('keeps an individually oversized local document complete and uncached without dispatching or occupying a warmup flight', () => {
         const screensV2 = successful()
         const store = new DocumentStore({
@@ -249,7 +306,15 @@ describe('whole-document runtime store', () => {
         store.warmup(contexts)
         expect(screensV2).toHaveBeenCalledTimes(2)
         await vi.waitFor(() => expect(contexts.every((context) => store.peek(context)?.status === 'ready')).toBe(true))
-        expect(screensV2).toHaveBeenCalledTimes(SCREEN_KINDS_V2.length)
+        const recorded = contexts.filter((context) => store.peek(context)?.document.metadata.authoring !== undefined)
+        expect(recorded.length).toBeGreaterThan(0)
+        expect(screensV2).toHaveBeenCalledTimes(SCREEN_KINDS_V2.length - recorded.length)
+        expect(screensV2.mock.calls.map(([metadata]) => metadata.kind).sort()).toEqual(
+            contexts
+                .filter((context) => !recorded.includes(context))
+                .map((context) => context.kind)
+                .sort(),
+        )
         expect(contexts.every((context) => store.peek(context)?.document.metadata.source === 'generated')).toBe(true)
         store.dispose()
     })
@@ -408,15 +473,23 @@ describe('whole-document runtime store', () => {
             expect(screensV2.mock.calls.map(([metadata]) => metadata.op)).toEqual([
                 'generate',
                 'precompute',
+                'generate',
+                'generate',
+                'generate',
+                'generate',
                 'progress',
             ])
             store.precompute(session, 'guide:step-1')
-            expect(screensV2).toHaveBeenCalledTimes(3)
+            expect(screensV2).toHaveBeenCalledTimes(7)
             store.observeSession({ ...session, revision: session.revision + 1 })
             await vi.advanceTimersByTimeAsync(100)
             expect(screensV2.mock.calls.map(([metadata]) => metadata.op)).toEqual([
                 'generate',
                 'precompute',
+                'generate',
+                'generate',
+                'generate',
+                'generate',
                 'progress',
                 'cancel',
             ])
@@ -500,17 +573,37 @@ describe('whole-document runtime store', () => {
                     ).toBe(true)
                     expect(screensV2.mock.calls.map(([metadata]) => metadata.op)).toEqual([
                         'precompute',
+                        'generate',
+                        'generate',
+                        'generate',
+                        'generate',
                         'progress',
                         'progress',
                     ])
                     expect(
-                        screensV2.mock.calls.every(([metadata]) => metadata.requestedKinds?.join() === 'guide'),
+                        screensV2.mock.calls.every(([metadata]) =>
+                            metadata.op === 'generate'
+                                ? metadata.kind === 'guide' &&
+                                  ['checking', 'second-opinion'].includes(metadata.uiState?.busy?.activity ?? '')
+                                : metadata.requestedKinds?.join() === 'guide',
+                        ),
                     ).toBe(true)
                     store.noteShown(documents[0]!, true)
                     expect(store.shownGuide(raw, 'step-1')).toBeNull()
                 } else {
                     expect(store.peek(expected[0]!.inputs)).toBeUndefined()
-                    expect(screensV2.mock.calls.map(([metadata]) => metadata.op)).toEqual(['precompute', 'cancel'])
+                    expect(
+                        screensV2.mock.calls.flatMap(([metadata]) => (metadata.op === 'generate' ? [] : [metadata.op])),
+                    ).toEqual(['precompute', 'cancel'])
+                    expect(
+                        screensV2.mock.calls
+                            .flatMap(([metadata]) =>
+                                metadata.op === 'generate'
+                                    ? [`${metadata.stepId}:${metadata.uiState?.busy?.activity}`]
+                                    : [],
+                            )
+                            .sort(),
+                    ).toEqual(['step-1:checking', 'step-1:second-opinion', 'step-2:checking', 'step-2:second-opinion'])
                 }
                 store.dispose()
             }

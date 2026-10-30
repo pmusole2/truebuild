@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { render } from '@testing-library/react-native'
-import { screenDocumentV2Schema } from '@truebuild/contracts'
+import { recordedDocumentForTest } from './recorded/test-support'
 import { ThemeProvider } from '../../theme/theme'
 import { originId } from '../screens/render-origin'
 import { DocumentRenderer } from './document-renderer'
@@ -26,9 +24,7 @@ import { auditDocumentHosts } from '../screens/test-support/strict-origin-audit'
 it.each(['recorded-home', 'recorded-add-empty', 'recorded-home-library-single', 'recorded-pages-cancelled'])(
     'audits every actual host of %s through the strict composed-marker protocol',
     async (name) => {
-        const document = screenDocumentV2Schema.parse(
-            JSON.parse(readFileSync(join(__dirname, `recorded/${name}.json`), 'utf8')),
-        )
+        const document = recordedDocumentForTest(name)
         const view = await render(
             <ThemeProvider>
                 <DocumentRenderer document={document} bindings={bindings} />

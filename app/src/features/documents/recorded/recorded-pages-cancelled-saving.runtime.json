@@ -1,0 +1,14 @@
+{
+    "evidence": "synthetic-fixture",
+    "model": null,
+    "effort": null,
+    "authoring": {
+        "model": "gpt-6.1-sol",
+        "effort": "ultra",
+        "recordedAt": "2026-10-30T09:23:28.620Z",
+        "fixtureId": "recorded-pages-cancelled-saving-sol-v1"
+    },
+    "recordedAt": "2026-10-30T09:23:28.620Z",
+    "promptVersion": 0,
+    "repaired": false
+}

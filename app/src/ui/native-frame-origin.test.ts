@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { URL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { screenDocumentV2Schema } from '@truebuild/contracts'
+import { recordedDocumentForTest } from '../features/documents/recorded/test-support'
 import { NativeHostMeter, type NativeHostCheckpoint } from '../features/screens/native-host-meter'
 import { sharedFallbackDocument } from '../features/documents/fallback-v2'
 import {
@@ -11,9 +9,7 @@ import {
     type NativeFrameOriginDiagnostic,
 } from './native-frame-origin'
 
-const document = screenDocumentV2Schema.parse(
-    JSON.parse(readFileSync(new URL('../features/documents/recorded/recorded-home.json', import.meta.url), 'utf8')),
-)
+const document = recordedDocumentForTest('recorded-home')
 const point: NativeHostCheckpoint = { sessionId: 'frame-test', platform: 'ios', screen: 'home', checkpointId: 'ready' }
 
 /** Public-node fixture: imperative nativeID commands do not rewrite RN's declarative .id getter. */

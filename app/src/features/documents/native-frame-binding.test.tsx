@@ -12,8 +12,7 @@ import type { FrameBindings } from './types'
 import { nativeFrameOrigins } from '../../ui/native-frame-origin'
 import { NativeHostMeter } from '../screens/native-host-meter'
 import { DocumentNavigationRoot, DocumentOwnershipProvider, DocumentRouteBoundary, useDocumentOwner } from './ownership'
-import { screenDocumentV2Schema } from '@truebuild/contracts'
-import recordedHome from './recorded/recorded-home.json'
+import { recordedDocumentForTest } from './recorded/test-support'
 
 /** The actual ownership components run unchanged; only RN's unavailable native public refs are structural fixtures. */
 class PublicNode implements NativeFrameNode {
@@ -57,7 +56,7 @@ jest.mock(
     'react-native-safe-area-context',
     () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
-const document = screenDocumentV2Schema.parse(recordedHome)
+const document = recordedDocumentForTest('recorded-home')
 function Publisher({ focused }: { focused: boolean }): ReactElement {
     useDocumentOwner(document, focused)
     return <View nativeID="truebuild-render-origin:generated" />

@@ -11,7 +11,6 @@ import { ModelProvenance } from './step-facts'
 import { BuiltToggleRow, CompareManualsRow, StagesPanel } from '../screens/attribution'
 import type { CheckStages } from './controller'
 import { secondOpinionLine } from './provenance-copy'
-import type { ScreenSlot } from '../screens/use-screen-slot'
 
 const VERBS = [
     ['Scan', 'Photograph the pages of your paper manual.'],
@@ -41,7 +40,6 @@ export function AboutThisCheck({
     result,
     children,
     stages,
-    resultSlot,
     check,
     onCompare,
 }: {
@@ -51,7 +49,6 @@ export function AboutThisCheck({
     children?: ReactNode
     // The same photo's stages after the verdict, and the composed result screen's state, for the judge layer only.
     stages?: CheckStages | null
-    resultSlot?: ScreenSlot
     check?: Pick<CheckResult, 'model' | 'decision'> | null
     onCompare?: () => void
 }): ReactElement {
@@ -79,7 +76,7 @@ export function AboutThisCheck({
                     {result === undefined || secondOpinionLine(result) === null ? null : (
                         <Caption>{secondOpinionLine(result)}</Caption>
                     )}
-                    <StagesPanel check={check ?? null} stages={stages} resultSlot={resultSlot} />
+                    <StagesPanel check={check ?? null} stages={stages} />
                     <BuiltToggleRow />
                     <CompareManualsRow onOpen={onCompare} />
                     {children}

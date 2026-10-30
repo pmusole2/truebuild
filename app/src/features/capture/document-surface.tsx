@@ -7,7 +7,6 @@ import {
     baseKindV2,
     visitVariantNodesV2,
     type AppIntent,
-    type ScreenContextInputsV2,
     type ScreenKindV2,
     type VariantState,
     type BusyActivityV2,
@@ -15,6 +14,7 @@ import {
 } from '@truebuild/contracts'
 import { useDocument } from '../document-runtime/use-document'
 import { documentKey } from '../document-runtime/store'
+import { futureDocumentStates } from '../document-runtime/future-states'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { useDocumentOwner } from '../documents/ownership'
 import type { FrameBindings } from '../documents/types'
@@ -22,12 +22,12 @@ import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
 import { useJudge } from '../screens/judge-context'
 import { resolveIntent, type ResolvedIntent } from '../screens/intents'
-import { captureUiState, homeUiState, moreUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
-import { publishableResult } from '../screens/screen-spec'
 import { useWorkflowActions } from './native-routes'
 import { readingLanguage, setReadingLanguage } from './reading-language'
 import { useMoreState, type MoreMode } from './screen-header'
-import type { QuickProgress } from './review-screen'
+import type { QuickProgress } from '../screens/quick-progress'
+import { documentInputs } from './document-inputs'
+export { documentInputs } from './document-inputs'
 import { useWorkflow } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
 
@@ -40,86 +40,6 @@ function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending.startsWith('Asking')) return 'asking'
     if (pending.startsWith('Saving')) return 'saving'
     return 'working'
-}
-
-export function documentInputs(
-    kind: ScreenKindV2,
-    workflow: Pick<ReturnType<typeof useWorkflow>, 'state' | 'entry'>,
-    quick?: QuickProgress,
-    contextualMore = false,
-): ScreenContextInputsV2 {
-    const { state, entry } = workflow
-    const step = entry?.session.reviewedSteps[entry.stepIndex]
-    const moreContext =
-        kind === 'more' && contextualMore && entry?.session.reviewStatus === 'reviewed' && step !== undefined
-    const held =
-        state.capture !== null &&
-        entry !== undefined &&
-        step !== undefined &&
-        state.capture.binding.manualId === entry.session.manualId &&
-        state.capture.binding.revision === entry.session.revision &&
-        state.capture.binding.stepId === step.stepId
-    const answered =
-        state.answer !== null && state.answeredQuestion != null
-            ? { question: state.answeredQuestion, value: state.answer }
-            : null
-    const result =
-        (kind === 'answer' || (moreContext && held && state.check === null)) && answered !== null
-            ? publishableResult({ kind: 'question', ...answered })
-            : (kind === 'result' || (moreContext && held)) && state.check !== null
-              ? publishableResult({ kind: 'check', value: state.check })
-              : null
-    return {
-        kind,
-        session:
-            ['home', 'compare', 'judge', 'error'].includes(kind) || (kind === 'more' && !moreContext)
-                ? null
-                : (entry?.session ?? null),
-        stepId:
-            moreContext || ['guide', 'result', 'answer', 'questions', 'recovery', 'camera'].includes(kind)
-                ? (step?.stepId ?? null)
-                : null,
-        captureId:
-            (moreContext && held) || ['result', 'answer', 'questions', 'camera'].includes(kind)
-                ? (state.capture?.binding.captureId ?? null)
-                : null,
-        result,
-        ...(moreContext && result?.kind === 'check' && answered !== null ? { companionAnswer: answered } : {}),
-        failure: kind === 'error' || kind === 'recovery' ? 'provider_error' : null,
-        ...(kind === 'completion' ? { completedStepIds: entry?.completedStepIds ?? [] } : {}),
-        uiState:
-            kind === 'home' || kind === 'compare'
-                ? homeUiState(state.entries)
-                : kind === 'add' || kind === 'pages'
-                  ? entry === undefined
-                      ? null
-                      : pagesUiState(entry)
-                  : kind === 'quick-check'
-                    ? entry === undefined
-                        ? null
-                        : reviewUiState(entry, quick)
-                    : kind === 'more' || kind === 'judge'
-                      ? {
-                            ...moreUiState({ tips: true }),
-                            ...(kind === 'more'
-                                ? {
-                                      ...(moreContext ? (held ? captureUiState(state) : { capture: null }) : {}),
-                                      language: { options: ['en', 'es', 'fr', 'de', 'pt-BR'] },
-                                      settings: { storage: true as const },
-                                  }
-                                : {}),
-                        }
-                      : kind === 'reading'
-                        ? { reading: { cancellation: 'confirm-before-stop' as const } }
-                        : kind === 'camera'
-                          ? {
-                                camera: {
-                                    mode: state.cameraIntent?.kind === 'page' ? 'manual-page' : 'build-photo',
-                                    permission: 'undetermined',
-                                },
-                            }
-                          : captureUiState(state),
-    }
 }
 
 /** One production route adapter. It binds live mechanics, never screen content or a parallel action bar. */
@@ -240,7 +160,21 @@ export function DocumentSurface({
                   ? 'error'
                   : (requestedState ?? (busy ? 'busy' : 'ready')),
     })
-    useDocumentOwner(reading.document, focused && !more.open && !judgeOpen)
+    const futureInputs = useRef(inputs)
+    futureInputs.current = inputs
+    const futureKey =
+        focused &&
+        !busy &&
+        !more.open &&
+        !judgeOpen &&
+        reading.status === 'ready' &&
+        reading.document.metadata.source === 'generated'
+            ? documentKey(inputs)
+            : null
+    useEffect(() => {
+        if (futureKey !== null) workflow.documents?.warmup(futureDocumentStates(futureInputs.current))
+    }, [workflow.documents, futureKey])
+    useDocumentOwner(reading.document, focused && !more.open && !judgeOpen, reading.activeState)
     useEffect(() => {
         if (presentedResult !== null && presentedResult.document.bound.captureId !== state.capture?.binding.captureId)
             setPresentedResult(null)
@@ -422,6 +356,7 @@ export function DocumentSurface({
                     else if (state.pending?.startsWith('Reading') === true && readingConfirmation?.open !== true)
                         readingConfirmation?.onChange(true)
                     else {
+                        if (entry !== undefined) workflow.documents?.cancelReading(entry.session.manualId)
                         controller.cancel()
                         readingConfirmation?.onChange(false)
                         setTimeout(nav.back, 0)
@@ -488,14 +423,18 @@ export function DocumentSurface({
     const candidates: CoachCandidate[] = []
     const variantPrefix = reading.activeState === 'ready' ? '' : `states.${reading.activeState}.`
     visitVariantNodesV2(reading.variant, variantPrefix, ({ node, path }): void => {
-        if (node.type === 'CoachMark')
+        if (node.type === 'CoachMark') {
+            const origin = reading.document.metadata.origins[path]
+            if (origin === undefined) throw new Error(`missing-origin:${path}`)
             candidates.push({
                 id: node.targetId,
                 kind: node.targetId === 'guide-hero' || node.targetId === 'guide-hero-frame' ? 'surface' : 'control',
                 heading: node.heading,
                 sentence: node.body,
-                textOrigin: reading.document.metadata.origins[path] ?? 'fallback',
+                textOrigin: origin,
+                documentId: reading.document.screenId,
             })
+        }
     })
     useCoachScreen(screen, {
         suppressed: busy || more.open || judgeOpen || reading.status === 'pending' || requestedState === 'error',
