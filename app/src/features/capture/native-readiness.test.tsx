@@ -10,6 +10,7 @@ import { deferred, entry, runtime, source } from '../screens/test-support/route-
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { fixtureDocuments } from '../screens/test-support/fixture-server'
 import { DOCUMENT_COLLECTION_DEADLINE_MS, DocumentStore } from '../document-runtime/store'
+import { documentInputs } from './document-inputs'
 const mockGetCameraPermissions = jest.fn(async () => ({ granted: true, canAskAgain: true }))
 const mockRequestCameraPermission = jest.fn()
 
@@ -114,6 +115,30 @@ it('retains the actual generated Home while a cold Guide prepares, then navigate
     expect(idle).toHaveLength(1)
 })
 
+it('keeps a witnessed Home ready composition while saving leaves its displayed facts unchanged', async () => {
+    mounted = await mount([])
+    const gate = deferred<void>()
+    const storage = mounted.storage
+    const save = storage.save
+    jest.spyOn(storage, 'save').mockImplementation(
+        async (...args: Parameters<typeof save>): ReturnType<typeof save> => {
+            await gate.promise
+            return save.apply(storage, args)
+        },
+    )
+    const previous = root('library-screen')
+    await press('Add a manual')
+    await waitFor(() => expect(mounted!.controller.getSnapshot().pending).toBe('Saving on this device…'))
+    expect(root('library-screen')?.documentRoot).toBe(previous.documentRoot)
+    expect(screen.getByRole('button', { name: 'Add a manual' })).toBeDisabled()
+    expect(primary('library-screen').props.accessibilityState.busy).toBe(true)
+    await act(async () => {
+        gate.resolve()
+    })
+    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/add'))
+    expect(root('pages-screen')?.origin).toBe('generated')
+})
+
 it('retains the generated Reading document until the exact first Quick check question is generated', async () => {
     const gate = deferred<void>()
     const parse = deferred<void>()
@@ -170,11 +195,94 @@ it('preserves the actual generated last result while saved completion prepares, 
     expect(root('guide-screen')?.documentRoot).toBe(previous?.documentRoot)
     expect(primary('guide-screen')).toBeDisabled()
     expect(screen.getByTestId('frozen-photo-image').props.source).toEqual(heldPhoto)
+    expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
     expect(heldPhoto.uri).toMatch(/^data:image\/jpeg;base64,/u)
     await act(async () => gate.resolve())
     await waitFor(() => expect(mounted!.view.getPathname()).toBe('/done/last-step'))
     expect(root('done-screen')?.origin).toBe('generated')
     expect(screen.getByText('1 of 1 steps marked done')).toBeTruthy()
+})
+
+it('reserves non-final completion before save invalidates its witnessed ready Result and photo', async () => {
+    const gate = deferred<void>()
+    let holdSave = false
+    mounted = await mount([entry('next-step', 'reviewed', 2)], { screens: { generated: ['guide', 'result'] } })
+    await press('Continue building')
+    await press('Take photo')
+    await act(async () => mounted!.controller.shutter(async () => source))
+    await loadPhoto()
+    expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
+    const previous = root('guide-screen')
+    const photo = screen.getByTestId('frozen-photo-image').props.source
+    const storage = mounted.storage
+    const save = storage.save
+    jest.spyOn(storage, 'save').mockImplementation(
+        async (...args: Parameters<typeof save>): ReturnType<typeof save> => {
+            if (holdSave) await gate.promise
+            return save.apply(storage, args)
+        },
+    )
+    holdSave = true
+    await fireEvent.press(screen.getByTestId('guide-primary'))
+    await waitFor(() => expect(mounted!.controller.getSnapshot().pending).toBe('Saving on this device…'))
+    expect(mounted.controller.getSnapshot().capture).toBeNull()
+    expect(root('guide-screen')?.documentRoot).toBe(previous.documentRoot)
+    expect(screen.getByTestId('frozen-photo-image').props.source).toEqual(photo)
+    expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
+    expect(primary('guide-screen')).toBeDisabled()
+    expect(screen.queryByText(/^Step 2 of/u)).toBeNull()
+    await act(async () => {
+        gate.resolve()
+    })
+    await waitFor(() => expect(mounted!.controller.current?.stepIndex).toBe(1))
+    expect(await screen.findByText(/^Step 2 of/u)).toBeTruthy()
+    expect(root('guide-screen')?.origin).toBe('generated')
+    expect(root('guide-screen')?.documentRoot).not.toBe(previous.documentRoot)
+    expect(screen.queryByTestId('frozen-photo-image')).toBeNull()
+})
+
+it('shows the actual held photo while Spark is pending, then reveals its result without an extra image load or local document request', async () => {
+    const check = deferred<void>()
+    let shutter!: Promise<void>
+    mounted = await mount([entry()], {
+        screens: { generated: ['guide', 'camera', 'result'] },
+        replies: { check_gate: check.promise },
+    })
+    await press('Continue building')
+    await press('Take photo')
+    await act(async () => {
+        shutter = mounted!.controller.shutter(async () => source)
+    })
+    try {
+        await waitFor(() => expect(mounted!.controller.pendingCheckCapture).not.toBeNull())
+        const state = mounted.controller.getSnapshot()
+        const inputs = documentInputs('result', { state, entry: mounted.controller.current })
+        expect(state.check).toBeNull()
+        expect(inputs.result).toBeNull()
+        expect(state.capture?.reusable).toBe(true)
+        expect(mounted.store.peek(inputs)?.document.metadata.source).toBe('generated')
+        expect(mounted.store.peek(inputs)?.exactGeneration).toBeUndefined()
+        expect(mounted.store.readyAt(inputs)).toBeNull()
+        expect(mounted.server.requests.filter((request) => request.kind === 'result')).toHaveLength(0)
+        const photo = await screen.findByTestId('frozen-photo-image')
+        const uri = photo.props.source.uri as string
+        expect(uri).toMatch(/^data:image\/jpeg;base64,/u)
+        await loadPhoto()
+        expect(screen.queryByText('Looks right')).toBeNull()
+        expect(primary('guide-screen')).toBeDisabled()
+        await act(async () => {
+            check.resolve()
+            await shutter
+        })
+        expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
+        expect(screen.getByTestId('frozen-photo-image')).toBe(photo)
+        expect(screen.getByTestId('frozen-photo-image').props.source.uri).toBe(uri)
+        expect(mounted.controller.pendingCheckCapture).toBeNull()
+        expect(screen.getByRole('button', { name: 'Next step' })).toBeEnabled()
+    } finally {
+        check.resolve()
+        await shutter
+    }
 })
 
 it.each(['document', 'native'] as const)(
@@ -221,14 +329,14 @@ it('keeps intentional off mode immediate and makes no generation request', async
 })
 
 it('keeps a disabled Quick check immediate in steps mode without awaiting or dispatching its document', async () => {
-    const { controller, calls } = await runtime([entry('steps', 'unreviewed')])
+    const { controller, calls, storage } = await runtime([entry('steps', 'unreviewed')])
     const server = fixtureDocuments({ generated: ['guide'] })
     const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps', pollMs: 1 })
     jest.mocked(createController).mockReturnValue(controller)
     jest.mocked(createDocuments).mockReturnValue(store)
     jest.mocked(createScreens).mockReturnValue(null)
     const view = await renderRouter(resolve(__dirname, '../../../app'))
-    mounted = { view, controller, calls, store, server }
+    mounted = { view, controller, calls, store, server, storage }
     await waitFor(() => expect(controller.getSnapshot().loading).toBe(false))
     const wait = jest.spyOn(store, 'waitForGenerated')
     await act(async () => controller.open('steps', 'overview'))
@@ -241,14 +349,14 @@ it('keeps a disabled Quick check immediate in steps mode without awaiting or dis
 it('opens a completed manual directly in steps mode without preparing an unseen Guide', async () => {
     const manual = entry('finished', 'reviewed', 1)
     manual.completedStepIds = ['step-1']
-    const { controller, calls } = await runtime([manual])
+    const { controller, calls, storage } = await runtime([manual])
     const server = fixtureDocuments({ generated: ['guide'] })
     const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'finished', pollMs: 1 })
     jest.mocked(createController).mockReturnValue(controller)
     jest.mocked(createDocuments).mockReturnValue(store)
     jest.mocked(createScreens).mockReturnValue(null)
     const view = await renderRouter(resolve(__dirname, '../../../app'))
-    mounted = { view, controller, calls, store, server }
+    mounted = { view, controller, calls, store, server, storage }
     await waitFor(() => expect(controller.getSnapshot().loading).toBe(false))
     const wait = jest.spyOn(store, 'waitForGenerated')
     await press('Continue building')

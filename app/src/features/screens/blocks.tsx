@@ -36,7 +36,7 @@ import { DirectionsBlock, TextFactSources } from './mandatory'
 import type { ResolvedIntent } from './intents'
 import type { LiveScreen } from './live'
 import { partSourceRefs } from './part-source'
-import { originId, type RenderOrigin } from './render-origin'
+import { originId, RenderOriginProvider, type RenderOrigin } from './render-origin'
 
 export type BlockContext = {
     readonly readOnly?: boolean
@@ -287,7 +287,9 @@ function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path
                     ) : (
                         <Body nativeID={mark}>{node.text}</Body>
                     )}
-                    <TextFactSources text={node.text} context={context} />
+                    <RenderOriginProvider origin={context.originOf(path)}>
+                        <TextFactSources text={node.text} context={context} />
+                    </RenderOriginProvider>
                 </>
             )
         case 'PartList':
@@ -309,7 +311,9 @@ function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path
             return (
                 <>
                     <Notice nativeID={mark} tone={node.tone === 'critical' ? 'error' : 'caution'} text={node.text} />
-                    <TextFactSources text={node.text} context={context} />
+                    <RenderOriginProvider origin={context.originOf(path)}>
+                        <TextFactSources text={node.text} context={context} />
+                    </RenderOriginProvider>
                 </>
             )
         case 'StepProgress':

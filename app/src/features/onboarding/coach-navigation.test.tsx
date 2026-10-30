@@ -212,13 +212,17 @@ beforeEach(() => {
     resetTipsSkipLatchForTests()
     jest.mocked(onboardingStorage.getItem).mockResolvedValue(null)
     jest.mocked(onboardingStorage.setItem).mockResolvedValue(undefined)
-    const methods = jest.requireActual<{ default: { measureInWindow: jest.Mock } }>(
+    const methods = jest.requireActual<{ default: { measureInWindow: jest.Mock; measureLayout: jest.Mock } }>(
         '@react-native/jest-preset/jest/MockNativeMethods',
     ).default
     methods.measureInWindow.mockImplementation(
         (callback: (x: number, y: number, width: number, height: number) => void) => {
             callback(16, 650, 358, 56)
         },
+    )
+    methods.measureLayout.mockImplementation(
+        (_root: unknown, callback: (x: number, y: number, width: number, height: number) => void): void =>
+            callback(16, 650, 358, 56),
     )
 })
 

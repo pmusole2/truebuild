@@ -26,7 +26,7 @@ import answerProvenance from '../documents/recorded-layouts/recorded-answer-layo
 import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { resultLayoutDocument } from './result-layout-runtime'
-import { answerContext, checkContext, largeContext } from './test-support/result-layout-inputs'
+import { answerContext, checkContext, largeContext, pendingCheckContext } from './test-support/result-layout-inputs'
 
 const deps = { sha256Hex, now: (): Date => new Date('2030-01-01T00:00:00.000Z') }
 const compile = (
@@ -52,6 +52,21 @@ describe('authored current-result layout records', () => {
     )
     it('immediately composes a held current answer without a prior document', () => {
         expect(recordedDocument(answerContext())?.metadata.source).toBe('generated')
+    })
+
+    it('the authored checking branch carries the actual held frame and manual facts without any result claim', () => {
+        const inputs = pendingCheckContext()
+        const document = resultLayoutDocument(inputs)!
+        expect(document.metadata.source).toBe('generated')
+        expect(document.bound.captureId).toBe(inputs.captureId)
+        expect(document.facts).toEqual(documentMaterialV2(inputs).facts)
+        expect(document.facts.some((fact) => fact.basis === 'result')).toBe(false)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+        for (const variant of variantsOfV2(document)) {
+            const nodes = nodesOf(document, variant.name)
+            expect(nodes.some((node) => node.type === 'Image' && node.source.kind === 'capture')).toBe(true)
+            expect(nodes.some((node) => node.type === 'VerdictCard')).toBe(false)
+        }
     })
 
     it.each([

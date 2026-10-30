@@ -11,6 +11,7 @@ import {
     type DocumentFixtureServerOptions as FixtureServerOptions,
 } from './fixture-server'
 import { runtime, type Replies } from './route-harness'
+import type { LibraryStorage } from '../../capture/library'
 
 // Mounts the production root layout. The calling test file must mock '../../capture/controller-factory' (the
 // controller and the screen store are handed in through it) and the native modules, as navigation.test.tsx does.
@@ -24,13 +25,14 @@ export type Mounted = {
     server: FixtureServer
     store: DocumentStore
     calls: string[]
+    storage: LibraryStorage
 }
 
 export async function mount(
     entries: LibraryEntry[],
     options: { screens?: FixtureServerOptions | 'off'; replies?: Replies; recordings?: 'off' } = {},
 ): Promise<Mounted> {
-    const { controller, calls } = await runtime(entries, options.replies)
+    const { controller, calls, storage } = await runtime(entries, options.replies)
     const server = fixtureDocuments(options.screens === 'off' ? {} : options.screens)
     const store = new DocumentStore({
         client: server,
@@ -48,7 +50,7 @@ export async function mount(
     jest.mocked(createDocuments).mockReturnValue(store)
     const view = await renderRouter(resolve(__dirname, '../../../../app'))
     await waitFor(() => expect(screen.queryByText('Getting your builds ready.')).toBeNull())
-    return { view, controller, server, store, calls }
+    return { view, controller, server, store, calls, storage }
 }
 
 export async function press(name: string): Promise<void> {

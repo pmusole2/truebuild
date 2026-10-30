@@ -5,8 +5,18 @@ import { FeedbackProvider } from '../../ui/feedback'
 import { jpegHeader } from '../../media/test-fixtures'
 import { bytesToDataUri } from '../../media/image-source'
 import { WorkflowContext } from '../capture/workflow-context'
-import { entry, runtime, source } from './test-support/route-harness'
+import { deferred, entry, runtime, source } from './test-support/route-harness'
 import { ComparePane } from './compare'
+const mockCheckpoint = jest.fn()
+let mockFocused = true
+jest.mock('./native-meter', () => ({
+    ...jest.requireActual('./native-meter'),
+    useMeterReading: (): unknown => ({ active: true, snapshot: null, session: null, measureNow: mockCheckpoint }),
+}))
+beforeEach(() => {
+    mockCheckpoint.mockClear()
+    mockFocused = true
+})
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock('../capture/controller-factory', () => ({
@@ -17,7 +27,7 @@ jest.mock('../capture/controller-factory', () => ({
 jest.mock('expo-router', () => ({
     ...jest.requireActual('expo-router'),
     usePathname: (): string => '/compare',
-    useIsFocused: (): boolean => true,
+    useIsFocused: (): boolean => mockFocused,
 }))
 jest.mock(
     'react-native-safe-area-context',
@@ -133,13 +143,16 @@ it('discards replaced panes and shows a terminal picture state with the global i
         nativeEvent: { layout: { width: 320, height: 340 } },
     })
     await waitFor(() => expect(screen.getByLabelText('Picture from your manual').props.source.uri).toBe(ports.betaUri))
+    const checkpoints = mockCheckpoint.mock.calls.length
     await act(() => release())
+    expect(mockCheckpoint).toHaveBeenCalledTimes(checkpoints)
     expect(screen.getByLabelText('Picture from your manual').props.source.uri).toBe(ports.betaUri)
     expect(ports.controller.getSnapshot()).toBe(before)
     await mounted.unmount()
     jest.spyOn(ports.storage, 'readAsset').mockRejectedValue(new Error('Synthetic unavailable image'))
     await render(wrap(ports, <ComparePane entry={ports.alpha} />))
     await waitFor(() => expect(screen.getByText(/picture.*unavailable/iu)).toBeTruthy())
+    expect(mockCheckpoint.mock.calls.some((call) => String(call[0]).endsWith(':unavailable'))).toBe(true)
     expect(screen.queryByTestId('skeleton-block')).toBeNull()
     const paused = ports.controller.getSnapshot()
     expect(paused.storageReadOnly).toBe(true)
@@ -151,4 +164,53 @@ it('discards replaced panes and shows a terminal picture state with the global i
     expect(ports.controller.getSnapshot()).toBe(paused)
     expect(ports.calls).toEqual(dispatched)
     ports.controller.dispose()
+})
+
+it('requests one distinct explicit checkpoint per actual asset phase and none for an unchanged rerender', async () => {
+    const ports = await setup()
+    const gate = deferred<void>()
+    const read = ports.storage.readAsset.bind(ports.storage)
+    jest.spyOn(ports.storage, 'readAsset').mockImplementation(async (page) => {
+        await gate.promise
+        return read(page)
+    })
+    const view = await render(wrap(ports, <ComparePane entry={ports.alpha} />))
+    try {
+        expect(mockCheckpoint).toHaveBeenCalledTimes(1)
+        expect(mockCheckpoint.mock.calls[0]![0]).toMatch(/:pending$/u)
+        await act(async () => {
+            gate.resolve()
+        })
+        await waitFor(() => expect(mockCheckpoint).toHaveBeenCalledTimes(2))
+        expect(mockCheckpoint.mock.calls[1]![0]).toMatch(/:ready$/u)
+        expect(mockCheckpoint.mock.calls[1]![0]).not.toBe(mockCheckpoint.mock.calls[0]![0])
+        await view.rerender(wrap(ports, <ComparePane entry={ports.alpha} />))
+        expect(mockCheckpoint).toHaveBeenCalledTimes(2)
+    } finally {
+        await view.unmount()
+        ports.controller.dispose()
+        gate.resolve()
+    }
+})
+
+it('a hidden pane cannot emit an unrelated-route checkpoint; refocus records its actual current ready state', async () => {
+    const ports = await setup()
+    mockFocused = false
+    const view = await render(wrap(ports, <ComparePane entry={ports.alpha} />))
+    try {
+        await fireEvent(screen.getByTestId('guide-hero-picture'), 'layout', {
+            nativeEvent: { layout: { width: 320, height: 340 } },
+        })
+        await waitFor(() =>
+            expect(screen.getByLabelText('Picture from your manual').props.source.uri).toBe(ports.alphaUri),
+        )
+        expect(mockCheckpoint).not.toHaveBeenCalled()
+        mockFocused = true
+        await view.rerender(wrap(ports, <ComparePane entry={ports.alpha} />))
+        expect(mockCheckpoint).toHaveBeenCalledTimes(1)
+        expect(mockCheckpoint.mock.calls[0]![0]).toMatch(/:ready$/u)
+    } finally {
+        await view.unmount()
+        ports.controller.dispose()
+    }
 })

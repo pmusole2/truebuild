@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { AppIntent, ManualSession, ScreenDocumentV2, TextRefV2 } from '@truebuild/contracts'
+import type { AppIntent, ManualSession, ScreenDocumentV2, TextRefV2, VariantState } from '@truebuild/contracts'
 import type { CaptureView, SegmentMark } from '../capture/controller'
 import type { ResolvedIntent } from '../screens/intents'
 import type { LiveScreen } from '../screens/live'
@@ -31,6 +31,10 @@ export type FrameBindings = {
     } | null
     /** Coach candidates are suppressed while work owns attention; copy/order still come from the document. */
     readonly workInProgress?: boolean
+    /** Only navigation/document preparation; the existing authored action presents its intrinsic busy state. */
+    readonly preparingDocument?: boolean
+    /** The committed variant after the real held-photo gate; a pending photo never witnesses ready. */
+    readonly onVariantShown?: (document: ScreenDocumentV2, state: 'ready' | VariantState) => void
     /** Live resolution of v2 bound text and toggles, from controller state. Absent means the control shows its label only. */
     readonly resolveText?: (ref: TextRefV2) => string
     readonly toggles?: Readonly<

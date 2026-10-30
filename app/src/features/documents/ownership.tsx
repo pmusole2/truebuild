@@ -12,7 +12,7 @@ import {
     type ReactNode,
 } from 'react'
 import { View } from 'react-native'
-import { screenDocumentV2Schema, type ScreenDocumentV2, type VariantState } from '@truebuild/contracts'
+import { screenDocumentV2Schema, VARIANT_STATES, type ScreenDocumentV2, type VariantState } from '@truebuild/contracts'
 import { mergeNativeIds, originId, type RenderOrigin } from '../../ui/render-origin'
 import { nativeFrameOrigins, type NativeFrameOriginDiagnostic } from '../../ui/native-frame-origin'
 
@@ -29,30 +29,101 @@ interface Owner {
 }
 const Context = createContext<Owner | null>(null)
 const RouteContext = createContext<Owner | null>(null)
+const VisibleContext = createContext(true)
+const NodeContext = createContext<{ readonly document: ScreenDocumentV2; readonly path: string } | null>(null)
+
+export function useDocumentVisibility(): boolean {
+    return useContext(VisibleContext)
+}
 
 export interface DocumentFrameOwner {
     readonly documentId: string
     readonly origin: RenderOrigin
     readonly focused: boolean
+    readonly document: ScreenDocumentV2
+    readonly state: 'ready' | VariantState
+    readonly originPath: string
 }
 function frameOf(claim: Claim | null): DocumentFrameOwner | null {
-    return claim === null ? null : { documentId: claim.document.screenId, origin: claim.origin, focused: claim.focused }
+    return claim === null
+        ? null
+        : {
+              documentId: claim.document.screenId,
+              origin: claim.origin,
+              focused: claim.focused,
+              document: claim.document,
+              state: claim.state,
+              originPath: `${claim.state === 'ready' ? '' : `states.${claim.state}.`}body`,
+          }
 }
 /** The nearest real frame, rather than the last globally focused sheet. */
 export function useDocumentFrameOwner(): DocumentFrameOwner | null {
     const local = useContext(RouteContext)
     const global = useContext(Context)
-    return frameOf(local === null ? (global?.current ?? null) : local.current)
+    const visible = useContext(VisibleContext)
+    const node = useContext(NodeContext)
+    if (!visible) return null
+    const frame = frameOf(local === null ? (global?.current ?? null) : local.current)
+    const origin = node?.document.metadata.origins[node.path]
+    return frame !== null && node?.document === frame.document && origin !== undefined
+        ? {
+              ...frame,
+              origin,
+              originPath: node.path,
+              state: VARIANT_STATES.find((state) => node.path.startsWith(`states.${state}.`)) ?? 'ready',
+          }
+        : frame
+}
+
+/** A node may lend its own exact published provenance to a citation portal, never a different document's source. */
+export function DocumentNodeOrigin({
+    document,
+    path,
+    children,
+}: {
+    readonly document: ScreenDocumentV2
+    readonly path: string
+    readonly children: ReactNode
+}): ReactElement {
+    const value = useMemo(() => ({ document, path }), [document, path])
+    return <NodeContext.Provider value={value}>{children}</NodeContext.Provider>
+}
+
+export function useDocumentModalFrameBinding(
+    root: RefObject<ComponentRef<typeof View> | null>,
+    owner: DocumentFrameOwner | null,
+    visible: boolean,
+): void {
+    useLayoutEffect(() => {
+        if (owner === null || !visible) return undefined
+        return nativeFrameOrigins.bindModal(root.current, owner.document, {
+            focused: owner.focused,
+            state: owner.state,
+            originPath: owner.originPath,
+            visible,
+            diagnostic: frameDiagnostic,
+        })
+    }, [root, owner?.document, owner?.state, owner?.originPath, owner?.focused, visible])
 }
 
 /** A modal owns its own published document and cannot borrow another route or nested modal's provenance. */
 export function DocumentOwnershipScope({
     children,
+    visible = true,
 }: {
     children: (owner: DocumentFrameOwner | null) => ReactNode
+    readonly visible?: boolean
 }): ReactElement {
     const owner = useOwners()
-    return <RouteContext.Provider value={owner}>{children(frameOf(owner.current))}</RouteContext.Provider>
+    const inherited = useContext(VisibleContext)
+    const active = inherited && visible
+    return (
+        <VisibleContext.Provider value={active}>
+            <RouteContext.Provider value={owner}>
+                {children(active ? frameOf(owner.current) : null)}
+            </RouteContext.Provider>
+        </VisibleContext.Provider>
+    )
 }
 
 function latest(claims: ReadonlyMap<object, Claim>): Claim | null {
@@ -90,22 +161,23 @@ export function useDocumentOwner(
 ): void {
     const register = useContext(Context)?.register
     const registerRoute = useContext(RouteContext)?.register
+    const visible = useContext(VisibleContext)
     const token = useRef<object>({})
     useLayoutEffect(() => {
         if (!screenDocumentV2Schema.safeParse(document).success) return undefined
         const prefix = state === 'ready' ? '' : `states.${state}.`
         const origin = document.metadata.origins[`${prefix}body`]
         if (origin === undefined) return undefined
-        const claim: Claim = { document, origin, focused, state }
+        const claim: Claim = { document, origin, focused: focused && visible, state }
         // A retained route still renders its own document, even though only a focused publisher owns global chrome.
         registerRoute?.(token.current, claim)
-        if (focused) register?.(token.current, claim)
+        if (focused && visible) register?.(token.current, claim)
         const key = token.current
         return (): void => {
             registerRoute?.(key, null)
-            if (focused) register?.(key, null)
+            if (focused && visible) register?.(key, null)
         }
-    }, [register, registerRoute, document, focused, state])
+    }, [register, registerRoute, document, focused, state, visible])
 }
 
 const frameDiagnostic =

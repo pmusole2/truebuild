@@ -199,7 +199,6 @@ it('cannot mutate the selected manual or its held photo through a valid generate
     await fireEvent.press(await screen.findByTestId('judge-built-toggle'))
     await fireEvent.press(await screen.findByRole('button', { name: 'Compare two manuals' }))
     await waitFor(() => expect(active!.view.getPathname()).toBe('/compare'))
-    await fireEvent.press(screen.getByTestId('compare-choose-second-manual'))
     const pane = await screen.findByTestId('compare-pane-second-manual')
     const target = await within(pane).findByRole('button', { name: second.session.reviewedSteps[1]!.title })
     expect(target).toBeDisabled()

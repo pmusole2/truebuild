@@ -1,5 +1,6 @@
 import {
     canonicalJson,
+    pendingCheckV2,
     buildFallbackDocumentV2,
     rebindGeneratedStatesV2,
     screenContextJsonV2,
@@ -254,7 +255,9 @@ export class DocumentStore {
                 status: 'ready',
                 document: recorded,
                 issue: null,
-                ...(isResultLayoutDocument(recorded) ? { exactGeneration: 'pending' as const } : {}),
+                ...(isResultLayoutDocument(recorded) && !pendingCheckV2(inputs)
+                    ? { exactGeneration: 'pending' as const }
+                    : {}),
             }
         }
         const reason = enabled ? 'busy' : this.enabled(inputs) && !this.disposed ? 'unconfigured' : 'disabled'
@@ -270,7 +273,11 @@ export class DocumentStore {
                 : rebindGeneratedStatesV2(inputs, local, donors, { sha256Hex, now: (): Date => new Date(this.now()) })
                       .document
         const fits = this.documentByteSize(document) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
-        return { status: enabled && fits ? 'pending' : 'ready', document, issue: fits ? null : 'budget_exhausted' }
+        return {
+            status: enabled && fits && !pendingCheckV2(inputs) ? 'pending' : 'ready',
+            document,
+            issue: fits ? null : 'budget_exhausted',
+        }
     }
     peek(inputs: ScreenContextInputsV2): DocumentRuntimeEntry | undefined {
         const key = documentKey(inputs),

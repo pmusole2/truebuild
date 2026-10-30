@@ -12,7 +12,7 @@ export interface NativeFrameNode {
 }
 export interface NativeFrameOriginDiagnostic {
     readonly nodeName: string
-    readonly role: 'route'
+    readonly role: 'route' | 'modal'
     readonly status: 'observed' | 'command-submitted' | 'preserved' | 'unsupported'
     readonly reason: string
 }
@@ -20,6 +20,9 @@ interface BindingOptions {
     readonly focused: boolean
     readonly state?: 'ready' | VariantState
     readonly diagnostic?: (entry: NativeFrameOriginDiagnostic) => void
+    readonly role?: 'route' | 'modal'
+    readonly visible?: boolean
+    readonly originPath?: string
 }
 interface Claim {
     readonly anchor: NativeFrameNode
@@ -106,6 +109,41 @@ function framePath(
     return { path, targets }
 }
 
+/** A real sheet's single SDK frame chain ends at its own nearest ModalHost, before any app/navigation root. */
+function modalPath(
+    anchor: NativeFrameNode,
+    documentId: string,
+    origin: NativeMeterOrigin,
+    options: BindingOptions,
+    idOf: (node: NativeFrameNode) => string | undefined,
+): ReturnType<typeof framePath> {
+    if (options.visible !== true || !ownsAnchor(anchor, documentId, origin)) return null
+    const path = [anchor],
+        targets: NativeFrameNode[] = []
+    for (let depth = 0; depth < 16; depth++) {
+        const child = path.at(-1)!
+        const parent: unknown = child.parentNode
+        if (!isNode(parent) || !parent.isConnected || path.includes(parent)) return null
+        const children = childrenOf(parent)
+        if (children?.length !== 1 || children[0] !== child) return null
+        const markers = parseNativeMeterMarkers(idOf(parent))
+        if (
+            markers.documentNavigation !== null ||
+            markers.documentRoot !== null ||
+            markers.capability !== null ||
+            markers.development
+        )
+            return null
+        if (markers.documentContentBoundary !== null && markers.documentContentBoundary !== documentId) return null
+        if (markers.origin !== null && markers.origin !== origin) return null
+        path.push(parent)
+        targets.push(parent)
+        if (/^(?:RCTModalHostView|ModalHostView)$/u.test(nameOf(parent))) return { path, targets }
+        if (!/^(?:View|RNCSafeAreaProvider|RNCSafeAreaView|RNSSafeAreaView)$/u.test(nameOf(parent))) return null
+    }
+    return null
+}
+
 export class InvalidNativeFrameOrigin extends Error {
     constructor() {
         super('invalid_native_frame_origin')
@@ -120,10 +158,20 @@ export class InvalidNativeFrameOrigin extends Error {
 export class NativeFrameOriginRegistry {
     private readonly hosts = new WeakMap<NativeFrameNode, HeldHost>()
 
+    bindModal(
+        anchor: unknown,
+        document: ScreenDocumentV2,
+        options: BindingOptions & { readonly visible: boolean },
+    ): () => void {
+        return this.bind(anchor, document, { ...options, role: 'modal' })
+    }
+
     bind(anchor: unknown, document: ScreenDocumentV2, options: BindingOptions): () => void {
         if (!isNode(anchor) || !screenDocumentV2Schema.safeParse(document).success) return (): void => {}
         const prefix = options.state === undefined || options.state === 'ready' ? '' : `states.${options.state}.`
-        const origin = document.metadata.origins[`${prefix}body`]
+        const path = options.originPath ?? `${prefix}body`
+        if (path !== `${prefix}body` && !path.startsWith(`${prefix}body.`)) return (): void => {}
+        const origin = document.metadata.origins[path]
         if (origin === undefined) return (): void => {}
         let planned: ReturnType<typeof framePath>
         try {
@@ -152,7 +200,7 @@ export class NativeFrameOriginRegistry {
         reason: string,
     ): void {
         try {
-            options.diagnostic?.({ nodeName: node.nodeName, role: 'route', status, reason })
+            options.diagnostic?.({ nodeName: node.nodeName, role: options.role ?? 'route', status, reason })
         } catch {
             // Diagnostic delivery cannot change attribution.
         }
@@ -164,10 +212,13 @@ export class NativeFrameOriginRegistry {
         origin: NativeMeterOrigin,
         options: BindingOptions,
     ): ReturnType<typeof framePath> {
-        return framePath(anchor, documentId, origin, options, (node) => {
+        const idOf = (node: NativeFrameNode): string | undefined => {
             const held = this.hosts.get(node)
             return held !== undefined && this.validHost(node, held) ? held.baseId : node.id
-        })
+        }
+        return options.role === 'modal'
+            ? modalPath(anchor, documentId, origin, options, idOf)
+            : framePath(anchor, documentId, origin, options, idOf)
     }
 
     private valid(claim: Claim): boolean {

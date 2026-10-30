@@ -566,15 +566,15 @@ describe('J2: compare two manuals', () => {
         expect(screen.getByTestId('compare-choose-manual-b')).toBeTruthy()
         const draft = screen.getByTestId('compare-choose-manual-c')
         expect(draft.props.accessibilityState).toMatchObject({ disabled: true })
-        expect(screen.queryByTestId('compare-pane-manual-a')).toBeNull()
+        expect(await screen.findByTestId('compare-pane-manual-a')).toBeTruthy()
+        expect(await screen.findByTestId('compare-pane-manual-b')).toBeTruthy()
+        expect(screen.queryByTestId('compare-pane-manual-c')).toBeNull()
     })
 
     it('draws any two manuals with the same renderer and different compositions, without changing either', async () => {
         const { view, controller, server } = await mount(entries(), { screens: different })
         await testRouter.push('/compare')
         await waitFor(() => expect(view.getPathname()).toBe('/compare'))
-        await fireEvent.press(screen.getByTestId('compare-choose-manual-a'))
-        await fireEvent.press(screen.getByTestId('compare-choose-manual-b'))
         const a = await screen.findByTestId('compare-pane-manual-a')
         const b = await screen.findByTestId('compare-pane-manual-b')
         expect(a).toBeTruthy()
@@ -594,6 +594,11 @@ describe('J2: compare two manuals', () => {
         )
         expect(composed).toEqual(expect.arrayContaining(['manual-a', 'manual-b']))
         expect(controller.getSnapshot().entries.map((item) => item.session.revision)).toEqual([1, 1, 1])
+        await fireEvent.press(screen.getByTestId('compare-choose-manual-a'))
+        expect(screen.queryByTestId('compare-pane-manual-a')).toBeNull()
+        expect(screen.getByTestId('compare-pane-manual-b')).toBeTruthy()
+        await fireEvent.press(screen.getByTestId('compare-choose-manual-a'))
+        expect(await screen.findByTestId('compare-pane-manual-a')).toBeTruthy()
     })
 
     it.each([
@@ -605,8 +610,6 @@ describe('J2: compare two manuals', () => {
         const { view } = await mount(entries(), { screens: different })
         await testRouter.push('/compare')
         await waitFor(() => expect(view.getPathname()).toBe('/compare'))
-        await fireEvent.press(screen.getByTestId('compare-choose-manual-a'))
-        await fireEvent.press(screen.getByTestId('compare-choose-manual-b'))
         await screen.findByTestId('compare-pane-manual-b')
         expect(screen.getByTestId('compare-panes').props.style).toEqual(
             expect.arrayContaining([expect.objectContaining({ flexDirection: direction })]),

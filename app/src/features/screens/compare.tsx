@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Stack as RouterStack, useIsFocused } from 'expo-router'
 import type { LibraryEntry } from '../capture/library'
@@ -17,6 +17,7 @@ import { documentKey } from '../document-runtime/store'
 import type { FrameBindings } from '../documents/types'
 import { useJudge } from './judge-context'
 import { useOriginNativeId } from '../../ui/render-origin'
+import { useMeterReading } from './native-meter'
 
 export const SIDE_BY_SIDE_WIDTH = 900
 export function comparable(entry: LibraryEntry): boolean {
@@ -73,6 +74,21 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
         }
     }, [reader, manualId, revision, pageKey])
     const currentPictures = pictures.key === pageKey ? pictures : null
+    const meter = useMeterReading()
+    const checkpoint = useRef(meter.measureNow)
+    checkpoint.current = meter.measureNow
+    const transition = `${key}:${reading.document.screenId}:${reading.status}:${currentPictures?.status ?? 'pending'}`
+    const sampled = useRef<string | null>(null)
+    useEffect(() => {
+        if (!meter.active || !focused) {
+            if (!meter.active) sampled.current = null
+            return
+        }
+        if (sampled.current === transition) return
+        sampled.current = transition
+        // Every actual committed phase, including initial pending and unavailable, has its own opaque checkpoint.
+        checkpoint.current(`compare:${transition}`)
+    }, [meter.active, focused, transition])
     const bindings: FrameBindings = {
         readOnly: true,
         resolve: () => ({ enabled: false, reason: 'Comparison is read only.', run: (): void => undefined }),
@@ -105,9 +121,14 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
 function Columns(): ReactElement {
     const { state } = useWorkflow()
     const { width } = useWindowDimensions()
-    const [chosen, setChosen] = useState<readonly string[]>([])
+    const [chosen, setChosen] = useState<readonly string[] | null>(null)
+    const available = state.entries.filter(comparable).map((entry) => entry.session.manualId)
+    const defaults = available.slice(0, 2)
+    const selected = (chosen ?? defaults).filter((id) => available.includes(id))
     const wide = width >= SIDE_BY_SIDE_WIDTH
-    const panes = chosen.flatMap((id) => state.entries.filter((entry) => entry.session.manualId === id))
+    const panes = selected.flatMap((id) =>
+        state.entries.filter((entry) => entry.session.manualId === id && comparable(entry)),
+    )
     return (
         <View style={styles.content}>
             <Caption>{wide ? 'Two manuals, side by side.' : 'Narrow layout: the two manuals are stacked.'}</Caption>
@@ -116,14 +137,15 @@ function Columns(): ReactElement {
                     key={entry.session.manualId}
                     testID={`compare-choose-${entry.session.manualId}`}
                     label={manualDisplayTitle(entry.session)}
-                    variant={chosen.includes(entry.session.manualId) ? 'accent' : 'secondary'}
+                    variant={selected.includes(entry.session.manualId) ? 'accent' : 'secondary'}
                     disabled={!comparable(entry)}
                     onPress={(): void =>
-                        setChosen((current) =>
-                            current.includes(entry.session.manualId)
-                                ? current.filter((id) => id !== entry.session.manualId)
-                                : [...current, entry.session.manualId].slice(-2),
-                        )
+                        setChosen((current) => {
+                            const ids = (current ?? defaults).filter((id) => available.includes(id))
+                            return ids.includes(entry.session.manualId)
+                                ? ids.filter((id) => id !== entry.session.manualId)
+                                : [...ids, entry.session.manualId].slice(-2)
+                        })
                     }
                 />
             ))}

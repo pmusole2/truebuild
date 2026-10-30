@@ -7,6 +7,7 @@ import { ThemeProvider } from '../../theme/theme'
 import { heroResolves, ScreenBlocks, type BlockContext } from './blocks'
 import type { ResolvedIntent } from './intents'
 import { instruction, randomBody, rng } from './test-support/documents'
+import { parseOrigin, RenderOriginProvider } from './render-origin'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -445,10 +446,26 @@ describe('a manual fact can open the pages it is cited from', () => {
         expect(screen.queryByTestId('diagram-0')).toBeNull()
     })
 
-    it("marks the access control as the app's own, never as the model's composition", async () => {
+    it('attributes the citation control to the document node that places it', async () => {
         const view = await render(mount([directions], ctx()))
+        expect(parseOrigin(screen.getByTestId('fact-source').props.nativeID)).toBe('generated')
         const measured = measureRenderOriginTree(view.toJSON(), checkpoint)
-        expect(measured.counts.shell).toBeGreaterThan(0)
+        expect(measured.counts.shell).toBe(0)
         expect(measured.counts.generated).toBeGreaterThan(0)
     })
+
+    it.each(['Instruction', 'Warning'] as const)(
+        'keeps a %s citation at its own fallback origin inside a generated container',
+        async (type) => {
+            const text = 'The groove faces the rail.'
+            const node: ScreenNode =
+                type === 'Instruction' ? instruction(text) : { type: 'Warning', text, tone: 'caution', citations: [] }
+            await render(
+                <RenderOriginProvider origin="generated">
+                    {mount([node], { ...ctx(), originOf: () => 'fallback' })}
+                </RenderOriginProvider>,
+            )
+            expect(parseOrigin(screen.getByTestId('fact-source').props.nativeID)).toBe('fallback')
+        },
+    )
 })

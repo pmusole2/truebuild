@@ -59,6 +59,7 @@ import { useContentFade } from '../../ui/motion'
 import { useIconReveal, useReadingLoop, useStepTransition } from '../../ui/motion'
 import { useFeedback } from '../../ui/feedback'
 import { PRIVACY_COPY } from '../capture/privacy-copy'
+import { DocumentNodeOrigin } from './ownership'
 import { startsAtStepSystemEdge, STEP_SWIPE_DISTANCE } from '../capture/gesture-policy'
 import { CoachTarget, useCoachAttention, useCoachScope } from '../onboarding/coach-provider'
 
@@ -1216,7 +1217,9 @@ function Node(props: NodeProps): ReactElement {
     if (!props.environment.bindings.inspect)
         return (
             <RenderOriginProvider origin={originAt(props.environment, props.path)}>
-                <NodeContent {...props} />
+                <DocumentNodeOrigin document={props.environment.document} path={props.path}>
+                    <NodeContent {...props} />
+                </DocumentNodeOrigin>
             </RenderOriginProvider>
         )
     return (
@@ -1234,7 +1237,9 @@ function Node(props: NodeProps): ReactElement {
             }}
         >
             <RenderOriginProvider origin={originAt(props.environment, props.path)}>
-                <NodeContent {...props} />
+                <DocumentNodeOrigin document={props.environment.document} path={props.path}>
+                    <NodeContent {...props} />
+                </DocumentNodeOrigin>
             </RenderOriginProvider>
             {showSource ? (
                 <Caption>{`${props.node.type.replace(/([a-z])([A-Z])/gu, '$1 $2')} · ${props.node.type === 'Image' && unavailableManualImage(props.node, props.environment) ? 'fallback' : originAt(props.environment, props.path)}`}</Caption>
@@ -1764,6 +1769,9 @@ export function NativeDocumentRenderer({
         (!document.requirements.capture || bindings.capture?.reusable === true)
     const gatePhoto = wanted.name === 'ready' && document.requirements.capture && !heldReady
     const selected = gatePhoto ? variants.find((item) => item.name === 'pending')! : wanted
+    useLayoutEffect(() => {
+        bindings.onVariantShown?.(document, selected.name)
+    }, [document, selected.name, bindings.onVariantShown])
     const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove)
     const [sectionState, setSectionState] = useState<{ id: string; values: Readonly<Record<string, boolean>> }>(() => ({
         id: bodyPage,
@@ -1825,6 +1833,7 @@ export function NativeDocumentRenderer({
             (node.label === 'Close' || node.label === 'Back')
         return {
             label: node.label,
+            busy: bindings.preparingDocument === true && role === 'primary' && !cancelsWork(node.intent),
             accessibilityLabel: node.label,
             icon: node.icon ?? undefined,
             onPress:

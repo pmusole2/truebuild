@@ -40,8 +40,13 @@ import { useFeedback } from './feedback'
 import { SPRING_GENTLE, timing } from './motion'
 import { useLargeText } from './large-text'
 import { Body, Heading } from './text'
-import { DocumentOwnershipScope, useDocumentFrameOwner } from '../features/documents/ownership'
-import { mergeNativeIds, originId, useRenderOrigin } from './render-origin'
+import {
+    DocumentOwnershipScope,
+    useDocumentFrameOwner,
+    useDocumentModalFrameBinding,
+    type DocumentFrameOwner,
+} from '../features/documents/ownership'
+import { mergeNativeIds, originId, RenderOriginProvider, useRenderOrigin } from './render-origin'
 const SheetDismissContext = createContext<(() => void) | null>(null)
 /** A document's own Back/Close action uses the same native dismissal motion and single-use latch as the grabber. */
 export function useSheetDismiss(): (() => void) | null {
@@ -142,12 +147,20 @@ export function BottomSheet({
     const parent = useDocumentFrameOwner()
     const inherited = useRenderOrigin()
     return (
-        <DocumentOwnershipScope>
+        <DocumentOwnershipScope visible={visible}>
             {(published) => {
                 // Document sheets publish their own frame. A citation disclosure belongs to its actual model-authored node.
-                const owner =
-                    published ??
-                    (!documentFrame && inherited !== null && parent !== null ? { ...parent, origin: inherited } : null)
+                const owner = !visible
+                    ? null
+                    : (published ??
+                      (!documentFrame && inherited !== null && parent?.origin === inherited ? parent : null))
+                const marker =
+                    owner === null
+                        ? undefined
+                        : mergeNativeIds(
+                              `truebuild-document-content-boundary:${owner.documentId}`,
+                              originId(owner.origin),
+                          )
                 return (
                     <Modal
                         nativeID={
@@ -162,21 +175,24 @@ export function BottomSheet({
                         accessibilityViewIsModal={true}
                     >
                         {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}
-                        <SafeAreaProvider>
-                            <SheetFrame
-                                visible={visible}
-                                title={title}
-                                compactTitle={compactTitle}
-                                onClose={onClose}
-                                detents={detents}
-                                initialDetent={initialDetent}
-                                testID={testID}
-                                scrollTestID={scrollTestID}
-                                documentFrame={documentFrame}
-                            >
-                                {children}
-                            </SheetFrame>
-                        </SafeAreaProvider>
+                        <RenderOriginProvider origin={owner?.origin ?? 'shell'}>
+                            <SafeAreaProvider nativeID={marker}>
+                                <SheetFrame
+                                    owner={owner}
+                                    visible={visible}
+                                    title={title}
+                                    compactTitle={compactTitle}
+                                    onClose={onClose}
+                                    detents={detents}
+                                    initialDetent={initialDetent}
+                                    testID={testID}
+                                    scrollTestID={scrollTestID}
+                                    documentFrame={documentFrame}
+                                >
+                                    {children}
+                                </SheetFrame>
+                            </SafeAreaProvider>
+                        </RenderOriginProvider>
                     </Modal>
                 )
             }}
@@ -200,6 +216,7 @@ export function MoreSheet(props: {
 }
 
 function SheetFrame({
+    owner,
     visible,
     title,
     compactTitle,
@@ -211,6 +228,7 @@ function SheetFrame({
     scrollTestID,
     documentFrame,
 }: {
+    readonly owner: DocumentFrameOwner | null
     readonly visible: boolean
     readonly title: string
     readonly compactTitle: string | undefined
@@ -223,8 +241,16 @@ function SheetFrame({
     readonly documentFrame: boolean
 }): ReactElement {
     const { colors, scheme } = useTheme()
-    const frame = useDocumentFrameOwner()
+    const frame = owner
     const documentId = frame?.documentId ?? null
+    const frameRoot = useRef<ComponentRef<typeof View>>(null)
+    useDocumentModalFrameBinding(frameRoot, owner, visible)
+    const frameId =
+        frame === null
+            ? undefined
+            : mergeNativeIds(`truebuild-document-content-boundary:${frame.documentId}`, originId(frame.origin))
+    // Each mechanics host owns itself. Unmarked arbitrary content does not inherit frame credit.
+    const chromeId = frameId
     const { reduceMotion } = useFeedback()
     const { height } = useWindowDimensions()
     const insets = useSafeAreaInsets()
@@ -386,6 +412,9 @@ function SheetFrame({
 
     return (
         <View
+            ref={frameRoot}
+            collapsable={false}
+            nativeID={frameId}
             testID="sheet-scrim"
             onLayout={onContainerLayout}
             style={[
@@ -396,6 +425,7 @@ function SheetFrame({
             ]}
         >
             <Pressable
+                nativeID={chromeId}
                 testID="sheet-dismiss"
                 accessibilityElementsHidden={true}
                 importantForAccessibility="no"
@@ -403,6 +433,7 @@ function SheetFrame({
                 onPress={close}
             />
             <Animated.View
+                nativeID={chromeId}
                 testID={testID}
                 style={[
                     styles.sheet,
@@ -415,6 +446,7 @@ function SheetFrame({
                 ]}
             >
                 <View
+                    nativeID={chromeId}
                     testID="sheet-handle"
                     accessible={true}
                     accessibilityRole="adjustable"
@@ -432,7 +464,7 @@ function SheetFrame({
                     {...pan.panHandlers}
                     style={styles.grabZone}
                 >
-                    <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
+                    <View nativeID={chromeId} style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
                 </View>
                 {documentFrame ? (
                     <View
@@ -448,8 +480,9 @@ function SheetFrame({
                     </View>
                 ) : (
                     <>
-                        <View style={styles.header}>
+                        <View nativeID={chromeId} style={styles.header}>
                             <View
+                                nativeID={chromeId}
                                 ref={attachMeterRoot}
                                 accessible={true}
                                 accessibilityRole={large && compactTitle !== undefined ? 'header' : undefined}
@@ -461,6 +494,7 @@ function SheetFrame({
                             <IconButton label="Close sheet" icon="close" onPress={close} />
                         </View>
                         <ScrollView
+                            nativeID={chromeId}
                             testID={scrollTestID}
                             style={styles.scroll}
                             contentContainerStyle={styles.scrollContent}

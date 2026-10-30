@@ -10,9 +10,39 @@ import { documentMatchesInputs } from '../../api/document-client'
 import { fixtureDocuments } from '../screens/test-support/fixture-server'
 import resultRuntime from '../documents/recorded-layouts/recorded-result-layout-sol-v1.runtime.json'
 import { DocumentStore } from './store'
-import { answerContext, checkContext } from './test-support/result-layout-inputs'
+import { answerContext, checkContext, pendingCheckContext } from './test-support/result-layout-inputs'
 
 describe('progressive authored result composition through the real model client', () => {
+    it.each([false, true])(
+        'pending check is strictly local, including recording opt-out=%s; actual verdict still dispatches once',
+        async (optOut) => {
+            const server = fixtureDocuments({ generated: ['result'] })
+            const store = new DocumentStore({
+                client: server,
+                mode: 'full',
+                id: (): string => 'pending-check',
+                ...(optOut ? { recordings: (): null => null } : {}),
+            })
+            const inputs = pendingCheckContext()
+            try {
+                const entry = store.request(inputs)
+                expect(entry.status).toBe('ready')
+                expect(entry.document.metadata.source).toBe(optOut ? 'fallback' : 'generated')
+                expect(entry.exactGeneration).toBeUndefined()
+                expect(entry.issue).toBeNull()
+                expect(store.readyAt(inputs)).toBeNull()
+                store.warmup([inputs])
+                await Promise.resolve()
+                expect(server.requests).toHaveLength(0)
+                const verdict = checkContext()
+                expect((await store.waitForGenerated(verdict))?.metadata.source).toBe('generated')
+                expect(server.requests).toHaveLength(1)
+                expect(server.requests[0]!.result).not.toBeNull()
+            } finally {
+                store.dispose()
+            }
+        },
+    )
     it.each([checkContext, answerContext])(
         'shows current truth while one exact request is held, then replaces it',
         async (context) => {

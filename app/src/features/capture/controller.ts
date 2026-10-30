@@ -212,6 +212,7 @@ export class CaptureController {
     private epoch = 0
     private operation: AbortController | null = null
     private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'secondOpinion' | 'ask' | null = null
+    private checkCapture: CaptureBinding | null = null
     private followUps: AbortController | null = null
     private overlayPatch: OverlayResult | null = null
     private readonly now: () => number
@@ -219,6 +220,24 @@ export class CaptureController {
         this.now = ports.now ?? ((): number => Date.now())
     }
     getSnapshot = (): WorkflowState => this.state
+    /** App presentation witness only; no wire assertion and no action/reuse permission. */
+    get pendingCheckCapture(): CaptureBinding | null {
+        const capture = this.state.capture
+        const entry = this.current
+        return this.checkCapture !== null &&
+            capture?.binding === this.checkCapture &&
+            this.state.check === null &&
+            this.operation !== null &&
+            !this.operation.signal.aborted &&
+            (this.operationKind === 'capture' || this.operationKind === 'check') &&
+            this.state.pending !== null &&
+            entry?.session.manualId === this.checkCapture.manualId &&
+            entry.session.revision === this.checkCapture.revision &&
+            entry.session.reviewStatus === 'reviewed' &&
+            entry.session.reviewedSteps[entry.stepIndex]?.stepId === this.checkCapture.stepId
+            ? this.checkCapture
+            : null
+    }
     subscribe = (listener: () => void): (() => void) => {
         this.listeners.add(listener)
         return (): void => {
@@ -239,6 +258,7 @@ export class CaptureController {
         this.operation?.abort()
         this.operation = null
         this.operationKind = null
+        this.checkCapture = null
         // Background presentation work belongs to the capture that started it and never outlives it.
         this.followUps?.abort()
         this.followUps = null
@@ -934,6 +954,7 @@ export class CaptureController {
         this.publish({ pending: 'Freezing photo…', notice: null })
         let original: SourceImageAsset | undefined
         let normalized: NormalizedImage | undefined
+        let capturedBinding: CaptureBinding | null = null
         try {
             const asset = await awaitStopped(photo(), guard.signal, (late): void => {
                 void releaseTemporaryImage(late.uri)
@@ -957,6 +978,8 @@ export class CaptureController {
                 stepId: step.stepId,
                 captureId: `capture-${this.ports.id()}`,
             }
+            capturedBinding = binding
+            this.checkCapture = intent.kind === 'check' ? binding : null
             this.publish({
                 capture: { binding, observation: image, capturedAt, reusable: true },
                 route: 'guide',
@@ -1079,6 +1102,7 @@ export class CaptureController {
                 await releaseTemporaryImage(normalized.uri)
             }
             guard.dispose()
+            if (this.checkCapture === capturedBinding) this.checkCapture = null
             if (token === this.epoch) {
                 this.operation = null
                 this.operationKind = null

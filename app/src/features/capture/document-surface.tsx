@@ -15,7 +15,7 @@ import { activeDocumentVariant, useDocument } from '../document-runtime/use-docu
 import { documentKey } from '../document-runtime/store'
 import { futureDocumentStates } from '../document-runtime/future-states'
 import { DocumentRenderer } from '../documents/document-renderer'
-import { useDocumentOwner } from '../documents/ownership'
+import { useDocumentOwner, useDocumentVisibility } from '../documents/ownership'
 import type { FrameBindings } from '../documents/types'
 import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
@@ -29,6 +29,7 @@ import { documentInputs } from './document-inputs'
 export { documentInputs } from './document-inputs'
 import { useWorkflow, type WorkflowValue } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
+import { documentMatchesInputs } from '../../api/document-client'
 
 /** One production route adapter. It binds live mechanics, never screen content or a parallel action bar. */
 export function DocumentSurface({
@@ -71,15 +72,40 @@ export function DocumentSurface({
     testID?: string
 }): ReactElement {
     const actualWorkflow = useWorkflow()
-    const focused = useIsFocused()
+    const routeFocused = useIsFocused()
+    const visible = useDocumentVisibility()
+    const focused = routeFocused && visible
     const pathname = usePathname()
     const preparation = useNavigationPreparation()
-    const preparing = focused && onClose === undefined && preparation?.sourcePath === pathname
+    const navigationPreparing = focused && onClose === undefined && preparation?.sourcePath === pathname
     const retained = useRef<{
         readonly workflow: WorkflowValue
         readonly quick: QuickProgress | undefined
         readonly document: ScreenDocumentV2
+        readonly key: string
+        readonly activeState: 'ready' | VariantState
+        readonly stableKey: string
+        readonly path: string
     } | null>(null)
+    // A storage write alone does not invalidate an already displayed fact set. Never apply this to checking/asking,
+    // a changed capture/manual/step/result, or newly published saved facts: those must select their actual context.
+    const previous = retained.current
+    const savingInputs =
+        previous === null ? null : documentInputs(previous.document.kind, actualWorkflow, quick, contextualMore)
+    const savingKey =
+        savingInputs === null
+            ? null
+            : documentKey({ ...savingInputs, uiState: { ...savingInputs.uiState, busy: null } })
+    const savingPreparing =
+        focused &&
+        onClose === undefined &&
+        previous?.activeState === 'ready' &&
+        previous.path === pathname &&
+        actualWorkflow.state.pending?.startsWith('Saving') === true &&
+        !actualWorkflow.state.storageReadOnly &&
+        !actualWorkflow.state.loading &&
+        savingKey === previous.stableKey
+    const preparing = navigationPreparing || savingPreparing
     const held = preparing ? retained.current : null
     const workflow = held?.workflow ?? actualWorkflow
     const progress = held === null ? quick : held.quick
@@ -117,7 +143,8 @@ export function DocumentSurface({
             : kind === 'guide'
               ? state.answer !== null && state.answeredQuestion != null && state.answer !== dismissedAnswer
                   ? 'answer'
-                  : state.check !== null
+                  : state.check !== null ||
+                      (state.capture !== null && workflow.controller.pendingCheckCapture === state.capture.binding)
                     ? 'result'
                     : state.pending === null && state.notice !== null && isProblemNotice(state.notice)
                       ? 'recovery'
@@ -163,32 +190,30 @@ export function DocumentSurface({
             : {
                   ...queried,
                   document: held.document,
-                  ...activeDocumentVariant(held.document, 'busy'),
+                  ...activeDocumentVariant(held.document, held.activeState),
                   status: 'ready' as const,
                   issue: null,
               }
+    const ownsRoute =
+        kind === 'home'
+            ? state.route === 'library'
+            : kind === 'reading'
+              ? state.route === 'pages'
+              : kind === 'quick-check'
+                ? state.route === 'overview'
+                : kind === 'guide'
+                  ? state.route === 'guide'
+                  : true
+    const currentKey = documentKey(inputs)
     useLayoutEffect(() => {
-        const ownsRoute =
-            kind === 'home'
-                ? state.route === 'library'
-                : kind === 'reading'
-                  ? state.route === 'pages'
-                  : kind === 'quick-check'
-                    ? state.route === 'overview'
-                    : kind === 'guide'
-                      ? state.route === 'guide'
-                      : true
         if (
             !preparing &&
             ownsRoute &&
-            onClose === undefined &&
-            queried.status === 'ready' &&
-            queried.document.metadata.source === 'generated'
-        ) {
-            // Keep the committed whole document with the actual old facts that made it valid, never a patched donor.
-            retained.current = { workflow: actualWorkflow, quick, document: queried.document }
-        }
-    }, [actualWorkflow, state.route, kind, onClose, preparing, quick, queried.status, queried.document])
+            retained.current !== null &&
+            (retained.current.key !== currentKey || retained.current.document !== queried.document)
+        )
+            retained.current = null
+    }, [preparing, ownsRoute, currentKey, queried.document, queried.activeState])
     const futureInputs = useRef(inputs)
     futureInputs.current = inputs
     const futureKey =
@@ -518,6 +543,28 @@ export function DocumentSurface({
                     ? { primary: 'retry-library' }
                     : undefined,
         workInProgress: busy || more.open || judgeOpen,
+        preparingDocument: preparing,
+        onVariantShown: (document, activeState): void => {
+            if (
+                !preparing &&
+                focused &&
+                ownsRoute &&
+                onClose === undefined &&
+                queried.status === 'ready' &&
+                document === queried.document &&
+                document.metadata.source === 'generated' &&
+                documentMatchesInputs(document, inputs)
+            )
+                retained.current = {
+                    workflow: actualWorkflow,
+                    quick,
+                    document,
+                    key: currentKey,
+                    activeState,
+                    path: pathname,
+                    stableKey: documentKey({ ...inputs, uiState: { ...inputs.uiState, busy: null } }),
+                }
+        },
         language: {
             value: language,
             onChange: (value): void => {

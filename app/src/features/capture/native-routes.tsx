@@ -521,7 +521,35 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
                 owner.cancel()
                 controller.cancel()
             },
-            completeStep: () => (available() ? controller.completeStep() : Promise.resolve()),
+            completeStep: async (): Promise<void> => {
+                if (!available()) return
+                const before = controller.current
+                if (
+                    before === undefined ||
+                    before.stepIndex >= before.session.reviewedSteps.length - 1 ||
+                    !prepares(documents, 'guide')
+                ) {
+                    await controller.completeStep()
+                    return
+                }
+                // Reserve before invalidate/save publishes: the same guide URL cannot reserve this transition later.
+                const preparation = owner.begin(here, before.session.manualId, 'guide')
+                if (preparation === null) return
+                try {
+                    await controller.completeStep()
+                    const after = controller.current
+                    if (
+                        !owner.active(preparation) ||
+                        after?.session.manualId !== before.session.manualId ||
+                        after.session.revision !== before.session.revision ||
+                        after.stepIndex !== before.stepIndex + 1
+                    )
+                        return
+                    await awaitTarget(controller, documents, owner, preparation, 'guide')
+                } finally {
+                    if (owner.active(preparation)) owner.cancel()
+                }
+            },
             confirm: () => (available() ? controller.confirm() : Promise.resolve()),
             coverageNotice: () => controller.coverageNotice(),
             createManual: async () => {

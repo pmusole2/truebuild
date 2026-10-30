@@ -61,6 +61,67 @@ function measure(root: Node): ReturnType<NativeHostMeter['sample']> {
     return meter.sample(point)
 }
 
+function modalFixture(): { root: Node; modal: Node; wrapper: Node; safe: Node; anchor: Node; stray: Node } {
+    const anchor = new Node(
+        'RN:View',
+        `truebuild-document-content-boundary:${document.screenId}|truebuild-render-origin:generated`,
+    ).append(new Node('RN:View', 'truebuild-render-origin:generated'))
+    const safe = new Node('RN:RNCSafeAreaProvider').append(anchor)
+    const wrapper = new Node('RN:View').append(safe)
+    const modal = new Node('RN:ModalHostView').append(wrapper)
+    const stray = new Node('RN:View')
+    return { root: new Node('RN:RootView').append(modal, stray), modal, wrapper, safe, anchor, stray }
+}
+
+describe('exclusive native modal frames', () => {
+    it('attributes only the published modal frame, never RootView or unrelated siblings, and restores on close', () => {
+        const tree = modalFixture()
+        const release = nativeFrameOrigins.bindModal(tree.anchor, document, { focused: true, visible: true })
+        expect(measure(tree.root).counts).toEqual({ generated: 5, fallback: 0, shell: 2, total: 7 })
+        expect(tree.modal.commands.at(-1)).toContain(`truebuild-document-content-boundary:${document.screenId}`)
+        expect(tree.root.commands).toEqual([])
+        expect(tree.stray.commands).toEqual([])
+        release()
+        expect(measure(tree.root).counts).toEqual({ generated: 2, fallback: 0, shell: 5, total: 7 })
+    })
+    it.each([
+        'invisible',
+        'wrong-owner',
+        'unrelated-content',
+        'navigation',
+        'root',
+        'missing-writer',
+        'other-variant-path',
+    ] as const)('refuses modal credit for %s', (kind) => {
+        const registry = new NativeFrameOriginRegistry()
+        const tree = modalFixture()
+        if (kind === 'wrong-owner')
+            tree.safe.id = 'truebuild-document-content-boundary:another-owner|truebuild-render-origin:generated'
+        if (kind === 'unrelated-content') tree.wrapper.append(new Node('RN:View'))
+        if (kind === 'navigation')
+            tree.safe.id = `truebuild-document-navigation:${document.screenId}|truebuild-render-origin:generated`
+        if (kind === 'root') tree.modal.nodeName = 'RN:RootView'
+        if (kind === 'missing-writer') Object.assign(tree.modal, { setNativeProps: undefined })
+        registry.bindModal(tree.anchor, document, {
+            focused: true,
+            visible: kind !== 'invisible',
+            ...(kind === 'other-variant-path' ? { originPath: 'states.error.body' } : {}),
+        })
+        expect(registry.markerFor(tree.modal)).toBeUndefined()
+        expect(tree.modal.commands).toEqual([])
+    })
+    it('revalidates the exact modal path and rejects a late foreign or disconnected owner', () => {
+        const registry = new NativeFrameOriginRegistry()
+        const tree = modalFixture()
+        registry.bindModal(tree.anchor, document, { focused: true, visible: true })
+        tree.safe.id = 'truebuild-document-content-boundary:another-owner|truebuild-render-origin:generated'
+        expect(() => registry.markerFor(tree.modal)).toThrow('invalid_native_frame_origin')
+        tree.safe.id = ''
+        tree.anchor.isConnected = false
+        expect(() => registry.markerFor(tree.modal)).toThrow('invalid_native_frame_origin')
+    })
+})
+
 describe('native document frame origin', () => {
     it('submits native marker commands for exact frame hosts without crediting unrelated descendants or coach siblings', () => {
         const tree = fixture()

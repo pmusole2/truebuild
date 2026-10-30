@@ -602,7 +602,7 @@ it('keeps one selection haptic on the highlighted action even under reduced moti
     expect(trigger).toHaveBeenCalledWith('selection')
 })
 
-it('normalizes Android native measurements into the full-screen overlay coordinate space', async () => {
+it('does not add a guessed Android status-bar offset to a native measurement', async () => {
     const os = Platform.OS
     const statusHeight = StatusBar.currentHeight
     Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true })
@@ -617,12 +617,36 @@ it('normalizes Android native measurements into the full-screen overlay coordina
                 } as never,
             },
         })
-        expect(rect).toEqual({ x: 16, y: 724, width: 360, height: 56 })
+        expect(rect).toEqual({ x: 16, y: 700, width: 360, height: 56 })
     } finally {
         Object.defineProperty(StatusBar, 'currentHeight', { value: statusHeight, configurable: true })
         Object.defineProperty(Platform, 'OS', { value: os, configurable: true })
     }
 })
+
+it.each([
+    ['keep-building', { x: 42, y: 2023, width: 996, height: 147 }],
+    ['header-more', { x: 923, y: 170, width: 115, height: 116 }],
+] as const)(
+    'measures %s relative to the actual common coach frame instead of another native window',
+    async (label, expected) => {
+        const reference = {} as never
+        const nativeWindow = jest.fn((done: (x: number, y: number, width: number, height: number) => void): void =>
+            done(expected.x, expected.y + 128.5, expected.width, expected.height),
+        )
+        const relative = jest.fn(
+            (_root: unknown, done: (x: number, y: number, width: number, height: number) => void): void =>
+                done(expected.x, expected.y, expected.width, expected.height),
+        )
+        const measured = await measureInWindow(
+            { label, ref: { current: { measureInWindow: nativeWindow, measureLayout: relative } as never } },
+            reference,
+        )
+        expect(measured).toEqual(expected)
+        expect(relative).toHaveBeenCalledWith(reference, expect.any(Function), expect.any(Function))
+        expect(nativeWindow).not.toHaveBeenCalled()
+    },
+)
 
 it('offers a bottom action in Android full-screen coordinates beyond the app content window', async () => {
     const os = Platform.OS

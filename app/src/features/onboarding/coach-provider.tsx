@@ -13,7 +13,7 @@ import {
     type ReactNode,
     type RefObject,
 } from 'react'
-import { AccessibilityInfo, AppState, BackHandler, Platform, StatusBar, View, type ViewStyle } from 'react-native'
+import { AccessibilityInfo, AppState, BackHandler, Platform, View, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useCoachWindow } from './coach-window'
 import { useFeedback } from '../../ui/feedback'
@@ -41,7 +41,7 @@ export type TargetHandle = {
 type Measure = (handle: TargetHandle) => Promise<Rect | null>
 
 /** Real measurement. A node that never answers resolves null, so a missing anchor never wedges the tour. */
-export const measureInWindow: Measure = (handle) =>
+export const measureInWindow = (handle: TargetHandle, reference?: ComponentRef<typeof View>): Promise<Rect | null> =>
     new Promise((resolve) => {
         const node = handle.ref.current
         if (node === null) {
@@ -50,12 +50,18 @@ export const measureInWindow: Measure = (handle) =>
         }
         const timer = setTimeout(() => resolve(null), 500)
         try {
-            node.measureInWindow((x, y, width, height) => {
+            const measured = (x: number, y: number, width: number, height: number): void => {
                 clearTimeout(timer)
-                // Android measures from the app content window; both full-screen coach hosts include the status area.
-                // Keep native header, body and camera targets in the same screen coordinate space.
-                resolve({ x, y: y + (Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0), width, height })
-            })
+                resolve({ x, y, width, height })
+            }
+            // The provider's full-window frame and the coach portal share layout coordinates. Different native
+            // windows need not share measureInWindow's origin; measure the real control relative to that frame.
+            if (reference !== undefined)
+                node.measureLayout(reference, measured, (): void => {
+                    clearTimeout(timer)
+                    resolve(null)
+                })
+            else node.measureInWindow(measured)
         } catch {
             clearTimeout(timer)
             resolve(null)
@@ -223,6 +229,16 @@ export function CoachProvider({
     renderOverlay,
 }: CoachProviderProps): ReactElement {
     const { haptic } = useFeedback()
+    const frame = useRef<ComponentRef<typeof View>>(null)
+    const measureTarget = useCallback<Measure>(
+        (handle) =>
+            measure === measureInWindow
+                ? frame.current === null
+                    ? Promise.resolve(null)
+                    : measureInWindow(handle, frame.current)
+                : measure(handle),
+        [measure],
+    )
     const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
     const window = useCoachWindow()
     const insets = useSafeAreaInsets()
@@ -351,7 +367,7 @@ export function CoachProvider({
                     remaining.map(async (candidate) => {
                         const handle = targets.current.get(`${screen}:${candidate.id}`)?.()
                         if (handle === undefined) return null
-                        const rect = await measure(handle)
+                        const rect = await measureTarget(handle)
                         return validRect(rect, size, insets, candidate.kind, touchTarget)
                             ? { candidate, rect, label: handle.label }
                             : null
@@ -391,7 +407,7 @@ export function CoachProvider({
             generation.current += 1
         }
         // Live candidate changes also invalidate copy and geometry, even if the screen and target id stay the same.
-    }, [eligible, liveReport, geometry, runTick, settleMs, measure])
+    }, [eligible, liveReport, geometry, runTick, settleMs, measureTarget])
 
     // A visible tip whose target left the screen (or whose candidate the screen withdrew) ends quietly and the tour
     // moves on; it never lingers pointing at nothing.
@@ -543,6 +559,8 @@ export function CoachProvider({
     return (
         <CoachContext.Provider value={value}>
             <View
+                ref={frame}
+                collapsable={false}
                 style={ROOT}
                 accessibilityElementsHidden={active !== null && active.host === 'root'}
                 importantForAccessibility={active !== null && active.host === 'root' ? 'no-hide-descendants' : 'auto'}

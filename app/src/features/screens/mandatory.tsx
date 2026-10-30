@@ -14,14 +14,13 @@ import { Notice } from '../../ui/status'
 import { Body, Caption, Instruction } from '../../ui/text'
 import { space, touchTarget } from '../../theme/tokens'
 import type { BlockContext } from './blocks'
-import { originId, type RenderOrigin } from './render-origin'
+import { originId, RenderOriginProvider, useOriginNativeId, type RenderOrigin } from './render-origin'
 import { safetyKey } from './safety'
 
 type DirectionsNode = Extract<ScreenNode, { type: 'ManualDirections' }>
 
 /**
- * Where the manual prints a fact: its own cited pages and figure regions, one tap away. This is app chrome around the
- * manual's words, not model composition, so it is marked shell whatever the fact's origin.
+ * Citation mechanics belong to the exact fact node that placed them. Unowned use remains shell.
  */
 function FactSource({
     fact,
@@ -33,17 +32,16 @@ function FactSource({
     pageUris: Readonly<Record<string, string>>
 }): ReactElement | null {
     const [open, setOpen] = useState(false)
+    const origin = useOriginNativeId()
     if (session === undefined) return null
     const pages = new Set(session.pages.map((page) => page.pageId))
     const refs = fact.sourceRefs.filter((ref) => pages.has(ref.pageId))
     // A citation to a page this manual does not hold shows nothing rather than a broken link.
     if (refs.length === 0) return null
-    // One pressable and its words, nothing wrapped around them: the control is the app's own, so it carries the shell
-    // marker itself, and the page it opens is the manual's own picture.
     return (
         <>
             <Pressable
-                nativeID={originId('shell')}
+                nativeID={origin}
                 testID="fact-source"
                 accessibilityRole="button"
                 accessibilityLabel={open ? 'Hide this in the manual' : 'Show this in the manual'}
@@ -54,7 +52,7 @@ function FactSource({
                 <Caption>{open ? 'Hide the manual page' : 'See it in the manual'}</Caption>
             </Pressable>
             {open ? (
-                <View nativeID={originId('shell')}>
+                <View testID="fact-source-content" nativeID={origin}>
                     <SourceDiagrams refs={refs} session={session} pageUris={pageUris} fit="page" />
                 </View>
             ) : null}
@@ -129,15 +127,17 @@ export function DirectionsBlock({
     if (facts.length === 0) return null
     return (
         <View nativeID={originId(context.originOf(path))} testID="manual-directions" style={styles.stack}>
-            {facts.map((fact) => (
-                <Fact
-                    key={fact.factId}
-                    fact={fact}
-                    emphasis={node.emphasis}
-                    session={context.session}
-                    pageUris={context.pageUris}
-                />
-            ))}
+            <RenderOriginProvider origin={context.originOf(path)}>
+                {facts.map((fact) => (
+                    <Fact
+                        key={fact.factId}
+                        fact={fact}
+                        emphasis={node.emphasis}
+                        session={context.session}
+                        pageUris={context.pageUris}
+                    />
+                ))}
+            </RenderOriginProvider>
         </View>
     )
 }
@@ -227,7 +227,9 @@ export function MandatoryFacts({
         <>
             {remaining.map(({ fact, origin }) => (
                 <View key={fact.factId} testID="mandatory-fact" nativeID={originId(origin)} style={styles.stack}>
-                    <Fact fact={fact} emphasis="normal" session={session} pageUris={pageUris ?? {}} />
+                    <RenderOriginProvider origin={origin}>
+                        <Fact fact={fact} emphasis="normal" session={session} pageUris={pageUris ?? {}} />
+                    </RenderOriginProvider>
                 </View>
             ))}
         </>

@@ -22,6 +22,7 @@ import { entry, runtime, source } from '../screens/test-support/route-harness'
 import { defaultNav } from '../capture/screen-nav'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { recordedDocumentForTest } from './recorded/test-support'
+import { recordedDocument } from '../document-runtime/recorded-runtime'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -119,6 +120,33 @@ async function setup(
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it('a pending check shows its actual bound photo without reuse permission and never exposes an old live verdict', async () => {
+        const { inputs, bindings } = await setup(true)
+        const pendingInputs: ScreenContextInputsV2 = {
+            ...inputs,
+            result: null,
+            uiState: {
+                capture: { captureId: inputs.captureId!, reusable: false, target: null, questionDraftPresent: false },
+                busy: { activity: 'checking' },
+            },
+        }
+        const document = recordedDocument(pendingInputs)!
+        const shown = jest.fn()
+        const capture = { ...bindings.capture!, reusable: false }
+        await render(
+            wrap(<DocumentRenderer document={document} bindings={{ ...bindings, capture, onVariantShown: shown }} />),
+        )
+        expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
+        expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
+        await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+            nativeEvent: { layout: { width: 300, height: 400 } },
+        })
+        await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+        expect(screen.getByTestId('frozen-photo-image').props.source.uri).toMatch(/^data:image\/jpeg;base64,/u)
+        expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
+        expect(shown).toHaveBeenLastCalledWith(document, 'pending')
+        expect(screen.queryByRole('button', { name: 'Next step' })).toBeNull()
+    })
     it.each([
         ['recorded-more-global', 'busy'],
         ['recorded-more-global', 'pending'],

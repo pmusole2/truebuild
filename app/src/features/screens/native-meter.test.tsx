@@ -277,6 +277,30 @@ describe('the device host meter wiring', () => {
         expect(reading.current?.snapshot?.version).toBeGreaterThan(before ?? 0)
     })
 
+    it('keeps genuine explicit phase checkpoints distinct while logging only opaque identities', async () => {
+        const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+        const test = harness({ enabled: true, roots: <Root target={root(tree())} kind="app" /> })
+        const view = await render(test.ui)
+        try {
+            await test.flush()
+            const before = reading.current?.session?.sampleCount ?? 0
+            await act(async () => reading.current?.measureNow('private-manual:private-source:pending'))
+            await test.flush()
+            const pending = reading.current?.snapshot?.latest?.checkpoint.checkpointId
+            await act(async () => reading.current?.measureNow('private-manual:private-source:ready'))
+            await test.flush()
+            expect(reading.current?.snapshot?.latest?.checkpoint.checkpointId).not.toBe(pending)
+            expect(reading.current?.session?.sampleCount).toBe(before + 2)
+            const emitted = log.mock.calls.map(([value]) => String(value)).join('\n')
+            expect(emitted).not.toContain('private-manual')
+            expect(emitted).not.toContain('private-source')
+            expect(emitted).toContain('requested-view-')
+        } finally {
+            await view.unmount()
+            log.mockRestore()
+        }
+    })
+
     it('passes changing router focus metadata and emits both complete named methods', async () => {
         const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
         const home = element('truebuild-render-origin:generated')

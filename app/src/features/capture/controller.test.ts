@@ -132,6 +132,42 @@ function setup(
     return { controller, calls, store, data, kv }
 }
 const controllers: CaptureController[] = []
+it.each(['check', 'question'] as const)(
+    'witnesses only the actual %s shutter purpose while its held capture is being saved',
+    async (kind) => {
+        const { controller, store } = await ready()
+        const gate = deferred()
+        const save = store.save.bind(store)
+        vi.spyOn(store, 'save').mockImplementation(async (...args) => {
+            await gate.promise
+            return save(...args)
+        })
+        if (kind === 'check')
+            vi.spyOn(ModelApiClient.prototype, 'check').mockImplementationOnce(
+                () => new Promise<never>(() => undefined),
+            )
+        controller.camera({ kind })
+        const pending = controller.shutter(async () => photo)
+        try {
+            expect(controller.pendingCheckCapture).toBeNull()
+            await vi.waitFor(() => expect(controller.getSnapshot().capture).not.toBeNull())
+            const capture = controller.getSnapshot().capture!
+            expect(controller.pendingCheckCapture).toBe(kind === 'check' ? capture.binding : null)
+            capture.reusable = false
+            expect(controller.pendingCheckCapture).toBe(kind === 'check' ? capture.binding : null)
+            gate.resolve()
+            if (kind === 'check')
+                await vi.waitFor(() => expect(controller.getSnapshot().pending).toBe('Checking frozen photo…'))
+            else await pending
+            controller.cancel()
+            expect(controller.pendingCheckCapture).toBeNull()
+        } finally {
+            gate.resolve()
+            controller.home()
+            await pending
+        }
+    },
+)
 function deferred(): { promise: Promise<void>; resolve: () => void } {
     let resolve!: () => void
     const promise = new Promise<void>((done) => {

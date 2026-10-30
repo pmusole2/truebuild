@@ -279,7 +279,7 @@ export type MeterReading = {
     readonly active: boolean
     readonly snapshot: NativeHostMeterSnapshot | null
     readonly session: NativeHostSessionSummary | null
-    readonly measureNow: () => void
+    readonly measureNow: (identity?: string) => void
 }
 
 /** The meter's latest measurement and its session summary, for the judge layer. Never a number that was not measured. */
@@ -300,7 +300,8 @@ export function useMeterReading(): MeterReading {
         active: control !== null,
         snapshot,
         session,
-        measureNow: (): void => control?.note('requested'),
+        measureNow: (identity): void =>
+            control?.note(identity === undefined ? 'requested' : `requested-${control.view(identity)}`),
     }
 }
 

@@ -24,6 +24,11 @@ export const answerContext = (): ScreenContextInputsV2 => ({
     },
 })
 
+export const pendingCheckContext = (): ScreenContextInputsV2 => {
+    const current = checkContext()
+    return { ...current, result: null, uiState: { ...current.uiState, busy: { activity: 'checking' } } }
+}
+
 /** Dense, repeated current source geometry can exceed this particular record's expansion budget. */
 export function largeContext(denseSafetySources = false): ScreenContextInputsV2 {
     const inputs = checkContext('uncertain')
