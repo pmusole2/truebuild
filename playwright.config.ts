@@ -49,7 +49,7 @@ process.env.TRUEBUILD_E2E_API_ORIGIN = API_ORIGIN
 
 export default defineConfig({
     testDir: './tests/e2e',
-    outputDir: `.local/ai-effort/close95/e2e-original-${mode}`,
+    outputDir: 'test-results',
     fullyParallel: false,
     workers: 1,
     retries: 0,
