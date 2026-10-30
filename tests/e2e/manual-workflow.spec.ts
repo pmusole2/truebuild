@@ -227,9 +227,10 @@ test('a cancelled reading says that nothing more is shown, and the reading is no
         uploadThroughput: -1,
     })
     await page.getByTestId('read-manual').click()
-    await expect(
-        page.getByRole('heading', { name: 'Reading your manual. This can take a minute.', exact: true }).first(),
-    ).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Reading your manual', exact: true }).first()).toBeVisible({
+        timeout: 15000,
+    })
+    await expect(page.getByTestId('reading-screen').getByText('This can take a minute.', { exact: true })).toBeVisible()
     // Cancel asks first, then stops the same request the old Cancel did and returns to the pages.
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Stop reading?', exact: true }).first()).toBeVisible()
