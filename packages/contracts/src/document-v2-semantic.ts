@@ -14,6 +14,7 @@ import {
     coachIssuesV2,
     earnedStateIssuesV2,
     literalIssuesV2,
+    BUSY_COPY_V2,
     CONFIRM_LABELS_V2,
     COACH_COPY_V2,
 } from './document-v2-copy'
@@ -63,6 +64,8 @@ const same = (a: string, b: string): boolean => normalize(a) === normalize(b)
 /** Titles of screens that make a claim about the person's work: the only wording the server allows is the listed one. */
 function claimTitles(material: DocumentMaterialV2): readonly string[] | null {
     if (material.inputs.kind === 'result') {
+        // A check that has not returned names only what the app is doing.
+        if (material.pendingCheck) return [BUSY_COPY_V2.checking.heading]
         return material.decision === 'pass'
             ? ['Looks right']
             : material.decision === 'refuse'

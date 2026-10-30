@@ -20,9 +20,12 @@ import {
     baseKindV2,
     cameraAccessV2,
     captureWitnessV2,
+    completionFigureV2,
     moreScopedV2,
+    pendingCheckV2,
     resultOfKindV2,
     screenUiForKindV2,
+    usableRefsOf,
     usedScopeV2,
     type ScreenContextInputsV2,
 } from './document-v2-context'
@@ -64,6 +67,11 @@ export interface DocumentMaterialV2 {
     sourcePrecision: 'region' | 'page'
     requirements: RequirementsV2
     decision: VerdictV2 | null
+    /**
+     * True when this is the held photo of a check that has not returned (`pendingCheckV2`): a result screen with the
+     * actual capture, no result, no verdict and nothing to confirm.
+     */
+    pendingCheck: boolean
     completion: 'witnessed' | 'unwitnessed'
     /** Parts of the current step whose names are known (a tile resolves name and quantity from the session). */
     partIds: string[]
@@ -158,7 +166,10 @@ function requiredActions(inputs: ScreenContextInputsV2, reviewed: boolean, decis
         case 'camera':
             return CAMERA_WAY_FORWARD[cameraAccessV2(ui?.camera)]
         case 'result':
-            return [decision === 'pass' ? intent('confirm', 'step') : intent('capture', 'retake')]
+            // Before the check returns there is nothing to confirm or retake: the way out is back to the guide.
+            return pendingCheckV2(inputs)
+                ? [intent('navigate', 'guide')]
+                : [decision === 'pass' ? intent('confirm', 'step') : intent('capture', 'retake')]
         case 'questions':
             return [intent('ask', 'about-step')]
         case 'answer':
@@ -187,7 +198,8 @@ function requiredNodes(inputs: ScreenContextInputsV2): RequirementsV2['nodes'] {
             break
         case 'result':
         case 'answer':
-            nodes.push('VerdictCard')
+            // A check that has not returned has no verdict to place.
+            if (!pendingCheckV2(inputs)) nodes.push('VerdictCard')
             break
         case 'judge':
             // The built-view flag is the one device-persistent setting: the panel and its toggle both belong here.
@@ -253,11 +265,15 @@ function overviewStepsOf(
     return facts.steps.length > 0 ? facts.steps : null
 }
 
-/** A result or answer screen holds the person's photo: its waiting variants show that photo, not the verdict. */
+/**
+ * A result or answer screen holds the person's photo: its waiting variants show that photo, not the verdict. So does the
+ * photo of a check that has not returned (it has no verdict to hold back yet, but it is the same photo-first screen).
+ */
 const heldPhotoRequired = (inputs: ScreenContextInputsV2): boolean =>
-    (inputs.kind === 'result' || inputs.kind === 'answer' || moreScopedV2(inputs)) &&
-    inputs.result !== null &&
-    inputs.captureId !== null
+    ((inputs.kind === 'result' || inputs.kind === 'answer' || moreScopedV2(inputs)) &&
+        inputs.result !== null &&
+        inputs.captureId !== null) ||
+    pendingCheckV2(inputs)
 
 /**
  * The capture a document may show or name, or null. A live photo is part of a screen only when its identity is in the
@@ -281,13 +297,6 @@ function usedInputs(raw: ScreenContextInputsV2): ScreenContextInputsV2 {
         }) as ScreenUiStateV2 | null,
     }
 }
-
-/** A step's own source references, restricted to the pages the manual really has (a missing page is never cited). */
-const usableRefs = (step: ManualStep, session: ScreenContextInputsV2['session']): DocumentSourceV2[] =>
-    step.sourceRefs
-        .filter((ref) => session?.pages.some((page) => page.pageId === ref.pageId) === true)
-        .slice(0, 100)
-        .map((ref) => ({ pageId: ref.pageId, region: ref.region }))
 
 export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterialV2 {
     const inputs = usedInputs(raw)
@@ -350,7 +359,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             kind: 'title',
             basis: 'overview',
             text: overviewStep.title,
-            sourceRefs: usableRefs(overviewStep, session),
+            sourceRefs: usableRefsOf(overviewStep, session),
         })
     }
     if (result !== null) publishResult(result)
@@ -365,12 +374,16 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
         moreScopedV2(inputs) && stepBound
             ? step
             : (questionStepOf(inputs, facts) ??
-              overviewSteps?.find((candidate) => usableRefs(candidate, session).length > 0) ??
+              overviewSteps?.find((candidate) => usableRefsOf(candidate, session).length > 0) ??
               null)
+    // The finished build shows the manual's own picture (the only source its table holds): see `completionFigureV2`.
+    const completionFigure = inputs.kind === 'completion' ? completionFigureV2(session) : null
     const diagramRefs =
-        figureStep === null
-            ? (step?.sourceRefs ?? [])
-            : figureStep.sourceRefs.filter((ref) => session?.pages.some((page) => page.pageId === ref.pageId))
+        completionFigure !== null
+            ? [completionFigure.ref]
+            : figureStep === null
+              ? (step?.sourceRefs ?? [])
+              : figureStep.sourceRefs.filter((ref) => session?.pages.some((page) => page.pageId === ref.pageId))
     const registry = sourceRegistry(diagramRefs, published)
     const resolve = sourceResolverV2(registry.sources)
     const diagram = resolve(diagramRefs)
@@ -403,11 +416,12 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             nodes: requiredNodes(inputs),
             confirm: readingConfirmation(inputs),
             capture: heldPhotoRequired(inputs),
-            figure: figureStep === null ? null : (diagram[0] ?? null),
+            figure: figureStep === null && completionFigure === null ? null : (diagram[0] ?? null),
             notice: operationNoticeHeld(inputs),
             parts: overviewSteps === null ? [] : partIds,
         },
         decision,
+        pendingCheck: pendingCheckV2(inputs),
         completion: completionWitnessed({
             kind: baseKindV2(inputs.kind),
             session,
@@ -436,6 +450,21 @@ export function intentAllowedV2(candidate: AppIntent, material: DocumentMaterial
         return access === 'settings' || (kind === 'more' && uiState?.settings?.storage === true)
     }
     if (candidate.intent === 'retry' && candidate.target === 'camera') return access === 'retry'
+    // A check that has not returned has nothing to confirm, retake, check again or ask about: only a way out or on.
+    if (material.pendingCheck) {
+        switch (candidate.intent) {
+            case 'navigate':
+                return ['guide', 'home', 'back', 'more'].includes(candidate.target)
+            case 'retry':
+                return candidate.target === 'last-action' || candidate.target === 'screen'
+            case 'open-details':
+                return candidate.target !== 'result'
+            case 'show-tips':
+                return true
+            default:
+                return false
+        }
+    }
     // Back closes or returns: home is the root and has nothing to return to.
     if (candidate.intent === 'navigate' && candidate.target === 'back') return kind !== 'home'
     // Tips have no preference to set, only the replay the More screen offers while the app has its tips section.

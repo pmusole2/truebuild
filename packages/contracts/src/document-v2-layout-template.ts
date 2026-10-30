@@ -42,6 +42,11 @@ import { canonicalJson } from './screen-context'
  * closed interface copy, earned state, intents) decide whether the compiled document is acceptable.
  */
 export const LAYOUT_TEMPLATE_V2_VERSION = 1 as const
+/**
+ * `result` records of this version also carry the `ready.checking` branch: the screen of the held photo before its check
+ * returns (see `pendingCheckV2`). Version 1 records are unchanged and cannot compile that screen.
+ */
+export const LAYOUT_TEMPLATE_V2_CHECKING_VERSION = 2 as const
 
 /**
  * Resource guards of the RECORD itself (the compiled document keeps `DOCUMENT_V2_LIMITS` untouched). They bound the work
@@ -324,23 +329,32 @@ const statesSchema = z.strictObject({
 export const LAYOUT_DECISIONS_V2 = ['pass', 'refuse', 'cannot_verify'] as const
 export type LayoutDecisionV2 = (typeof LAYOUT_DECISIONS_V2)[number]
 
-interface TemplateBaseV2 {
-    version: typeof LAYOUT_TEMPLATE_V2_VERSION
+interface TemplateBaseV2<V extends number> {
+    version: V
     /** Identity of this authoring; must equal `provenance.authoring.fixtureId`. */
     fixtureId: string
     states: TemplateStatesV2
 }
 /** A check: one explicit ready variant per decision; the compiler reads the actual decision and nothing else to choose. */
-export interface ResultLayoutTemplateV2 extends TemplateBaseV2 {
+export interface ResultLayoutTemplateV2 extends TemplateBaseV2<typeof LAYOUT_TEMPLATE_V2_VERSION> {
     kind: 'result'
     ready: Record<LayoutDecisionV2, TemplateVariantV2>
 }
+/**
+ * A check, version 2: the ready variants of version 1 plus `checking`, the screen of the actual held photo while its
+ * check has not returned. It is a ready slot with the state-style copy of the checking activity (`{kind:'state'}`
+ * refs are allowed) and no result: result slots are refused there, exactly as in a state variant.
+ */
+export interface CheckingResultLayoutTemplateV2 extends TemplateBaseV2<typeof LAYOUT_TEMPLATE_V2_CHECKING_VERSION> {
+    kind: 'result'
+    ready: Record<LayoutDecisionV2, TemplateVariantV2> & { checking: TemplateVariantV2 }
+}
 /** An answer: one ready variant. */
-export interface AnswerLayoutTemplateV2 extends TemplateBaseV2 {
+export interface AnswerLayoutTemplateV2 extends TemplateBaseV2<typeof LAYOUT_TEMPLATE_V2_VERSION> {
     kind: 'answer'
     ready: TemplateVariantV2
 }
-export type LayoutTemplateV2 = ResultLayoutTemplateV2 | AnswerLayoutTemplateV2
+export type LayoutTemplateV2 = ResultLayoutTemplateV2 | CheckingResultLayoutTemplateV2 | AnswerLayoutTemplateV2
 
 const resultTemplateSchema = z.strictObject({
     version: z.literal(LAYOUT_TEMPLATE_V2_VERSION),
@@ -360,9 +374,24 @@ const answerTemplateSchema = z.strictObject({
     ready: templateVariantSchema,
     states: statesSchema,
 })
-export const layoutTemplateV2Schema = z.discriminatedUnion('kind', [
-    resultTemplateSchema,
-    answerTemplateSchema,
+const checkingResultTemplateSchema = z.strictObject({
+    version: z.literal(LAYOUT_TEMPLATE_V2_CHECKING_VERSION),
+    fixtureId: fixtureIdV2Schema,
+    kind: z.literal('result'),
+    ready: z.strictObject({
+        pass: templateVariantSchema,
+        refuse: templateVariantSchema,
+        cannot_verify: templateVariantSchema,
+        checking: templateVariantSchema,
+    }),
+    states: statesSchema,
+})
+/** Version 1 records, exactly as they have always parsed. */
+const layoutTemplateV1Schema = z.discriminatedUnion('kind', [resultTemplateSchema, answerTemplateSchema])
+/** Every record version. `parseLayoutTemplateV2` selects the schema by the record's own version, for precise issues. */
+export const layoutTemplateV2Schema = z.union([
+    checkingResultTemplateSchema,
+    layoutTemplateV1Schema,
 ]) as unknown as z.ZodType<LayoutTemplateV2>
 
 /**
@@ -397,21 +426,32 @@ function nestsDeeperThan(value: unknown, max: number): boolean {
     return false
 }
 
-/** Every variant of a record with its template path (`ready.pass`, `ready`, `states.busy`, ...) and whether it is a ready one. */
+/**
+ * Every variant of a record with its template path (`ready.pass`, `ready`, `ready.checking`, `states.busy`, ...), whether
+ * it fills the document's ready slot, and whether it may state the actual result (`result`: the decision branches and the
+ * answer; not a state variant and not the checking branch, which have no result to state).
+ */
 export function layoutTemplateVariantsV2(
     template: LayoutTemplateV2,
-): { path: string; ready: boolean; variant: TemplateVariantV2 }[] {
+): { path: string; ready: boolean; result: boolean; variant: TemplateVariantV2 }[] {
     const ready =
         template.kind === 'result'
-            ? LAYOUT_DECISIONS_V2.map((decision) => ({
-                  path: `ready.${decision}`,
-                  ready: true,
-                  variant: template.ready[decision],
-              }))
-            : [{ path: 'ready', ready: true, variant: template.ready }]
+            ? [
+                  ...LAYOUT_DECISIONS_V2.map((decision) => ({
+                      path: `ready.${decision}`,
+                      ready: true,
+                      result: true,
+                      variant: template.ready[decision],
+                  })),
+                  ...(template.version === LAYOUT_TEMPLATE_V2_CHECKING_VERSION
+                      ? [{ path: 'ready.checking', ready: true, result: false, variant: template.ready.checking }]
+                      : []),
+              ]
+            : [{ path: 'ready', ready: true, result: true, variant: template.ready }]
     const states = (['busy', 'pending', 'error', 'recovery'] as const).map((state) => ({
         path: `states.${state}`,
         ready: false,
+        result: false,
         variant: template.states[state],
     }))
 
@@ -462,29 +502,29 @@ export function layoutTemplateIssuesV2(template: LayoutTemplateV2): string[] {
         issues.add(`template:${path}:${rule}`)
     }
     let count = 0
-    const walk = (item: TemplateNodeV2, path: string, depth: number, ready: boolean, row: boolean): void => {
+    const walk = (item: TemplateNodeV2, path: string, depth: number, result: boolean, row: boolean): void => {
         count += 1
         if (depth > LAYOUT_TEMPLATE_LIMITS_V2.depth) add(path, 'too_deep')
         if (row && !ROW_LEAVES.has(item.type) && !CONTAINERS.has(item.type)) add(path, 'not_in_row')
         if ((item.type === 'FactText' || item.type === 'FactCitations') && !row) add(path, 'slot_outside_row')
-        if (item.type === 'ResultCard' && !ready) add(path, 'result_slot_in_state')
-        if (refsOf(item).some((ref) => ref.kind === 'state') && ready) add(path, 'state_copy_in_ready')
+        if (item.type === 'ResultCard' && !result) add(path, 'result_slot_in_state')
+        if (refsOf(item).some((ref) => ref.kind === 'state') && result) add(path, 'state_copy_in_ready')
         if (item.type === 'RepeatFacts' || item.type === 'WhenFacts') {
-            if (!ready && RESULT_FACT_SETS_V2.includes(item.source)) add(path, 'result_slot_in_state')
+            if (!result && RESULT_FACT_SETS_V2.includes(item.source)) add(path, 'result_slot_in_state')
         }
         if (item.type === 'RepeatFacts') {
             count += item.group === null ? 0 : 1
-            walk(item.row, `${path}.row`, depth + (item.group === null ? 1 : 2), ready, true)
+            walk(item.row, `${path}.row`, depth + (item.group === null ? 1 : 2), result, true)
         } else if ('children' in item) {
-            item.children.forEach((child, index) => walk(child, `${path}.children.${index}`, depth + 1, ready, row))
+            item.children.forEach((child, index) => walk(child, `${path}.children.${index}`, depth + 1, result, row))
         }
         if (item.type === 'WhenFacts' && row) add(path, 'not_in_row')
     }
-    for (const { path, ready, variant } of layoutTemplateVariantsV2(template)) {
-        if ([variant.header.title, variant.header.subtitle].some((ref) => ref?.kind === 'state') && ready) {
+    for (const { path, result, variant } of layoutTemplateVariantsV2(template)) {
+        if ([variant.header.title, variant.header.subtitle].some((ref) => ref?.kind === 'state') && result) {
             add(`${path}.header`, 'state_copy_in_ready')
         }
-        walk(variant.body, `${path}.body`, 1, ready, false)
+        walk(variant.body, `${path}.body`, 1, result, false)
     }
     if (count > LAYOUT_TEMPLATE_LIMITS_V2.nodes) add('', 'too_many_nodes')
 
@@ -494,6 +534,14 @@ export function layoutTemplateIssuesV2(template: LayoutTemplateV2): string[] {
 export type LayoutTemplateParseV2 =
     { ok: true; template: LayoutTemplateV2; canonical: string } | { ok: false; issues: string[] }
 
+/** The schema of a record's own version (a record that names no known version is judged as version 1, as before). */
+function layoutTemplateSchemaOf(raw: unknown): z.ZodType<LayoutTemplateV2> {
+    const version = typeof raw === 'object' && raw !== null ? (raw as { version?: unknown }).version : undefined
+    return (version === LAYOUT_TEMPLATE_V2_CHECKING_VERSION
+        ? checkingResultTemplateSchema
+        : layoutTemplateV1Schema) as unknown as z.ZodType<LayoutTemplateV2>
+}
+
 /**
  * Parses an untrusted record (JSON already parsed by the caller). Strict: nothing unknown is accepted or dropped, so the
  * parsed value is the raw value (a record the schema would normalize, say untrimmed text, is refused: its hash would
@@ -501,7 +549,7 @@ export type LayoutTemplateParseV2 =
  */
 export function parseLayoutTemplateV2(raw: unknown): LayoutTemplateParseV2 {
     if (nestsDeeperThan(raw, LAYOUT_TEMPLATE_LIMITS_V2.jsonDepth)) return { ok: false, issues: ['template::too_deep'] }
-    const parsed = layoutTemplateV2Schema.safeParse(raw)
+    const parsed = layoutTemplateSchemaOf(raw).safeParse(raw)
     if (!parsed.success) {
         const issues = parsed.error.issues.map((issue) => `template:${issue.path.map(String).join('.')}:${issue.code}`)
 

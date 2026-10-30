@@ -114,6 +114,16 @@ export const COMPLETION_MANUAL_COPY_V2 = {
     hint: 'Find your manual on Home.',
 } as const
 
+/**
+ * What the finished build says about the manual's own picture (listed only where that picture exists): `figure` for a
+ * cited region of a page, `page` when the picture is a whole page (a reference with no region). Never mixed, so a whole
+ * page is never described as a figure.
+ */
+export const COMPLETION_FIGURE_COPY_V2 = {
+    figure: 'From your manual',
+    page: 'A page from your manual',
+} as const
+
 /** Said by a quick check whose question step has no usable source picture (listed only then): nothing is invented. */
 export const NO_FIGURE_COPY_V2 = 'No picture to show for this detail.'
 /** Said by the overview of a quick check when no step cites a page the manual has (listed only then). */
@@ -218,6 +228,8 @@ const normalizeCopy = (value: string): string =>
 export function claimWordingV2(material: DocumentMaterialV2): string[] {
     const { kind } = material.inputs
     if (kind === 'result') {
+        // A check that has not returned states no verdict at all.
+        if (material.pendingCheck) return []
         return [
             material.decision === 'pass'
                 ? 'Looks right'
@@ -235,8 +247,19 @@ function contextCopy(material: DocumentMaterialV2, variant: CopyVariant): string
     const { inputs } = material
     // Claim wording makes a claim about the held result: only the revealed (ready) screen may say it.
     const copy: string[] = variant === 'ready' ? [...claimWordingV2(material)] : []
-    if (inputs.kind === 'completion' && variant === 'ready' && inputs.session !== null)
+    if (inputs.kind === 'completion' && variant === 'ready' && inputs.session !== null) {
         copy.push(COMPLETION_MANUAL_COPY_V2.label, COMPLETION_MANUAL_COPY_V2.hint)
+        const picture =
+            material.requirements.figure === null ? undefined : material.sources[material.requirements.figure]
+        if (picture !== undefined) {
+            copy.push(picture.region === null ? COMPLETION_FIGURE_COPY_V2.page : COMPLETION_FIGURE_COPY_V2.figure)
+        }
+    }
+    // The ready screen of a check that has not returned says what the app is actually doing, in the checking activity's
+    // own closed words (the busy variant has them through its witnessed activity).
+    if (material.pendingCheck && variant === 'ready') {
+        copy.push(BUSY_COPY_V2.checking.heading, BUSY_COPY_V2.checking.detail)
+    }
     if (inputs.kind === 'home') {
         copy.push(
             (inputs.uiState?.library?.entries.length ?? 0) > 0

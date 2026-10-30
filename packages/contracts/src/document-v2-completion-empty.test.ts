@@ -30,6 +30,6 @@ it('does not claim a manual or completed build in a sessionless completion docum
         expect.objectContaining({ type: 'Text', content: { kind: 'bound', key: 'manual-title' } }),
     )
     expect(JSON.stringify(document.body)).not.toContain('Find your manual on Home.')
-    expect(nodes.filter((node) => node.type === 'Progress')).toHaveLength(1)
+    expect(nodes.filter((node) => node.type === 'Progress')).toHaveLength(0)
     expect(nodes.filter((node) => node.type === 'Meter')).toHaveLength(0)
 })

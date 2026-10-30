@@ -14,6 +14,7 @@ import {
     layoutTemplateSha256V2,
     manualSessionSchema,
     parseLayoutTemplateV2,
+    photoSpineV2,
     questionResultSchema,
     screenDocumentV2Schema,
     structureOfV2,
@@ -21,6 +22,7 @@ import {
     visitVariantNodesV2,
     variantsOfV2,
     type AnswerLayoutTemplateV2,
+    type CheckingResultLayoutTemplateV2,
     type FactSetV2,
     type LayoutBranchV2,
     type LayoutTemplateV2,
@@ -1021,5 +1023,175 @@ describe('the existing gates are not weakened', () => {
         expect(verifyDocumentAgainstInputsV2(document, checkInputs('correct'), sha256Hex).length).toBeGreaterThan(0)
         // A held result that is not a check cannot be compiled by a result record.
         expect(failed({ ...answerInputs(), kind: 'result' }, resultTemplate())).toContain('inputs::result_mismatch')
+    })
+})
+
+describe('a version 2 record also owns the held photo before its check returns', () => {
+    const pendingInputs = (patch: Partial<ScreenContextInputsV2> = {}): ScreenContextInputsV2 => ({
+        ...checkInputs('correct'),
+        result: null,
+        uiState: { ...ui, busy: { activity: 'checking' } },
+        ...patch,
+    })
+    /** Authored like the others: its own order and copy choices, the photo first, state copy of the checking activity. */
+    const checkingVariant = (): TemplateVariantV2 => ({
+        header: { title: state('heading'), subtitle: null, back, actions: [] },
+        body: scroll([
+            stack([
+                photo,
+                text(state('heading'), 'heading'),
+                text(state('detail')),
+                listing('Safety', 'safety', 6),
+                listing('Directions', 'directions', 20),
+                listing('More detail', 'details', 20, true),
+            ]),
+        ]),
+        bar: {
+            primary: {
+                type: 'PrimaryAction',
+                label: 'Back to the guide',
+                icon: 'chevronLeft',
+                intent: { intent: 'navigate', target: 'guide' },
+            },
+            secondary: null,
+        },
+    })
+    const recordV2 = (): CheckingResultLayoutTemplateV2 => {
+        const base = resultTemplate()
+        return { ...base, version: 2, ready: { ...base.ready, checking: checkingVariant() } }
+    }
+    const stackOf = (variant: TemplateVariantV2): TemplateNodeV2[] => {
+        const root = variant.body.children[0]
+        if (root?.type !== 'Stack') throw new Error('Expected the authored stack')
+        return root.children
+    }
+
+    it('parses version 2 and leaves version 1 as it was', () => {
+        expect(parseLayoutTemplateV2(recordV2())).toMatchObject({ ok: true })
+        expect(parseLayoutTemplateV2(resultTemplate())).toMatchObject({ ok: true })
+        // Each version has exactly its own shape: no checking branch in version 1, and none missing from version 2.
+        const stray = { ...resultTemplate(), ready: { ...resultTemplate().ready, checking: checkingVariant() } }
+        expect(parseLayoutTemplateV2(stray)).toMatchObject({ ok: false })
+        const { checking: _checking, ...withoutChecking } = recordV2().ready
+        expect(parseLayoutTemplateV2({ ...recordV2(), ready: withoutChecking })).toMatchObject({ ok: false })
+        expect(parseLayoutTemplateV2({ ...answerTemplate(), version: 2 })).toMatchObject({ ok: false })
+    })
+
+    it('keeps result slots out of the checking branch and state copy out of the verdict branches', () => {
+        const withCard = recordV2()
+        stackOf(withCard.ready.checking).push({
+            type: 'ResultCard',
+            variant: 'card',
+            showReason: true,
+            showRegions: true,
+        })
+        const verdictRows = recordV2()
+        stackOf(verdictRows.ready.checking).push(resultCitations)
+        const stateCopy = recordV2()
+        stackOf(stateCopy.ready.pass).push(text(state('detail')))
+        const issues = (record: unknown): string[] => {
+            const parsed = parseLayoutTemplateV2(record)
+            return parsed.ok ? [] : parsed.issues
+        }
+        const at = stackOf(recordV2().ready.checking).length
+        expect(issues(withCard)).toContain(
+            `template:ready.checking.body.children.0.children.${at}:result_slot_in_state`,
+        )
+        expect(issues(verdictRows)).toContain(
+            `template:ready.checking.body.children.0.children.${at}:result_slot_in_state`,
+        )
+        expect(
+            issues(stateCopy).some(
+                (issue) => issue.startsWith('template:ready.pass.') && issue.endsWith(':state_copy_in_ready'),
+            ),
+        ).toBe(true)
+    })
+
+    it('compiles the held photo before the verdict from the record, as generated synthetic authoring', () => {
+        const inputs = pendingInputs()
+        const result = compiled(inputs, recordV2())
+        expect(result.branch).toBe('checking')
+        expect(result.document.metadata).toMatchObject({
+            source: 'generated',
+            evidence: 'synthetic-fixture',
+            model: null,
+            effort: null,
+            authoring: authoring(recordV2()),
+        })
+        expect(result.document.bound).toMatchObject({ manualId: 'demo-divider', stepId: 'step-1', captureId: 'cap-1' })
+        expect(result.document.header.title).toEqual({ kind: 'literal', text: 'Checking your photo…' })
+        expect(result.lineage.header?.template).toBe('ready.checking.header')
+        expect(verifyDocumentAgainstInputsV2(result.document, inputs, sha256Hex)).toEqual([])
+        for (const { variant, prefix } of variantsOfV2(result.document)) {
+            const found: ScreenNodeV2[] = []
+            visitVariantNodesV2(variant, prefix, ({ node }) => found.push(node))
+            expect(found.some((node) => node.type === 'VerdictCard')).toBe(false)
+            expect(found.some((node) => node.type === 'Image' && node.source.kind === 'capture')).toBe(true)
+        }
+        // The deterministic fallback of the same inputs stays separate, and stays fallback.
+        expect(
+            buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' }).metadata
+                .source,
+        ).toBe('fallback')
+    })
+
+    it.each(LAYOUT_DECISIONS_V2)(
+        'keeps one photo spine from before the verdict to the actual %s result',
+        (decision) => {
+            const orientation = (Object.keys(ORIENTATION) as (keyof typeof ORIENTATION)[]).find(
+                (key) => ORIENTATION[key] === decision,
+            )!
+            const before = compiled(pendingInputs(), recordV2())
+            const after = compiled(checkInputs(orientation), recordV2())
+            expect(after.branch).toBe(decision)
+            const spines = (document: typeof before.document): (string | null)[] =>
+                variantsOfV2(document).map(({ variant }) => photoSpineV2(variant))
+            expect(spines(before.document).every((spine) => spine !== null)).toBe(true)
+            expect(new Set([...spines(before.document), ...spines(after.document)]).size).toBe(1)
+            expect(after.document.bound.captureId).toBe(before.document.bound.captureId)
+        },
+    )
+
+    it('fails closed: a version 1 record cannot own it, and nothing unwitnessed compiles', () => {
+        expect(failed(pendingInputs(), resultTemplate())).toEqual(['inputs::pending_unsupported'])
+        for (const inputs of [
+            pendingInputs({ uiState: ui }),
+            pendingInputs({ captureId: 'cap-9' }),
+            pendingInputs({ uiState: { ...ui, busy: { activity: 'second-opinion' } } }),
+            pendingInputs({ failure: 'provider_error' }),
+        ]) {
+            expect(failed(inputs, recordV2())).toContain('inputs::no_result')
+        }
+        // A real result still picks its own decision branch, and an answer record has no checking branch.
+        expect(compiled(checkInputs('reversed'), recordV2()).branch).toBe('refuse')
+        expect(failed(pendingInputs({ kind: 'answer' }), answerTemplate())).toContain('inputs::no_result')
+    })
+
+    it('holds the checking branch to the shared claims gates', () => {
+        const bad = (change: (record: CheckingResultLayoutTemplateV2) => void): string[] => {
+            const record = recordV2()
+            change(record)
+            return failed(pendingInputs(), record)
+        }
+        expect(
+            bad((record) => {
+                record.ready.checking.bar.primary = readyVariant('pass').bar.primary
+            }).some((issue) => issue.endsWith('intent_not_allowed')),
+        ).toBe(true)
+        expect(
+            bad((record) => {
+                record.ready.checking.header.title = lit('Looks right')
+            }).some((issue) => issue.endsWith('literal_not_listed') || issue.endsWith('title_not_listed')),
+        ).toBe(true)
+        expect(
+            bad((record) => {
+                stackOf(record.ready.checking).push({ type: 'Icon', name: 'check', tone: 'success', size: 'md' })
+            }).some((issue) => issue.endsWith('icon_unearned') || issue.endsWith('tone_unearned')),
+        ).toBe(true)
+        expect(
+            bad((record) => {
+                stackOf(record.ready.checking).shift()
+            }).some((issue) => issue.includes('held_photo')),
+        ).toBe(true)
     })
 })

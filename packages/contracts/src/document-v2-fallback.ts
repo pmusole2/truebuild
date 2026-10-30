@@ -43,6 +43,7 @@ import {
     BUSY_COPY_V2,
     CAMERA_ACCESS_COPY_V2,
     CAMERA_TIPS_V2,
+    COMPLETION_FIGURE_COPY_V2,
     COMPLETION_MANUAL_COPY_V2,
     CONFIRM_LABELS_V2,
     COACH_COPY_V2,
@@ -204,9 +205,16 @@ function titleOf(material: DocumentMaterialV2): Built {
                 ? { title: lit('Photograph a page'), subtitle: null }
                 : { title: lit('Take a photo'), subtitle: material.step ? bound('step-title') : null }
         case 'result':
+            // A check that has not returned says only what the app is doing; the verdict titles are earned by a decision.
             return {
                 title: lit(
-                    decision === 'pass' ? 'Looks right' : decision === 'refuse' ? 'Not quite right' : 'Cannot tell yet',
+                    material.pendingCheck
+                        ? BUSY_COPY_V2.checking.heading
+                        : decision === 'pass'
+                          ? 'Looks right'
+                          : decision === 'refuse'
+                            ? 'Not quite right'
+                            : 'Cannot tell yet',
                 ),
                 subtitle: bound('step-title'),
             }
@@ -397,6 +405,29 @@ const capturedImage = (material: DocumentMaterialV2): Node[] =>
     material.inputs.captureId === null
         ? []
         : [{ type: 'Image', source: { kind: 'capture' }, fit: 'cover', ratio: 'wide', caption: null }]
+
+/**
+ * The finished build's picture: the manual's own cited figure or page (`requirements.figure`, see `completionFigureV2`),
+ * captioned for what it is, and the opener of that same source. Nothing when the manual has no picture.
+ */
+function completionFigure(material: DocumentMaterialV2): { picture: Node[]; source: Node[] } {
+    const index = material.requirements.figure
+    const source = index === null ? undefined : material.sources[index]
+    if (index === null || source === undefined) return { picture: [], source: [] }
+    const caption = source.region === null ? COMPLETION_FIGURE_COPY_V2.page : COMPLETION_FIGURE_COPY_V2.figure
+    return {
+        picture: [
+            {
+                type: 'Image',
+                source: { kind: 'source', index },
+                fit: 'contain',
+                ratio: 'square',
+                caption: lit(caption),
+            },
+        ],
+        source: chips([index]),
+    }
+}
 
 /**
  * Lets the person say which part a question is about: offered only when the app actually holds a photo to point at and
@@ -646,6 +677,14 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
             return [cameraView(material), cameraTips(material), ...factNodes(material, true)]
         }
         case 'result':
+            if (material.pendingCheck) {
+                return [
+                    ...capturedImage(material),
+                    text(lit(BUSY_COPY_V2.checking.heading), { role: 'heading' }),
+                    text(lit(BUSY_COPY_V2.checking.detail), { tone: 'info' }),
+                    ...factNodes(material, true),
+                ]
+            }
             return [...capturedImage(material), ...resultNodes(material, 'banner'), ...factNodes(material, true)]
         case 'questions':
             return [
@@ -668,22 +707,26 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
             return [...capturedImage(material), ...resultNodes(material, 'card'), ...factNodes(material, true)]
         case 'more':
             return moreBody(material)
-        case 'completion':
-            return inputs.session === null
-                ? [
-                      text(bound('completion-summary'), { role: 'heading' }),
-                      { type: 'Progress', binding: 'build', label: null },
-                  ]
-                : [
-                      card([
-                          text(lit(COMPLETION_MANUAL_COPY_V2.label), { role: 'label', emphasis: 'strong' }),
-                          text(bound('manual-title'), { role: 'heading' }),
-                          text(bound('completion-summary')),
-                          // One witnessed build indicator, kept with its manual and count.
-                          { type: 'Progress', binding: 'build', label: null },
-                      ]),
-                      text(lit(COMPLETION_MANUAL_COPY_V2.hint), { tone: 'info' }),
-                  ]
+        case 'completion': {
+            if (inputs.session === null) {
+                return [text(bound('completion-summary'), { role: 'heading' })]
+            }
+            const figure = completionFigure(material)
+            return [
+                card([
+                    text(lit(COMPLETION_MANUAL_COPY_V2.label), { role: 'label', emphasis: 'strong' }),
+                    text(bound('manual-title'), { role: 'heading' }),
+                    // The manual's own picture, honestly captioned (never a product photo the app does not have), and
+                    // the opener of the page it came from, kept together.
+                    ...figure.picture,
+                    ...figure.source,
+                    text(bound('completion-summary')),
+                    // One witnessed build indicator, kept with its manual and count.
+                    { type: 'Progress', binding: 'build', label: null },
+                ]),
+                text(lit(COMPLETION_MANUAL_COPY_V2.hint), { tone: 'info' }),
+            ]
+        }
         case 'error':
             return [
                 { type: 'Icon', name: 'alert', tone: 'caution', size: 'lg' },
@@ -771,6 +814,13 @@ function barOf(material: DocumentMaterialV2): BarV2 {
                   }
         }
         case 'result':
+            // Nothing to confirm, retake or ask about until the check returns: the way out is back to the guide.
+            if (material.pendingCheck) {
+                return {
+                    primary: primary('Back to the guide', intent('navigate', 'guide'), 'chevronLeft'),
+                    secondary: null,
+                }
+            }
             return decision === 'pass'
                 ? { primary: primary('Next step', intent('confirm', 'step'), 'arrowRight'), secondary: ask }
                 : { primary: primary('Retake photo', intent('capture', 'retake'), 'camera'), secondary: ask }

@@ -25,6 +25,7 @@ import { BUSY_COPY_V2, STATE_COPY_V2 } from './document-v2-copy'
 import type { ScreenContextInputsV2 } from './document-v2-context'
 import {
     LAYOUT_DECISIONS_V2,
+    LAYOUT_TEMPLATE_V2_CHECKING_VERSION,
     layoutTemplateProvenanceV2Schema,
     layoutTemplateSha256V2,
     layoutTemplateVariantsV2,
@@ -43,8 +44,11 @@ import { syntheticDocumentFactsV2 } from './document-v2-recorded'
 import { verifyDocumentAgainstInputsV2 } from './document-v2-verify'
 import { canonicalJson } from './screen-context'
 
-/** Which ready variant of the record was compiled: the actual decision of a held check, or the one of an answer. */
-export type LayoutBranchV2 = LayoutDecisionV2 | 'answer'
+/**
+ * Which ready variant of the record was compiled: the actual decision of a held check, the one of an answer, or
+ * `checking`, the held photo before its check returns (version 2 records only).
+ */
+export type LayoutBranchV2 = LayoutDecisionV2 | 'answer' | 'checking'
 
 /**
  * Where a compiled component came from in the raw record. `template` is the raw JSON path of the template node that
@@ -137,6 +141,7 @@ function expandVariant(
     material: DocumentMaterialV2,
     budget: { document: number },
     nodeLineage: WeakMap<object, LayoutLineageV2>,
+    checking: boolean,
 ): Expanded {
     const { inputs } = material
     const policy = variantPolicyV2(inputs.kind, name, material.requirements, material)
@@ -146,9 +151,12 @@ function expandVariant(
     const resultKind = inputs.result?.kind ?? 'check'
     const activity = inputs.uiState?.busy?.activity
     // Closed registry copy, selected by the actual witness (the busy activity) and the variant: nothing the app composes.
+    // The checking branch is a ready slot whose witnessed activity is `checking` (see `pendingCheckV2`).
     const copy =
         name === 'ready'
-            ? null
+            ? checking
+                ? BUSY_COPY_V2.checking
+                : null
             : name === 'busy' && activity !== undefined
               ? BUSY_COPY_V2[activity]
               : STATE_COPY_V2[name]
@@ -403,15 +411,20 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     const material = documentMaterialV2(args.inputs)
     const held = material.inputs.result
     if (material.inputs.kind !== 'result' && material.inputs.kind !== 'answer') bad.push('inputs::kind_unsupported')
-    else if (held === null) bad.push('inputs::no_result')
-    else if (held.kind !== (material.inputs.kind === 'result' ? 'check' : 'question'))
+    else if (held === null && !material.pendingCheck) bad.push('inputs::no_result')
+    else if (held !== null && held.kind !== (material.inputs.kind === 'result' ? 'check' : 'question'))
         bad.push('inputs::result_mismatch')
     if (bad.length > 0) return failure(bad)
 
     const decision = material.decision
     let ready: TemplateVariantV2
     let branch: LayoutBranchV2
-    if (template.kind === 'result') {
+    if (template.kind === 'result' && material.pendingCheck) {
+        // The held photo before its check returns: only a version 2 record owns that screen; a version 1 record cannot.
+        if (template.version !== LAYOUT_TEMPLATE_V2_CHECKING_VERSION) return failure(['inputs::pending_unsupported'])
+        ready = template.ready.checking
+        branch = 'checking'
+    } else if (template.kind === 'result') {
         if (decision === null) return failure(['inputs::no_decision'])
         ready = template.ready[decision]
         branch = decision
@@ -428,7 +441,7 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     const states: Partial<Record<VariantState, ScreenVariantV2>> = {}
     const headerLineage: Record<string, LayoutLineageV2> = {}
     try {
-        readyExpanded = expandVariant(ready, readyAt, 'ready', material, budget, nodeLineage)
+        readyExpanded = expandVariant(ready, readyAt, 'ready', material, budget, nodeLineage, branch === 'checking')
         Object.assign(headerLineage, readyExpanded.headerLineage)
         for (const state of ['busy', 'pending', 'error', 'recovery'] as const) {
             const expanded = expandVariant(
@@ -438,6 +451,7 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
                 material,
                 budget,
                 nodeLineage,
+                false,
             )
             states[state] = expanded.variant
             Object.assign(headerLineage, expanded.headerLineage)

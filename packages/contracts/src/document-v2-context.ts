@@ -1,6 +1,7 @@
-import type { ManualSession, QuestionResult } from './index'
+import type { ManualSession, ManualStep, QuestionResult } from './index'
 import {
     canonicalJson,
+    screenFacts,
     screenResultView,
     screenContextParts,
     screenUiForKind,
@@ -8,7 +9,12 @@ import {
     type ScreenResultInput,
 } from './screen-context'
 import type { ScreenFailure, ScreenKind } from './screen'
-import { SCREEN_CATALOG_V2_VERSION, type ScreenKindV2, type ScreenUiStateV2 } from './document-v2'
+import {
+    SCREEN_CATALOG_V2_VERSION,
+    type DocumentSourceV2,
+    type ScreenKindV2,
+    type ScreenUiStateV2,
+} from './document-v2'
 
 /**
  * The answer a person got about the photo of a retained check, held beside that check by a step-scoped More. Legal only
@@ -78,16 +84,78 @@ export function resultOfKindV2(
     return companion === null ? null : { kind: 'question', question: companion.question, value: companion.value }
 }
 
-/** Exact held capture used by a document, including a question before its answer exists. */
+/** The one busy activity that witnesses a check in flight (`Freezing photo…`, `Checking frozen photo…`). */
+export const PENDING_CHECK_ACTIVITY_V2 = 'checking' as const
+
+/**
+ * Whether these inputs are the HELD PHOTO OF A CHECK THAT HAS NOT RETURNED: a result screen before its result. It is true
+ * only when the app actually holds the evidence for it, all at once: a result screen without a result or a failure, a
+ * reviewed manual that has the step, the capture the app holds (named in the inputs and in the held-capture state), and
+ * the checking activity. Anything else keeps the meaning it always had; nothing here is ever assumed or inferred.
+ */
+export function pendingCheckV2(
+    inputs: Pick<ScreenContextInputsV2, 'kind' | 'captureId' | 'result' | 'uiState'> &
+        Partial<Pick<ScreenContextInputsV2, 'session' | 'stepId' | 'failure'>>,
+): boolean {
+    const { session, stepId, captureId } = inputs
+    return (
+        inputs.kind === 'result' &&
+        inputs.result === null &&
+        (inputs.failure ?? null) === null &&
+        session != null &&
+        session.reviewStatus === 'reviewed' &&
+        stepId != null &&
+        session.reviewedSteps.some((step) => step.stepId === stepId) &&
+        captureId != null &&
+        inputs.uiState?.capture?.captureId === captureId &&
+        inputs.uiState?.busy?.activity === PENDING_CHECK_ACTIVITY_V2
+    )
+}
+
+/**
+ * Exact held capture used by a document, including a question before its answer exists and a check before its result
+ * returns (see `pendingCheckV2`).
+ */
 export function captureWitnessV2(
-    inputs: Pick<ScreenContextInputsV2, 'kind' | 'result' | 'captureId' | 'uiState'> & {
-        stepId?: string | null | undefined
-    },
+    inputs: Pick<ScreenContextInputsV2, 'kind' | 'result' | 'captureId' | 'uiState'> &
+        Partial<Pick<ScreenContextInputsV2, 'session' | 'stepId' | 'failure'>>,
 ): string | null {
     if (inputs.result !== null) return inputs.captureId
+    if (pendingCheckV2(inputs)) return inputs.captureId
     const heldHere = inputs.kind === 'questions' || (inputs.kind === 'more' && (inputs.stepId ?? null) !== null)
     const held = heldHere ? inputs.uiState?.capture : null
     return held && (inputs.captureId === null || inputs.captureId === held.captureId) ? held.captureId : null
+}
+
+/** A step's own source references, restricted to the pages the manual really has (a missing page is never cited). */
+export const usableRefsOf = (step: ManualStep, session: ManualSession | null): DocumentSourceV2[] =>
+    step.sourceRefs
+        .filter((ref) => session?.pages.some((page) => page.pageId === ref.pageId) === true)
+        .slice(0, 100)
+        .map((ref) => ({ pageId: ref.pageId, region: ref.region }))
+
+/**
+ * The manual's own picture for a finished build. `whole` is true when it is a whole page, not a figure.
+ */
+export interface CompletionFigureV2 {
+    ref: DocumentSourceV2
+    whole: boolean
+}
+
+/**
+ * The picture the finished-build screen shows, from the manual itself and nothing else: the first usable reference of
+ * the manual's LAST step (as the legacy Done hero did), exactly as cited (a region stays that region, a whole page stays
+ * a whole page); else the manual's FIRST page, whole. A region is never invented or widened, and a manual with no page
+ * has no picture. Reviewed or not, the steps are the ones every other screen reads (`screenFacts`).
+ */
+export function completionFigureV2(session: ManualSession | null): CompletionFigureV2 | null {
+    if (session === null) return null
+    const steps = screenFacts(session)?.steps ?? []
+    const last = steps[steps.length - 1]
+    const own = last === undefined ? undefined : usableRefsOf(last, session)[0]
+    if (own !== undefined) return { ref: own, whole: own.region === null }
+    const first = session.pages[0]
+    return first === undefined ? null : { ref: { pageId: first.pageId, region: null }, whole: true }
 }
 
 /** The v1 kind whose session, step and result identity a v2 kind shares. */
@@ -213,6 +281,8 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
     }
     const parts = screenContextParts(base)
     const companion = inputs.companionAnswer ?? null
+    // The finished build's picture is grounded in the manual's own cited step: part of the key only where it exists.
+    const figure = inputs.kind === 'completion' ? completionFigureV2(inputs.session) : null
     return {
         content: {
             ...parts.content,
@@ -230,6 +300,7 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
                           value: companion.value,
                       }),
                   }),
+            ...(figure === null ? {} : { figure: figure.ref }),
         },
         identity: { ...parts.identity, captureId: captureWitnessV2(inputs) },
     }

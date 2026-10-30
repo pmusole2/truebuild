@@ -1502,6 +1502,7 @@ export const screenDocumentV2Schema = z
             const policy = variantPolicyV2(document.kind, name, requirements, document)
             const stated = new Set<string>()
             const cited = new Set<number>()
+            const sourceOpeners = new Set<number>()
             const offered: AppIntent[] = []
             const present = new Set<string>()
             const heldIntents: AppIntent[] = []
@@ -1575,6 +1576,9 @@ export const screenDocumentV2Schema = z
                     for (const reference of resultFacts[entry.node.result]) stated.add(reference)
                 }
                 for (const index of indexes) cited.add(index)
+                if (entry.node.type === 'Citation' || entry.node.type === 'ManualPage') {
+                    for (const index of indexes) sourceOpeners.add(index)
+                }
                 offered.push(...nodeIntentsV2(entry.node))
                 present.add(entry.node.type)
                 if (entry.node.type === 'Image' && entry.node.source.kind === 'capture') photo = true
@@ -1588,6 +1592,10 @@ export const screenDocumentV2Schema = z
                         ? 'A required citation is missing'
                         : `A required citation is missing from the ${name} variant`,
                 )
+            }
+            // A displayed completion picture must offer its real page. The image itself is not a citation opener.
+            if (document.kind === 'completion' && policy.figure !== null && !sourceOpeners.has(policy.figure)) {
+                add('A required citation is missing')
             }
             for (const required of policy.actions) {
                 if (!offered.some((has) => has.intent === required.intent && has.target === required.target)) {
