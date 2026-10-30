@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import {
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     createDemoManual,
     screenContextJsonV2,
     screenDocumentV2Schema,
@@ -31,7 +31,7 @@ const inputs: ScreenContextInputsV2 = {
     failure: null,
 }
 const metadata = screensV2GenerateRequest('v2-1', inputs, sha256Hex)
-const document = composeFallbackDocumentV2(inputs, {
+const document = buildFallbackDocumentV2(inputs, {
     sha256Hex,
     now: () => new Date('2026-01-01T00:00:00Z'),
     reason: 'fixture',
@@ -84,7 +84,7 @@ describe('v2 document transport', () => {
         expect(request).toMatchObject({ companionAnswer })
         expect(inputsFromDocumentMetadata(request)).toMatchObject({ companionAnswer })
         const complete = screenDocumentV2Schema.parse(
-            composeFallbackDocumentV2(contextual, {
+            buildFallbackDocumentV2(contextual, {
                 sha256Hex,
                 now: (): Date => new Date('2026-01-01T00:00:00Z'),
                 reason: 'fixture',
@@ -138,7 +138,7 @@ describe('v2 document transport', () => {
             const context = { ...inputs, session: large }
             const request = screensV2GenerateRequest('v2-1', context, sha256Hex)
             const complete = screenDocumentV2Schema.parse(
-                composeFallbackDocumentV2(context, {
+                buildFallbackDocumentV2(context, {
                     sha256Hex,
                     now: (): Date => new Date('2026-01-01T00:00:00Z'),
                     reason: 'fixture',

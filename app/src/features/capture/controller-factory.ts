@@ -29,9 +29,9 @@ export const textDigest = async (text: string): Promise<string> =>
  * `__DEV__` so a production bundle never contains the fixture images.
  */
 export function proofPorts(): ProofRuntime.ProofPorts | null {
-    // The whole branch sits inside `if (__DEV__)`: Metro folds that to nothing in a production bundle, which removes the
-    // require (and with it the fixture images) before dependencies are collected. An early return would not.
-    if (__DEV__) {
+    // A compile-time gate removes the require and fixture images from ordinary production bundles before collection.
+    // Explicit isolated fixture releases retain this branch for native verification. An early return would not suffice.
+    if (__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') {
         const config = nativeProofConfig(API_BASE_URL)
         if (config !== null) {
             // eslint-disable-next-line @typescript-eslint/no-require-imports

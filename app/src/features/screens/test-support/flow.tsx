@@ -28,7 +28,7 @@ export type Mounted = {
 
 export async function mount(
     entries: LibraryEntry[],
-    options: { screens?: FixtureServerOptions | 'off'; replies?: Replies } = {},
+    options: { screens?: FixtureServerOptions | 'off'; replies?: Replies; recordings?: 'off' } = {},
 ): Promise<Mounted> {
     const { controller, calls } = await runtime(entries, options.replies)
     const server = fixtureDocuments(options.screens === 'off' ? {} : options.screens)
@@ -40,6 +40,8 @@ export async function mount(
             return (): string => `s-${++id}`
         })(),
         pollMs: 1,
+        // Latency/failure protocol cases must explicitly request the transport path; normal mounts keep recordings.
+        ...(options.recordings === 'off' ? { recordings: (): null => null } : {}),
     })
     jest.mocked(createController).mockReturnValue(controller)
     jest.mocked(createScreens).mockReturnValue(null)

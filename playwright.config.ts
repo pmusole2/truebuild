@@ -1,4 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
+import { fileURLToPath } from 'node:url'
+
+const root = fileURLToPath(new URL('.', import.meta.url))
+const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
+if (mode !== 'full' && mode !== 'steps' && mode !== 'off') {
+    throw new Error('TRUEBUILD_E2E_GENERATIVE_UI must be full, steps or off')
+}
 
 // Public shared key for the isolated test API and bundle only. It is not a provider credential and is never a Meta key.
 const FIXTURE_DEMO_KEY = 'truebuild-fixture-demo'
@@ -42,6 +49,7 @@ process.env.TRUEBUILD_E2E_API_ORIGIN = API_ORIGIN
 
 export default defineConfig({
     testDir: './tests/e2e',
+    outputDir: `.local/ai-effort/close95/e2e-original-${mode}`,
     fullyParallel: false,
     workers: 1,
     retries: 0,
@@ -66,6 +74,7 @@ export default defineConfig({
         {
             // Test-only Meta-mode API with the documented HTTP mock. An empty key is required and no .env file is loaded.
             command: `node --import tsx api/scripts/mock-server.ts --test-only --scenario=${SCENARIO}${secondOpinionFlags}`,
+            cwd: root,
             url: `${API_ORIGIN}/api/health`,
             reuseExistingServer: false,
             timeout: 120_000,
@@ -73,10 +82,13 @@ export default defineConfig({
                 MODEL_API_KEY: '',
                 PORT: String(API_PORT),
                 CORS_ORIGINS: WEB_ORIGIN,
+                GENERATIVE_UI: mode,
+                EXPO_NO_DOTENV: '1',
             },
         },
         {
-            command: `npm exec --workspace @truebuild/app -- expo start --web --localhost --port ${WEB_PORT}`,
+            command: `npm run web -- --localhost --port ${WEB_PORT}`,
+            cwd: `${root}app`,
             url: WEB_ORIGIN,
             reuseExistingServer: false,
             timeout: 120_000,
@@ -84,9 +96,11 @@ export default defineConfig({
                 CI: '1',
                 EXPO_NO_TELEMETRY: '1',
                 EXPO_NO_DOTENV: '1',
+                NODE_OPTIONS: '--dns-result-order=ipv4first',
                 EXPO_PUBLIC_API_BASE_URL: API_ORIGIN,
                 EXPO_PUBLIC_API_SECRET: FIXTURE_DEMO_KEY,
                 EXPO_PUBLIC_PROVIDER_MODE: 'meta',
+                EXPO_PUBLIC_GENERATIVE_UI: mode,
                 // Tips are for people; the regression suite drives the real controls directly. This flag only hides them
                 // in a development bundle and never marks a screen seen.
                 EXPO_PUBLIC_SKIP_TIPS: '1',

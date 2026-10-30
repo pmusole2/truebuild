@@ -17,6 +17,7 @@ import { DocumentRenderer } from '../documents/document-renderer'
 import { hostsOutsideDocuments, type OwnershipTree } from '../documents/ownership-audit'
 import { View } from 'react-native'
 import { BottomSheet } from '../../ui/sheet'
+import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { DocumentSurface } from './document-surface'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
 
@@ -685,7 +686,9 @@ it('the actual More and nested judge entry publish document owners while their M
         for (const modal of modals) {
             const id = (modal as unknown as OwnershipTree).props.nativeID
             expect(typeof id).toBe('string')
-            expect(ids.has(String(id).replace('truebuild-document-root:', ''))).toBe(true)
+            const markers = parseNativeMeterMarkers(id)
+            expect(ids.has(markers.documentRoot ?? '')).toBe(true)
+            expect(markers.origin).not.toBeNull()
         }
         expect(hostsOutsideDocuments(actualRoot(), ids)).toEqual([])
     }

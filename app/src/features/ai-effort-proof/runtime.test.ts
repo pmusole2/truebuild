@@ -10,6 +10,38 @@ const inputs = { development: true, enabled: '1', providerMode: 'fixture', baseU
 const digest = async (bytes: Uint8Array): Promise<string> => createHash('sha256').update(bytes).digest('hex')
 
 describe('proof isolation guard', () => {
+    it('permits an explicitly isolated non-development fixture build without enabling ordinary production fixtures', () => {
+        const release = {
+            ...inputs,
+            development: false,
+            releaseFixture: '1',
+            runId: 'close95-release-proof',
+        }
+        expect(resolveProofConfig(release)).toEqual({
+            runId: 'close95-release-proof',
+            baseUrl: 'http://127.0.0.1:3101',
+        })
+        expect(resolveProofConfig({ ...release, releaseFixture: undefined })).toBeNull()
+    })
+    it.each([
+        { releaseFixture: 'yes' },
+        { enabled: '0' },
+        { enabled: undefined },
+        { providerMode: 'meta' },
+        { runId: undefined },
+        { baseUrl: 'http://192.168.0.2:3101' },
+        { baseUrl: 'http://127.0.0.1:3102' },
+    ])('rejects an invalid active release fixture configuration %j', (override) => {
+        expect(() =>
+            resolveProofConfig({
+                ...inputs,
+                development: false,
+                releaseFixture: '1',
+                runId: 'close95-release-proof',
+                ...override,
+            }),
+        ).toThrow()
+    })
     it('stays absent in production or without explicit opt-in', () => {
         expect(resolveProofConfig({ ...inputs, development: false })).toBeNull()
         expect(resolveProofConfig({ ...inputs, enabled: undefined })).toBeNull()

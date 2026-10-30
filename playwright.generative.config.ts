@@ -3,7 +3,9 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
-if (mode !== 'full' && mode !== 'off') throw new Error('Use full or off for the isolated generative UI flow')
+if (mode !== 'full' && mode !== 'steps' && mode !== 'off') {
+    throw new Error('Use full, steps or off for the isolated generative UI flow')
+}
 
 export default defineConfig({
     testDir: './tests/generative-e2e',

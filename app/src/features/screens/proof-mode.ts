@@ -8,7 +8,7 @@ import { PROOF_EVIDENCE_LABEL } from '../ai-effort-proof/evidence'
  * An invalid proof configuration is not a proof run (the app refuses to start in one), so it reads as none here.
  */
 export function proofEvidenceLabel(): string | null {
-    if (!__DEV__) return null
+    if (!__DEV__ && process.env.EXPO_PUBLIC_RELEASE_FIXTURE !== '1') return null
     try {
         return nativeProofConfig(API_BASE_URL) === null ? null : PROOF_EVIDENCE_LABEL
     } catch {

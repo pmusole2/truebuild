@@ -1,8 +1,11 @@
-/** The fixture seam is available only in an explicitly selected development bundle on the isolated fixture origin. */
+/** Explicit fixture builds only; ordinary release bundles keep the seam disabled. */
+declare const __DEV__: boolean
+
 export type ProofConfig = Readonly<{ runId: string; baseUrl: string }>
 
 export type ProofConfigInputs = {
     readonly development: boolean
+    readonly releaseFixture?: string | undefined
     readonly enabled: string | undefined
     readonly providerMode: string | undefined
     readonly baseUrl: string
@@ -10,11 +13,19 @@ export type ProofConfigInputs = {
 }
 
 export function resolveProofConfig(inputs: ProofConfigInputs): ProofConfig | null {
-    if (!inputs.development || inputs.enabled === undefined || inputs.enabled === '' || inputs.enabled === '0') {
+    const release = inputs.releaseFixture
+    if (release !== undefined && release !== '' && release !== '0' && release !== '1') {
+        throw new Error('Invalid release fixture build flag')
+    }
+    if (!inputs.development && release !== '1') return null
+    if (release === '1' && (inputs.enabled !== '1' || inputs.runId === undefined)) {
+        throw new Error('Release fixture requires explicit opt-in and namespace')
+    }
+    if (inputs.enabled === undefined || inputs.enabled === '' || inputs.enabled === '0') {
         return null
     }
     if (inputs.enabled !== '1' || inputs.providerMode !== 'fixture') {
-        throw new Error('Native proof requires explicit development fixture mode')
+        throw new Error('Native proof requires explicit fixture mode')
     }
     let url: URL
     try {
@@ -39,10 +50,11 @@ export function resolveProofConfig(inputs: ProofConfigInputs): ProofConfig | nul
     return Object.freeze({ runId, baseUrl: url.origin })
 }
 
-/** Static public build flags only. Production never enables the native IO fixture. */
+/** Static public build flags only. A fixture release is explicit and never uses the ordinary library. */
 export function nativeProofConfig(baseUrl: string): ProofConfig | null {
     return resolveProofConfig({
         development: typeof __DEV__ !== 'undefined' && __DEV__,
+        releaseFixture: process.env.EXPO_PUBLIC_RELEASE_FIXTURE,
         enabled: process.env.EXPO_PUBLIC_AI_EFFORT_PROOF,
         providerMode: process.env.EXPO_PUBLIC_PROVIDER_MODE,
         baseUrl,

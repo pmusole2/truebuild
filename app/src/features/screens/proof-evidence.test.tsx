@@ -29,11 +29,7 @@ async function panel(): Promise<void> {
             <FeedbackProvider reduceMotion>
                 <WorkflowContext.Provider value={workflow}>
                     <JudgeProvider store={store}>
-                        <StagesPanel
-                            check={{ model: 'muse-wonder-1.0', decision: 'pass' }}
-                            stages={stages}
-                            resultSlot={undefined}
-                        />
+                        <StagesPanel check={{ model: 'muse-wonder-1.0', decision: 'pass' }} stages={stages} />
                     </JudgeProvider>
                 </WorkflowContext.Provider>
             </FeedbackProvider>

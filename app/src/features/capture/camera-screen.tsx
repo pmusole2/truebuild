@@ -31,8 +31,8 @@ export type CameraScreenProps = {
  * behind `__DEV__` so a production bundle never contains the fixture images.
  */
 export function proofCamera(): typeof ProofCameraModule.ProofCamera | null {
-    // Inside `if (__DEV__)` so a production bundle folds the require away (an early return would leave it collected).
-    if (__DEV__) {
+    // Compile-time gating removes this require from ordinary production; isolated fixture releases retain it explicitly.
+    if (__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') {
         if (nativeProofConfig(API_BASE_URL) !== null) {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             return (require('../ai-effort-proof/camera') as typeof ProofCameraModule).ProofCamera

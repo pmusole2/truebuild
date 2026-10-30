@@ -18,11 +18,12 @@ import type {
     DocumentFixtureServer as FixtureServer,
     DocumentFixtureServerOptions as FixtureServerOptions,
 } from './test-support/fixture-server'
-import { inputsFromDocumentMetadata } from '../../api/document-client'
+import { documentPrecomputeInputs, inputsFromDocumentMetadata } from '../../api/document-client'
 import { measureRenderOriginTree } from '../../ui/test-support/render-origin-coverage'
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { LibraryEntry } from '../capture/library'
+import type { JsonElement } from 'test-renderer'
 
 // The production root layout, routes, screens, controller and screen store run unchanged. Only the device/transport
 // boundary is injected: the model transport, storage and image normalization, and the /api/screens server.
@@ -100,8 +101,23 @@ afterEach(async () => {
     await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: false }))
 })
 
-const hostCounts = (view: Mounted['view']): { generated: number; fallback: number; shell: number; total: number } => {
-    const sample = measureRenderOriginTree(view.toJSON(), {
+const hostCounts = (
+    view: Mounted['view'],
+    documentTestId?: string,
+): { generated: number; fallback: number; shell: number; total: number } => {
+    const findDocument = (node: JsonElement): JsonElement | null => {
+        if (node.props.testID === documentTestId) return node
+        for (const child of node.children) {
+            if (typeof child === 'string') continue
+            const match = findDocument(child)
+            if (match !== null) return match
+        }
+        return null
+    }
+    const allMounted = view.toJSON()
+    const tree = documentTestId === undefined || allMounted === null ? allMounted : findDocument(allMounted)
+    if (documentTestId !== undefined && tree === null) throw new Error('missing_document_host_tree')
+    const sample = measureRenderOriginTree(tree, {
         sessionId: 'ui-grace',
         screen: 'home',
         checkpointId: 'current',
@@ -135,10 +151,10 @@ describe('generated screens off keeps the original app', () => {
 describe('Home composed by the document', () => {
     it('shows the calm skeleton while composing, then the document, keeping the stable test identity of the action', async () => {
         const gate = deferred<void>()
-        const { server } = await mount([], { screens: { gate: gate.promise } })
+        const { server } = await mount([], { screens: { gate: gate.promise }, recordings: 'off' })
         expect(await screen.findByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
         expect(screen.getByText(STATE_COPY_V2.pending.detail)).toBeTruthy()
-        expect(STATE_COPY_V2.pending.heading).toBe('Getting this ready')
+        expect(STATE_COPY_V2.pending.heading).toBe('Working on it')
         await act(async () => gate.resolve())
         expect(await screen.findByText('Add a manual to start building.')).toBeTruthy()
         expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
@@ -159,16 +175,20 @@ describe('Home composed by the document', () => {
     })
 
     it('keeps the native Home when the document cannot be composed', async () => {
-        await mount([], { screens: { failing: ['home'] } })
+        const { server } = await mount([], { screens: { failing: ['home'] }, recordings: 'off' })
         expect(await screen.findByRole('button', { name: 'Add a manual' })).toBeTruthy()
         expect(screen.getByText('Add a manual to start building.')).toBeTruthy()
         expect(screen.queryByTestId('generated-body')).toBeNull()
+        expect(generateCalls(server)).toContain('home')
     })
 
     it('keeps the native Home usable after the grace period and does not swap a late document under the person', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
-        const { store, view, server } = await mount([], { screens: { generated: ['home'], gate: gate.promise } })
+        const { store, view, server } = await mount([], {
+            screens: { generated: ['home'], gate: gate.promise },
+            recordings: 'off',
+        })
         expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(8_001))
         expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
@@ -187,19 +207,46 @@ describe('Home composed by the document', () => {
 
 describe('Guide composed by the document', () => {
     it('precomputes every step once after the manual is confirmed, then opens each step without a new request', async () => {
-        const { server, view, controller } = await mount([entry('flow-manual', 'reviewed', 3)])
+        const { server, view, controller, store } = await mount([entry('flow-manual', 'reviewed', 3)])
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         expect(await screen.findByText(/^Step 1 of \d+$/u)).toBeTruthy()
         await waitFor(() => expect(server.requests.some((request) => request.op === 'progress')).toBe(true))
         const precomputes = server.requests.filter((request) => request.op === 'precompute')
         expect(precomputes).toHaveLength(1)
+        const precompute = precomputes[0]!
+        const guides = documentPrecomputeInputs({
+            session: controller.current!.session,
+            uiState: precompute.uiState,
+            completedStepIds: precompute.completedStepIds,
+            requestedKinds: precompute.requestedKinds,
+        }).filter((item) => item.inputs.kind === 'guide')
+        await waitFor(() => expect(guides.every((item) => store.peek(item.inputs)?.status === 'ready')).toBe(true))
+        const guideRequests = (): typeof server.requests =>
+            server.requests.filter((request) => request.op === 'generate' && request.kind === 'guide')
+        await waitFor(() =>
+            expect(
+                guideRequests()
+                    .filter((request) => request.uiState?.busy != null)
+                    .map((request) => `${request.stepId}:${request.uiState!.busy!.activity}`)
+                    .sort(),
+            ).toEqual([
+                'step-1:checking',
+                'step-1:second-opinion',
+                'step-2:checking',
+                'step-2:second-opinion',
+                'step-3:checking',
+                'step-3:second-opinion',
+            ]),
+        )
+        const preparedRequests = guideRequests()
+        expect(preparedRequests.filter((request) => request.uiState?.busy == null).length).toBeLessThanOrEqual(1)
         await act(async () => controller.step(1))
         expect(await screen.findByText(/^Step 2 of \d+$/u)).toBeTruthy()
         await act(async () => controller.step(2))
         expect(await screen.findByText(/^Step 3 of \d+$/u)).toBeTruthy()
         // Steps 2 and 3 came from the background job, not from one request per step.
-        expect(generateCalls(server).filter((kind) => kind === 'guide').length).toBeLessThanOrEqual(1)
+        expect(guideRequests()).toEqual(preparedRequests)
     })
 
     it('uses the document bar for the action and keeps the guide-primary identity', async () => {
@@ -286,11 +333,19 @@ describe('Result composed after an immediate verdict', () => {
             },
         })
         await photo(controller)
+        const heldCapture = controller.getSnapshot().capture
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
         await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('invalid_output'))
+        expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.source).toBe('fallback')
+        // Rejection replaces the document identity and resets the real photo gate. Load that actual held frame.
+        await loadPhoto()
+        expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
         expect(screen.queryByText('Not quite right')).toBeNull()
         expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
-        expect(hostCounts(view).generated).toBe(0)
+        // The all-mounted tree also retains the generated recorded Home behind this active result document.
+        expect(hostCounts(view, 'guide-screen').generated).toBe(0)
+        expect(hostCounts(view, 'guide-screen').fallback).toBeGreaterThan(0)
+        expect(controller.getSnapshot().capture).toBe(heldCapture)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
     })
 
@@ -365,10 +420,15 @@ describe('J1: show how Meta AI built this', () => {
             'Reasoning tokens: 700',
         ])
             expect(guide().getByText(text)).toBeTruthy()
-        expect(guide().getByText('This screen, all hosts: Not recorded')).toBeTruthy()
-        expect(guide().getByText('Session, all hosts: Not recorded')).toBeTruthy()
-        expect(guide().getByText('Mean across routes: Not recorded')).toBeTruthy()
-        expect(guide().getByText('Session, excluding declared native internals: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Visible screen and open sheets: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Visible-screen session: Not recorded')).toBeTruthy()
+        expect(guide().getByText('Mean across visible routes: Not recorded')).toBeTruthy()
+        expect(
+            guide().getByText('Visible session, excluding camera and manual-image internals: Not recorded'),
+        ).toBeTruthy()
+        expect(
+            guide().getByText('All mounted screens (previous method): Not recorded; session Not recorded'),
+        ).toBeTruthy()
         expect(guide().getByText(/Count unavailable: disconnected|Not counted on this device/u)).toBeTruthy()
         expect(guide().queryByText(/\d+ elements/u)).toBeNull()
         await openJudge()
@@ -851,7 +911,10 @@ describe('a late document is used on the next visit, never swapped in under the 
     it('keeps the native Home while it is in front, and shows the document when Home is next focused', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
-        const { view } = await mount([entry()], { screens: { generated: ['home', 'guide'], gate: gate.promise } })
+        const { view } = await mount([entry()], {
+            screens: { generated: ['home', 'guide'], gate: gate.promise },
+            recordings: 'off',
+        })
         await act(async () => jest.advanceTimersByTime(4_000))
         await testRouter.push('/guide/flow-manual')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))

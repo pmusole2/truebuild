@@ -83,7 +83,7 @@ describe('the native proof is off unless every guard holds', () => {
             expect(proofPorts()).toBeNull()
             expect(proofCamera()).toBeNull()
         } else {
-            expect(() => proofPorts()).toThrow('explicit development fixture mode')
+            expect(() => proofPorts()).toThrow('explicit fixture mode')
         }
     })
 

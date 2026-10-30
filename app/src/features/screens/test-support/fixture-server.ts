@@ -1,6 +1,6 @@
 import {
     assembleDocumentV2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     documentMaterialV2,
     type ScreenContextInputsV2,
     type ScreenDocumentV2,
@@ -459,7 +459,7 @@ export function documentForV2(
     const material = documentMaterialV2(inputs)
     const generated = options.generated?.includes(inputs.kind) === true
     const recorded = options.recordedMetadata === true
-    const proposal = composeProposalV2(material)
+    const proposal = buildFallbackProposalV2(material)
     const document = assembleDocumentV2(
         material,
         options.arrange?.(proposal, inputs) ?? proposal,

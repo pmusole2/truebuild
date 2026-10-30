@@ -62,6 +62,8 @@ test('a complete document owns the frame; off stays local and full publishes hon
                   .then((response) => response.json())
             : null
     await page.goto('/')
+    // Launch recordings intentionally serve Home without a request; factual manual routes still use the API.
+    await prepareGuide(page, true)
     if (firstDocument !== null) {
         const published = screensV2ResultSchema.parse(await firstDocument)
         expect(published).toMatchObject({
@@ -74,11 +76,12 @@ test('a complete document owns the frame; off stays local and full publishes hon
             },
         })
     }
-    await prepareGuide(page, true)
     await expect(page.getByTestId('guide-screen').getByTestId('bottom-bar')).toHaveCount(1)
     await expect(
         page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
     ).toBeVisible()
+    // The synthetic manual explicitly classifies these as directions, kept complete behind More detail.
+    await page.getByTestId('guide-screen').getByRole('button', { name: 'More detail', exact: true }).click()
     await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
     if (mode === 'full') {
         expect(documentRequests).toBeGreaterThan(0)
