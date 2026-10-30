@@ -7,7 +7,7 @@ import {
     SCREEN_KINDS_V2,
     appIntentSchema,
     cameraAccessV2,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     createDemoManual,
     documentMaterialV2,
     intentAllowedV2,
@@ -43,8 +43,8 @@ const inputsOf = (state: Camera | null, kind: ScreenKindV2 = 'camera'): ScreenCo
     failure: null,
     uiState: { camera: state },
 })
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 const nodesOf = (document: ScreenDocumentV2, name: string): ScreenNodeV2[] => {
     const out: ScreenNodeV2[] = []
@@ -123,7 +123,7 @@ describe('camera access is derived from the witnessed state, never faked', () =>
 
 describe('the camera document per access', () => {
     it('granted and working: the raw camera and the shutter, nothing about permission', () => {
-        const document = compose(inputsOf(camera()))
+        const document = fallbackFor(inputsOf(camera()))
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputsOf(camera()), sha256Hex)).toEqual([])
         expect(document.requirements.nodes).toContain('CameraView')
@@ -142,7 +142,7 @@ describe('the camera document per access', () => {
         ['the manual-page camera', camera({ mode: 'manual-page', permission: 'undetermined' })],
     ] as [string, Camera | null][])('%s: no raw camera, privacy help, primary "Allow camera"', (_name, state) => {
         const inputs = inputsOf(state)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         expect(hasCameraView(document)).toBe(false)
@@ -157,7 +157,7 @@ describe('the camera document per access', () => {
 
     it('denied and cannot ask again: primary "Open settings" (open-details/device-settings), never the prompt', () => {
         const inputs = inputsOf(camera({ permission: 'denied', canAskAgain: false }))
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         expect(hasCameraView(document)).toBe(false)
@@ -170,7 +170,7 @@ describe('the camera document per access', () => {
 
     it('failed camera: no raw camera, ready and the error/recovery variants lead with "Try camera again"', () => {
         const inputs = inputsOf(camera({ failed: true }))
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         expect(hasCameraView(document)).toBe(false)
@@ -183,7 +183,7 @@ describe('the camera document per access', () => {
     })
 
     it('a working camera keeps its error variant free of the camera retry (only a witnessed failure owns it)', () => {
-        const document = compose(inputsOf(camera()))
+        const document = fallbackFor(inputsOf(camera()))
         expect(barOf(document, 'error')).not.toContain('retry/camera')
         expect(hasCameraView(document)).toBe(true)
         expect(
@@ -200,7 +200,7 @@ describe('the camera document per access', () => {
             camera({ permission: 'denied', canAskAgain: false }),
             camera({ permission: 'undetermined' }),
         ]) {
-            const document = compose(inputsOf(state))
+            const document = fallbackFor(inputsOf(state))
             expect(document.requirements.facts.length).toBeGreaterThan(0)
             // The schema itself rejects a variant that omits a required fact or citation.
             expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
@@ -257,7 +257,7 @@ describe('the new targets are scoped to the camera screen and its witnesses', ()
 
 describe('a request-bound client refuses a document that places a camera it cannot have', () => {
     it('rejects a CameraView when the permission is not granted or the camera failed', () => {
-        const granted = compose(inputsOf(camera()))
+        const granted = fallbackFor(inputsOf(camera()))
         for (const state of [camera({ permission: 'denied' }), camera({ failed: true }), null]) {
             const issues = verifyDocumentAgainstInputsV2(granted, inputsOf(state))
             expect(issues).toContain('camera_unavailable')
@@ -267,7 +267,7 @@ describe('a request-bound client refuses a document that places a camera it cann
 
     it('rejects a failed camera whose error or recovery variant does not lead with the camera retry', () => {
         const inputs = inputsOf(camera({ failed: true }))
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const forged: ScreenDocumentV2 = {
             ...document,
             states: {

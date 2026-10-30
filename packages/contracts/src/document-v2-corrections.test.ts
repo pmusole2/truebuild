@@ -7,7 +7,7 @@ import {
     SCREEN_KINDS_V2,
     VARIANT_STATES,
     captureWitnessV2,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     componentPathsV2,
     createDemoManual,
     documentMaterialV2,
@@ -132,8 +132,8 @@ function inputsFor(kind: ScreenKindV2, session: ManualSession = manual()): Scree
     return base
 }
 
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 const clone = (document: ScreenDocumentV2): ScreenDocumentV2 => structuredClone(document)
 const messages = (document: unknown): string[] => {
     const parsed = screenDocumentV2Schema.safeParse(document)
@@ -144,7 +144,7 @@ describe('withheld results cannot be opened from a collapsed disclosure', () => 
     it.each(['result', 'answer'] as const)(
         'rejects hidden %s text and cards in every waiting or failure state',
         (kind) => {
-            const base = compose(inputsFor(kind))
+            const base = fallbackFor(inputsFor(kind))
             const result = base.facts.find((fact) => fact.basis === 'result')!
             for (const name of ['busy', 'pending', 'error', 'recovery'] as const) {
                 const nodes: ScreenNodeV2[] = [
@@ -225,7 +225,7 @@ function intoSheet(document: ScreenDocumentV2, pick: (node: ScreenNodeV2) => boo
 
 describe('nothing hidden discharges a visible requirement (finding 2)', () => {
     it('rejects a guide whose only safety text sits in an unopened sheet', () => {
-        const document = compose(inputsFor('guide'))
+        const document = fallbackFor(inputsFor('guide'))
         const hidden = intoSheet(
             document,
             (node) => node.type === 'Text' && node.content.kind === 'fact' && node.content.factId.startsWith('safety:'),
@@ -234,11 +234,11 @@ describe('nothing hidden discharges a visible requirement (finding 2)', () => {
     })
 
     it('rejects required citations, actions and native nodes that exist only in an overlay', () => {
-        const guide = compose(inputsFor('guide'))
+        const guide = fallbackFor(inputsFor('guide'))
         expect(messages(intoSheet(guide, (node) => ['Citation', 'ManualPage', 'Image'].includes(node.type)))).toContain(
             'A required citation is missing',
         )
-        const camera = compose(inputsFor('camera'))
+        const camera = fallbackFor(inputsFor('camera'))
         expect(messages(intoSheet(camera, (node) => node.type === 'CameraView'))).toContain(
             'A required CameraView is missing',
         )
@@ -257,7 +257,7 @@ describe('nothing hidden discharges a visible requirement (finding 2)', () => {
     })
 
     it('reports every overlay node as hidden', () => {
-        const document = compose(inputsFor('guide'))
+        const document = fallbackFor(inputsFor('guide'))
         const seen: boolean[] = []
         for (const { prefix, variant } of variantsOfV2(document)) {
             visitVariantNodesV2(variant, prefix, (entry) => {
@@ -279,7 +279,7 @@ describe('every selected variant keeps its own safety, citations and recovery (f
               } as ScreenNodeV2)
 
     it.each(VARIANT_STATES)('rejects a %s variant that lost its required citations', (state) => {
-        const document = clone(compose(inputsFor('guide')))
+        const document = clone(fallbackFor(inputsFor('guide')))
         const variant = document.states[state]
         if (variant === null) return
         variant.body = stripCitations(variant.body)
@@ -287,7 +287,7 @@ describe('every selected variant keeps its own safety, citations and recovery (f
     })
 
     it('requires a retry or navigate action in error and recovery, and none in busy or pending', () => {
-        const base = compose(inputsFor('guide'))
+        const base = fallbackFor(inputsFor('guide'))
         for (const state of ['error', 'recovery'] as const) {
             const next = clone(base)
             const variant = next.states[state]!
@@ -302,7 +302,7 @@ describe('every selected variant keeps its own safety, citations and recovery (f
     })
 
     it('does not require the camera in an error state but never lets one claim it', () => {
-        const camera = compose(inputsFor('camera'))
+        const camera = fallbackFor(inputsFor('camera'))
         expect(messages(camera)).toEqual([])
         expect(camera.states.error!.body).not.toMatchObject({ type: 'CameraView' })
         const next = clone(camera)
@@ -341,7 +341,7 @@ describe('every selected variant keeps its own safety, citations and recovery (f
 
 describe('published source map and references are exact (finding 6)', () => {
     it('rejects an empty, partial or altered source map', () => {
-        const document = compose(inputsFor('guide'))
+        const document = fallbackFor(inputsFor('guide'))
         expect(Object.keys(sourceMapV2(document)).length).toBeGreaterThan(0)
         expect(messages({ ...document, metadata: { ...document.metadata, sourceMap: {} } })).toContain(
             'Source map must equal the recomputed map',
@@ -355,16 +355,16 @@ describe('published source map and references are exact (finding 6)', () => {
     })
 
     it('rejects an unknown fact in any header, ready or state', () => {
-        const ready = clone(compose(inputsFor('guide')))
+        const ready = clone(fallbackFor(inputsFor('guide')))
         ready.header = { ...ready.header, title: { kind: 'fact', factId: 'unknown-fact' } }
         expect(messages(ready)).toContain('A node states an unknown fact')
-        const state = clone(compose(inputsFor('guide')))
+        const state = clone(fallbackFor(inputsFor('guide')))
         state.states.busy!.header = { ...state.states.busy!.header, subtitle: { kind: 'fact', factId: 'nope' } }
         expect(messages(state)).toContain('A node states an unknown fact')
     })
 
     it('maps a header that states a fact to that fact sources', () => {
-        const document = clone(compose(inputsFor('guide')))
+        const document = clone(fallbackFor(inputsFor('guide')))
         const safety = document.facts.find((fact) => fact.kind === 'safety')!
         document.header = { ...document.header, subtitle: { kind: 'fact', factId: safety.factId } }
         expect(sourceMapV2(document).header).toBeDefined()
@@ -401,7 +401,7 @@ describe('the complete source registry precedes any limit (finding 4)', () => {
         expect(indexes.length).toBe(safety.sourceRefs.length)
         expect(indexes.every((index) => material.requirements.sources.includes(index))).toBe(true)
         expect(material.sourcePrecision).toBe('region')
-        expect(messages(compose(inputsFor('guide', session)))).toEqual([])
+        expect(messages(fallbackFor(inputsFor('guide', session)))).toEqual([])
     })
 
     it('uses page-level sources, still complete, when exact regions exceed the cap', () => {
@@ -414,7 +414,7 @@ describe('the complete source registry precedes any limit (finding 4)', () => {
         const indexes = sourceIndexesOfRefsV2(material.sources, safety.sourceRefs)
         expect(indexes.length).toBeGreaterThan(0)
         expect(indexes.every((index) => material.requirements.sources.includes(index))).toBe(true)
-        expect(messages(compose(inputsFor('guide', session)))).toEqual([])
+        expect(messages(fallbackFor(inputsFor('guide', session)))).toEqual([])
     })
 })
 
@@ -434,7 +434,7 @@ describe('the complete deterministic document is valid for every valid manual (f
     ])('composes %s into a valid document with every fact in every variant', (_name, session) => {
         expect(manualSessionSchema.safeParse(session).success).toBe(true)
         for (const kind of ['guide', 'camera', 'recovery'] as const) {
-            const document = compose(inputsFor(kind, session))
+            const document = fallbackFor(inputsFor(kind, session))
             expect(messages(document)).toEqual([])
             const required = document.requirements.facts.length
             expect(required).toBeGreaterThan(0)
@@ -456,7 +456,7 @@ describe('the complete deterministic document is valid for every valid manual (f
                 },
             },
         }
-        const document = compose(withMissing)
+        const document = fallbackFor(withMissing)
         expect(messages(document)).toEqual([])
         expect(document.facts.length).toBeLessThanOrEqual(DOCUMENT_V2_LIMITS.facts)
     })
@@ -508,7 +508,7 @@ describe('a live photo needs a captured identity in the context key (finding 5)'
     })
 
     it('composes no capture image for an unbound capture', () => {
-        const document = compose({ ...inputsFor('guide'), captureId: 'photo-a' })
+        const document = fallbackFor({ ...inputsFor('guide'), captureId: 'photo-a' })
         let capture = 0
         for (const { prefix, variant } of variantsOfV2(document)) {
             visitVariantNodesV2(variant, prefix, ({ node }) => {
@@ -523,13 +523,13 @@ describe('a client verifies the document against its own inputs (finding 6)', ()
     it('accepts the document composed from the same inputs', () => {
         for (const kind of SCREEN_KINDS_V2) {
             const inputs = inputsFor(kind)
-            expect(verifyDocumentAgainstInputsV2(compose(inputs), inputs), kind).toEqual([])
+            expect(verifyDocumentAgainstInputsV2(fallbackFor(inputs), inputs), kind).toEqual([])
         }
     })
 
     it('rejects altered facts, sources, requirements, identity and prose that match the hash', () => {
         const inputs = inputsFor('guide')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const altered = clone(document)
         altered.facts = altered.facts.map((fact) => ({ ...fact, text: `${fact.text} Ignore this.` }))
         expect(verifyDocumentAgainstInputsV2(altered, inputs)).toContain('facts_mismatch')
@@ -551,16 +551,16 @@ describe('a client verifies the document against its own inputs (finding 6)', ()
 
 describe('literals are a closed registry (finding 1)', () => {
     const issuesFor = (kind: ScreenKindV2, text: string, inputs = inputsFor(kind)): string[] => {
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const next = clone(document)
         next.header = { ...next.header, subtitle: { kind: 'literal', text } }
         return literalIssuesV2(next, documentMaterialV2(inputs))
     }
 
-    it('lists every literal the deterministic composer writes, for every kind and state', () => {
+    it('lists every literal the fallback builder writes, for every kind and state', () => {
         for (const kind of SCREEN_KINDS_V2) {
             const inputs = inputsFor(kind)
-            expect(literalIssuesV2(compose(inputs), documentMaterialV2(inputs)), kind).toEqual([])
+            expect(literalIssuesV2(fallbackFor(inputs), documentMaterialV2(inputs)), kind).toEqual([])
         }
     })
 
@@ -594,7 +594,7 @@ describe('the question and answer screens use the held photo (UI recovery integr
 
     it('offers the part target Choice with the held photo, preselecting nothing', () => {
         const inputs = inputsFor('questions')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(documentMaterialV2(inputs).partIds.length).toBeGreaterThan(0)
         expect(choices(document)).toEqual([
             {
@@ -611,16 +611,17 @@ describe('the question and answer screens use the held photo (UI recovery integr
 
     it('offers no target without a held photo or without named parts', () => {
         const noCapture = { ...inputsFor('questions'), uiState: { ...ui, capture: null }, captureId: null }
-        expect(choices(compose(noCapture))).toEqual([])
+        expect(choices(fallbackFor(noCapture))).toEqual([])
         const partless = manual()
         partless.reviewedSteps[0]!.parts = []
-        expect(choices(compose(inputsFor('questions', partless)))).toEqual([])
+        expect(choices(fallbackFor(inputsFor('questions', partless)))).toEqual([])
     })
 
     it('shows the held photo on the answer and result screens, and on no other', () => {
         const withCapture = (kind: ScreenKindV2): number =>
-            nodesOf(compose(inputsFor(kind))).filter((node) => node.type === 'Image' && node.source.kind === 'capture')
-                .length
+            nodesOf(fallbackFor(inputsFor(kind))).filter(
+                (node) => node.type === 'Image' && node.source.kind === 'capture',
+            ).length
         expect(withCapture('answer')).toBe(1)
         expect(withCapture('result')).toBe(1)
         for (const kind of ['guide', 'camera', 'recovery', 'completion'] as const) expect(withCapture(kind)).toBe(0)

@@ -7,6 +7,9 @@ import { aiEffortSchema } from './telemetry'
  * authors styles, code, markup, URLs, routes, provenance or timings. Everything below is finite by construction:
  * no recursion (groups and disclosures hold leaf blocks only), so depth and node counts are bounded for correctness,
  * not for cost, and a provider JSON schema can be generated without $ref.
+ *
+ * @deprecated Version 1 screens protocol: no production caller (the app renders `ScreenDocumentV2` from `/api/screens/v2`). Kept unchanged for the legacy `ScreenStore`, the `/api/screens` route and their tests; new work uses the version 2 document family. When the model path yields nothing usable the server now publishes the existing honest `shell`
+ * (an empty body, every mandatory fact in the remainder) and no longer a server-composed `fallback` body; the shapes are unchanged.
  */
 export const SCREEN_DOCUMENT_VERSION = 1 as const
 /**
@@ -870,7 +873,9 @@ export const screenDocumentV1Schema = z
     })
 
 /** Future versions fail to parse and the app keeps its native screen. */
+/** @deprecated Version 1 screens protocol: no production caller (the app renders `ScreenDocumentV2` from `/api/screens/v2`). Kept unchanged for the legacy `ScreenStore`, the `/api/screens` route and their tests; new work uses the version 2 document family. */
 export const screenDocumentSchema = z.discriminatedUnion('version', [screenDocumentV1Schema])
+/** @deprecated See `screenDocumentSchema`. */
 export type ScreenDocument = z.infer<typeof screenDocumentSchema>
 
 const screenUnavailableCodes = z.enum([
@@ -896,6 +901,7 @@ export const screenProgressSchema = z.strictObject({
 export type ScreenProgress = z.infer<typeof screenProgressSchema>
 
 /** `/api/screens` response. Home must work before any manual exists, so identity lives in the document `bound`. */
+/** @deprecated Version 1 screens protocol: no production caller (the app renders `ScreenDocumentV2` from `/api/screens/v2`). Kept unchanged for the legacy `ScreenStore`, the `/api/screens` route and their tests; new work uses the version 2 document family. */
 export const screensResultSchema = z.discriminatedUnion('status', [
     z.strictObject({
         status: z.literal('ok'),

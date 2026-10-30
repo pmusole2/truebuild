@@ -7,6 +7,8 @@ import {
     OVERVIEW_FACT_PREFIX_V2,
     READING_CANCELLATION_V2,
     STEP_KINDS_V2,
+    UNRESOLVED_SAFETY_FACT_ID_V2,
+    UNRESOLVED_SAFETY_TEXT_V2,
     isRequiredFactV2,
     sourceKeyV2,
     sourceResolverV2,
@@ -25,7 +27,7 @@ import {
     type ScreenContextInputsV2,
 } from './document-v2-context'
 import { completionWitnessed } from './screen-context'
-import { manualDirectionFacts } from './screen-facts'
+import { manualDirectionFacts, unresolvedSafetyNotes } from './screen-facts'
 import { screenFacts } from './screen-context'
 import type { AppIntent } from './screen'
 import type { ScreenKindV2, ScreenUiStateV2, TextRefV2 } from './document-v2'
@@ -47,6 +49,11 @@ export interface DocumentMaterialV2 {
     /** True when the facts include the overview of a fully known manual (quick check only, see `overviewStepsOf`). */
     overview: boolean
     stepBound: boolean
+    /**
+     * Every fact the screen may state. A step-bound screen leads with the one `unresolved-safety` statement when the
+     * step's extraction left a safety note unreadable, then the step's known safety notes and directions, then any
+     * overview and result facts.
+     */
     facts: FactV2[]
     sources: DocumentSourceV2[]
     /**
@@ -297,6 +304,20 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
         text: fact.text,
         sourceRefs: fact.sourceRefs.slice(0, 100).map((ref) => ({ pageId: ref.pageId, region: ref.region })),
     }))
+    // A safety note the extraction could not read is not a known manual fact, so `manualDirectionFacts` never returns it,
+    // yet the person must still learn that a printed warning exists. One fixed statement about the extraction (however
+    // many notes were unreadable) leads the step's safety facts and qualifies the notes below it. It comes from the same
+    // basis as every other fact of the step (the reviewed steps, else the raw extraction), is required in every variant
+    // like a known safety note, and has no source and no reason of its own: there is no manual text to cite or to quote.
+    if (session !== null && step !== null && stepBound && unresolvedSafetyNotes(session, step.stepId).length > 0) {
+        published.unshift({
+            factId: UNRESOLVED_SAFETY_FACT_ID_V2,
+            kind: 'safety',
+            basis: 'unresolved-safety',
+            text: UNRESOLVED_SAFETY_TEXT_V2,
+            sourceRefs: [],
+        })
+    }
     // A held check states `result:verdict` (+ `result:missing:N`); a held answer, alone or beside that check, states
     // `result:answer` (+ `result:answer-missing:N`): one namespace per result type, so each card states only its own.
     const refsOf = (value: {

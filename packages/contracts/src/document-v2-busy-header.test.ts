@@ -6,7 +6,7 @@ import {
     BUSY_ACTIVITIES_V2,
     BUSY_COPY_V2,
     SCREEN_KINDS_V2,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     createDemoManual,
     documentMaterialV2,
     literalIssuesV2,
@@ -73,8 +73,8 @@ function inputsFor(kind: ScreenKindV2, uiState: ScreenUiStateV2 = baseUi): Scree
     return base
 }
 
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 const clone = <T>(value: T): T => structuredClone(value)
 
 function nodesOf(document: ScreenDocumentV2, name: string): ScreenNodeV2[] {
@@ -93,7 +93,7 @@ describe('busy header states the current activity', () => {
 
     it.each(cases)('%s busy header is the %s heading, whatever the body scroll', (kind, activity) => {
         const inputs = inputsFor(kind, { ...baseUi, busy: { activity } })
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const busy = document.states.busy
         expect(busy).not.toBeNull()
         expect(busy!.header.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2[activity].heading })
@@ -102,15 +102,15 @@ describe('busy header states the current activity', () => {
     })
 
     it.each(NEVER_BUSY)('%s keeps its header: the activity is not part of its context', (kind) => {
-        const plain = compose(inputsFor(kind))
+        const plain = fallbackFor(inputsFor(kind))
         const named = inputsFor(kind, { ...baseUi, busy: { activity: 'asking' } })
-        expect(compose(named)).toEqual(plain)
+        expect(fallbackFor(named)).toEqual(plain)
         expect(literalIssuesV2(plain, documentMaterialV2(named))).toEqual([])
     })
 
     it('the questions sheet header says Still thinking… / Asking… while busy, and keeps its context and back', () => {
         for (const activity of ['question-waiting', 'asking'] as const) {
-            const document = compose(inputsFor('questions', { ...baseUi, busy: { activity } }))
+            const document = fallbackFor(inputsFor('questions', { ...baseUi, busy: { activity } }))
             const ready = document.header
             const busy = document.states.busy!.header
             expect(busy.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2[activity].heading })
@@ -118,13 +118,13 @@ describe('busy header states the current activity', () => {
             expect(busy.back).toEqual(ready.back)
             expect(ready.title).toEqual({ kind: 'literal', text: 'Ask about this step' })
         }
-        const second = compose(inputsFor('result', { ...baseUi, busy: { activity: 'second-opinion' } }))
+        const second = fallbackFor(inputsFor('result', { ...baseUi, busy: { activity: 'second-opinion' } }))
         expect(second.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Taking a closer look…' })
     })
 
     it('rejects a busy variant that keeps the ready heading, in the server gate and the request-bound client', () => {
         const inputs = inputsFor('questions', { ...baseUi, busy: { activity: 'question-waiting' } })
-        const stale = clone(compose(inputs))
+        const stale = clone(fallbackFor(inputs))
         stale.states.busy = {
             ...stale.states.busy!,
             header: { ...stale.states.busy!.header, title: stale.header.title },
@@ -133,7 +133,7 @@ describe('busy header states the current activity', () => {
         expect(verifyDocumentAgainstInputsV2(stale, inputs, sha256Hex)).toContain('busy_header_mismatch')
 
         // The wrong activity's (listed elsewhere) heading is rejected too; only the current one is accepted.
-        const wrong = clone(compose(inputs))
+        const wrong = clone(fallbackFor(inputs))
         wrong.states.busy = {
             ...wrong.states.busy!,
             header: { ...wrong.states.busy!.header, title: { kind: 'literal', text: BUSY_COPY_V2.asking.heading } },
@@ -141,7 +141,7 @@ describe('busy header states the current activity', () => {
         expect(literalIssuesV2(wrong, documentMaterialV2(inputs))).toContain('states.busy.header:busy_header_mismatch')
 
         // A bound or fact reference cannot stand in for the activity wording either.
-        const bound = clone(compose(inputs))
+        const bound = clone(fallbackFor(inputs))
         bound.states.busy = {
             ...bound.states.busy!,
             header: { ...bound.states.busy!.header, title: { kind: 'bound', key: 'step-title' } },
@@ -152,9 +152,9 @@ describe('busy header states the current activity', () => {
     it('leaves other states unchanged and is silent without a named activity', () => {
         for (const kind of SCREEN_KINDS_V2) {
             const inputs = inputsFor(kind)
-            const document = compose(inputs)
+            const document = fallbackFor(inputs)
             expect(literalIssuesV2(document, documentMaterialV2(inputs)), kind).toEqual([])
-            const named = compose(inputsFor(kind, { ...baseUi, busy: { activity: 'checking' } }))
+            const named = fallbackFor(inputsFor(kind, { ...baseUi, busy: { activity: 'checking' } }))
             for (const name of ['pending', 'empty', 'error', 'recovery', 'confirming'] as const) {
                 expect(named.states[name], `${kind} ${name}`).toEqual(document.states[name])
             }
@@ -166,7 +166,7 @@ describe('completion publishes one build indicator', () => {
     it('the ready body carries one Progress and no Meter for the same build count', () => {
         for (const ui of [baseUi, { ...baseUi, busy: { activity: 'saving' as const } }]) {
             const inputs = inputsFor('completion', ui)
-            const document = compose(inputs)
+            const document = fallbackFor(inputs)
             const ready = nodesOf(document, 'ready')
             expect(ready.filter((node) => node.type === 'Progress')).toHaveLength(1)
             expect(ready.filter((node) => node.type === 'Meter')).toHaveLength(0)

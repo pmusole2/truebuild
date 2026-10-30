@@ -195,7 +195,7 @@ export const screenUiStateV2Schema = screenUiStateSchema.extend({
     judge: z.strictObject({ builtView: z.boolean() }).nullable().optional(),
     /**
      * Error, recovery and reading: the app holds a problem notice (`operation-notice` binds its plain words). Presence
-     * only: the notice text, the manual and the cause never reach the composer.
+     * only: the notice text, the manual and the cause never reach the model or the builder.
      */
     failure: z
         .strictObject({ notice: z.literal(true) })
@@ -710,16 +710,34 @@ export function visitVariantNodesV2(
     variant.overlays.forEach((overlay, index) => walk(overlay.content, `${prefix}overlays.${index}`, 1, true))
 }
 
-/** Paths of every component of a document that carries an origin: header, back, actions, and every node. */
-export function componentPathsV2(document: Parameters<typeof variantsOfV2>[0]): string[] {
-    const paths: string[] = []
-    for (const { prefix, variant } of variantsOfV2(document)) {
-        paths.push(`${prefix}header`)
+/** Paths of every component of each variant that carries an origin: header, back, actions, and every node. */
+export function variantComponentPathsV2(
+    document: Parameters<typeof variantsOfV2>[0],
+): { name: 'ready' | VariantState; prefix: string; paths: string[] }[] {
+    return variantsOfV2(document).map(({ name, prefix, variant }) => {
+        const paths = [`${prefix}header`]
         if (variant.header.back) paths.push(`${prefix}header.back`)
         variant.header.actions.forEach((_action, index) => paths.push(`${prefix}header.actions.${index}`))
         visitVariantNodesV2(variant, prefix, (entry) => paths.push(entry.path))
-    }
-    return paths
+        return { name, prefix, paths }
+    })
+}
+
+/** Paths of every component of a document that carries an origin: header, back, actions, and every node. */
+export function componentPathsV2(document: Parameters<typeof variantsOfV2>[0]): string[] {
+    return variantComponentPathsV2(document).flatMap((variant) => variant.paths)
+}
+
+/**
+ * The origin every component of one variant carries. A variant is attributed as a whole: the document's `source`,
+ * except a state variant that `metadata.carried` names, which keeps the `generated` origin of the document that really
+ * authored it. Nothing else can make a component `generated`.
+ */
+export function variantOriginV2(
+    metadata: { source: 'generated' | 'fallback'; carried?: CarriedStatesV2 | undefined },
+    name: 'ready' | VariantState,
+): 'generated' | 'fallback' {
+    return name !== 'ready' && metadata.carried?.[name] !== undefined ? 'generated' : metadata.source
 }
 
 /** Every TextRef a node carries (its words), in document order. */
@@ -789,13 +807,19 @@ export type DocumentSourceV2 = z.infer<typeof documentSourceV2Schema>
 
 export const FACT_KINDS_V2 = [...MANUAL_FACT_KINDS, 'verdict', 'answer', 'missing'] as const
 /**
+ * `unresolved-safety`: a statement about the EXTRACTION, never manual text. The reading of a step could not make out a
+ * printed safety note (`state: 'unknown'`), and an unreadable note is not a known manual fact, so this one fixed fact
+ * (see `UNRESOLVED_SAFETY_FACT_ID_V2`) is how the document still says so. It cites no source (the manual says nothing
+ * to cite), repeats none of the extraction's own reasons and is required, like a known safety note, in every variant.
+ *
  * `overview`: the title of a step the quick check of a fully known manual states so the person has something to confirm
  * (see `OVERVIEW_FACT_PREFIX_V2`). Not a direction and not a safety fact: it is required only in that ready screen.
  */
-export const FACT_BASES_V2 = [...MANUAL_FACT_BASES, 'result', 'overview'] as const
+export const FACT_BASES_V2 = [...MANUAL_FACT_BASES, 'unresolved-safety', 'result', 'overview'] as const
 /**
  * A complete, source-witnessed statement the document may show by reference: the manual's own words (never clipped,
- * not subject to the model-text plain rule) or the actual validated result. Server-owned; the model only places it.
+ * not subject to the model-text plain rule), the actual validated result, or the fixed unresolved-safety explanation
+ * of a witnessed extraction state (which has no manual text or source to cite). Server-owned; the model only places it.
  */
 export const factV2Schema = z.strictObject({
     factId,
@@ -808,6 +832,15 @@ export type FactV2 = z.infer<typeof factV2Schema>
 /** Facts of these bases must be shown in every variant that carries them (see `requirements`). */
 export const isRequiredFactV2 = (fact: Pick<FactV2, 'basis'>): boolean =>
     fact.basis !== 'direction' && fact.basis !== 'overview'
+
+/**
+ * Identity and words of the one fact of basis `unresolved-safety`: a step whose extraction left a safety note unreadable
+ * states it once, however many notes were unreadable. The words are fixed. They say nothing the manual says and nothing
+ * about which note, so a document can neither soften nor invent the missing warning. Only the shared material derives
+ * it (see `documentMaterialV2`); the model never writes it.
+ */
+export const UNRESOLVED_SAFETY_FACT_ID_V2 = 'state:safety-unreadable' as const
+export const UNRESOLVED_SAFETY_TEXT_V2 = 'A safety note could not be read. Add a clearer page before building.' as const
 
 /** Identity prefix of the step-title facts of a quick check's overview (`overview:step:<stepId>`). */
 export const OVERVIEW_FACT_PREFIX_V2 = 'overview:step:' as const
@@ -841,7 +874,10 @@ export const verdictCardFactIdsV2 = (card: 'check' | 'question', facts: readonly
  * a document is invalid unless its ready variant shows every one, and its facts appear in every variant that is present.
  */
 export const requirementsV2Schema = z.strictObject({
-    /** Facts to state (safety notes, unclassified-step directions, the verdict, answer and missing evidence). */
+    /**
+     * Facts to state (safety notes, the unreadable-safety statement, unclassified-step directions, the verdict, answer and
+     * missing evidence).
+     */
     facts: z.array(factId).max(DOCUMENT_V2_LIMITS.facts),
     /** Indexes of `sources` that must be cited visibly (sources of the required facts and of the result). */
     sources: z
@@ -905,6 +941,52 @@ export type FallbackReasonV2 = (typeof FALLBACK_REASONS_V2)[number]
 const nullableMs = z.number().min(0).nullable()
 const nullableCount = z.number().int().min(0).nullable()
 
+/**
+ * Where a published document's content came from. `live`: the live API runtime (a fallback after a real failure is still
+ * `live`). `synthetic-fixture`: a fixture/test runtime, no model claimed. `recorded-generation`: a model response that was
+ * really recorded once (by the run named in `model`, `effort`, `generatedAt` and `fixtureId`) and bound to its context
+ * later, so it was observed at record time and nothing about its timing or usage is known now. `local-deterministic`:
+ * built on the device without a server (generation off).
+ */
+export const DOCUMENT_EVIDENCE_V2 = ['live', 'synthetic-fixture', 'recorded-generation', 'local-deterministic'] as const
+export type DocumentEvidenceV2 = (typeof DOCUMENT_EVIDENCE_V2)[number]
+/** Identity of one recording: lowercase words, digits, dots, dashes and underscores (`recorded-home-first-launch-v1`). */
+export const fixtureIdV2Schema = z.string().regex(/^[a-z0-9][a-z0-9._-]{2,80}$/u)
+
+/** Actual offline composition author; separate from a Meta inference response and its effort/usage. */
+export const syntheticAuthorV2Schema = z.strictObject({
+    model: z.literal('gpt-6.1-sol'),
+    effort: z.literal('ultra'),
+    recordedAt: z.iso.datetime(),
+    fixtureId: fixtureIdV2Schema,
+})
+export type SyntheticAuthorV2 = z.infer<typeof syntheticAuthorV2Schema>
+
+/**
+ * Who really authored a state variant that sits on a document built for another context (see
+ * `rebindGeneratedStatesV2`): the generated or recorded document it was taken from, with that document's own model,
+ * effort, date and recording identity. Never the time it was carried, never a claim about a deterministic template.
+ */
+export const carriedStateV2Schema = z.strictObject({
+    /** `screenId` of the generated document that authored the variant. */
+    fromScreenId: sha256,
+    evidence: z.enum(['live', 'synthetic-fixture', 'recorded-generation']),
+    model: z.enum(['muse-spark-1.3', 'muse-wonder-1.0']).nullable(),
+    effort: aiEffortSchema.nullable(),
+    generatedAt: z.iso.datetime(),
+    promptVersion: z.number().int().min(0),
+    fixtureId: fixtureIdV2Schema.nullable(),
+    authoring: syntheticAuthorV2Schema.optional(),
+})
+export type CarriedStateV2 = z.infer<typeof carriedStateV2Schema>
+/** Closed by construction: a state of the catalog, never `ready` (the ready screen states this context's facts). */
+export const carriedStatesV2Schema = z.strictObject(
+    Object.fromEntries(VARIANT_STATES.map((state) => [state, carriedStateV2Schema.optional()])) as {
+        [S in VariantState]: z.ZodOptional<typeof carriedStateV2Schema>
+    },
+)
+export type CarriedStatesV2 = z.infer<typeof carriedStatesV2Schema>
+
 export const documentMetadataV2Schema = z.strictObject({
     /** `generated`: the model's document, accepted unchanged. `fallback`: the complete deterministic document. */
     source: screenSourceSchema.exclude(['shell']),
@@ -927,9 +1009,18 @@ export const documentMetadataV2Schema = z.strictObject({
      * `live`: served by the live API runtime, including its unconfigured or failed-provider fallback. It proves no
      * provider call by itself: a fallback's unobserved model, effort, timing and usage remain null.
      * `synthetic-fixture`: a fixture/test runtime (a `generated` document with it claims no model, effort, timing or
-     * usage). `local-deterministic`: composed on the device without a server (generation off).
+     * usage). `recorded-generation`: a recorded model response (names its model, effort, date and `fixtureId`; claims no
+     * timing or usage). `local-deterministic`: built on the device without a server (generation off).
      */
-    evidence: z.enum(['live', 'synthetic-fixture', 'local-deterministic']),
+    evidence: z.enum(DOCUMENT_EVIDENCE_V2),
+    /** Identity of the recording; present exactly when `evidence` is `recorded-generation`. */
+    fixtureId: fixtureIdV2Schema.nullable().optional(),
+    /**
+     * State variants taken from generated documents of other contexts, keyed by state, each with the provenance of the
+     * document that authored it. Only a `fallback` document carries any; its other variants stay `fallback`.
+     */
+    carried: carriedStatesV2Schema.optional(),
+    authoring: syntheticAuthorV2Schema.optional(),
     stage: z.enum(['screen', 'step-page']),
     model: z.enum(['muse-spark-1.3', 'muse-wonder-1.0']).nullable(),
     effort: aiEffortSchema.nullable(),
@@ -1142,7 +1233,7 @@ function spineV2(variant: Pick<ScreenVariantV2, 'body'>, match: (node: ScreenNod
 
 const RESULT_FACT_PREFIX = 'result:'
 
-/** Facts and sources a variant must carry, shared by the schema and the composer. */
+/** Facts and sources a variant must carry, shared by the schema and the fallback builder. */
 export function variantRequirementsV2(
     name: 'ready' | VariantState,
     requirements: RequirementsV2,
@@ -1293,7 +1384,8 @@ export const screenDocumentV2Schema = z
         if (factIds.size !== document.facts.length) add('Duplicate fact identity')
         const limit = document.sources.length
         const { metadata } = document
-        const paths = componentPathsV2(document)
+        const variantPaths = variantComponentPathsV2(document)
+        const paths = variantPaths.flatMap((variant) => variant.paths)
         const known = new Set(paths)
         if (
             Object.keys(metadata.origins).some((path) => !known.has(path)) ||
@@ -1301,12 +1393,60 @@ export const screenDocumentV2Schema = z
         ) {
             add('Origins must name every component exactly')
         }
-        if (Object.values(metadata.origins).some((origin) => origin !== metadata.source)) {
-            add('Every component origin matches the document source')
+        // A variant is attributed as a whole. Its origin is the document source, except a state variant that names the
+        // generated document that really authored it in `metadata.carried`: only that provenance makes a component of a
+        // fallback document `generated`.
+        for (const { name, paths: own } of variantPaths) {
+            const expected = variantOriginV2(metadata, name)
+            if (own.some((path) => metadata.origins[path] !== undefined && metadata.origins[path] !== expected)) {
+                add(
+                    expected === 'generated' && metadata.source === 'fallback'
+                        ? 'A carried state keeps the origin of the generated document that authored it'
+                        : 'Every component origin matches the document source',
+                )
+            }
+        }
+        const carried = metadata.carried ?? {}
+        for (const state of VARIANT_STATES) {
+            const provenance = carried[state]
+            if (provenance === undefined) continue
+            if (
+                provenance.authoring !== undefined &&
+                (provenance.evidence !== 'synthetic-fixture' ||
+                    provenance.generatedAt !== provenance.authoring.recordedAt)
+            ) {
+                add('A synthetic state preserves its actual author separately from provider observations')
+            }
+            if (metadata.source !== 'fallback') add('Only a fallback document carries generated states')
+            if (document.states[state] === null) add(`A carried ${state} state must exist`)
+            if (provenance.evidence === 'live' && provenance.model === null) add('A carried state names its model')
+            if (
+                provenance.evidence === 'synthetic-fixture' &&
+                (provenance.model !== null || provenance.effort !== null)
+            ) {
+                add('A carried synthetic state claims no model or effort')
+            }
+            if (provenance.evidence === 'recorded-generation') {
+                if (provenance.model === null || provenance.effort === null) {
+                    add('A carried recording names its model and effort')
+                }
+                if (provenance.fixtureId === null) add('A carried recording names its fixture')
+            } else if (provenance.fixtureId !== null) {
+                add('Only a recording carries a fixture identity')
+            }
         }
         if (Object.keys(metadata.sourceMap).some((path) => !known.has(path))) add('Source map names an unknown path')
         for (const indexes of Object.values(metadata.sourceMap)) {
             if (indexes.some((index) => index >= limit)) add('Source map does not index a document source')
+        }
+        if (
+            metadata.authoring !== undefined &&
+            (metadata.source !== 'generated' ||
+                metadata.evidence !== 'synthetic-fixture' ||
+                metadata.generatedAt !== metadata.authoring.recordedAt ||
+                metadata.cacheHit)
+        ) {
+            add('Synthetic authoring is a generated fixture, never a provider response or cache hit')
         }
         if (metadata.source === 'generated') {
             if (metadata.evidence === 'local-deterministic') add('Generated content is never local')
@@ -1320,9 +1460,28 @@ export const screenDocumentV2Schema = z
             ) {
                 add('A synthetic example claims no model, timing or usage')
             }
+            if (metadata.evidence === 'recorded-generation') {
+                if (metadata.model === null || metadata.effort === null) {
+                    add('A recording names its model and effort')
+                }
+                if ((metadata.fixtureId ?? null) === null) add('A recording names its fixture')
+                if (
+                    Object.values(metadata.timing).some((value) => value !== null && value !== undefined) ||
+                    Object.values(metadata.usage).some((value) => value !== null)
+                ) {
+                    add('A recording claims no timing or usage')
+                }
+                if (metadata.cacheHit) add('A recording is never a cache hit')
+            }
             if (metadata.fallbackReason !== null) add('Generated content has no fallback reason')
         } else if (metadata.fallbackReason === null) {
             add('Deterministic content names its reason')
+        }
+        if (metadata.source !== 'generated' && metadata.evidence === 'recorded-generation') {
+            add('Deterministic content is never a recording')
+        }
+        if ((metadata.fixtureId ?? null) !== null && metadata.evidence !== 'recorded-generation') {
+            add('Only a recording carries a fixture identity')
         }
         if (metadata.evidence === 'local-deterministic' && (metadata.model !== null || metadata.effort !== null)) {
             add('Local content claims no model')

@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
     assembleDocumentV2,
-    composeFallbackDocumentV2,
-    composeProposalV2,
+    buildFallbackDocumentV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     intentAllowedV2,
@@ -63,7 +63,7 @@ function build(
     edit?: (proposal: ScreenProposalV2) => ScreenProposalV2,
 ): { document: ScreenDocumentV2; schema: string[]; verify: string[] } {
     const material = documentMaterialV2(inputs)
-    const composed = composeProposalV2(material)
+    const composed = buildFallbackProposalV2(material)
     const document = assembleDocumentV2(
         material,
         edit ? edit(composed) : composed,
@@ -77,8 +77,8 @@ function build(
         verify: verifyDocumentAgainstInputsV2(document, inputs, sha256Hex),
     }
 }
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 const nodesOf = (variant: ScreenVariantV2): ScreenNodeV2[] => {
     const out: ScreenNodeV2[] = []
@@ -356,7 +356,7 @@ describe('waiting and failing variants never claim the overview', () => {
     it.each(['busy', 'pending', 'error', 'recovery'] as const)(
         'the %s variant states no step, part or picture',
         (name) => {
-            const document = compose(quick())
+            const document = fallbackFor(quick())
             expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
             const variant = variantOf(document, name)
             expect(stated(variant).filter((id) => id.startsWith('overview:'))).toEqual([])
@@ -367,7 +367,7 @@ describe('waiting and failing variants never claim the overview', () => {
     )
 
     it('refuses a document that states a step in a waiting variant', () => {
-        const [first] = overviewIds(compose(quick()))
+        const [first] = overviewIds(fallbackFor(quick()))
         const leaked = build(quick(), (proposal) => ({
             ...proposal,
             states: {
@@ -403,7 +403,7 @@ describe('waiting and failing variants never claim the overview', () => {
             reviewedSteps: [],
             rawExtraction: null,
         } as ManualSession
-        const document = compose({
+        const document = fallbackFor({
             kind: 'reading',
             session,
             stepId: null,
@@ -419,7 +419,7 @@ describe('waiting and failing variants never claim the overview', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Obligations the shared schema (and so the gate and the client verifier) enforces, not just the composer.
+// Obligations the shared schema (and so the gate and the client verifier) enforces, not just the fallback builder.
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** Two pages: step 2 cites a page the first step (and so the picture) does not, so only its own chip cites it. */
@@ -666,7 +666,7 @@ describe('a quick check offers only an action the app can earn', () => {
     it.each(cases)('composes no confirmation, in any variant, when %s', (_name, review) => {
         const inputs = quick(review)
         const material = documentMaterialV2(inputs)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const intents = intentsOf(document)
         expect(intents.length).toBeGreaterThan(0)
         expect(intents.filter((offered) => !intentAllowedV2(offered, material))).toEqual([])
@@ -679,7 +679,7 @@ describe('a quick check offers only an action the app can earn', () => {
     })
 
     it('still offers Looks right when the review can be confirmed', () => {
-        const document = compose(quick())
+        const document = fallbackFor(quick())
         const material = documentMaterialV2(quick())
         expect(variantOf(document, 'ready').bar.primary.intent).toEqual({ intent: 'confirm', target: 'facts' })
         expect(intentsOf(document).filter((offered) => !intentAllowedV2(offered, material))).toEqual([])

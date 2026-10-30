@@ -1,20 +1,27 @@
+/**
+ * The direct v2 FALLBACK BUILDER: the last resort, used only when no authored document is valid for a context.
+ *
+ * Architecture, in one place:
+ * - An authored document (a model response accepted by the server gate, or a recorded model response published by
+ *   `assembleDocumentV2`) is always preferred. It carries `source: 'generated'` and its own provenance.
+ * - When none is valid (generation off, no provider, a timeout, a rejected and repaired answer, a stale revision),
+ *   this module builds the COMPLETE document of the same catalog directly from the validated material: every ready node
+ *   and every required state variant, every mandatory fact, citation and action. It is v2 end to end: it constructs
+ *   `ScreenNodeV2` values and never converts, wraps or adapts a version 1 screen.
+ * - Its output is always `source: 'fallback'` and every origin is `fallback`. A deterministic template can never be
+ *   relabelled generated, here or by carrying one of its variants (see `rebindGeneratedStatesV2`).
+ * - It owns no identity, provenance or tables: `assembleDocumentV2` (document-v2-assemble.ts) adds those for every
+ *   producer, and `verifyDocumentAgainstInputsV2` (document-v2-verify.ts) lets a request-bound client check any of them.
+ */
 import {
     DOCUMENT_V2_LIMITS,
-    SCREEN_CATALOG_V2_VERSION,
-    SCREEN_DOCUMENT_V2_VERSION,
     VARIANT_STATES,
     OVERVIEW_PARTS_VISIBLE_V2,
     OVERVIEW_TITLE_KEY_V2,
     isOverviewFactV2,
-    componentPathsV2,
     noticeShownInV2,
-    nodeTextRefsV2,
-    variantsOfV2,
-    visitVariantNodesV2,
     requiredStatesV2,
     variantRequirementsV2,
-    screenStageV2,
-    sourceMapV2,
     sourceResolverV2,
     type BarV2,
     type DocumentMetadataV2,
@@ -43,14 +50,8 @@ import {
     NO_OVERVIEW_FIGURE_COPY_V2,
     NO_STEP_FIGURE_COPY_V2,
     STATE_COPY_V2,
-    bindingIssuesV2,
-    cameraIssuesV2,
-    earnedStateIssuesV2,
-    coachIssuesV2,
-    literalIssuesV2,
 } from './document-v2-copy'
 import {
-    availableBoundKeysV2,
     coachTargetsForV2,
     intentAllowedV2,
     READING_KEEP_V2,
@@ -58,15 +59,8 @@ import {
     documentMaterialV2,
     type DocumentMaterialV2,
 } from './document-v2-material'
-import {
-    cameraAccessV2,
-    moreScopedV2,
-    resultOfKindV2,
-    screenContextPartsV2,
-    screenContextJsonV2,
-    type ScreenContextInputsV2,
-} from './document-v2-context'
-import { canonicalJson } from './screen-context'
+import { cameraAccessV2, moreScopedV2, resultOfKindV2, type ScreenContextInputsV2 } from './document-v2-context'
+import { assembleDocumentV2, type AssembleDeps, type DocumentFacts } from './document-v2-assemble'
 import type { AppIntent, ScreenIcon } from './screen'
 
 type Node = ScreenNodeV2
@@ -74,7 +68,7 @@ type Tone = 'neutral' | 'info' | 'success' | 'caution' | 'critical'
 type Space = 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl'
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Small constructors. Everything below is the deterministic composition of the same catalog the model composes with.
+// Small constructors. Everything below builds the same v2 catalog the model authors with, one node at a time.
 // ---------------------------------------------------------------------------------------------------------------------
 
 const lit = (text: string): LabelTextRefV2 => ({ kind: 'literal', text })
@@ -289,9 +283,11 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
             }),
         )
     const manual = material.facts.filter((fact) => fact.basis !== 'result')
-    const safety = manual.filter((fact) => fact.kind === 'safety')
-    const required = manual.filter((fact) => fact.kind !== 'safety' && fact.basis === 'unclassified-step')
-    const optional = manual.filter((fact) => fact.basis === 'direction')
+    const isSafety = (fact: FactV2): boolean => fact.kind === 'safety' || fact.basis === 'safety-note'
+    const requiredIds = new Set(material.requirements.facts)
+    const safety = manual.filter(isSafety)
+    const required = manual.filter((fact) => !isSafety(fact) && requiredIds.has(fact.factId))
+    const optional = manual.filter((fact) => !isSafety(fact) && !requiredIds.has(fact.factId))
     return [
         ...(safety.length > 0
             ? [section('Safety', nest(pack(entries(safety, true), (children) => card(children, 'caution'))))]
@@ -708,10 +704,12 @@ function barOf(material: DocumentMaterialV2): BarV2 {
                 secondary: secondary('Choose photos', intent('capture', 'choose-pages'), 'image'),
             }
         case 'pages':
-            return {
-                primary: primary('Read manual', intent('confirm', 'reading'), 'arrowRight'),
-                secondary: secondary('Add page', intent('capture', 'add-page'), 'plus'),
-            }
+            return intentAllowedV2(intent('confirm', 'reading'), material)
+                ? {
+                      primary: primary('Read manual', intent('confirm', 'reading'), 'arrowRight'),
+                      secondary: secondary('Add page', intent('capture', 'add-page'), 'plus'),
+                  }
+                : { primary: primary('Add page', intent('capture', 'add-page'), 'plus'), secondary: null }
         case 'reading':
             return { primary: primary('Back to pages', intent('navigate', 'pages'), 'chevronLeft'), secondary: null }
         case 'quick-check':
@@ -941,7 +939,7 @@ function visiblyCited(node: Node, hidden: boolean, into: Set<number>): void {
 
 /**
  * Mandatory citations not yet cited by a fact's own chips (a held result's sources, say) are shown together under the
- * manual pages, so every variant cites every required source. Appended by the composer, never by the server.
+ * manual pages, so every variant cites every required source. Added by this builder, never by the server.
  */
 function withCoverage(
     variant: ScreenVariantV2,
@@ -959,7 +957,7 @@ function withCoverage(
 }
 
 /** The complete deterministic proposal for this material: ready variant plus every required state variant. */
-export function composeProposalV2(material: DocumentMaterialV2): ScreenProposalV2 {
+export function buildFallbackProposalV2(material: DocumentMaterialV2): ScreenProposalV2 {
     const ready: ScreenVariantV2 = {
         header: headerOf(material, true),
         body: scroll([stack(bodyOf(material))]),
@@ -980,162 +978,49 @@ export function composeProposalV2(material: DocumentMaterialV2): ScreenProposalV
     return { ...withCoverage(ready, material, 'ready'), states }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Assembly. Shared by the app (local deterministic), the server (fallback, fixture and model documents).
-// ---------------------------------------------------------------------------------------------------------------------
-
-export interface AssembleDeps {
-    sha256Hex(text: string): string
-    now(): Date
-}
-
-export interface DocumentFacts {
-    source: 'generated' | 'fallback'
-    evidence: DocumentMetadataV2['evidence']
-    fallbackReason: FallbackReasonV2 | null
-    model?: DocumentMetadataV2['model']
-    effort?: DocumentMetadataV2['effort']
-    repaired?: boolean
-    rejectedIssues?: number | null
-    cacheHit?: boolean
-    promptVersion?: number
-    generatedAt?: string
-    timing?: DocumentMetadataV2['timing']
-    usage?: DocumentMetadataV2['usage']
-}
+/** The only facts about a failed model call that a fallback document may record: what the call really observed. */
+const OBSERVED_KEYS = [
+    'model',
+    'effort',
+    'repaired',
+    'rejectedIssues',
+    'cacheHit',
+    'promptVersion',
+    'generatedAt',
+    'timing',
+    'usage',
+] as const satisfies readonly (keyof DocumentFacts)[]
 
 /**
- * Builds the published document from material and a proposal, adding only what the server owns: identity, the fact and
- * source tables, the requirements, origins and the source map. It never edits the proposal. Callers validate the
- * result with `screenDocumentV2Schema`.
+ * What `buildFallbackDocumentV2` is told about a failed model call: observations only. Never an origin, the identity of
+ * a recording or carried provenance, so a template cannot be made generated by saying so (only `rebindGeneratedStatesV2`,
+ * reading a real generated document, attributes a variant to one).
  */
-export function assembleDocumentV2(
-    material: DocumentMaterialV2,
-    proposal: ScreenProposalV2,
-    about: DocumentFacts,
-    deps: AssembleDeps,
-): ScreenDocumentV2 {
-    const { inputs } = material
-    const parts = screenContextPartsV2(inputs)
-    const bound = {
-        manualId: parts.identity.manualId,
-        revision: parts.identity.revision,
-        stepId: parts.identity.stepId,
-        captureId: parts.identity.captureId,
-        contextKey: deps.sha256Hex(screenContextJsonV2(inputs)),
-    }
-    const tables = { facts: material.facts, sources: material.sources }
-    const shell = { ...proposal, ...tables }
-    const origins = Object.fromEntries(componentPathsV2(proposal).map((path) => [path, about.source]))
-    const metadata: DocumentMetadataV2 = {
-        source: about.source,
-        origins,
-        sourceMap: sourceMapV2(shell),
-        evidence: about.evidence,
-        stage: screenStageV2(inputs.kind),
-        model: about.model ?? null,
-        effort: about.effort ?? null,
-        fallbackReason: about.fallbackReason,
-        repaired: about.repaired ?? false,
-        rejectedIssues: about.rejectedIssues ?? null,
-        cacheHit: about.cacheHit ?? false,
-        catalogVersion: SCREEN_CATALOG_V2_VERSION,
-        promptVersion: about.promptVersion ?? 0,
-        generatedAt: about.generatedAt ?? deps.now().toISOString(),
-        timing: about.timing ?? { timeToProviderMs: null, providerMs: null, parseValidateMs: null, totalMs: null },
-        usage: about.usage ?? { inputTokens: null, cachedTokens: null, outputTokens: null, reasoningTokens: null },
-    }
-    return {
-        version: SCREEN_DOCUMENT_V2_VERSION,
-        kind: inputs.kind,
-        screenId: deps.sha256Hex(
-            canonicalJson({
-                bound,
-                kind: inputs.kind,
-                source: about.source,
-                proposal,
-                ...tables,
-                requirements: material.requirements,
-            }),
-        ),
-        bound,
-        metadata,
-        header: proposal.header,
-        body: proposal.body,
-        bar: proposal.bar,
-        overlays: proposal.overlays,
-        states: proposal.states,
-        facts: material.facts,
-        sources: material.sources,
-        requirements: material.requirements,
-    }
+export type FallbackObservedV2 = Pick<DocumentFacts, (typeof OBSERVED_KEYS)[number]>
+
+/** Keeps the observation fields and nothing else, whatever the caller handed over (types do not stop an untyped one). */
+function observationsOf(observed: FallbackObservedV2): FallbackObservedV2 {
+    const only: Record<string, unknown> = {}
+    for (const key of OBSERVED_KEYS) if (observed[key] !== undefined) only[key] = observed[key]
+    return only as FallbackObservedV2
 }
 
 /**
  * The complete deterministic document of the same catalog: ready variant and every required state variant, all
  * mandatory witnesses shown. Used by the server whenever a model document is unavailable or rejected, and by the app
- * itself (no network) when generation is off: `reason: 'disabled'`, `evidence: 'local-deterministic'`.
+ * itself (no network) when generation is off: `reason: 'disabled'`, `evidence: 'local-deterministic'`. It is all
+ * fallback whatever `observed` says: only the observation fields of it are read.
  */
-export function composeFallbackDocumentV2(
+export function buildFallbackDocumentV2(
     inputs: ScreenContextInputsV2,
     deps: AssembleDeps & { reason: FallbackReasonV2; evidence: DocumentMetadataV2['evidence'] },
-    observed: Omit<DocumentFacts, 'source' | 'evidence' | 'fallbackReason'> = {},
+    observed: FallbackObservedV2 = {},
 ): ScreenDocumentV2 {
     const material = documentMaterialV2(inputs)
     return assembleDocumentV2(
         material,
-        composeProposalV2(material),
-        { ...observed, source: 'fallback', evidence: deps.evidence, fallbackReason: deps.reason },
+        buildFallbackProposalV2(material),
+        { ...observationsOf(observed), source: 'fallback', evidence: deps.evidence, fallbackReason: deps.reason },
         deps,
     )
-}
-
-/**
- * What a request-bound client checks of every server document, recomputed from ITS OWN inputs: the screen kind and
- * identity, the authoritative facts, sources and requirements (the shared material), the interface wording and the
- * earned progress. A matching context-key hash alone proves only that both sides hashed the same inputs, not that the
- * document restates the manual faithfully. Pass `sha256Hex` to also check the context key. Machine codes only.
- */
-export function verifyDocumentAgainstInputsV2(
-    document: ScreenDocumentV2,
-    inputs: ScreenContextInputsV2,
-    sha256Hex?: (text: string) => string,
-): string[] {
-    const material = documentMaterialV2(inputs)
-    const { identity } = screenContextPartsV2(inputs)
-    const issues = new Set<string>()
-    if (document.kind !== inputs.kind) issues.add('kind_mismatch')
-    const { bound } = document
-    if (
-        bound.manualId !== identity.manualId ||
-        bound.revision !== identity.revision ||
-        bound.stepId !== identity.stepId ||
-        bound.captureId !== identity.captureId ||
-        (sha256Hex !== undefined && bound.contextKey !== sha256Hex(screenContextJsonV2(inputs)))
-    ) {
-        issues.add('bound_mismatch')
-    }
-    if (canonicalJson(document.facts) !== canonicalJson(material.facts)) issues.add('facts_mismatch')
-    if (canonicalJson(document.sources) !== canonicalJson(material.sources)) issues.add('sources_mismatch')
-    if (canonicalJson(document.requirements) !== canonicalJson(material.requirements))
-        issues.add('requirements_mismatch')
-    const available = new Set(availableBoundKeysV2(material))
-    const checkRef = (ref: TextRefV2 | null): void => {
-        if (ref?.kind === 'bound' && !available.has(ref.key)) issues.add('bound_unavailable')
-    }
-    for (const { variant, prefix } of variantsOfV2(document)) {
-        checkRef(variant.header.title)
-        checkRef(variant.header.subtitle)
-        visitVariantNodesV2(variant, prefix, ({ node }) => nodeTextRefsV2(node).forEach(checkRef))
-    }
-    for (const issue of [
-        ...literalIssuesV2(document, material),
-        ...earnedStateIssuesV2(document, material),
-        ...coachIssuesV2(document, material),
-        ...cameraIssuesV2(document, material),
-        ...bindingIssuesV2(document, material),
-    ]) {
-        issues.add(issue.slice(issue.lastIndexOf(':') + 1))
-    }
-    return [...issues]
 }

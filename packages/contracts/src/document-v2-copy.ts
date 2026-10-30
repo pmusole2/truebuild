@@ -64,8 +64,9 @@ export const COACH_COPY_V2: Readonly<Record<string, { heading: string; body: str
 }
 
 export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; detail: string }>> = {
-    busy: { heading: 'Working on it', detail: 'This only takes a moment.' },
-    pending: { heading: 'Getting this ready', detail: 'Your screen will appear here.' },
+    // The generic wait says one calm thing, busy or pending; what the app is actually doing is `BUSY_COPY_V2`.
+    busy: { heading: 'Working on it', detail: 'One moment, please.' },
+    pending: { heading: 'Working on it', detail: 'One moment, please.' },
     empty: { heading: 'Nothing here yet', detail: 'Add something to get started.' },
     error: { heading: 'Something went wrong', detail: 'Try again in a moment.' },
     recovery: { heading: 'Let us get you back on track', detail: 'Try again, or go back home.' },
@@ -74,7 +75,7 @@ export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; det
 
 /** The busy variant's authored words per activity (what the app is doing), never a native text override. */
 export const BUSY_COPY_V2: Readonly<Record<BusyActivityV2, { heading: string; detail: string }>> = {
-    working: { heading: 'Working…', detail: 'This only takes a moment.' },
+    working: { heading: 'Working on it', detail: 'One moment, please.' },
     reading: { heading: 'Reading your manual. This can take a minute.', detail: 'Reading each page.' },
     checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
     'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },

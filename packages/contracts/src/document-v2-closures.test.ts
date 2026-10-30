@@ -6,7 +6,7 @@ import {
     BOUND_TEXT_KEYS,
     BUSY_ACTIVITIES_V2,
     SCREEN_KINDS_V2,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     createDemoManual,
     documentMaterialV2,
     earnedStateIssuesV2,
@@ -84,8 +84,8 @@ function inputsFor(
     return base
 }
 
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 /** Re-publishes an edited document with its derived tables recomputed, so only the edit under test can fail. */
 function nodesOf(document: ScreenDocumentV2, name: 'ready' | string): ScreenNodeV2[] {
@@ -116,7 +116,7 @@ describe('1 reading cancellation confirmation', () => {
     const witnessed = inputsFor('reading', { ...baseUi, reading: WITNESS })
 
     it('requires a full authored confirming variant with exactly Keep and Stop, only with the witness', () => {
-        const document = compose(witnessed)
+        const document = fallbackFor(witnessed)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(document.requirements.confirm).toEqual([
             { intent: 'navigate', target: 'pages' },
@@ -140,19 +140,22 @@ describe('1 reading cancellation confirmation', () => {
 
     it('has no confirming variant, and refuses Keep, without the witness', () => {
         const plain = inputsFor('reading', baseUi)
-        const document = compose(plain)
+        const document = fallbackFor(plain)
         expect(document.states.confirming).toBeNull()
         expect(document.requirements.confirm).toEqual([])
         expect(intentAllowedV2({ intent: 'navigate', target: 'reading' }, documentMaterialV2(plain))).toBe(false)
         expect(intentAllowedV2({ intent: 'navigate', target: 'reading' }, documentMaterialV2(witnessed))).toBe(true)
         // A confirming variant claimed without the witness is rejected.
-        const forged = { ...document, states: { ...document.states, confirming: compose(witnessed).states.confirming } }
+        const forged = {
+            ...document,
+            states: { ...document.states, confirming: fallbackFor(witnessed).states.confirming },
+        }
         expect(screenDocumentV2Schema.safeParse(forged).success).toBe(false)
     })
 
     it('is bound into the context key and rejects a confirming variant that offers more than Stop and Keep', () => {
         expect(screenContextJsonV2(witnessed)).not.toBe(screenContextJsonV2(inputsFor('reading', baseUi)))
-        const document = compose(witnessed)
+        const document = fallbackFor(witnessed)
         const confirming = document.states.confirming!
         const extra = {
             ...document,
@@ -187,7 +190,7 @@ describe('2 busy activity witness', () => {
             checking: 'Checking your photo…',
             asking: 'Asking…',
             saving: 'Saving…',
-            working: 'Working…',
+            working: 'Working on it',
             reading: 'Reading your manual. This can take a minute.',
         }
         expect([...BUSY_ACTIVITIES_V2].sort()).toEqual(Object.keys(copy).sort())
@@ -195,7 +198,7 @@ describe('2 busy activity witness', () => {
         for (const activity of BUSY_ACTIVITIES_V2) {
             const inputs = inputsFor('result', { ...baseUi, busy: { activity } })
             keys.add(screenContextJsonV2(inputs))
-            const document = compose(inputs)
+            const document = fallbackFor(inputs)
             expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
             expect(literalsOf(document, 'busy')).toContain(copy[activity])
             expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
@@ -206,7 +209,7 @@ describe('2 busy activity witness', () => {
     it('rejects busy copy for another activity and ignores the witness where it is not used', () => {
         const second = inputsFor('result', { ...baseUi, busy: { activity: 'second-opinion' } })
         const checking = inputsFor('result', { ...baseUi, busy: { activity: 'checking' } })
-        expect(verifyDocumentAgainstInputsV2(compose(checking), second, sha256Hex).join()).toContain(
+        expect(verifyDocumentAgainstInputsV2(fallbackFor(checking), second, sha256Hex).join()).toContain(
             'literal_not_listed',
         )
         const a = inputsFor('error', { ...baseUi, busy: { activity: 'checking' } })
@@ -218,7 +221,7 @@ describe('2 busy activity witness', () => {
 describe('3 header More and the More document', () => {
     it('the client rejects app-owned text outside its available screen bindings', () => {
         const inputs = inputsFor('home')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         document.header.title = { kind: 'bound', key: 'step-title' }
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toContain('bound_unavailable')
         document.header.title = { kind: 'literal', text: 'Your manuals' }
@@ -246,7 +249,7 @@ describe('3 header More and the More document', () => {
 
     it('authors a header More where the app previously had one and nowhere it must not', () => {
         for (const kind of SCREEN_KINDS_V2) {
-            const document = compose(inputsFor(kind))
+            const document = fallbackFor(inputsFor(kind))
             const has = document.header.actions.some((action) => action.intent.target === 'more')
             expect(has, kind).toBe(moreKinds.includes(kind))
         }
@@ -254,7 +257,7 @@ describe('3 header More and the More document', () => {
 
     it('restores privacy, settings, how it works and language on More with bound text only', () => {
         const inputs = inputsFor('more')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         const nodes = nodesOf(document, 'ready')
@@ -295,7 +298,7 @@ describe('3 header More and the More document', () => {
         expect(withLanguage).not.toBe(screenContextJsonV2(inputsFor('more', { ...baseUi, settings: null })))
         // Presence only: the saved-build count is live bound text, never part of the key.
         expect(withLanguage).toBe(screenContextJsonV2(inputsFor('more', { ...baseUi, pages: null, capture: null })))
-        const bare = compose(inputsFor('more', { sections: ['about-this-check'] }))
+        const bare = fallbackFor(inputsFor('more', { sections: ['about-this-check'] }))
         const keys = nodesOf(bare, 'ready').flatMap((node) =>
             nodeTextRefsV2(node).flatMap((ref) => (ref.kind === 'bound' ? [ref.key] : [])),
         )
@@ -305,7 +308,7 @@ describe('3 header More and the More document', () => {
 
     it('states the privacy line on pages and add', () => {
         for (const kind of ['pages', 'add'] as const) {
-            const keys = nodesOf(compose(inputsFor(kind)), 'ready').flatMap((node) =>
+            const keys = nodesOf(fallbackFor(inputsFor(kind)), 'ready').flatMap((node) =>
                 nodeTextRefsV2(node).flatMap((ref) => (ref.kind === 'bound' ? [ref.key] : [])),
             )
             expect(keys, kind).toContain('privacy-stay')
@@ -319,7 +322,7 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
             ...inputsFor('result'),
             result: { kind: 'check', value: createHeroResponse('correct') },
         }
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const pending = document.states.pending!
         pending.body = {
             type: 'Stack',
@@ -341,7 +344,7 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
         ).toBe(true)
     })
     it('a verdict banner that hides its reason does not discharge the required witnessed explanation', () => {
-        const document = compose(inputsFor('result'))
+        const document = fallbackFor(inputsFor('result'))
         const verdict = nodesOf(document, 'ready').find((node) => node.type === 'VerdictCard')
         if (verdict?.type !== 'VerdictCard') throw new Error('expected composed verdict')
         verdict.showReason = false
@@ -356,25 +359,25 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
     })
     it('binds a question photo before an answer exists and changes identity for another held photo', () => {
         const questions = inputsFor('questions')
-        const first = compose(questions)
+        const first = fallbackFor(questions)
         expect(first.bound.captureId).toBe('cap-1')
         const secondInputs = {
             ...questions,
             captureId: 'cap-2',
             uiState: { ...baseUi, capture: { ...baseUi.capture!, captureId: 'cap-2' } },
         }
-        const second = compose(secondInputs)
+        const second = fallbackFor(secondInputs)
         expect(second.bound.captureId).toBe('cap-2')
         expect(second.bound.contextKey).not.toBe(first.bound.contextKey)
         expect(verifyDocumentAgainstInputsV2(first, secondInputs, sha256Hex)).toContain('bound_mismatch')
         expect(
-            compose({ ...questions, captureId: null, uiState: { ...baseUi, capture: null } }).bound.captureId,
+            fallbackFor({ ...questions, captureId: null, uiState: { ...baseUi, capture: null } }).bound.captureId,
         ).toBeNull()
     })
     const result = inputsFor('result')
 
     it('requires the capture image in ready, busy and pending, calm header, no verdict', () => {
-        const document = compose(result)
+        const document = fallbackFor(result)
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(document.requirements.capture).toBe(true)
         for (const name of ['ready', 'busy', 'pending']) {
@@ -405,7 +408,7 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
     })
 
     it('rejects a pending variant that drops the photo or exposes the verdict', () => {
-        const document = compose(result)
+        const document = fallbackFor(result)
         const pending = document.states.pending!
         const dropPhoto = (node: ScreenNodeV2): ScreenNodeV2 =>
             'children' in node
@@ -445,7 +448,7 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
 
     it('never gives a guide or a held-nothing screen a photo', () => {
         const guide = inputsFor('guide')
-        const document = compose(guide)
+        const document = fallbackFor(guide)
         expect(document.requirements.capture).toBe(false)
         expect(documentMaterialV2(inputsFor('result', { ...baseUi })).requirements.capture).toBe(true)
         const withPhoto = {
@@ -470,7 +473,7 @@ describe('4 held result: pending keeps the photo and never shows the verdict', (
     })
 
     it('holds the same for an answer', () => {
-        const document = compose(inputsFor('answer'))
+        const document = fallbackFor(inputsFor('answer'))
         expect(document.requirements.capture).toBe(true)
         expect(nodesOf(document, 'pending').some((node) => node.type === 'Image')).toBe(true)
         expect(nodesOf(document, 'pending').some((node) => node.type === 'VerdictCard')).toBe(false)

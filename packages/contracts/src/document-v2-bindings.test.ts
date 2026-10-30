@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     SCREEN_KINDS_V2,
-    composeFallbackDocumentV2,
+    buildFallbackDocumentV2,
     createDemoManual,
     documentMaterialV2,
     bindingIssuesV2,
@@ -57,8 +57,8 @@ const inputsFor = (kind: ScreenKindV2, uiState: ScreenUiStateV2 = ui): ScreenCon
     failure: kind === 'error' ? 'timeout' : null,
     uiState,
 })
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 /** The document with one extra live-bound node appended to its ready body. */
 function withNode(document: ScreenDocumentV2, node: ScreenNodeV2): ScreenDocumentV2 {
@@ -67,13 +67,13 @@ function withNode(document: ScreenDocumentV2, node: ScreenNodeV2): ScreenDocumen
 const issues = (document: ScreenDocumentV2, inputs: ScreenContextInputsV2): string[] =>
     bindingIssuesV2(document, documentMaterialV2(inputs))
 
-describe('the composer never binds what the screen cannot resolve', () => {
+describe('the fallback builder never binds what the screen cannot resolve', () => {
     it.each(SCREEN_KINDS_V2)('%s has no unavailable binding, with or without app state', (kind) => {
         for (const state of [ui, {}] as ScreenUiStateV2[]) {
             const inputs = inputsFor(kind, state)
-            expect(issues(compose(inputs), inputs), `${kind} ${JSON.stringify(Object.keys(state))}`).toEqual([])
+            expect(issues(fallbackFor(inputs), inputs), `${kind} ${JSON.stringify(Object.keys(state))}`).toEqual([])
             expect(
-                verifyDocumentAgainstInputsV2(compose(inputs), inputs).filter((code) => code.includes('binding')),
+                verifyDocumentAgainstInputsV2(fallbackFor(inputs), inputs).filter((code) => code.includes('binding')),
             ).toEqual([])
         }
     })
@@ -89,30 +89,30 @@ describe('an unsupported binding is refused wherever the app has no such state',
     it('review progress exists only in the quick check with a current question', () => {
         for (const kind of SCREEN_KINDS_V2.filter((candidate) => candidate !== 'quick-check')) {
             const inputs = inputsFor(kind)
-            expect(issues(withNode(compose(inputs), progress('review')), inputs).join(), kind).toContain(
+            expect(issues(withNode(fallbackFor(inputs), progress('review')), inputs).join(), kind).toContain(
                 'binding_unavailable',
             )
         }
         const noQuestion = inputsFor('quick-check', { ...ui, review: { ...review, currentQuestion: null } })
-        expect(issues(withNode(compose(noQuestion), progress('review')), noQuestion).join()).toContain(
+        expect(issues(withNode(fallbackFor(noQuestion), progress('review')), noQuestion).join()).toContain(
             'binding_unavailable',
         )
         const quick = inputsFor('quick-check')
-        expect(issues(withNode(compose(quick), progress('review')), quick)).toEqual([])
+        expect(issues(withNode(fallbackFor(quick), progress('review')), quick)).toEqual([])
     })
 
     it('step, reading and pages progress need their own state', () => {
         const home = inputsFor('home')
-        expect(issues(withNode(compose(home), progress('step')), home).join()).toContain('binding_unavailable')
-        expect(issues(withNode(compose(home), progress('reading')), home).join()).toContain('binding_unavailable')
-        expect(issues(withNode(compose(home), progress('pages')), home).join()).toContain('binding_unavailable')
+        expect(issues(withNode(fallbackFor(home), progress('step')), home).join()).toContain('binding_unavailable')
+        expect(issues(withNode(fallbackFor(home), progress('reading')), home).join()).toContain('binding_unavailable')
+        expect(issues(withNode(fallbackFor(home), progress('pages')), home).join()).toContain('binding_unavailable')
         const guide = inputsFor('guide')
-        expect(issues(withNode(compose(guide), progress('step')), guide)).toEqual([])
-        expect(issues(withNode(compose(guide), progress('reading')), guide).join()).toContain('binding_unavailable')
+        expect(issues(withNode(fallbackFor(guide), progress('step')), guide)).toEqual([])
+        expect(issues(withNode(fallbackFor(guide), progress('reading')), guide).join()).toContain('binding_unavailable')
         const pages = inputsFor('pages')
-        expect(issues(withNode(compose(pages), progress('pages')), pages)).toEqual([])
+        expect(issues(withNode(fallbackFor(pages), progress('pages')), pages)).toEqual([])
         const reading = inputsFor('reading')
-        expect(issues(withNode(compose(reading), progress('reading')), reading)).toEqual([])
+        expect(issues(withNode(fallbackFor(reading), progress('reading')), reading)).toEqual([])
     })
 
     it('meters and steppers need a build or pages', () => {
@@ -120,10 +120,10 @@ describe('an unsupported binding is refused wherever the app has no such state',
         const meter: ScreenNodeV2 = { type: 'Meter', binding: 'steps-confirmed', label: null, tone: 'neutral' }
         const stepper: ScreenNodeV2 = { type: 'Stepper', binding: 'steps', label: null }
         for (const node of [meter, stepper]) {
-            expect(issues(withNode(compose(home), node), home).join(), node.type).toContain('binding_unavailable')
+            expect(issues(withNode(fallbackFor(home), node), home).join(), node.type).toContain('binding_unavailable')
         }
         const completion = inputsFor('completion')
-        expect(issues(withNode(compose(completion), stepper), completion)).toEqual([])
+        expect(issues(withNode(fallbackFor(completion), stepper), completion)).toEqual([])
     })
 
     it('the built-view toggle exists only on the judge screen', () => {
@@ -133,14 +133,14 @@ describe('an unsupported binding is refused wherever the app has no such state',
             label: { kind: 'literal', text: 'Show how Meta AI built this' },
         }
         const more = inputsFor('more')
-        expect(issues(withNode(compose(more), toggle), more).join()).toContain('binding_unavailable')
+        expect(issues(withNode(fallbackFor(more), toggle), more).join()).toContain('binding_unavailable')
         const judge = inputsFor('judge')
-        expect(issues(withNode(compose(judge), toggle), judge)).toEqual([])
+        expect(issues(withNode(fallbackFor(judge), toggle), judge)).toEqual([])
     })
 
     it('the client verifier reports it for a document it receives', () => {
         const home = inputsFor('home')
-        const forged = withNode(compose(home), progress('review'))
+        const forged = withNode(fallbackFor(home), progress('review'))
         expect(variantsOfV2(forged).length).toBeGreaterThan(0)
         expect(verifyDocumentAgainstInputsV2(forged, home)).toContain('binding_unavailable')
     })
@@ -152,7 +152,7 @@ it.each([false, true])('a question cannot bind a verdict card without a publishe
         captureId: 'cap-1',
         uiState: { ...ui, capture: { ...ui.capture!, reusable } },
     }
-    const document = withNode(compose(request), {
+    const document = withNode(fallbackFor(request), {
         type: 'VerdictCard',
         result: 'check',
         variant: 'card',

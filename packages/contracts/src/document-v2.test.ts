@@ -8,8 +8,8 @@ import {
     SCREEN_KINDS_V2,
     assembleDocumentV2,
     componentPathsV2,
-    composeFallbackDocumentV2,
-    composeProposalV2,
+    buildFallbackDocumentV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     questionResultSchema,
@@ -127,8 +127,8 @@ function inputsFor(kind: ScreenKindV2, manual = session({ safety: true })): Scre
     return base
 }
 
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 function mutate(document: ScreenDocumentV2): ScreenDocumentV2 {
     return structuredClone(document)
@@ -140,7 +140,7 @@ const issues = (document: unknown): string[] => {
 
 describe('deterministic complete documents', () => {
     it.each(SCREEN_KINDS_V2)('%s composes one complete, valid fallback document', (kind) => {
-        const document = compose(inputsFor(kind))
+        const document = fallbackFor(inputsFor(kind))
         expect(issues(document)).toEqual([])
         expect(document.kind).toBe(kind)
         expect(document.metadata).toMatchObject({ source: 'fallback', evidence: 'local-deterministic', model: null })
@@ -154,13 +154,13 @@ describe('deterministic complete documents', () => {
     })
 
     it('camera is its own document and never borrows the guide wording', () => {
-        const camera = compose(inputsFor('camera'))
-        const guide = compose(inputsFor('guide'))
+        const camera = fallbackFor(inputsFor('camera'))
+        const guide = fallbackFor(inputsFor('guide'))
         expect(camera.kind).toBe('camera')
         expect(camera.requirements.nodes).toContain('CameraView')
         expect(JSON.stringify(camera.header)).not.toBe(JSON.stringify(guide.header))
         expect(camera.bound.contextKey).not.toBe(guide.bound.contextKey)
-        const page = compose({
+        const page = fallbackFor({
             ...inputsFor('camera'),
             session: null,
             stepId: null,
@@ -171,7 +171,7 @@ describe('deterministic complete documents', () => {
     })
 
     it('busy, pending and error chrome come from the document variants, each with its own bar', () => {
-        const document = compose(inputsFor('guide'))
+        const document = fallbackFor(inputsFor('guide'))
         for (const state of ['busy', 'pending', 'error', 'recovery'] as const) {
             const variant = document.states[state]!
             expect(variant.bar.primary.type).toBe('PrimaryAction')
@@ -181,7 +181,7 @@ describe('deterministic complete documents', () => {
     })
 
     it('a reversed verdict document states the verdict through a VerdictCard and offers a retake', () => {
-        const document = compose(inputsFor('result'))
+        const document = fallbackFor(inputsFor('result'))
         expect(document.requirements.nodes).toContain('VerdictCard')
         expect(document.requirements.actions).toEqual([{ intent: 'capture', target: 'retake' }])
         expect(document.facts.find((fact) => fact.factId === 'result:verdict')?.basis).toBe('result')
@@ -198,18 +198,18 @@ describe('deterministic complete documents', () => {
     it('an unreviewed fresh parse never offers a build action', () => {
         const manual = createDemoManual()
         manual.reviewStatus = 'unreviewed'
-        const document = compose({ ...inputsFor('guide', manual), session: manual })
+        const document = fallbackFor({ ...inputsFor('guide', manual), session: manual })
         expect(document.bar.primary.intent).toEqual({ intent: 'navigate', target: 'quick-check' })
         expect(issues(document)).toEqual([])
     })
 
     it('the same inputs always give the same document', () => {
-        expect(compose(inputsFor('guide'))).toEqual(compose(inputsFor('guide')))
+        expect(fallbackFor(inputsFor('guide'))).toEqual(fallbackFor(inputsFor('guide')))
     })
 })
 
 describe('mandatory witnesses reject rather than repair', () => {
-    const base = compose(inputsFor('guide'))
+    const base = fallbackFor(inputsFor('guide'))
 
     it('lists the safety note as required, with its citation, in every variant', () => {
         expect(base.requirements.facts).toContain('safety:n1')
@@ -281,7 +281,7 @@ describe('mandatory witnesses reject rather than repair', () => {
         noAction.bar.secondary = null
         expect(issues(noAction).join()).toContain('A required action is missing')
 
-        const verdict = compose(inputsFor('result'))
+        const verdict = fallbackFor(inputsFor('result'))
         const noVerdict = mutate(verdict)
         noVerdict.body = { type: 'Spacer', size: 'md' }
         expect(issues(noVerdict).join()).toContain('A required VerdictCard is missing')
@@ -309,7 +309,7 @@ describe('mandatory witnesses reject rather than repair', () => {
     })
 
     it('rejects an intent the screen kind does not allow and a back that does not navigate', () => {
-        const document = mutate(compose(inputsFor('more')))
+        const document = mutate(fallbackFor(inputsFor('more')))
         document.bar.primary.intent = { intent: 'retry', target: 'last-action' }
         expect(issues(document).join()).toContain('Intent is not allowed')
     })
@@ -331,7 +331,7 @@ describe('recursive tree bounds', () => {
             : { type: 'Stack', gap: 'sm', align: 'start', children: [nest(depth - 1)] }
 
     it('accepts the depth limit and refuses one level more', () => {
-        const base = compose(inputsFor('more'))
+        const base = fallbackFor(inputsFor('more'))
         const at = { ...mutate(base), body: nest(DOCUMENT_V2_LIMITS.depth) }
         const over = { ...mutate(base), body: nest(DOCUMENT_V2_LIMITS.depth + 1) }
         // Requirements about the replaced body aside, only the structure rule is asserted here.
@@ -351,7 +351,7 @@ describe('recursive tree bounds', () => {
         expect(screenNodeV2Schema.safeParse(wide(DOCUMENT_V2_LIMITS.children)).success).toBe(true)
         expect(screenNodeV2Schema.safeParse(wide(DOCUMENT_V2_LIMITS.children + 1)).success).toBe(false)
         const many = {
-            ...mutate(compose(inputsFor('more'))),
+            ...mutate(fallbackFor(inputsFor('more'))),
             body: {
                 type: 'Stack',
                 gap: 'sm',
@@ -386,7 +386,7 @@ describe('recursive tree bounds', () => {
 describe('proposal, source map and assembly', () => {
     it('the model proposal is the document without server-owned fields and is strict', () => {
         const material = documentMaterialV2(inputsFor('guide'))
-        const proposal = composeProposalV2(material)
+        const proposal = buildFallbackProposalV2(material)
         expect(screenProposalV2Schema.safeParse(proposal).success).toBe(true)
         expect(screenProposalV2Schema.safeParse({ ...proposal, facts: [] }).success).toBe(false)
         expect(screenProposalV2Schema.safeParse({ ...proposal, metadata: {} }).success).toBe(false)
@@ -394,7 +394,7 @@ describe('proposal, source map and assembly', () => {
 
     it('assembly never edits the proposal and tags every path with the given source', () => {
         const material = documentMaterialV2(inputsFor('guide'))
-        const proposal = composeProposalV2(material)
+        const proposal = buildFallbackProposalV2(material)
         const before = JSON.stringify(proposal)
         const document = assembleDocumentV2(
             material,
@@ -412,7 +412,7 @@ describe('proposal, source map and assembly', () => {
         const material = documentMaterialV2(inputsFor('guide'))
         const document = assembleDocumentV2(
             material,
-            composeProposalV2(material),
+            buildFallbackProposalV2(material),
             { source: 'generated', evidence: 'synthetic-fixture', fallbackReason: null, model: 'muse-wonder-1.0' },
             deps,
         )
@@ -420,7 +420,7 @@ describe('proposal, source map and assembly', () => {
     })
 
     it('maps each citing node to the sources of its facts', () => {
-        const document = compose(inputsFor('guide'))
+        const document = fallbackFor(inputsFor('guide'))
         const map = sourceMapV2(document)
         expect(Object.keys(map).length).toBeGreaterThan(0)
         expect(
@@ -481,7 +481,7 @@ describe('request binding', () => {
     })
 
     it('the result envelope carries a valid document', () => {
-        const document = compose(inputsFor('home'))
+        const document = fallbackFor(inputsFor('home'))
         expect(
             screensV2ResultSchema.safeParse({
                 status: 'ok',

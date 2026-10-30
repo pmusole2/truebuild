@@ -10,8 +10,8 @@ import {
     assembleDocumentV2,
     availableBoundKeysV2,
     coachTargetsForV2,
-    composeFallbackDocumentV2,
-    composeProposalV2,
+    buildFallbackDocumentV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     intentAllowedV2,
@@ -109,7 +109,7 @@ interface Built {
 /** Composes, optionally edits the PROPOSAL, republishes with recomputed tables, and reports every rule that fires. */
 function build(inputs: ScreenContextInputsV2, edit?: (proposal: ScreenProposalV2) => ScreenProposalV2): Built {
     const material = documentMaterialV2(inputs)
-    const composed = composeProposalV2(material)
+    const composed = buildFallbackProposalV2(material)
     const proposal = edit ? edit(composed) : composed
     const document = assembleDocumentV2(
         material,
@@ -125,8 +125,8 @@ function build(inputs: ScreenContextInputsV2, edit?: (proposal: ScreenProposalV2
         verify: verifyDocumentAgainstInputsV2(document, inputs, sha256Hex),
     }
 }
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 const nodesOf = (variant: ScreenVariantV2, prefix = ''): ScreenNodeV2[] => {
     const out: ScreenNodeV2[] = []
@@ -227,7 +227,7 @@ describe('1 operation notice', () => {
         expect(unwitnessed.schema.join()).toMatch(/notice/iu)
         expect(unwitnessed.verify).toContain('bound_unavailable')
         const header = screenProposalV2Schema.safeParse({
-            ...composeProposalV2(documentMaterialV2(witnessed('error'))),
+            ...buildFallbackProposalV2(documentMaterialV2(witnessed('error'))),
             header: {
                 title: { kind: 'bound', key: 'operation-notice' },
                 subtitle: null,
@@ -241,7 +241,7 @@ describe('1 operation notice', () => {
 
 describe('2 tips replay and the judge flag', () => {
     it('more offers a Show tips again action, not a tips toggle', () => {
-        const document = compose(inputsFor('more'))
+        const document = fallbackFor(inputsFor('more'))
         const ready = nodesOf(document)
         expect(ready.some((node) => node.type === 'Toggle')).toBe(false)
         const action = ready.find((node) => node.type === 'SecondaryAction' && node.intent.intent === 'show-tips')
@@ -256,14 +256,14 @@ describe('2 tips replay and the judge flag', () => {
             true,
         )
         expect(
-            nodesOf(compose(without)).some((node) => nodeIntentsV2(node).some((i) => i.intent === 'show-tips')),
+            nodesOf(fallbackFor(without)).some((node) => nodeIntentsV2(node).some((i) => i.intent === 'show-tips')),
         ).toBe(false)
     })
 
     it('rejects the unimplemented tips toggle and fact-answer text field bindings', () => {
         expect(TOGGLE_BINDINGS).toEqual(['built-view'])
         expect(TEXT_FIELD_BINDINGS).toEqual(['question'])
-        const proposal = composeProposalV2(documentMaterialV2(inputsFor('more')))
+        const proposal = buildFallbackProposalV2(documentMaterialV2(inputsFor('more')))
         const tips = screenProposalV2Schema.safeParse({
             ...proposal,
             body: stackOf([
@@ -420,7 +420,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
     }
 
     it('ready, busy and pending hold the CameraView at one spine, first in its stack', () => {
-        const document = compose(camera())
+        const document = fallbackFor(camera())
         const ready = spine(variantOf(document, 'ready'))
         expect(ready).toEqual(['Scroll.0', 'Stack.0'])
         expect(spine(variantOf(document, 'busy'))).toEqual(ready)
@@ -430,14 +430,14 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
     })
 
     it('pending keeps an enabled authored Take photo primary, busy is a disabled-style Working', () => {
-        const document = compose(camera())
+        const document = fallbackFor(camera())
         expect(document.states.pending!.bar.primary).toMatchObject({
             label: 'Take photo',
             intent: { intent: 'capture', target: 'take-photo' },
         })
         expect(document.states.busy!.bar.primary.label).toBe('Working…')
         expect(document.states.busy!.bar.primary.intent).toEqual({ intent: 'capture', target: 'take-photo' })
-        const saving = compose({
+        const saving = fallbackFor({
             ...camera(),
             uiState: {
                 ...baseUi,
@@ -489,7 +489,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
     })
 
     it('error and recovery never hold a camera, and a camera that cannot run holds none anywhere', () => {
-        const document = compose(camera())
+        const document = fallbackFor(camera())
         for (const name of ['error', 'recovery']) {
             expect(
                 nodesOf(variantOf(document, name)).some((node) => node.type === 'CameraView'),
@@ -497,7 +497,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
             ).toBe(false)
         }
         for (const patch of [{ permission: 'denied' as const }, { failed: true }]) {
-            const blocked = compose(camera(patch))
+            const blocked = fallbackFor(camera(patch))
             for (const entry of variantsOfV2(blocked)) {
                 expect(
                     nodesOf(entry.variant).some((node) => node.type === 'CameraView'),
@@ -516,17 +516,17 @@ describe('5 navigate/back', () => {
     it('every authored header back is navigate/back, except home, and the confirmation has none', () => {
         const confirming = inputsFor('reading', { ...baseUi, reading: { cancellation: 'confirm-before-stop' } })
         for (const kind of SCREEN_KINDS_V2) {
-            const document = compose(inputsFor(kind))
+            const document = fallbackFor(inputsFor(kind))
             const back = document.header.back
             if (kind === 'home') expect(back).toBeNull()
             else expect(back, kind).toMatchObject({ intent: { intent: 'navigate', target: 'back' } })
         }
-        expect(compose(confirming).states.confirming!.header.back).toBeNull()
+        expect(fallbackFor(confirming).states.confirming!.header.back).toBeNull()
     })
 
     it('sheet-like kinds close with Close; more, judge and compare lead with it', () => {
         for (const kind of ['more', 'judge', 'compare'] as const) {
-            const document = compose(inputsFor(kind))
+            const document = fallbackFor(inputsFor(kind))
             expect(document.header.back).toMatchObject({ label: 'Close', icon: 'close' })
             expect(document.bar.primary, kind).toMatchObject({
                 label: 'Close',
@@ -534,17 +534,17 @@ describe('5 navigate/back', () => {
             })
             expect(document.requirements.actions, kind).toEqual([{ intent: 'navigate', target: 'back' }])
         }
-        expect(compose(inputsFor('questions')).header.back).toMatchObject({ label: 'Close' })
-        expect(compose(inputsFor('questions')).bar.primary).toMatchObject({
+        expect(fallbackFor(inputsFor('questions')).header.back).toMatchObject({ label: 'Close' })
+        expect(fallbackFor(inputsFor('questions')).bar.primary).toMatchObject({
             intent: { intent: 'ask', target: 'about-step' },
         })
     })
 
     it('explicit Home stays Home', () => {
-        const completion = compose(inputsFor('completion'))
+        const completion = fallbackFor(inputsFor('completion'))
         expect(completion.bar.primary.intent).toEqual({ intent: 'navigate', target: 'home' })
         expect(completion.requirements.actions).toEqual([{ intent: 'navigate', target: 'home' }])
-        expect(compose(inputsFor('error')).bar.secondary?.intent).toEqual({ intent: 'navigate', target: 'home' })
+        expect(fallbackFor(inputsFor('error')).bar.secondary?.intent).toEqual({ intent: 'navigate', target: 'home' })
     })
 
     it('is not offered on home', () => {
@@ -565,7 +565,7 @@ describe('6 home coach order', () => {
         expect(targets({})).toEqual(['keep-building', 'home-add', 'header-more'])
         expect(targets({ library: { entries: [], soleManualId: null } })).toEqual(['home-add', 'header-more'])
         expect(targets({ library: null })).toEqual(['home-add', 'header-more'])
-        const document = compose(inputsFor('home'))
+        const document = fallbackFor(inputsFor('home'))
         expect(document.overlays.map((overlay) => overlay.anchor)).toEqual(['keep-building', 'home-add', 'header-more'])
         expect(document.bar.primary.intent).toEqual({ intent: 'navigate', target: 'guide' })
     })
@@ -586,7 +586,7 @@ describe('7 overlays are tooltip coach marks only', () => {
         placement: 'auto',
     }
     const withOverlays = (overlays: unknown[]): unknown => ({
-        ...composeProposalV2(documentMaterialV2(inputsFor('home'))),
+        ...buildFallbackProposalV2(documentMaterialV2(inputsFor('home'))),
         overlays,
     })
 

@@ -9,8 +9,8 @@ import {
     assembleDocumentV2,
     availableBoundKeysV2,
     captureWitnessV2,
-    composeFallbackDocumentV2,
-    composeProposalV2,
+    buildFallbackDocumentV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     earnedStateIssuesV2,
@@ -98,8 +98,8 @@ function contextual(held: Held = 'none', session: ManualSession = createDemoManu
     }
 }
 
-const compose = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
-    composeFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+const fallbackFor = (inputs: ScreenContextInputsV2): ScreenDocumentV2 =>
+    buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 const nodesOf = (variant: ScreenVariantV2, prefix = ''): ScreenNodeV2[] => {
     const out: ScreenNodeV2[] = []
     visitVariantNodesV2(variant, prefix, ({ node }) => out.push(node))
@@ -115,7 +115,7 @@ const republish = (inputs: ScreenContextInputsV2, edit: (proposal: ScreenProposa
     const material = documentMaterialV2(inputs)
     const document = assembleDocumentV2(
         material,
-        edit(composeProposalV2(material)),
+        edit(buildFallbackProposalV2(material)),
         { source: 'fallback', evidence: 'local-deterministic', fallbackReason: 'disabled' },
         deps,
     )
@@ -142,7 +142,7 @@ describe('global More stays global', () => {
         expect(availableBoundKeysV2(material)).not.toContain('held-question')
         expect(availableBoundKeysV2(material)).not.toContain('step-title')
         expect(availableBoundKeysV2(material)).not.toContain('manual-title')
-        expect(JSON.stringify(compose(global()))).not.toContain(NO_STEP_FIGURE_COPY_V2)
+        expect(JSON.stringify(fallbackFor(global()))).not.toContain(NO_STEP_FIGURE_COPY_V2)
     })
 
     it('keeps its context key independent of any step state and offers no step action', () => {
@@ -159,7 +159,7 @@ describe('global More stays global', () => {
         ] as const) {
             expect(intentAllowedV2(candidate, material)).toBe(false)
         }
-        expect(compose(global()).requirements.actions).toEqual([{ intent: 'navigate', target: 'back' }])
+        expect(fallbackFor(global()).requirements.actions).toEqual([{ intent: 'navigate', target: 'back' }])
     })
 })
 
@@ -169,7 +169,7 @@ describe('contextual More', () => {
         const material = documentMaterialV2(inputs)
         expect(material.stepBound).toBe(true)
         expect(material.facts.length).toBeGreaterThan(0)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(messages(document)).toEqual([])
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         expect(document.bound).toMatchObject({ manualId: 'demo-divider', stepId: 'step-1', captureId: null })
@@ -183,7 +183,7 @@ describe('contextual More', () => {
 
     it('shows the exact source figure of the step, with its own page and region', () => {
         const inputs = contextual('none')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const { figure } = document.requirements
         expect(figure).not.toBeNull()
         const image = nodesOf(document as unknown as ScreenVariantV2).find(
@@ -199,7 +199,7 @@ describe('contextual More', () => {
         const session = createDemoManual()
         session.reviewedSteps[0]!.sourceRefs = []
         const inputs = contextual('none', session)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(document.requirements.figure).toBeNull()
         expect(nodesOf(document as unknown as ScreenVariantV2).some((node) => node.type === 'Image')).toBe(false)
         expect(JSON.stringify(document.body)).toContain(NO_STEP_FIGURE_COPY_V2)
@@ -208,7 +208,7 @@ describe('contextual More', () => {
     })
 
     it('keeps mandatory safety visible and everything else collapsed', () => {
-        const document = compose(contextual('none'))
+        const document = fallbackFor(contextual('none'))
         const collapsed: string[] = []
         const visible: ScreenNodeV2[] = []
         visitVariantNodesV2(variantOf(document, 'ready'), '', ({ node, hidden }) => {
@@ -222,7 +222,7 @@ describe('contextual More', () => {
         )
         for (const factId of document.requirements.facts) expect(stated.has(factId)).toBe(true)
         // The global More keeps its privacy and settings open.
-        const open = compose(global())
+        const open = fallbackFor(global())
         let privacyOpen = false
         visitVariantNodesV2(variantOf(open, 'ready'), '', ({ node }) => {
             if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Privacy')
@@ -244,7 +244,7 @@ describe('contextual More', () => {
         const draft = contextual('photo')
         draft.uiState = { ...ui, capture: { ...ui.capture!, questionDraftPresent: true, reusable: false } }
         expect(screenContextJsonV2(draft)).toBe(screenContextJsonV2(held))
-        const photo = compose(held)
+        const photo = fallbackFor(held)
         expect(
             nodesOf(photo as unknown as ScreenVariantV2).some(
                 (node) => node.type === 'Image' && node.source.kind === 'capture',
@@ -257,7 +257,7 @@ describe('contextual More', () => {
 describe('retained check and companion answer in More', () => {
     it('shows photo before verdict and withholds the verdict in every waiting and failure variant', () => {
         const inputs = contextual('refuse')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(document.requirements.capture).toBe(true)
         expect(messages(document)).toEqual([])
         for (const { name, variant } of variantsOfV2(document)) {
@@ -280,7 +280,7 @@ describe('retained check and companion answer in More', () => {
 
     it('states the refusal and the answer separately, each with its own facts, citations and missing evidence', () => {
         const inputs = contextual('both')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(messages(document)).toEqual([])
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         const ids = document.facts.map((fact) => fact.factId)
@@ -331,7 +331,7 @@ describe('retained check and companion answer in More', () => {
     })
 
     it('maps a card to the sources of its own facts only', () => {
-        const document = compose(contextual('both'))
+        const document = fallbackFor(contextual('both'))
         const map = sourceMapV2(document)
         const ready = variantOf(document, 'ready')
         const indexOfCard = (kind: 'check' | 'question'): number[] => {
@@ -356,7 +356,7 @@ describe('retained check and companion answer in More', () => {
 
     it('treats a held answer alone as the primary result', () => {
         const inputs = contextual('answer')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(messages(document)).toEqual([])
         expect(document.facts.map((fact) => fact.factId).filter((id) => id.startsWith('result:'))).toEqual([
             'result:answer',
@@ -381,7 +381,7 @@ describe('retained check and companion answer in More', () => {
     })
 
     it('verifies against inputs that differ in the answer', () => {
-        const document = compose(contextual('both'))
+        const document = fallbackFor(contextual('both'))
         const other = contextual('both')
         other.companionAnswer = { question: QUESTION, value: answer({ answer: 'It faces outward.' }) }
         expect(verifyDocumentAgainstInputsV2(document, other, sha256Hex)).toEqual(
@@ -420,7 +420,7 @@ describe('More intents', () => {
 
     it('never advances a step from a refusal, an answer or a global More', () => {
         for (const held of ['refuse', 'answer', 'both'] as const) {
-            const document = compose(contextual(held))
+            const document = fallbackFor(contextual(held))
             for (const { variant } of variantsOfV2(document)) {
                 const intents = JSON.stringify(variant)
                 expect(intents).not.toContain('"target":"step"')
@@ -534,7 +534,7 @@ describe('request schema', () => {
         const sent = screensV2GenerateRequest('r1', inputs, sha256Hex)
         expect(modelScreensV2MetadataSchema.safeParse(sent).error?.issues ?? []).toEqual([])
         expect(Buffer.byteLength(JSON.stringify(sent))).toBeLessThan(MODEL_METADATA_MAX_BYTES)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(messages(document)).toEqual([])
         expect(document.facts.length).toBeLessThanOrEqual(DOCUMENT_V2_LIMITS.facts)
         expect(Buffer.byteLength(JSON.stringify(document))).toBeLessThan(16 * 1024 * 1024)
@@ -569,7 +569,7 @@ describe('photo-first failure policy', () => {
     }
 
     it('shows the held photo and no verdict in every failure variant of a result', () => {
-        const document = compose(resultInputs('reversed'))
+        const document = fallbackFor(resultInputs('reversed'))
         for (const state of ['error', 'recovery'] as const) {
             const variant = variantOf(document, state)
             const nodes = nodesOf(variant)
@@ -587,7 +587,7 @@ describe('photo-first failure policy', () => {
     })
 
     it('rejects a failure variant that states the held result', () => {
-        const document = compose(resultInputs('reversed'))
+        const document = fallbackFor(resultInputs('reversed'))
         for (const state of ['error', 'recovery'] as const) {
             expect(messages(withFact(document, state)).join()).toMatch(/before it is revealed/)
         }
@@ -596,7 +596,7 @@ describe('photo-first failure policy', () => {
     it('rejects a success tone before the verdict is revealed and earned', () => {
         const inputs = resultInputs('reversed')
         const material = documentMaterialV2(inputs)
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         const tone = (state: 'busy' | 'error' | 'ready'): ScreenDocumentV2 => {
             const next = structuredClone(document)
             const variant = state === 'ready' ? next : next.states[state]!
@@ -617,7 +617,7 @@ describe('photo-first failure policy', () => {
         }
         // A held pass earns it in the revealed screen only.
         const pass = documentMaterialV2(resultInputs('correct'))
-        const passed = compose(resultInputs('correct'))
+        const passed = fallbackFor(resultInputs('correct'))
         const ready = structuredClone(passed)
         if (ready.body.type === 'Scroll' && ready.body.children[0]?.type === 'Stack') {
             ready.body.children[0].children.unshift({
@@ -662,7 +662,7 @@ describe('the held photo keeps one spine', () => {
     it.each(cases)(
         '%s: ready, busy, pending, error and recovery share the photo ancestors, types and indexes',
         (_name, inputs) => {
-            const document = compose(inputs)
+            const document = fallbackFor(inputs)
             const ready = photoSpineV2(document)
             expect(ready).not.toBeNull()
             for (const state of ['busy', 'pending', 'error', 'recovery'] as const) {
@@ -673,7 +673,7 @@ describe('the held photo keeps one spine', () => {
     )
 
     it('puts the More photo beside the manual figure (Row index 1) in every variant', () => {
-        const document = compose(contextual('refuse'))
+        const document = fallbackFor(contextual('refuse'))
         expect(photoSpineV2(document)).toMatch(/Row\.1$/u)
         expect(photoSpineV2(document.states.pending!)).toMatch(/Row\.1$/u)
         // The figure stays visible while waiting; the verdict is withheld.
@@ -684,7 +684,7 @@ describe('the held photo keeps one spine', () => {
 
     it('rejects a variant that moves the photo, in the gate and for a request-bound client', () => {
         const inputs = contextual('refuse')
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         for (const state of ['busy', 'pending', 'error', 'recovery'] as const) {
             const moved = structuredClone(document)
             const variant = moved.states[state]!
@@ -695,7 +695,7 @@ describe('the held photo keeps one spine', () => {
             }
             expect(messages(moved).join(), state).toMatch(/moves the held photo/)
         }
-        const resultMoved = structuredClone(compose(resultInputs('result')))
+        const resultMoved = structuredClone(fallbackFor(resultInputs('result')))
         const body = resultMoved.states.busy!.body
         if (body.type === 'Scroll' && body.children[0]?.type === 'Stack')
             body.children[0].children.unshift({ type: 'Spacer', size: 'sm' })
@@ -728,7 +728,7 @@ describe('the cancelled reading notice on Pages', () => {
 
     it('states the notice once, in the ready screen only, for the actual cancellation witness', () => {
         const inputs = pages({ cancelled: { reading: true } })
-        const document = compose(inputs)
+        const document = fallbackFor(inputs)
         expect(document.requirements.notice).toBe(true)
         expect(availableBoundKeysV2(documentMaterialV2(inputs))).toContain('operation-notice')
         expect(noticeCount(variantOf(document, 'ready'))).toBe(1)
@@ -744,11 +744,11 @@ describe('the cancelled reading notice on Pages', () => {
         expect(screenContextJsonV2(pages({ cancelled: { reading: true } }))).not.toBe(plain)
         // The generic problem witness stays exact: it does nothing on Pages.
         expect(screenContextJsonV2(pages({ failure: { notice: true } }))).toBe(plain)
-        expect(compose(pages({ failure: { notice: true } })).requirements.notice).toBe(false)
+        expect(fallbackFor(pages({ failure: { notice: true } })).requirements.notice).toBe(false)
     })
 
     it('does not offer the notice without its witness, on any other kind, or twice', () => {
-        const without = compose(pages({}))
+        const without = fallbackFor(pages({}))
         expect(without.requirements.notice).toBe(false)
         expect(availableBoundKeysV2(documentMaterialV2(pages({})))).not.toContain('operation-notice')
         for (const kind of ['guide', 'home', 'add', 'quick-check', 'more'] as const) {
@@ -756,17 +756,17 @@ describe('the cancelled reading notice on Pages', () => {
             expect(material.requirements.notice, kind).toBe(false)
         }
         const inputs = pages({ cancelled: { reading: true } })
-        const twice = structuredClone(compose(inputs))
+        const twice = structuredClone(fallbackFor(inputs))
         const ready = twice.body
         if (ready.type === 'Scroll' && ready.children[0]?.type === 'Stack') {
             ready.children[0].children.push(structuredClone(ready.children[0].children[1]!))
         }
         expect(messages(twice).join()).toMatch(/exactly once/)
         // Stated without a witness it is refused too.
-        const forged = structuredClone(compose(inputs))
+        const forged = structuredClone(fallbackFor(inputs))
         forged.requirements.notice = false
         expect(messages(forged).join()).toMatch(/operation notice it does not hold/)
-        const busy = structuredClone(compose(inputs))
+        const busy = structuredClone(fallbackFor(inputs))
         const waiting = busy.states.busy!.body
         if (waiting.type === 'Scroll' && waiting.children[0]?.type === 'Stack') {
             waiting.children[0].children.push({
