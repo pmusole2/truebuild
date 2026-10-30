@@ -536,7 +536,7 @@ export function DocumentSurface({
             ? {
                   summary:
                       reading.document.metadata.evidence === 'synthetic-fixture'
-                          ? 'Simulated fixture · no model call'
+                          ? 'Simulated fixture'
                           : reading.document.metadata.source,
                   onShowDetails: (): void => setJudgeOpen(true),
               }

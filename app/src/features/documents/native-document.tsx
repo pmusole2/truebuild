@@ -1043,7 +1043,7 @@ function Judge({
             <Heading>How this screen was built</Heading>
             <Caption>
                 {metadata.evidence === 'synthetic-fixture'
-                    ? 'Simulated fixture composition · no model call'
+                    ? 'Simulated fixture composition'
                     : metadata.source === 'generated'
                       ? 'Composed by Meta AI'
                       : 'App fallback composition'}
@@ -1058,7 +1058,7 @@ function Judge({
             {details ? (
                 <View testID="judge-details" style={styles.stack}>
                     <Caption>{`Source: ${metadata.source}`}</Caption>
-                    <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture · no model call' : metadata.evidence}`}</Caption>
+                    <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture' : metadata.evidence}`}</Caption>
                     {metadata.authoring === undefined ? null : (
                         <Caption>{`Offline composition author: ${metadata.authoring.model}, ${metadata.authoring.effort} · ${metadata.authoring.recordedAt}. This is not a Meta inference result.`}</Caption>
                     )}

@@ -55,11 +55,19 @@ export function useDocument(
     )
     const retained = useRef<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const prior = retained.current?.key === key ? retained.current.entry : undefined
+    const availablePrior = useMemo<DocumentRuntimeEntry | undefined>(
+        () =>
+            prior?.exactGeneration === 'pending' && entry === undefined && cacheIssue !== null
+                ? { ...prior, exactGeneration: 'unavailable', issue: cacheIssue }
+                : prior,
+        [prior, entry, cacheIssue],
+    )
     const preserveGenerated =
         options.focused === true &&
         prior?.document.metadata.source === 'generated' &&
+        !(progressiveResult && prior.exactGeneration !== undefined) &&
         (entry?.status !== 'ready' || entry.document.screenId !== prior.document.screenId)
-    const current = preserveGenerated ? prior : (entry ?? prior ?? evicted ?? preview)
+    const current = preserveGenerated ? prior : (entry ?? availablePrior ?? evicted ?? preview)
     const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {

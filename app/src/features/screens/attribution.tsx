@@ -257,7 +257,7 @@ export function StagesPanel({
             identity: `result:${sameDocument ? resultDocument.screenId : 'none'}`,
             scope: phoneScope(resultAt),
             value: sameDocument
-                ? `${resultDocument.metadata.source === 'fallback' ? `App fallback (${resultDocument.metadata.fallbackReason ?? 'Not recorded'})` : resultDocument.metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture composition, no model call' : 'Model-composed'}, model ${resultDocument.metadata.model ?? NOT_RECORDED}, effort ${resultDocument.metadata.effort ?? NOT_RECORDED}, provider ${ms(resultDocument.metadata.timing.totalMs)}`
+                ? `${resultDocument.metadata.source === 'fallback' ? `App fallback (${resultDocument.metadata.fallbackReason ?? 'Not recorded'})` : resultDocument.metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture composition' : 'Model-composed'}, model ${resultDocument.metadata.model ?? NOT_RECORDED}, effort ${resultDocument.metadata.effort ?? NOT_RECORDED}, provider ${ms(resultDocument.metadata.timing.totalMs)}`
                 : 'Not asked for',
         },
         {

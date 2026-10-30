@@ -1,0 +1,9 @@
+{
+    "authoring": {
+        "model": "gpt-6.1-sol",
+        "effort": "ultra",
+        "recordedAt": "2026-10-30T17:46:30.000Z",
+        "fixtureId": "recorded-answer-layout-sol-v1"
+    },
+    "templateSha256": "6ce5f5a74bbcd86636ce2662c31d8dbb1a49b2bb0cf222edb09277c2c4b84a4d"
+}

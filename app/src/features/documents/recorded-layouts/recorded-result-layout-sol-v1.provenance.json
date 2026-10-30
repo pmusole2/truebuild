@@ -1,0 +1,18 @@
+{
+    "authoring": {
+        "model": "gpt-6.1-sol",
+        "effort": "ultra",
+        "recordedAt": "2026-10-30T17:46:30.000Z",
+        "fixtureId": "recorded-result-layout-sol-v1"
+    },
+    "templateSha256": "b078a1487b1b6e9f25a54ea62fa63db8bfbfff4be739607cab8a6dad271e26a3",
+    "rawSha256": "7356ea510323aa58e0b3e6bc573252d942b9bf9de60110ecd314b402214abea6",
+    "prompt": "Author two original parameterized TrueBuild v2 layout records from scratch using only the frozen layout-template DSL, for actual held check results (pass, refuse, cannot_verify) and held question answers. Choose all layout composition, grouping, spacing, styling, copy and typed actions yourself. A calm premium composition should foreground the unmodified captured photo, one actual ResultCard with reason, regions and its native missing-evidence list, actual result citations grouped up to twenty references per opener, always-visible required safety and directions, and optionally collapsed manual detail. Preserve the same photo spine in busy/pending/error/recovery; select closed state/activity copy, never old result claims. Pass offers Next step, other checks Retake photo, answer Back to the guide. Use only current FactText/FactCitations/ResultCard slots; invent no facts, manuals, photos, future verdicts, sources or provider receipts. All current safety, exact facts, source geometry, actions, identities, requirements and compiler gates must pass unchanged. Authoring is self-attested gpt-6.1-sol / ultra, offline synthetic composition; provider model/effort/timing/usage are null. Keep this full prompt out of runtime imports.",
+    "promptSha256": "0092d60719b1ae7697a788295169141f6f7e917c0eb2a9820f14cc3341d437f7",
+    "evidence": "synthetic-fixture",
+    "model": null,
+    "effort": null,
+    "timing": null,
+    "usage": null,
+    "attestation": "Original model-authored parameterized composition. Local serialization repeats the authored state structures; no fallback output, manual facts or provider receipt was used."
+}

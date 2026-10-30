@@ -279,7 +279,7 @@ describe('Result composed after an immediate verdict', () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
         let hold = false
-        const { controller, server, view } = await atGuide({
+        const { controller, server, view, store } = await atGuide({
             screens: {
                 generated: ['result'],
                 get gate() {
@@ -296,17 +296,56 @@ describe('Result composed after an immediate verdict', () => {
         await loadPhoto()
         expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
         const heldCapture = controller.getSnapshot().capture?.binding.captureId
+        const resultRequest = server.requests.find((request) => request.op === 'generate' && request.kind === 'result')!
+        const resultInputs = inputsFromDocumentMetadata(resultRequest)
+        const authored = store.peek(resultInputs)!
+        expect(authored.document.kind).toBe('result')
+        expect(authored.document.metadata.authoring?.fixtureId).toBe('recorded-result-layout-sol-v1')
+        expect(authored.document.metadata.carried ?? {}).toEqual({})
+        expect(authored.exactGeneration).toBe('pending')
+        expect(store.readyAt(resultInputs)).toBeNull()
         await act(async () => jest.advanceTimersByTime(9_001))
-        expect(hostCounts(view).generated).toBe(0)
+        // guide-screen is the route's stable testID; its actual document is the current authored Result.
+        expect(screen.getByTestId('guide-screen').props.nativeID).toContain(
+            `truebuild-document-root:${authored.document.screenId}`,
+        )
+        expect(hostCounts(view, 'guide-screen').generated).toBeGreaterThan(0)
         expect(screen.getByText('The groove faces inward.')).toBeTruthy()
         await act(async () => gate.resolve())
-        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
+        await waitFor(() => expect(store.peek(resultInputs)?.exactGeneration).toBeUndefined())
+        expect(store.peek(resultInputs)?.document.screenId).not.toBe(authored.document.screenId)
+        expect(store.readyAt(resultInputs)).not.toBeNull()
         expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
         expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
         expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldCapture)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
         expect(generateCalls(server)).toContain('result')
-        const resultRequest = server.requests.find((request) => request.op === 'generate' && request.kind === 'result')
+        expect(
+            server.requests.filter(
+                (request) => request.op === 'generate' && request.contextKey === resultRequest.contextKey,
+            ),
+        ).toHaveLength(1)
+        const resultRequests = (): typeof server.requests =>
+            server.requests.filter((request) => request.op === 'generate' && request.kind === 'result')
+        await waitFor(() => expect(resultRequests()).toHaveLength(3))
+        for (const request of resultRequests())
+            await waitFor(() =>
+                expect(store.peek(inputsFromDocumentMetadata(request))?.exactGeneration).toBeUndefined(),
+            )
+        await act(async () => jest.runOnlyPendingTimersAsync())
+        await flush()
+        expect(resultRequests()).toHaveLength(3)
+        expect(new Set(resultRequests().map((request) => request.contextKey)).size).toBe(3)
+        expect(
+            resultRequests()
+                .map((request) => request.uiState?.busy?.activity ?? 'ready')
+                .sort(),
+        ).toEqual(['asking', 'question-waiting', 'ready'])
+        for (const request of resultRequests()) {
+            expect(request.captureId).toBe(heldCapture)
+            expect(request.result).toEqual(resultRequest.result)
+            expect(resultRequests().filter((item) => item.contextKey === request.contextKey)).toHaveLength(1)
+        }
         expect(JSON.stringify(resultRequest)).not.toContain('secondOpinionToken')
     })
 
@@ -317,7 +356,7 @@ describe('Result composed after an immediate verdict', () => {
         await waitFor(() => expect(controller.current?.completedStepIds).toEqual(['step-1']))
     })
 
-    it('refuses a result document whose banner names another verdict and keeps the native result', async () => {
+    it('refuses a result document whose banner names another verdict and keeps the authored current result', async () => {
         const { controller, store, server, view } = await atGuide({
             screens: {
                 generated: ['result'],
@@ -336,24 +375,33 @@ describe('Result composed after an immediate verdict', () => {
         const heldCapture = controller.getSnapshot().capture
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
         await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('invalid_output'))
-        expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.source).toBe('fallback')
-        // Rejection replaces the document identity and resets the real photo gate. Load that actual held frame.
+        const retained = store.peek(inputsFromDocumentMetadata(request))!
+        expect(retained.document.metadata.source).toBe('generated')
+        expect(retained.document.metadata.authoring?.fixtureId).toBe('recorded-result-layout-sol-v1')
+        expect(retained.exactGeneration).toBe('unavailable')
+        expect(store.readyAt(inputsFromDocumentMetadata(request))).toBeNull()
+        // Rejection keeps the authored current result and its actual held frame.
         await loadPhoto()
         expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
         expect(screen.queryByText('Not quite right')).toBeNull()
         expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
-        // The all-mounted tree also retains the generated recorded Home behind this active result document.
-        expect(hostCounts(view, 'guide-screen').generated).toBe(0)
-        expect(hostCounts(view, 'guide-screen').fallback).toBeGreaterThan(0)
+        // These counts belong to the active Result inside its guide route.
+        expect(hostCounts(view, 'guide-screen').generated).toBeGreaterThan(0)
+        expect(hostCounts(view, 'guide-screen').fallback).toBe(0)
         expect(controller.getSnapshot().capture).toBe(heldCapture)
         expect(controller.getSnapshot().check?.decision).toBe('pass')
     })
 
-    it('keeps the native result when the composed one cannot be made', async () => {
+    it('keeps the authored current result when exact composition cannot be made', async () => {
         const { controller, store, server } = await atGuide({ screens: { failing: ['result'] } })
         await photo(controller)
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
         await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('provider_error'))
+        expect(store.peek(inputsFromDocumentMetadata(request))?.exactGeneration).toBe('unavailable')
+        expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.authoring?.fixtureId).toBe(
+            'recorded-result-layout-sol-v1',
+        )
+        expect(store.readyAt(inputsFromDocumentMetadata(request))).toBeNull()
         expect(screen.getByTestId('frozen-photo-image')).toBeTruthy()
         expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
     })
@@ -441,7 +489,7 @@ describe('J1: show how Meta AI built this', () => {
         await atGuideWithJudge({ screens: generated ? { generated: ['guide'] } : {} })
         await showDetails()
         expect(guide().getByText(`Source: ${generated ? 'generated' : 'fallback'}`)).toBeTruthy()
-        expect(guide().getByText('Evidence: Simulated fixture · no model call')).toBeTruthy()
+        expect(guide().getByText('Evidence: Simulated fixture')).toBeTruthy()
         expect(guide().getByText('Model, effort, provider timings and tokens: Not recorded.')).toBeTruthy()
         expect(guide().queryByText('Model: Not recorded')).toBeNull()
         expect(guide().queryByText('Provider time: Not recorded')).toBeNull()
@@ -540,7 +588,7 @@ describe('J2: compare two manuals', () => {
         expect(within(b).getByRole('button', { name: 'Take a photo' }).props.accessibilityState).toMatchObject({
             disabled: true,
         })
-        expect(screen.getAllByText('Simulated fixture · no model call')).toHaveLength(2)
+        expect(screen.getAllByText('Simulated fixture')).toHaveLength(2)
         const composed = server.requests.flatMap((request) =>
             request.op === 'generate' ? [request.session?.manualId] : [],
         )
@@ -686,13 +734,15 @@ describe('J3: the same photo, in the order each part arrived', () => {
         const { controller, store, server } = await atResult({}, { failing: ['result'] })
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'result')!
         await waitFor(() => expect(store.peek(inputsFromDocumentMetadata(request))?.issue).toBe('provider_error'))
+        expect(store.peek(inputsFromDocumentMetadata(request))?.exactGeneration).toBe('unavailable')
+        expect(store.readyAt(inputsFromDocumentMetadata(request))).toBeNull()
         await flush()
         expect(controller.getSnapshot().stages).toBeUndefined()
         await openJudge()
         const details = within(screen.getByTestId('judge-details', { hidden: true }))
         expect(
             details.getByText(
-                /^2\. Result screen: App fallback \(provider_error\), model Not recorded, effort Not recorded, provider Not recorded$/u,
+                /^2\. Result screen: Simulated fixture composition, model Not recorded, effort Not recorded, provider Not recorded$/u,
             ),
         ).toBeTruthy()
         expect(details.getByText('3. Precise mask: Not offered')).toBeTruthy()
@@ -772,7 +822,7 @@ describe('every other screen is composed from its own document', () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
         let hold = false
-        const { controller, view } = await mount([entry()], {
+        const { controller, view, store, server } = await mount([entry()], {
             screens: {
                 generated: ['answer'],
                 get gate() {
@@ -797,11 +847,24 @@ describe('every other screen is composed from its own document', () => {
         expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
         const heldPhoto = controller.getSnapshot().capture?.binding.captureId
+        const answerRequest = server.requests.find((request) => request.op === 'generate' && request.kind === 'answer')!
+        const answerInputs = inputsFromDocumentMetadata(answerRequest)
+        const authored = store.peek(answerInputs)!
+        expect(authored.document.metadata.authoring?.fixtureId).toBe('recorded-answer-layout-sol-v1')
+        expect(authored.exactGeneration).toBe('pending')
+        expect(store.readyAt(answerInputs)).toBeNull()
         await act(async () => jest.advanceTimersByTime(9_001))
-        expect(hostCounts(view).generated).toBe(0)
+        expect(hostCounts(view, 'guide-screen').generated).toBeGreaterThan(0)
         expect(screen.getByText('The groove faces inward.')).toBeTruthy()
         await act(async () => gate.resolve())
-        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
+        await waitFor(() => expect(store.peek(answerInputs)?.exactGeneration).toBeUndefined())
+        expect(store.peek(answerInputs)?.document.screenId).not.toBe(authored.document.screenId)
+        expect(store.readyAt(answerInputs)).not.toBeNull()
+        expect(
+            server.requests.filter(
+                (request) => request.op === 'generate' && request.contextKey === answerRequest.contextKey,
+            ),
+        ).toHaveLength(1)
         expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)
         await press('Back to the guide')
         await loadPhoto()

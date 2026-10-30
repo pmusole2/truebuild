@@ -91,7 +91,7 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
                 <Heading>{manualDisplayTitle(entry.session)}</Heading>
                 <Caption>
                     {reading.document.metadata.evidence === 'synthetic-fixture'
-                        ? 'Simulated fixture · no model call'
+                        ? 'Simulated fixture'
                         : reading.document.metadata.source === 'generated'
                           ? 'Model-composed guide'
                           : 'App fallback guide'}

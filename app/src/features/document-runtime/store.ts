@@ -26,11 +26,14 @@ import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { futureDocumentStates } from './future-states'
+import { isResultLayoutDocument } from './result-layout-runtime'
 
 export type DocumentRuntimeEntry = {
     readonly status: 'pending' | 'ready'
     readonly document: ScreenDocumentV2
     readonly issue: string | null
+    /** A complete authored layout may be ready while its exact-context provider composition is still being collected. */
+    readonly exactGeneration?: 'pending' | 'unavailable'
 }
 export type DocumentStoreOptions = {
     readonly client?: Pick<ModelApiClient, 'screensV2'>
@@ -113,6 +116,9 @@ function reasonFor(code: string): FallbackReasonV2 {
     if (code === 'budget_exhausted') return 'busy'
     if (code === 'duplicate_request' || code === 'stale') return 'stale'
     return 'invalid_output'
+}
+function inFlight(entry: DocumentRuntimeEntry | undefined): boolean {
+    return entry?.status === 'pending' || entry?.exactGeneration === 'pending'
 }
 
 /** Complete v2 documents only. Failure/pending/off use the same shared catalog, never a native or v1 partial escape. */
@@ -244,7 +250,12 @@ export class DocumentStore {
             recorded !== null &&
             this.documentByteSize(recorded) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
         ) {
-            return { status: 'ready', document: recorded, issue: null }
+            return {
+                status: 'ready',
+                document: recorded,
+                issue: null,
+                ...(isResultLayoutDocument(recorded) ? { exactGeneration: 'pending' as const } : {}),
+            }
         }
         const reason = enabled ? 'busy' : this.enabled(inputs) && !this.disposed ? 'unconfigured' : 'disabled'
         const local = localDocument(inputs, reason, this.now)
@@ -316,7 +327,7 @@ export class DocumentStore {
         this.evicted.delete(key)
         this.held.set(key, held)
         this.trimCache()
-        if (held.entry.status === 'pending' && this.current(key, held)) void this.generate(key, held)
+        if (inFlight(held.entry) && this.current(key, held)) void this.generate(key, held)
         this.publish()
         return held.entry
     }
@@ -355,6 +366,7 @@ export class DocumentStore {
                 const held = this.held.get(key)
                 if (
                     held?.entry.status === 'ready' &&
+                    held.entry.exactGeneration === undefined &&
                     held.entry.document.metadata.source === 'generated' &&
                     documentMatchesInputs(held.entry.document, inputs)
                 ) {
@@ -364,7 +376,11 @@ export class DocumentStore {
                 const collecting = [...this.jobs.values()].some((job) =>
                     documentPrecomputeInputs(job).some((item) => documentKey(item.inputs) === key),
                 )
-                if (!collecting && (held?.entry.status === 'ready' || this.evicted.has(key))) finish(null)
+                if (
+                    !collecting &&
+                    ((!inFlight(held?.entry) && held?.entry.status === 'ready') || this.evicted.has(key))
+                )
+                    finish(null)
             }
             const timer = setTimeout(() => finish(null), timeoutMs)
             unsubscribe = this.subscribe(check)
@@ -379,7 +395,7 @@ export class DocumentStore {
         ) {
             const oldest = this.held.entries().next().value
             if (oldest === undefined) break
-            if (oldest[1].entry.status === 'pending') {
+            if (inFlight(oldest[1].entry)) {
                 this.evicted.set(oldest[0], 'budget_exhausted')
                 while (this.evicted.size > MAX_ENTRIES) this.evicted.delete(this.evicted.keys().next().value!)
             }
@@ -390,7 +406,7 @@ export class DocumentStore {
     retry(inputs: ScreenContextInputsV2): void {
         const key = documentKey(inputs),
             held = this.held.get(key)
-        if (held?.entry.status !== 'pending') {
+        if (!inFlight(held?.entry)) {
             this.held.delete(key)
             this.publish()
         }
@@ -419,6 +435,25 @@ export class DocumentStore {
             issue = 'provider_error'
         }
         if (!this.current(key, held)) return
+        const replacementTooLarge =
+            document !== null &&
+            this.documentByteSize(document) > (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
+        if (
+            held.entry.exactGeneration !== undefined &&
+            (document?.metadata.source !== 'generated' || replacementTooLarge)
+        ) {
+            held.entry = {
+                status: 'ready',
+                document: held.entry.document,
+                issue: replacementTooLarge
+                    ? 'budget_exhausted'
+                    : (issue ?? document?.metadata.fallbackReason ?? 'invalid_output'),
+                exactGeneration: 'unavailable',
+            }
+            this.trimCache()
+            this.publish()
+            return
+        }
         if (document !== null) this.acceptedDocuments.add(document)
         held.readyAt = document === null ? null : this.now()
         held.entry = {
@@ -446,10 +481,10 @@ export class DocumentStore {
             const context = next[1]
             if (this.stale(context.session)) continue
             const entry = this.request(context)
-            if (entry.status === 'ready') continue
+            if (!inFlight(entry)) continue
             this.warming++
             const stop = this.subscribe(() => {
-                if (this.peek(context)?.status === 'pending') return
+                if (inFlight(this.peek(context))) return
                 stop()
                 this.warming--
                 this.drainWarmup()
