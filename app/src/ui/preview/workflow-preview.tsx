@@ -1,26 +1,22 @@
 import { useEffect, useState, type ReactElement } from 'react'
-import { Platform, ScrollView, StyleSheet, View } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import type { SharedValue } from 'react-native-reanimated'
-import { CameraStage } from '../../features/capture/camera-stage'
+import { baseKindV2, buildFallbackDocumentV2, type ScreenKindV2 } from '@truebuild/contracts'
 import { ManualImage } from '../../features/capture/page-media'
-import type { QuickProgress } from '../../features/capture/review-screen'
-import type { MoreControl } from '../../features/capture/screen-header'
-import { SettingsScreen } from '../../features/capture/settings-screen'
+import type { QuickProgress } from '../../features/screens/quick-progress'
+import { useQuickProgress } from '../../features/screens/quick-progress'
+import { useMoreState, type MoreControl } from '../../features/capture/screen-header'
 import { AppUnavailableScreen } from '../../features/capture/app-unavailable'
-import { stepAssemblyGuide } from '../../features/capture/step-facts'
-import { ShutterButton } from '../camera-chrome'
-import {
-    DoneScreen,
-    GuideScreen,
-    LibraryScreen,
-    OverviewScreen,
-    PagesScreen,
-    ReadingScreen,
-    type WorkflowController,
-} from '../../features/capture/screens'
+import { defaultNav } from '../../features/capture/screen-nav'
+import type { WorkflowController } from '../../features/capture/workflow-types'
+import { documentInputs } from '../../features/capture/document-inputs'
+import { DocumentRenderer } from '../../features/documents/document-renderer'
+import type { FrameBindings } from '../../features/documents/types'
+import { sha256Hex } from '../../features/documents/sha256'
+import { resolveIntent } from '../../features/screens/intents'
+import { MoreSheet } from '../sheet'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { CoachTarget } from '../../features/onboarding/coach-provider'
 import { InertTour, tourScreenFor } from './inert-tour'
 import { ThemeProvider, useTheme } from '../../theme/theme'
 import type { ColorScheme } from '../../theme/tokens'
@@ -162,109 +158,20 @@ function PreviewFrame({
     const { colors } = useTheme()
     // The gallery runs inside the app, under the status bar, so its controls clear the top inset themselves.
     const insets = useSafeAreaInsets()
-    const { state, entry } = workflowPreviewFixture(selected)
+    const { state } = workflowPreviewFixture(selected)
     const group = WORKFLOW_PREVIEW_CASES.find((preview) => preview.id === selected)!.group
     const options = WORKFLOW_PREVIEW_CASES.filter((preview) => preview.group === group).map((preview) => ({
         value: preview.id,
         label: preview.label.split(' · ')[1]!,
     }))
 
-    // This branch is a synthetic coverage failure, never a production gate or a workflow action.
-    const guideController =
-        selected === 'guide-needs-pages'
-            ? { ...INERT_WORKFLOW_CONTROLLER, coverageNotice: (): string => 'A clearer page is needed.' }
-            : INERT_WORKFLOW_CONTROLLER
-    const chrome = native === undefined ? {} : { chrome: 'native' as const, more: native.more }
-    const screenFor = (): ReactElement => (
-        <>
-            {selected === 'home-unavailable' ? (
-                <AppUnavailableScreen />
-            ) : selected === 'settings' ? (
-                <SettingsScreen state={state} onOpenDeviceSettings={doNothing} />
-            ) : state.route === 'camera' ? (
-                <CameraStage
-                    intent={{
-                        kind:
-                            selected === 'camera-page' ? 'page' : selected === 'camera-question' ? 'question' : 'check',
-                    }}
-                    guide={
-                        selected === 'camera-page'
-                            ? undefined
-                            : stepAssemblyGuide(entry.session, entry.stepIndex, state.pageUris)
-                    }
-                    presentation={
-                        cameraPreviewPresentation(selected) ?? {
-                            status: 'preview',
-                            media: (
-                                // Fixture pages are SVG, which the native Image cannot draw: ManualImage can.
-                                <ManualImage
-                                    uri={Object.values(state.pageUris)[0] ?? ''}
-                                    label="Synthetic camera preview"
-                                />
-                            ),
-                            shutter: (
-                                <CoachTarget
-                                    id="camera-shutter"
-                                    screen="camera"
-                                    label="Capture photo"
-                                    onPress={doNothing}
-                                >
-                                    <ShutterButton
-                                        label={selected === 'camera-preparing' ? 'Preparing photo…' : 'Capture photo'}
-                                        disabled={selected === 'camera-preparing'}
-                                        busy={selected === 'camera-preparing'}
-                                        onPress={doNothing}
-                                    />
-                                </CoachTarget>
-                            ),
-                        }
-                    }
-                    shutterReady={selected !== 'camera-preparing'}
-                    busy={selected === 'camera-preparing'}
-                    onCancel={doNothing}
-                    onRequestPermission={doNothing}
-                    onOpenSettings={doNothing}
-                    onRetry={doNothing}
-                />
-            ) : state.route === 'library' ? (
-                <LibraryScreen
-                    state={state}
-                    controller={INERT_WORKFLOW_CONTROLLER}
-                    {...chrome}
-                    {...(native === undefined
-                        ? {}
-                        : {
-                              largeTitle: Platform.OS === 'ios' ? ('heading' as const) : ('content' as const),
-                              scrollY: native.scrollY,
-                              onCollapsedChange: native.onCollapsedChange,
-                          })}
-                />
-            ) : selected === 'done-finished' ? (
-                <DoneScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} {...chrome} />
-            ) : state.route === 'pages' && state.pending !== null && state.pending.startsWith('Reading') ? (
-                <ReadingScreen state={state} entry={entry} controller={INERT_WORKFLOW_CONTROLLER} />
-            ) : state.route === 'pages' ? (
-                <PagesScreen
-                    state={state}
-                    entry={entry}
-                    controller={INERT_WORKFLOW_CONTROLLER}
-                    choosePages={doNothing}
-                    {...chrome}
-                />
-            ) : state.route === 'overview' ? (
-                <OverviewScreen
-                    state={state}
-                    entry={entry}
-                    controller={INERT_WORKFLOW_CONTROLLER}
-                    {...chrome}
-                    progress={native?.progress}
-                />
-            ) : (
-                <GuideScreen state={state} entry={entry} controller={guideController} {...chrome} />
-            )}
-        </>
-    )
-    if (native !== undefined) {
+    const screenFor = (): ReactElement =>
+        selected === 'home-unavailable' ? (
+            <AppUnavailableScreen />
+        ) : (
+            <DocumentFixture key={selected} selected={selected} native={native} />
+        )
+    if (native !== undefined || !showControls) {
         // The camera is dark and full bleed whatever the appearance; every other screen follows the gallery's scheme.
         return (
             <View style={[styles.root, { backgroundColor: colors.canvas }]} testID="workflow-preview">
@@ -340,6 +247,173 @@ function PreviewFrame({
                 )}
             </View>
         </View>
+    )
+}
+
+/** Uses production document inputs, the shared v2 composer and the actual native renderer over inert controller IO. */
+function DocumentFixture({
+    selected,
+    native,
+}: {
+    readonly selected: WorkflowPreviewCase
+    readonly native?: NativeChrome
+}): ReactElement {
+    const { state, entry } = workflowPreviewFixture(selected, { reusableCapture: true })
+    const ownMore = useMoreState()
+    const more = native?.more ?? ownMore
+    const progress = useQuickProgress(entry.session)
+    const quick = native?.progress ?? progress
+    const controller =
+        selected === 'guide-needs-pages'
+            ? { ...INERT_WORKFLOW_CONTROLLER, coverageNotice: (): string => 'A clearer page is needed.' }
+            : INERT_WORKFLOW_CONTROLLER
+    const nav = defaultNav(controller)
+    const kind: ScreenKindV2 =
+        selected === 'settings'
+            ? 'more'
+            : state.route === 'camera'
+              ? 'camera'
+              : state.route === 'library'
+                ? 'home'
+                : selected === 'done-finished'
+                  ? 'completion'
+                  : state.route === 'overview'
+                    ? 'quick-check'
+                    : state.route === 'pages'
+                      ? state.pending?.startsWith('Reading')
+                          ? 'reading'
+                          : entry.session.pages.length === 0
+                            ? 'add'
+                            : 'pages'
+                      : state.answer !== null
+                        ? 'answer'
+                        : state.check !== null
+                          ? 'result'
+                          : state.notice !== null
+                            ? 'recovery'
+                            : 'guide'
+    const inputs = documentInputs(kind, { state, entry }, quick)
+    const presentation = cameraPreviewPresentation(selected)
+    const permission =
+        presentation?.status === 'permission'
+            ? 'denied'
+            : presentation?.status === 'checking-access'
+              ? 'undetermined'
+              : 'granted'
+    if (kind === 'camera' && inputs.uiState?.camera != null)
+        inputs.uiState.camera = {
+            ...inputs.uiState.camera,
+            permission,
+            failed: presentation?.status === 'error',
+            canAskAgain: presentation?.status === 'permission' ? presentation.canAskAgain : null,
+        }
+    const compose = (next: typeof inputs): ReturnType<typeof buildFallbackDocumentV2> =>
+        buildFallbackDocumentV2(next, {
+            sha256Hex,
+            now: () => new Date('2026-10-29T00:00:00.000Z'),
+            reason: 'disabled',
+            evidence: 'synthetic-fixture',
+        })
+    const document = compose(inputs)
+    const bindings: FrameBindings = {
+        resolve: (intent) => {
+            if (intent.intent === 'navigate' && intent.target === 'back')
+                return {
+                    enabled: !state.loading,
+                    reason: state.loading ? 'Your builds are opening.' : null,
+                    run: more.open ? more.hide : doNothing,
+                }
+            if (intent.intent === 'open-details' && intent.target === 'device-settings')
+                return { enabled: state.pending === null, reason: state.pending, run: doNothing }
+            if (
+                kind === 'camera' &&
+                ((intent.intent === 'confirm' && intent.target === 'camera-permission') ||
+                    (intent.intent === 'retry' && intent.target === 'camera'))
+            )
+                return { enabled: state.pending === null, reason: state.pending, run: doNothing }
+            return resolveIntent(intent, {
+                kind: baseKindV2(kind),
+                state,
+                entry,
+                controller,
+                nav,
+                extras: { showMore: more.show, choosePages: doNothing, contextualMore: more.open },
+            })
+        },
+        live: {
+            state,
+            entry,
+            controller,
+            nav,
+            more,
+            quick,
+            pages: { open: (): void => more.show('details'), arriving: new Set() },
+            closeSheet: more.hide,
+        },
+        session: entry.session,
+        pageUris: state.pageUris,
+        pageImageStatus: 'ready',
+        capture: state.capture,
+        marks: state.stages?.masks ?? [],
+        heroMode: 'inline',
+        inspect: false,
+        workInProgress: state.pending !== null || state.loading,
+        camera:
+            kind === 'camera'
+                ? {
+                      preview: (
+                          <ManualImage uri={Object.values(state.pageUris)[0] ?? ''} label="Synthetic camera preview" />
+                      ),
+                      capture: doNothing,
+                      ready: presentation === null && selected !== 'camera-preparing',
+                      permission,
+                      failed: presentation?.status === 'error',
+                      canAskAgain: presentation?.status === 'permission' ? presentation.canAskAgain : null,
+                      requestPermission: doNothing,
+                      openSettings: doNothing,
+                      retry: doNothing,
+                  }
+                : undefined,
+        operationNotice: state.notice,
+        language: { value: 'en', onChange: doNothing },
+        closeOverlays: more.hide,
+    }
+    const variant =
+        state.loading || presentation?.status === 'checking-access'
+            ? 'pending'
+            : state.storageReadOnly
+              ? 'recovery'
+              : presentation?.status === 'error'
+                ? 'error'
+                : presentation?.status === 'permission'
+                  ? 'auth-needed'
+                  : state.pending !== null || selected === 'camera-preparing'
+                    ? 'busy'
+                    : 'ready'
+    const testID =
+        kind === 'home'
+            ? 'library-screen'
+            : kind === 'quick-check'
+              ? 'overview-screen'
+              : kind === 'completion'
+                ? 'done-screen'
+                : kind === 'add' || kind === 'pages'
+                  ? 'pages-screen'
+                  : kind === 'reading'
+                    ? 'reading-screen'
+                    : kind === 'camera'
+                      ? 'camera-screen'
+                      : kind === 'more'
+                        ? 'settings-screen'
+                        : 'guide-screen'
+    const moreInputs = documentInputs('more', { state, entry }, quick, true)
+    return (
+        <>
+            <DocumentRenderer document={document} bindings={bindings} variant={variant} testID={testID} />
+            <MoreSheet visible={more.open} title="More about this step" onClose={more.hide} documentFrame>
+                <DocumentRenderer document={compose(moreInputs)} bindings={bindings} testID="preview-more-document" />
+            </MoreSheet>
+        </>
     )
 }
 

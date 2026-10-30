@@ -1,10 +1,9 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { INERT_WORKFLOW_CONTROLLER, WorkflowPreview, type NativeChrome } from './workflow-preview'
 import { useMoreState } from '../../features/capture/screen-header'
-import { HeaderButtons } from '../../features/capture/screen-header'
 import type { SharedValue } from 'react-native-reanimated'
 import type { ReactElement } from 'react'
-import { WORKFLOW_PREVIEW_BANNER } from './workflow-fixtures'
+import { WORKFLOW_PREVIEW_BANNER, workflowPreviewFixture } from './workflow-fixtures'
 import { Linking } from 'react-native'
 
 // A phone-sized window at normal text, so the camera panel is the full (non-compact) layout the app shows.
@@ -42,7 +41,9 @@ it('opens the real More sheet and keeps every controller action inert', async ()
     try {
         await render(<WorkflowPreview initialCase="guide-instructions" />)
         await fireEvent.press(screen.getByRole('button', { name: 'More' }))
-        expect(screen.getByText('More about this step')).toBeTruthy()
+        expect(screen.getByTestId('preview-more-document')).toBeTruthy()
+        await fireEvent.press(within(screen.getByTestId('preview-more-document')).getByTestId('close-sheet'))
+        expect(screen.queryByTestId('preview-more-document')).toBeNull()
         for (const action of Object.values(INERT_WORKFLOW_CONTROLLER)) {
             if (typeof action === 'function') {
                 await action()
@@ -54,15 +55,15 @@ it('opens the real More sheet and keeps every controller action inert', async ()
     }
 })
 
-it('renders camera recovery through the pure stage without opening hardware or sending a request', async () => {
+it('renders camera recovery through the actual v2 document without opening hardware or sending a request', async () => {
     const fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Preview must never fetch'))
     try {
         await render(<WorkflowPreview initialCase="camera-denied" />)
         expect(screen.getByTestId('camera-screen')).toBeTruthy()
         // The denied fixture cannot ask again, so Settings is its one recovery and Go back is the fixed close icon.
         expect(screen.queryByRole('button', { name: 'Allow camera' })).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: 'Open Settings' }))
-        await fireEvent.press(screen.getByRole('button', { name: 'Go back' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Open settings' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Back' }))
         expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
         fetchSpy.mockRestore()
@@ -81,24 +82,19 @@ it('keeps settings inspection inert, including the device settings action', asyn
     }
 })
 
-it('wires the camera preview guide exactly as the app does: one cue over the viewfinder, every fact in More', async () => {
+it('renders the camera node, its real document bar and complete cited facts over hardware-free fixture media', async () => {
     await render(<WorkflowPreview initialCase="camera-check" />)
-    // One short generic instruction to aim by. Nothing else sits over the viewfinder.
-    const cue = within(screen.getByTestId('camera-cue')).getByText('Show the part.')
-    expect(cue.props.numberOfLines).toBe(1)
+    expect(screen.getAllByText('Keep the whole step in view')).toHaveLength(1)
+    expect(screen.getByLabelText('Synthetic camera preview')).toBeTruthy()
     expect(screen.queryByTestId('assembly-panel')).toBeNull()
-    expect(screen.queryByText(/^Frame the current assembly step/)).toBeNull()
+    expect(screen.queryByText(/^Frame the current assembly step/u)).toBeNull()
     expect(screen.queryByText(/frozen photo/iu)).toBeNull()
-    expect(screen.getByText('Step 1 of 2')).toBeTruthy()
-    expect(screen.getByTestId('camera-thumbnail')).toBeTruthy()
-    // The shutter stays readable beneath the viewfinder; the full step is one tap away.
-    expect(screen.getByRole('button', { name: 'Capture photo' })).toBeTruthy()
-    // The picture opens the details; there is no second info control beside it.
-    expect(screen.queryByRole('button', { name: 'Step details' })).toBeNull()
-    await fireEvent.press(screen.getByRole('button', { name: 'See the step picture' }))
-    expect(screen.getByText(/^Which way it faces: Groove faces inward toward the divider\./u)).toBeTruthy()
-    expect(screen.getByText('1. Look for: The inward-facing groove is visible.')).toBeTruthy()
-    expect(screen.getByText('How it joins: Keep the panel free before seating the divider.')).toBeTruthy()
+    expect(screen.getByTestId('camera-shutter').props.accessibilityLabel).toBe('Take photo')
+    expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(2)
+    expect(screen.getByText('Groove faces inward toward the divider.')).toBeTruthy()
+    expect(screen.getByText('The inward-facing groove is visible.')).toBeTruthy()
+    expect(screen.getByText('Keep the panel free before seating the divider.')).toBeTruthy()
+    await fireEvent.press(screen.getAllByTestId('fact-source')[0]!)
     expect(screen.getByText('Picture from your manual · Page 1')).toBeTruthy()
 })
 
@@ -127,7 +123,6 @@ describe('native chrome for hidden-controls captures', () => {
         }
         return (
             <>
-                <HeaderButtons more={more} />
                 <WorkflowPreview initialCase={id} showControls={false} native={native} />
             </>
         )
@@ -144,12 +139,12 @@ describe('native chrome for hidden-controls captures', () => {
         },
     )
 
-    it("opens the screen's own real More sheet from the host header and keeps the state unchanged", async () => {
+    it("opens the document's own More sheet from its single document header and keeps the state unchanged", async () => {
         await render(<Host id="guide-instructions" />)
         expect(screen.queryByTestId('more-sheet')).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'More' }))
         expect(screen.getByTestId('more-sheet')).toBeTruthy()
-        expect(screen.getByText('More about this step', { exact: false })).toBeTruthy()
+        expect(screen.getByTestId('preview-more-document')).toBeTruthy()
     })
 
     it('draws the camera full bleed with no gallery chrome around it', async () => {
@@ -158,31 +153,41 @@ describe('native chrome for hidden-controls captures', () => {
         expect(screen.queryByText(/Synthetic visual preview/u)).toBeNull()
     })
 
-    it('keeps the banner, controls and inline header when the debug controls are visible', async () => {
+    it('keeps debug controls around the same document header without a legacy inline header', async () => {
         await render(<WorkflowPreview initialCase="guide-pass" />)
         expect(screen.getByText(WORKFLOW_PREVIEW_BANNER)).toBeTruthy()
         expect(screen.getAllByRole('radio').length).toBeGreaterThan(0)
-        expect(screen.getByTestId('inline-header')).toBeTruthy()
+        expect(screen.queryByTestId('inline-header')).toBeNull()
+        expect(screen.getAllByTestId('document-header-copy')).toHaveLength(1)
     })
 })
 
 it.each([
-    ['review-blocked', 'Add clearer photos'],
-    ['guide-needs-check', 'Answer questions'],
-    ['guide-needs-pages', 'Add clearer photos'],
-    ['guide-earlier-open', 'Go to step 1'],
-] as const)('shows the real conditional primary in the inert %s fixture', async (fixture, label) => {
+    ['review-blocked', 'Back to pages', false],
+    ['guide-needs-check', 'Quick check', false],
+    ['guide-needs-pages', 'Take photo', true],
+    ['guide-earlier-open', 'Take photo', false],
+] as const)('uses the actual v2 document primary and controller guard for %s', async (fixture, label, disabled) => {
     await render(<WorkflowPreview initialCase={fixture} showControls={false} />)
-    expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    const primary = within(screen.getByTestId('bottom-bar')).getByRole('button', { name: label })
+    expect(primary.props.accessibilityState.disabled).toBe(disabled)
+    if (fixture === 'guide-needs-pages')
+        expect(screen.getByText('More manual pages are needed before a photo can be checked.')).toBeTruthy()
+    if (fixture === 'guide-earlier-open') expect(screen.getByText('Step 2 of 2')).toBeTruthy()
 })
 
 it('opts into a delayed inert result for native motion capture, without changing the default gallery', async () => {
     jest.useFakeTimers()
     try {
         await render(<WorkflowPreview initialCase="guide-pending" reveal="pass" showControls={false} />)
-        expect(screen.queryByTestId('result-icon', { hidden: true })).toBeNull()
+        expect(screen.queryByText(workflowPreviewFixture('guide-pass').state.check!.reason)).toBeNull()
         await act(async () => jest.advanceTimersByTime(1600))
-        expect(screen.getByTestId('result-icon', { hidden: true })).toBeTruthy()
+        expect(screen.queryByText(workflowPreviewFixture('guide-pass').state.check!.reason)).toBeNull()
+        await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+            nativeEvent: { layout: { width: 300, height: 200 } },
+        })
+        await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+        expect(screen.getByText(workflowPreviewFixture('guide-pass').state.check!.reason)).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Next step' })).toBeTruthy()
     } finally {
         jest.useRealTimers()

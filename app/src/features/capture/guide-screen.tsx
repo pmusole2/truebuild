@@ -46,32 +46,40 @@ import { SourceDiagrams } from './step-facts'
 import { StepDetails } from './step-details'
 import { StepLayout } from './step-layout'
 import { StepPicture } from './step-picture'
-import {
-    applyTips,
-    ComposedHero,
-    composeBar,
-    GeneratedBody,
-    MoreIntro,
-    ScreenPending,
-    splitHero,
-} from '../screens/host'
-import { MandatoryFacts } from '../screens/mandatory'
-import type { ScreenSlot } from '../screens/use-screen-slot'
 import type { WorkflowScreenProps } from './workflow-types'
-import { useOptionalWorkflow } from './workflow-context'
-
 import { startsAtSystemEdge, STEP_SWIPE_DISTANCE as SWIPE_DISTANCE } from './gesture-policy'
 export { startsAtSystemEdge, EDGE_RESERVE } from './gesture-policy'
-
 const RESULT_SIZE = 48
-
 const RESULT_LOOK: Readonly<
-    Record<'pass' | 'refuse' | 'cannot' | 'error', { icon: IconName; surface: ColorToken; ink: ColorToken }>
+    Record<
+        'pass' | 'refuse' | 'cannot' | 'error',
+        {
+            icon: IconName
+            surface: ColorToken
+            ink: ColorToken
+        }
+    >
 > = {
-    pass: { icon: 'check', surface: 'passSurface', ink: 'pass' },
-    refuse: { icon: 'close', surface: 'refuseSurface', ink: 'refuse' },
-    cannot: { icon: 'help', surface: 'cautionSurface', ink: 'caution' },
-    error: { icon: 'alert', surface: 'cautionSurface', ink: 'caution' },
+    pass: {
+        icon: 'check',
+        surface: 'passSurface',
+        ink: 'pass',
+    },
+    refuse: {
+        icon: 'close',
+        surface: 'refuseSurface',
+        ink: 'refuse',
+    },
+    cannot: {
+        icon: 'help',
+        surface: 'cautionSurface',
+        ink: 'caution',
+    },
+    error: {
+        icon: 'alert',
+        surface: 'cautionSurface',
+        ink: 'caution',
+    },
 }
 
 /** The verdict as a tinted mark beside the sentence. It says nothing the sentence does not, so it is not an element. */
@@ -93,23 +101,22 @@ function ResultIcon({
             testID="result-icon"
             accessibilityElementsHidden={true}
             importantForAccessibility="no-hide-descendants"
-            style={[styles.resultIcon, { backgroundColor: colors[look.surface] }, reveal]}
+            style={[
+                styles.resultIcon,
+                {
+                    backgroundColor: colors[look.surface],
+                },
+                reveal,
+            ]}
         >
             <Icon name={look.icon} color={colors[look.ink]} />
         </Animated.View>
     )
 }
-
 type GuideProps = WorkflowScreenProps &
     ChromeProps & {
         entry: LibraryEntry
         readonly nav?: ScreenNav
-        // The model-composed screen for this moment, or undefined for the native screen (generated screens off, failed, or not ready).
-        readonly slot?: ScreenSlot
-        // The More sheet's own composed intro.
-        readonly moreSlot?: ScreenSlot
-        // The composed ask view for the held photo, while the ask view is open.
-        readonly questionsSlot?: ScreenSlot
     }
 
 /**
@@ -124,9 +131,6 @@ export function GuideScreen({
     nav: navProp,
     chrome = 'inline',
     more: moreProp,
-    slot,
-    moreSlot,
-    questionsSlot,
 }: GuideProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
@@ -173,7 +177,10 @@ export function GuideScreen({
     // A generic failure is the sentence itself (warning icon and one instruction), so it never gets a second banner.
     const quietState =
         state.notice !== null && (isProgressNotice(state.notice) || sentence.kind === 'error')
-            ? { ...state, notice: null }
+            ? {
+                  ...state,
+                  notice: null,
+              }
             : state
     const target = state.target
     const targetSummary =
@@ -182,7 +189,11 @@ export function GuideScreen({
             : target.kind === 'part'
               ? `Selected part: ${choices.find((choice) => choice.partId === target.partId)?.label ?? 'a part'}`
               : 'Selected point in photo.'
-    const onPoint = (point: Point): void => controller.targetChanged({ kind: 'point', ...point })
+    const onPoint = (point: Point): void =>
+        controller.targetChanged({
+            kind: 'point',
+            ...point,
+        })
     const pointTap = editable && capture !== null ? onPoint : undefined
 
     // One notification per new result, announced once however often it is shown again. An answer never changes how a
@@ -235,7 +246,6 @@ export function GuideScreen({
         }
         previousAnswer.current = answer
     }, [answer, more])
-
     const swipe = useMemo(
         () =>
             PanResponder.create({
@@ -293,7 +303,6 @@ export function GuideScreen({
             )}
         />
     )
-
     const cameraBlocked = busy || blocked
     const primary: BarAction = blocked
         ? {
@@ -343,22 +352,20 @@ export function GuideScreen({
                     testID: 'guide-primary',
                     icon: 'camera',
                     disabled: cameraBlocked,
-                    onPress: (): void => controller.camera({ kind: 'check' }),
+                    onPress: (): void =>
+                        controller.camera({
+                            kind: 'check',
+                        }),
                 }
-
     useCoachScreen('guide', {
         suppressed: state.pending !== null || state.storageReadOnly || more.open || keyboard,
-        candidates: applyTips(
-            guideCandidates({
-                hero: step !== undefined,
-                primaryLabel: primary.disabled === true || primary.busy === true ? null : primary.label,
-                swipe: stepCount > 1,
-                more: chrome === 'native',
-            }),
-            slot,
-        ),
+        candidates: guideCandidates({
+            hero: step !== undefined,
+            primaryLabel: primary.disabled === true || primary.busy === true ? null : primary.label,
+            swipe: stepCount > 1,
+            more: chrome === 'native',
+        }),
     })
-
     const stepItems: StepListItem[] = session.reviewedSteps.map((item, index) => ({
         id: item.stepId,
         title: item.title,
@@ -381,16 +388,13 @@ export function GuideScreen({
     const pairedFrom = capture === null || refusal !== null ? null : answer !== null ? 'answer' : 'check'
     const pairedRefs =
         pairedFrom === 'answer' ? (answer?.sourceRefs ?? []) : pairedFrom === 'check' ? (check?.sourceRefs ?? []) : []
-    // The hero is the document's own figure when it put one first; otherwise (native, pending, or a document without a
-    // picture) the native picture stays for the states that have one.
-    const composed = slot?.status === 'ready' ? slot.screen : null
-    const composedHero = composed !== null && splitHero(composed).hero !== null
-    const heroLive = {
-        heroCapture: (height: number): ReactElement | null =>
-            capture === null ? null : frozenPhoto(capture.observation, guideNotes, height),
-    }
     const heroImage = (
-        <View testID="guide-hero" style={{ height: heroHeight }}>
+        <View
+            testID="guide-hero"
+            style={{
+                height: heroHeight,
+            }}
+        >
             {capture === null ? (
                 <StepPicture
                     reference={step?.sourceRefs[0]}
@@ -408,14 +412,9 @@ export function GuideScreen({
         </View>
     )
     const reason = state.pending !== null && check !== null ? plainPending(state.pending) : null
-    // A busy or blocked native state is the only honest bar; otherwise the document composed it.
-    const composedBar = composeBar(
-        { primary },
-        slot,
-        blocked || state.storageReadOnly || (state.pending !== null && check === null),
-    )
-    const composedReason =
-        slot?.status === 'ready' && composedBar.primary?.disabled === true ? slot.screen.barReason : null
+    const bar = {
+        primary,
+    }
     // An answer never carries a verdict, even while a check is retained, so only the check's own sentence gets the mark.
     const verdict =
         sentence.kind === 'pass' ||
@@ -437,7 +436,6 @@ export function GuideScreen({
         ) : (
             <Instruction>{sentence.text}</Instruction>
         )
-
     return (
         <ScreenBody testID="guide-screen">
             {chrome === 'inline' ? (
@@ -448,55 +446,32 @@ export function GuideScreen({
                 />
             ) : null}
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-                {composed !== null && !composedHero ? null : (
-                    <CoachTarget id="guide-hero-frame" label="The step picture">
-                        <CoachTarget id="guide-hero" label="The step picture">
-                            <View testID="guide-hero-frame" {...swipe.panHandlers} style={styles.heroFrame}>
-                                <View style={blocked ? styles.dimmed : undefined}>
-                                    <Animated.View style={stepMotion}>
-                                        {composed !== null ? (
-                                            <ComposedHero screen={composed} live={heroLive} />
-                                        ) : (
-                                            heroImage
-                                        )}
-                                    </Animated.View>
-                                </View>
+                <CoachTarget id="guide-hero-frame" label="The step picture">
+                    <CoachTarget id="guide-hero" label="The step picture">
+                        <View testID="guide-hero-frame" {...swipe.panHandlers} style={styles.heroFrame}>
+                            <View style={blocked ? styles.dimmed : undefined}>
+                                <Animated.View style={stepMotion}>{heroImage}</Animated.View>
                             </View>
-                        </CoachTarget>
+                        </View>
                     </CoachTarget>
-                )}
+                </CoachTarget>
                 {/* A slim cue of overall progress: the full labelled bar is in More. It never moves the hero. */}
-                {composed !== null ? null : (
-                    <View style={styles.cue}>
-                        <ProgressBar
-                            slim
-                            animate={!still}
-                            label="Current step"
-                            value={entry.stepIndex + 1}
-                            total={stepCount}
-                        />
-                    </View>
-                )}
+                <View style={styles.cue}>
+                    <ProgressBar
+                        slim
+                        animate={!still}
+                        label="Current step"
+                        value={entry.stepIndex + 1}
+                        total={stepCount}
+                    />
+                </View>
                 <TextRegion testID="guide-panel">
                     <PlainNotice state={quietState} controller={controller} />
-                    <MandatoryFacts
-                        session={session}
-                        stepId={step?.stepId ?? null}
-                        slot={slot}
-                        visibleText={composed === null && slot?.status !== 'pending' ? sentence.text : undefined}
-                    />
-                    <Animated.View style={stepMotion}>
-                        {slot?.status === 'pending' ? (
-                            <ScreenPending />
-                        ) : composed !== null ? (
-                            <GeneratedBody screen={composed} enabled={!still} pinned live={heroLive} />
-                        ) : (
-                            sentenceNode
-                        )}
-                    </Animated.View>
+
+                    <Animated.View style={stepMotion}>{sentenceNode}</Animated.View>
                 </TextRegion>
             </KeyboardAvoidingView>
-            <FixedBottomBar {...composedBar} reason={reason ?? composedReason} />
+            <FixedBottomBar {...bar} reason={reason} />
             <MoreSheet
                 visible={more.open}
                 title={more.mode === 'ask' ? 'Ask about this step' : 'More about this step'}
@@ -506,9 +481,6 @@ export function GuideScreen({
                 initialDetent="tall"
             >
                 <GuideMore
-                    moreSlot={moreSlot}
-                    questionsSlot={questionsSlot}
-                    resultSlot={slot}
                     mode={more.mode === 'ask' ? 'ask' : 'details'}
                     onAsk={(): void => more.show('ask')}
                     state={state}
@@ -534,11 +506,7 @@ export function GuideScreen({
         </ScreenBody>
     )
 }
-
 function GuideMore({
-    moreSlot,
-    questionsSlot,
-    resultSlot,
     mode,
     onAsk,
     state,
@@ -560,9 +528,6 @@ function GuideMore({
     editable,
     askBlocked,
 }: {
-    moreSlot: ScreenSlot | undefined
-    questionsSlot: ScreenSlot | undefined
-    resultSlot: ScreenSlot | undefined
     mode: 'details' | 'ask'
     onAsk: () => void
     state: WorkflowScreenProps['state']
@@ -586,8 +551,6 @@ function GuideMore({
 }): ReactElement {
     const { session } = entry
     const { check, capture, answer, target } = state
-    const step = session.reviewedSteps[entry.stepIndex]
-    const questionsEnabled = useOptionalWorkflow()?.screens?.enabled('questions') === true
     const busy = state.pending !== null || state.storageReadOnly
     const last = entry.stepIndex >= session.reviewedSteps.length - 1
     const ask = (
@@ -601,7 +564,9 @@ function GuideMore({
                 disabled={askBlocked}
                 onPress={(): void => {
                     onClose()
-                    controller.camera({ kind: 'question' })
+                    controller.camera({
+                        kind: 'question',
+                    })
                 }}
             />
             {capture === null ? null : (
@@ -609,9 +574,17 @@ function GuideMore({
                     question={state.question}
                     questionLabel="Question about your photo"
                     onQuestionChange={controller.questionChanged}
-                    parts={choices.map((choice) => ({ id: choice.partId, label: choice.label }))}
+                    parts={choices.map((choice) => ({
+                        id: choice.partId,
+                        label: choice.label,
+                    }))}
                     selectedPartId={target?.kind === 'part' ? target.partId : null}
-                    onSelectPart={(partId): void => controller.targetChanged({ kind: 'part', partId })}
+                    onSelectPart={(partId): void =>
+                        controller.targetChanged({
+                            kind: 'part',
+                            partId,
+                        })
+                    }
                     targetSummary={targetSummary}
                     hasTarget={target !== null}
                     editable={editable}
@@ -666,46 +639,15 @@ function GuideMore({
         </>
     )
     if (mode === 'ask') {
-        // The composed ask view replaces both the evidence and the composer; until it arrives the native ones stand.
-        if (questionsSlot?.status === 'ready') {
-            return (
-                <Stack gap="md">
-                    <GeneratedBody
-                        screen={questionsSlot.screen}
-                        live={{
-                            ask: {
-                                choices: choices.map((choice) => ({ partId: choice.partId, label: choice.label })),
-                                editable,
-                                blocked: askBlocked,
-                                targetSummary,
-                            },
-                        }}
-                    />
-                    <MandatoryFacts
-                        session={session}
-                        stepId={step?.stepId ?? null}
-                        slot={questionsSlot}
-                        enabled={questionsEnabled}
-                    />
-                </Stack>
-            )
-        }
         return (
             <Stack gap="md">
                 {evidence}
                 {ask}
-                <MandatoryFacts
-                    session={session}
-                    stepId={step?.stepId ?? null}
-                    slot={questionsSlot}
-                    enabled={questionsEnabled}
-                />
             </Stack>
         )
     }
     return (
         <Stack gap="lg">
-            <MoreIntro slot={moreSlot} />
             {state.pending === null ? null : (
                 <Card tone="raised">
                     <Body>{plainPending(state.pending) ?? 'Working…'}</Body>
@@ -800,7 +742,6 @@ function GuideMore({
                     result={answer ?? check ?? undefined}
                     check={check}
                     stages={state.stages}
-                    resultSlot={resultSlot}
                 >
                     <DemoControls
                         session={session}
@@ -816,11 +757,18 @@ function GuideMore({
         </Stack>
     )
 }
-
 const styles = StyleSheet.create({
-    flex: { flex: 1 },
-    sentenceRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-    sentenceText: { flex: 1 },
+    flex: {
+        flex: 1,
+    },
+    sentenceRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.sm,
+    },
+    sentenceText: {
+        flex: 1,
+    },
     resultIcon: {
         width: RESULT_SIZE,
         height: RESULT_SIZE,
@@ -828,10 +776,27 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    dimmed: { opacity: 0.45 },
-    heroFrame: { overflow: 'hidden' },
-    cue: { paddingHorizontal: space.md, paddingTop: space.xs },
-    fullStep: { gap: space.xs },
-    row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    cell: { flexGrow: 1, flexBasis: 0, minWidth: 150 },
+    dimmed: {
+        opacity: 0.45,
+    },
+    heroFrame: {
+        overflow: 'hidden',
+    },
+    cue: {
+        paddingHorizontal: space.md,
+        paddingTop: space.xs,
+    },
+    fullStep: {
+        gap: space.xs,
+    },
+    row: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: space.xs,
+    },
+    cell: {
+        flexGrow: 1,
+        flexBasis: 0,
+        minWidth: 150,
+    },
 })

@@ -1,14 +1,12 @@
 import { createHash } from 'node:crypto'
 import { render, screen } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
-import { composeFallbackDocumentV2, createDemoManual, type AppIntent } from '@truebuild/contracts'
+import { buildFallbackDocumentV2, createDemoManual, type AppIntent } from '@truebuild/contracts'
 import { FeedbackProvider } from '../../ui/feedback'
 import { ThemeProvider } from '../../theme/theme'
 import type { ResolvedIntent } from '../screens/intents'
-import { adaptScreenDocumentV2 } from './adapt'
 import { DocumentRenderer } from './document-renderer'
 import type { FrameBindings } from './types'
-import { validateFrameDocument } from './validate'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -45,7 +43,7 @@ function wrap(node: ReactElement): ReactElement {
 /** The renderer consumes the real exported v2 contracts: Sonnet's deterministic composer is the document source. */
 describe('ScreenDocumentV2 through the native renderer', () => {
     it('renders a composed fallback guide document with header, body and one primary bar', async () => {
-        const document = composeFallbackDocumentV2(
+        const document = buildFallbackDocumentV2(
             {
                 kind: 'guide',
                 session,
@@ -61,18 +59,16 @@ describe('ScreenDocumentV2 through the native renderer', () => {
                 evidence: 'local-deterministic',
             },
         )
-        const frame = adaptScreenDocumentV2(document, (key) => (key === 'manual-title' ? session.title : ''))
-        expect(frame.kind).toBe('guide')
-        expect(frame.source).toBe('fallback')
-        expect(validateFrameDocument(frame).ok).toBe(true)
-        await render(wrap(<DocumentRenderer document={frame} bindings={bindings()} />))
+        expect(document.kind).toBe('guide')
+        expect(document.metadata.source).toBe('fallback')
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
         expect(screen.getByTestId('document-screen')).toBeTruthy()
         expect(screen.getByTestId('bottom-bar')).toBeTruthy()
-        expect(screen.getByText(frame.bar.primary.label)).toBeTruthy()
+        expect(screen.getByText(document.bar.primary.label)).toBeTruthy()
     })
 
     it('keeps camera as its own v2 document kind, never Guide wording', async () => {
-        const document = composeFallbackDocumentV2(
+        const document = buildFallbackDocumentV2(
             {
                 kind: 'camera',
                 session,
@@ -89,9 +85,8 @@ describe('ScreenDocumentV2 through the native renderer', () => {
                 evidence: 'local-deterministic',
             },
         )
-        const frame = adaptScreenDocumentV2(document)
-        expect(frame.kind).toBe('camera')
-        await render(wrap(<DocumentRenderer document={frame} bindings={bindings()} />))
+        expect(document.kind).toBe('camera')
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
         expect(screen.getByTestId('document-screen')).toBeTruthy()
     })
 })

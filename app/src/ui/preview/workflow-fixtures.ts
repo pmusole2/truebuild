@@ -127,7 +127,10 @@ const DIVIDER_CASES: readonly WorkflowPreviewCase[] = [
     'guide-answer-guided',
 ]
 
-export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: WorkflowState; entry: LibraryEntry } {
+export function workflowPreviewFixture(
+    id: WorkflowPreviewCase,
+    options: { readonly reusableCapture?: boolean } = {},
+): { state: WorkflowState; entry: LibraryEntry } {
     const portrait = PORTRAIT_CASES.includes(id)
     const stool = STOOL_CASES.includes(id) || portrait
     const session = portrait ? syntheticPortraitManual() : stool ? syntheticStoolManual() : sampleManual()
@@ -226,7 +229,8 @@ export function workflowPreviewFixture(id: WorkflowPreviewCase): { state: Workfl
                 height: portrait ? 600 : 400,
             },
             capturedAt: 0,
-            reusable: false,
+            // Explicit synthetic ownership witness for actual v2 image-load gating; native compatibility stays false.
+            reusable: options.reusableCapture === true,
         }
     }
 

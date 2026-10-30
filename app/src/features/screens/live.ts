@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import type { WorkflowState } from '../capture/controller'
 import type { LibraryEntry } from '../capture/library'
-import type { QuickProgress } from '../capture/review-screen'
+import type { QuickProgress } from './quick-progress'
 import type { MoreControl } from '../capture/screen-header'
 import type { ScreenNav } from '../capture/screen-nav'
 import type { WorkflowController } from '../capture/workflow-types'

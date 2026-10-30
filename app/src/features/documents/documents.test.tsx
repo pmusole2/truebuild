@@ -1,33 +1,65 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
-import { createDemoManual, screenDocumentV2Schema, type AppIntent } from '@truebuild/contracts'
+import {
+    assembleDocumentV2,
+    buildFallbackProposalV2,
+    createDemoManual,
+    documentMaterialV2,
+    screenDocumentV2Schema,
+    visitVariantNodesV2,
+    type ScreenContextInputsV2,
+    type ScreenDocumentV2,
+    type ScreenNodeV2,
+} from '@truebuild/contracts'
 import { FeedbackProvider } from '../../ui/feedback'
 import { ThemeProvider } from '../../theme/theme'
-import type { ResolvedIntent } from '../screens/intents'
-import { adaptScreenDocument } from './adapt'
+import { activeDocumentVariant } from '../document-runtime/use-document'
 import { CompareColumns } from './compare-columns'
-import { DocumentRenderer, capabilityInternalsId, selectVariant } from './document-renderer'
-import { sharedFallbackDocument, sharedFallbackFrame } from './fallback-v2'
-import { flattenFrameNodes, type FrameBindings, type FrameDocument } from './types'
-import { splitHeroFrame } from './bindings'
-import { dedupeCitations, heldPhotoResolves, validateFrameDocument } from './validate'
-import { makeDocument } from '../screens/test-support/documents'
+import { DocumentRenderer, capabilityInternalsId } from './document-renderer'
+import { sharedFallbackDocument } from './fallback-v2'
+import { sha256Hex } from './sha256'
+import type { FrameBindings } from './types'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',
     () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
-
 const session = createDemoManual()
-
+const inputs: ScreenContextInputsV2 = {
+    kind: 'guide',
+    session,
+    stepId: session.reviewedSteps[0]!.stepId,
+    captureId: null,
+    result: null,
+    failure: null,
+}
+const literal = (text: string): ScreenNodeV2 => ({
+    type: 'Text',
+    role: 'body',
+    content: { kind: 'literal', text },
+    emphasis: 'normal',
+    tone: 'neutral',
+    align: 'start',
+})
+function compose(extras: readonly ScreenNodeV2[] = []): ScreenDocumentV2 {
+    const material = documentMaterialV2(inputs)
+    const proposal = buildFallbackProposalV2(material)
+    return screenDocumentV2Schema.parse(
+        assembleDocumentV2(
+            material,
+            {
+                ...proposal,
+                body: { type: 'Stack', gap: 'md', align: 'stretch', children: [...extras, proposal.body] },
+            },
+            { source: 'fallback', evidence: 'synthetic-fixture', fallbackReason: 'disabled' },
+            { sha256Hex, now: () => new Date('2026-10-29T00:00:00Z') },
+        ),
+    )
+}
 function bindings(overrides: Partial<FrameBindings> = {}): FrameBindings {
     return {
-        resolve: (intent: AppIntent): ResolvedIntent => ({
-            enabled: intent.intent !== 'retry',
-            reason: intent.intent === 'retry' ? 'Nothing to retry.' : null,
-            run: jest.fn(),
-        }),
+        resolve: () => ({ enabled: true, reason: null, run: jest.fn() }),
         live: null,
         session,
         pageUris: {},
@@ -35,11 +67,9 @@ function bindings(overrides: Partial<FrameBindings> = {}): FrameBindings {
         marks: [],
         heroMode: 'inline',
         inspect: false,
-        judge: null,
         ...overrides,
     }
 }
-
 function wrap(node: ReactElement): ReactElement {
     return (
         <ThemeProvider>
@@ -48,182 +78,122 @@ function wrap(node: ReactElement): ReactElement {
     )
 }
 
-const guideDoc = (): FrameDocument =>
-    adaptScreenDocument(
-        makeDocument({
-            body: [
-                { type: 'Instruction', text: 'Slide the panel onto the bracket.', emphasis: 'strong', citations: [] },
-            ],
-        }),
-    )
-
-describe('document frame ownership', () => {
-    it('renders exactly one document header, one scrolling body and one fixed primary bar', async () => {
-        await render(wrap(<DocumentRenderer document={guideDoc()} bindings={bindings()} />))
+describe('v2 document ownership without frame or slot conversion', () => {
+    it('renders the intact document with one header, one scroll and exactly its primary bar identity', async () => {
+        const document = compose([literal('Slide the panel onto the bracket.')])
+        await render(
+            wrap(
+                <DocumentRenderer document={document} bindings={bindings({ testIds: { primary: 'guide-primary' } })} />,
+            ),
+        )
         expect(screen.getByTestId('document-screen')).toBeTruthy()
         expect(screen.getByText('Slide the panel onto the bracket.')).toBeTruthy()
-        expect(screen.getByTestId('bottom-bar')).toBeTruthy()
-        expect(screen.getByText('Take photo')).toBeTruthy()
+        expect(screen.getAllByTestId('bottom-bar')).toHaveLength(1)
+        expect(screen.getByTestId('guide-primary').props.accessibilityLabel).toBe(document.bar.primary.label)
     })
-
-    it('keeps document order through a deep recursive layout tree (no leaf-only cap)', async () => {
-        const doc: FrameDocument = {
-            ...guideDoc(),
-            body: [
-                {
-                    type: 'Stack',
-                    children: [
-                        {
-                            type: 'Card',
-                            children: [
-                                {
-                                    type: 'Stack',
-                                    children: [
-                                        { type: 'Instruction', text: 'Deep first.', emphasis: 'strong', citations: [] },
-                                        {
-                                            type: 'Instruction',
-                                            text: 'Deep second.',
-                                            emphasis: 'normal',
-                                            citations: [],
-                                        },
-                                    ],
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ],
-        }
-        expect(
-            flattenFrameNodes(doc.body).map((leaf) => (leaf.type === 'Instruction' ? leaf.text : leaf.type)),
-        ).toEqual(['Deep first.', 'Deep second.'])
-        await render(wrap(<DocumentRenderer document={doc} bindings={bindings()} />))
-        expect(screen.getByText('Deep first.')).toBeTruthy()
-        expect(screen.getByText('Deep second.')).toBeTruthy()
-    })
-
-    it('does not reorder an explicit layout: a hero placed last stays last', () => {
-        const doc: FrameDocument = {
-            ...guideDoc(),
-            body: [
-                { type: 'Instruction', text: 'Do this first.', emphasis: 'strong', citations: [] },
-                {
-                    type: 'HeroFigure',
-                    source: 'page',
-                    refId: session.pages[0]!.pageId,
-                    caption: null,
-                    fit: 'cover',
-                },
-            ],
-        }
-        expect(flattenFrameNodes(doc.body).map((leaf) => leaf.type)).toEqual(['Instruction', 'HeroFigure'])
-    })
-
-    it('takes busy and reading bars from document variants, never a native override beside the document', () => {
-        const doc = sharedFallbackFrame(
-            { kind: 'reading', session, stepId: null, captureId: null, result: null, failure: null },
-            () => '',
-        )
-        const selected = selectVariant(doc, 'error', null)
-        expect(selected.effective).toBe('error')
-        expect(selected.bar.primary.label.length).toBeGreaterThan(0)
-    })
-})
-
-describe('hero split keeps document placement', () => {
-    it('finds a hero nested in a root stack without reordering the rest', () => {
-        const doc: FrameDocument = {
-            ...guideDoc(),
-            body: [
-                {
-                    type: 'Stack',
-                    children: [
-                        {
-                            type: 'HeroFigure',
-                            source: 'page',
-                            refId: session.pages[0]!.pageId,
-                            caption: null,
-                            fit: 'cover',
-                        },
-                        { type: 'Instruction', text: 'After the hero.', emphasis: 'strong', citations: [] },
-                    ],
-                },
-            ],
-        }
-        const split = splitHeroFrame(doc)
-        expect(split.hero?.body[0]?.type).toBe('HeroFigure')
-        expect(flattenFrameNodes(split.rest.body).map((leaf) => leaf.type)).toEqual(['Instruction'])
-    })
-})
-
-describe('validation: reject, never append', () => {
-    it('rejects a document that omits a mandatory fact instead of appending it natively', () => {
-        const doc: FrameDocument = {
-            ...guideDoc(),
-            manualFacts: [
-                {
-                    factId: 'safety:1',
-                    kind: 'safety',
-                    basis: 'safety-note',
-                    text: 'Keep children away.',
-                    sourceRefs: [{ pageId: session.pages[0]!.pageId, region: null }],
-                    placement: 'remainder',
-                },
-            ],
-            requiredFactIds: ['safety:1'],
-        }
-        const result = validateFrameDocument(doc)
-        expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.errors).toContain('mandatory-fact-omitted:safety:1')
-    })
-
-    it('rejects an unknown intent (negative)', () => {
-        const doc: FrameDocument = {
-            ...guideDoc(),
-            bar: {
-                primary: { label: 'Go', icon: null, intent: { intent: 'navigate', target: 'nowhere' } as never },
-                secondary: null,
+    it('retains more than fourteen nested authored nodes in document and native order', async () => {
+        const texts = Array.from({ length: 17 }, (_, index) => `Authored instruction ${index + 1}.`)
+        const document = compose([
+            {
+                type: 'Stack',
+                gap: 'sm',
+                align: 'stretch',
+                children: [{ type: 'Stack', gap: 'sm', align: 'stretch', children: texts.map(literal) }],
             },
-        }
-        expect(validateFrameDocument(doc).ok).toBe(false)
+        ])
+        const authored: string[] = []
+        visitVariantNodesV2(document, '', ({ node }) => {
+            if (
+                node.type === 'Text' &&
+                node.content.kind === 'literal' &&
+                node.content.text.startsWith('Authored instruction')
+            )
+                authored.push(node.content.text)
+        })
+        expect(authored).toEqual(texts)
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
+        expect(screen.getAllByText(/^Authored instruction/u).map((node) => node.props.children)).toEqual(texts)
     })
-
-    it('dedupes citations so a fact is cited once', () => {
-        expect(dedupeCitations([0, 0, 1, 1, 2])).toEqual([0, 1, 2])
+    it('leaves an authored instruction before the document figure instead of splitting a pinned hero', () => {
+        const document = compose([literal('Do this before the figure.')])
+        const leaves: ScreenNodeV2[] = []
+        visitVariantNodesV2(document, '', ({ node }) => {
+            if (!('children' in node)) leaves.push(node)
+        })
+        const instruction = leaves.findIndex(
+            (node) =>
+                node.type === 'Text' &&
+                node.content.kind === 'literal' &&
+                node.content.text === 'Do this before the figure.',
+        )
+        const figure = leaves.findIndex((node) => node.type === 'Image' || node.type === 'ManualPage')
+        expect(instruction).toBeGreaterThanOrEqual(0)
+        expect(figure).toBeGreaterThan(instruction)
+    })
+    it('selects the whole reading error variant including its own bar', () => {
+        const document = sharedFallbackDocument({ ...inputs, kind: 'reading', stepId: null })
+        const chosen = activeDocumentVariant(document, 'error')
+        expect(chosen.activeState).toBe('error')
+        expect(chosen.variant).toBe(document.states.error)
+        expect(chosen.variant.bar.primary.label.length).toBeGreaterThan(0)
+    })
+    it('never gains a secondary action absent from the v2 document', async () => {
+        const document = sharedFallbackDocument({
+            ...inputs,
+            kind: 'completion',
+            stepId: null,
+            completedStepIds: session.reviewedSteps.map((step) => step.stepId),
+        })
+        expect(document.bar.secondary).toBeNull()
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
+        expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
     })
 })
 
-describe('held photo before verdict', () => {
-    const resultDoc = (captureId: string): FrameDocument => ({
-        ...guideDoc(),
-        kind: 'result',
-        bound: { manualId: session.manualId, revision: session.revision, stepId: 'step-1', captureId },
-        body: [
-            { type: 'PhotoWithRegions', captureId, observed: null, regions: [] },
-            { type: 'ResultBanner', verdict: 'pass', text: 'Looks right.', citations: [] },
-        ],
-        variants: {
-            pending: { body: [{ type: 'Skeleton', variant: 'lines', lines: 2 }] },
-        },
+describe('v2 validation rejects whole documents', () => {
+    it('rejects omission of required manual facts instead of appending native content', () => {
+        const document = compose()
+        expect(document.requirements.facts.length).toBeGreaterThan(0)
+        expect(
+            screenDocumentV2Schema.safeParse({ ...document, body: literal('No required facts here.') }).success,
+        ).toBe(false)
     })
-
-    it('resolves only for the held reusable capture with its photo node', () => {
-        expect(heldPhotoResolves(resultDoc('cap-1'), { captureId: 'cap-1', reusable: true })).toBe(true)
-        expect(heldPhotoResolves(resultDoc('cap-1'), { captureId: 'cap-2', reusable: true })).toBe(false)
-        expect(heldPhotoResolves(resultDoc('cap-1'), null)).toBe(false)
-        expect(validateFrameDocument(resultDoc('cap-1'), { heldCaptureId: 'cap-2' }).ok).toBe(false)
+    it('rejects an unknown intent in the real primary action schema', () => {
+        const document = compose()
+        expect(
+            screenDocumentV2Schema.safeParse({
+                ...document,
+                bar: {
+                    ...document.bar,
+                    primary: { ...document.bar.primary, intent: { intent: 'navigate', target: 'nowhere' } },
+                },
+            }).success,
+        ).toBe(false)
     })
-
-    it('shows the pending variant, not the verdict, before the photo resolves', () => {
-        const selected = selectVariant(resultDoc('cap-1'), 'normal', { captureId: 'cap-2', reusable: true })
-        expect(selected.effective).toBe('pending')
-        expect(flattenFrameNodes(selected.body).some((leaf) => leaf.type === 'ResultBanner')).toBe(false)
+    it('keeps a result behind its pending variant when no matching held photo is available', async () => {
+        const document = sharedFallbackDocument({
+            ...inputs,
+            kind: 'result',
+            captureId: 'cap-1',
+            result: {
+                kind: 'check',
+                value: {
+                    decision: 'pass',
+                    reason: 'Looks right.',
+                    sourceRefs: [],
+                    missingEvidence: [],
+                    observedRegion: null,
+                },
+            },
+        })
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
+        expect(screen.queryByText('Looks right.')).toBeNull()
+        expect(screen.getByTestId('document-screen')).toBeTruthy()
     })
 })
 
-describe('local deterministic fallbacks (off / steps need no network)', () => {
-    it('builds a complete fallback document for every kind through the same renderer shape', () => {
-        // The shared contracts composer is the only fallback source (off/steps, no network, no handcrafted frames).
+describe('shared complete deterministic v2 fallbacks', () => {
+    it('builds every supported kind through the unchanged public composer without a legacy adapter', () => {
         for (const kind of [
             'home',
             'add',
@@ -242,10 +212,9 @@ describe('local deterministic fallbacks (off / steps need no network)', () => {
             'judge',
             'compare',
         ] as const) {
-            const doc = sharedFallbackDocument({
+            const document = sharedFallbackDocument({
+                ...inputs,
                 kind,
-                session,
-                stepId: session.reviewedSteps[0]!.stepId,
                 captureId: ['result', 'questions', 'answer'].includes(kind) ? 'fixture-held' : null,
                 result:
                     kind === 'result'
@@ -271,78 +240,35 @@ describe('local deterministic fallbacks (off / steps need no network)', () => {
                             }
                           : null,
                 failure: kind === 'error' ? 'provider_error' : null,
-                ...(kind === 'camera'
-                    ? { uiState: { camera: { mode: 'build-photo' as const, permission: 'granted' as const } } }
-                    : {}),
+                ...(kind === 'camera' ? { uiState: { camera: { mode: 'build-photo', permission: 'granted' } } } : {}),
             })
-            expect(doc.metadata.source).toBe('fallback')
-            expect(doc.bar.primary.label.length).toBeGreaterThan(0)
-            // Every canonical fallback is complete before any legacy test adapter is involved.
-            expect(screenDocumentV2Schema.safeParse(doc).success).toBe(true)
+            expect(document.metadata.source).toBe('fallback')
+            expect(document.bar.primary.label.length).toBeGreaterThan(0)
+            expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         }
-        // A result fallback with no held photo is rejected by the held-photo gate, never shown as a verdict.
-        const result = sharedFallbackFrame(
-            {
-                kind: 'result',
-                session,
-                stepId: session.reviewedSteps[0]!.stepId,
-                captureId: null,
-                result: null,
-                failure: null,
-            },
-            () => '',
-        )
-        const verdict = validateFrameDocument(result)
-        expect(verdict.ok).toBe(false)
-        if (!verdict.ok) expect(verdict.errors).toContain('held-photo-required')
     })
-
-    it('reading fallback carries a pending variant and honest progress, never invented page counts', () => {
-        const frame = sharedFallbackFrame(
-            { kind: 'reading', session, stepId: null, captureId: null, result: null, failure: null },
-            () => '',
-        )
-        expect(frame.variants?.pending).toBeDefined()
-        expect(frame.variants?.error).toBeDefined()
-        // Progress is a live-bound leaf; the document never states a page total it does not hold.
-        const progress = flattenFrameNodes(frame.body).find((leaf) => leaf.type === 'V2Leaf')
-        expect(progress).toBeDefined()
+    it('reading carries pending/error variants and live progress instead of invented counts', () => {
+        const document = sharedFallbackDocument({ ...inputs, kind: 'reading', stepId: null })
+        expect(document.states.pending).not.toBeNull()
+        expect(document.states.error).not.toBeNull()
+        const progress: ScreenNodeV2[] = []
+        visitVariantNodesV2(document, '', ({ node }) => {
+            if (node.type === 'Progress') progress.push(node)
+        })
+        expect(progress.length).toBeGreaterThan(0)
+        expect(progress.every((node) => node.type === 'Progress' && node.binding === 'reading')).toBe(true)
     })
-
-    it('compare panes use distinct real titles and a first-page hero', async () => {
+    it('compare panes retain distinct real manual titles and each actual first-page image', async () => {
         const alpha = { ...createDemoManual(), manualId: 'm-a', title: 'Alpha manual' }
         const beta = { ...createDemoManual(), manualId: 'm-b', title: 'Beta manual' }
         beta.reviewedSteps[0]!.title = 'Attach the bracket'
-        const pane = (manual: typeof session, uri: string): Parameters<typeof CompareColumns>[0]['panes'][number] => {
-            const document = sharedFallbackFrame(
-                {
-                    kind: 'guide',
-                    session: manual,
-                    stepId: manual.reviewedSteps[0]!.stepId,
-                    captureId: null,
-                    result: null,
-                    failure: null,
-                },
-                (key) =>
-                    key === 'manual-title'
-                        ? manual.title
-                        : key === 'step-position'
-                          ? `Step 1 of ${manual.reviewedSteps.length}`
-                          : key === 'step-title'
-                            ? manual.reviewedSteps[0]!.title
-                            : '',
-            )
-            expect(document.source).toBe('fallback')
-            expect(document.header.title).toBe(`Step 1 of ${manual.reviewedSteps.length}`)
-            expect(document.header.subtitle).toBe(manual.reviewedSteps[0]!.title)
-            return {
-                manualId: manual.manualId,
-                title: manual.title,
-                note: 'Local fallback guide',
-                document,
-                bindings: bindings({ session: manual, pageUris: { [manual.pages[0]!.pageId]: uri } }),
-            }
-        }
+        const pane = (manual: typeof session, uri: string): Parameters<typeof CompareColumns>[0]['panes'][number] => ({
+            manualId: manual.manualId,
+            title: manual.title,
+            note: 'Local fallback guide',
+            document: sharedFallbackDocument({ ...inputs, session: manual, stepId: manual.reviewedSteps[0]!.stepId }),
+            bindings: bindings({ session: manual, pageUris: { [manual.pages[0]!.pageId]: uri } }),
+        })
         await render(
             wrap(<CompareColumns panes={[pane(alpha, 'file:///alpha.png'), pane(beta, 'file:///beta.png')]} />),
         )
@@ -352,24 +278,14 @@ describe('local deterministic fallbacks (off / steps need no network)', () => {
         ] as const) {
             const shown = within(screen.getByTestId(`compare-pane-${manual.manualId}`))
             expect(shown.getByRole('header', { name: manual.title })).toBeTruthy()
-            const hero = shown.getAllByTestId('guide-hero')[0]!
+            const hero = shown.getAllByTestId('guide-hero-picture')[0]!
             await fireEvent(hero, 'layout', { nativeEvent: { layout: { width: 300, height: 200 } } })
-            expect(within(hero).getByLabelText('Picture from your manual').props.source).toEqual({ uri })
+            expect(shown.getByLabelText('Picture from your manual').props.source).toEqual({ uri })
             expect(shown.getAllByText(manual.reviewedSteps[0]!.title).length).toBeGreaterThan(0)
         }
         expect(screen.queryByText(/Untitled/u)).toBeNull()
     })
 })
-
-describe('measurement honesty markers', () => {
-    it('names capability internals separately from document content', () => {
-        expect(capabilityInternalsId('CameraView')).toBe('truebuild-capability-internals:CameraView')
-    })
-
-    it('judge summary is one card behind no extra surface, and hidden while work runs', async () => {
-        const judge = { summary: 'Composed by the model · 96.0% generated', onShowDetails: jest.fn() }
-        await render(wrap(<DocumentRenderer document={guideDoc()} bindings={bindings({ judge })} />))
-        expect(screen.getByTestId('judge-summary')).toBeTruthy()
-        expect(screen.getByTestId('judge-details')).toBeTruthy()
-    })
+it('keeps actual capability exclusion ids separate from document content', () => {
+    expect(capabilityInternalsId('CameraView')).toBe('truebuild-capability-internals:CameraView')
 })

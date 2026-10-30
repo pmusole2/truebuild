@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { reloadAppAsync } from 'expo'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { composeFallbackDocumentV2, screenDocumentV2Schema } from '@truebuild/contracts'
+import { buildFallbackDocumentV2, screenDocumentV2Schema } from '@truebuild/contracts'
 import { DocumentRoot } from '../documents/document-renderer'
 import { useDocumentOwner } from '../documents/ownership'
 import { sha256Hex } from '../documents/sha256'
@@ -29,7 +29,7 @@ export function AppUnavailableScreen(): ReactElement {
     const document = useMemo(
         () =>
             screenDocumentV2Schema.parse(
-                composeFallbackDocumentV2(
+                buildFallbackDocumentV2(
                     {
                         kind: 'error',
                         session: null,

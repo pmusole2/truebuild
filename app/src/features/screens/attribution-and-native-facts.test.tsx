@@ -3,90 +3,15 @@ import type { ReactElement } from 'react'
 import { Text } from 'react-native'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
-import type { CoachCandidate } from '../onboarding/coach-types'
-import { applyTips, composeBar } from './host'
 import { JudgeProvider, useJudge } from './judge-context'
 import { createJudgeStore, JUDGE_STORAGE_KEY } from './judge-store'
 import { BuiltToggleRow, BUILT_TOGGLE_LABEL, StagesPanel } from './attribution'
-import type { GeneratedScreen, ScreenSlot } from './use-screen-slot'
 import { createDemoManual } from '@truebuild/contracts'
 import { mandatoryFacts, MandatoryFacts } from './mandatory'
 import { makeDocument } from './test-support/documents'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
-
-const candidate = (id: string, sentence = `native ${id}`): CoachCandidate => ({
-    id,
-    kind: 'control',
-    heading: `H ${id}`,
-    sentence,
-})
-const ready = (overrides: Partial<GeneratedScreen> = {}): ScreenSlot => ({
-    status: 'ready',
-    key: 'k',
-    kind: 'guide',
-    screen: {
-        tips: new Map(),
-        bar: { primary: { label: 'Composed', onPress: jest.fn(), nativeID: 'x' }, secondary: undefined },
-        document: { body: [] },
-        ...overrides,
-    } as unknown as GeneratedScreen,
-})
-
-describe('coach copy and order from the document', () => {
-    const native = [candidate('home-add'), candidate('header-more'), candidate('keep-building')]
-
-    it('leaves the native tips alone without a composed screen', () => {
-        expect(applyTips(native, undefined)).toBe(native)
-        expect(applyTips(native, { status: 'pending', key: 'k', kind: 'home' })).toBe(native)
-        expect(applyTips(native, ready())).toBe(native)
-    })
-
-    it('rewords and reorders only tips the screen really has, in the document’s order, keeping the rest after them', () => {
-        const slot = ready({
-            tips: new Map([
-                ['header-more', { heading: 'More help', text: 'Everything else is here.' }],
-                ['home-add', { heading: 'Start', text: 'Add your manual here.' }],
-                ['camera-shutter', { heading: 'Not here', text: 'This screen has no shutter.' }],
-            ]),
-        })
-        expect(applyTips(native, slot).map((tip) => [tip.id, tip.heading, tip.sentence])).toEqual([
-            ['header-more', 'More help', 'Everything else is here.'],
-            ['home-add', 'Start', 'Add your manual here.'],
-            ['keep-building', 'H keep-building', 'native keep-building'],
-        ])
-    })
-})
-
-describe('the bar', () => {
-    const nativeBar = {
-        primary: { label: 'Native', testID: 'guide-primary', onPress: jest.fn() },
-        secondary: { label: 'Native second', testID: 'second', onPress: jest.fn() },
-    }
-    const composed = ready({
-        bar: {
-            primary: { label: 'Composed', onPress: jest.fn(), nativeID: 'p' },
-            secondary: { label: 'Composed second', onPress: jest.fn(), nativeID: 's' },
-        },
-    })
-
-    it('is the native bar without a composed screen, and when a native state must win', () => {
-        expect(composeBar(nativeBar, undefined)).toBe(nativeBar)
-        expect(composeBar(nativeBar, composed, true)).toBe(nativeBar)
-    })
-
-    it('takes the document’s words and actions but keeps the native test identities', () => {
-        const bar = composeBar(nativeBar, composed)
-        expect(bar.primary).toMatchObject({ label: 'Composed', testID: 'guide-primary', nativeID: 'p' })
-        expect(bar.secondary).toMatchObject({ label: 'Composed second', testID: 'second', nativeID: 's' })
-    })
-
-    it('never gains a secondary the document did not compose', () => {
-        const single = ready({ bar: { primary: { label: 'Only', onPress: jest.fn() }, secondary: undefined } })
-        expect(composeBar(nativeBar, single).secondary).toBeUndefined()
-    })
-})
 
 describe('judge preference in the tree', () => {
     function Probe(): ReactElement {
@@ -156,7 +81,7 @@ describe('mandatory warning identity', () => {
         )
     })
 
-    it('shows local required facts while an enabled native-pending surface has no slot', async () => {
+    it('shows local required facts on an explicitly enabled native compatibility surface', async () => {
         const session = createDemoManual()
         session.reviewedSteps[0]!.safetyNotes = [
             {
@@ -168,7 +93,7 @@ describe('mandatory warning identity', () => {
                 },
             },
         ]
-        await render(wrap2(<MandatoryFacts session={session} stepId="step-1" slot={undefined} enabled />))
+        await render(wrap2(<MandatoryFacts session={session} stepId="step-1" enabled />))
         expect(screen.getByText('Keep children away.')).toBeTruthy()
     })
 
@@ -188,11 +113,7 @@ describe('mandatory warning identity', () => {
                 },
             },
         ]
-        await render(
-            wrap2(
-                <MandatoryFacts session={session} stepId="step-1" slot={undefined} enabled visibleText={visibleText} />,
-            ),
-        )
+        await render(wrap2(<MandatoryFacts session={session} stepId="step-1" enabled visibleText={visibleText} />))
         expect(screen.queryByText('Keep children away.') !== null).toBe(remains)
     })
 })
@@ -205,11 +126,7 @@ it('pairs the retained primary model with its own timing after the shown verdict
         wrap2(
             <WorkflowContext.Provider value={workflow}>
                 <JudgeProvider store={store}>
-                    <StagesPanel
-                        check={{ model: 'muse-wonder-1.0', decision: 'refuse' }}
-                        stages={null}
-                        resultSlot={undefined}
-                    />
+                    <StagesPanel check={{ model: 'muse-wonder-1.0', decision: 'refuse' }} stages={null} />
                 </JudgeProvider>
             </WorkflowContext.Provider>,
         ),

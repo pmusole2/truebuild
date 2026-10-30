@@ -3,7 +3,7 @@ import { reviewedSession, type WorkflowState } from '../capture/controller'
 import type { LibraryEntry } from '../capture/library'
 import { stopFor } from '../capture/plain-copy'
 import { otherBlockers } from '../capture/quick-check-model'
-import type { QuickProgress } from '../capture/review-screen'
+import type { QuickProgress } from './quick-progress'
 import { manualDisplayTitle } from '../documents/manual-title'
 
 const MAX_TITLE = 200

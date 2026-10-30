@@ -1,3 +1,4 @@
+import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
 import { reloadAppAsync } from 'expo'
@@ -65,9 +66,10 @@ it('owns the startup failure and native frame with a complete local fallback bef
     expect(hostsOutsideDocuments(screen.container as unknown as OwnershipTree, new Set([document.screenId]))).toEqual(
         [],
     )
-    expect(screen.getByTestId('document-navigation-root').props.nativeID).toBe(
-        `truebuild-document-navigation:${document.screenId}`,
-    )
+    expect(parseNativeMeterMarkers(screen.getByTestId('document-navigation-root').props.nativeID)).toMatchObject({
+        documentNavigation: document.screenId,
+        origin: 'fallback',
+    })
     expect(screen.getAllByTestId('bottom-bar')).toHaveLength(1)
     expect(StyleSheet.flatten(screen.getByTestId('app-unavailable-screen').props.style).paddingTop).toBe(32)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()

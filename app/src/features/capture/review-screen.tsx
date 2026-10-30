@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import type { ManualSession, ManualStep } from '@truebuild/contracts'
@@ -21,85 +21,24 @@ import { AboutThisCheck } from './more-sections'
 import { PageImage } from './page-media'
 import { firstSentences, isProgressNotice, plainReason } from './plain-copy'
 import { FixEditor } from './fix-editor'
-import { editableQuestions, otherBlockers, type Question } from './quick-check-model'
+import { otherBlockers, type Question } from './quick-check-model'
 import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
-import { applyTips, ComposedHero, composeBar, GeneratedBody, ScreenPending } from '../screens/host'
-import { MandatoryFacts } from '../screens/mandatory'
-import type { ScreenSlot } from '../screens/use-screen-slot'
 import { StepDetails } from './step-details'
 import { StepPicture } from './step-picture'
 import type { WorkflowScreenProps } from './workflow-types'
+import { useQuickProgress, type QuickProgress } from '../screens/quick-progress'
 
 /** Internal issue wording turned into a plain line for More. Part ids and field names never show. */
 function plainIssue(issue: string): string {
     return issue.replace(/^Part \S+ name: /u, 'A part name is unclear: ').replace(/, quantity of \S+:/u, ', how many:')
 }
-
-export type QuickProgress = {
-    readonly questions: readonly Question[]
-    readonly current: Question | undefined
-    // The current question's place among all the questions this read started with; 0 when none is showing.
-    readonly position: number
-    readonly total: number
-    readonly skipped: readonly string[]
-    readonly skip: (id: string) => void
-    readonly unskip: () => void
-    // "Question 2 of 5", for the fixed header; undefined when no question is on screen.
-    readonly label: string | undefined
-}
-
-/**
- * Where the person is in the questions. It is held above the screen so that accepting a fact (which makes a new
- * revision of the manual) keeps the count: after question 1 of 2 comes question 2 of 2. A different manual or a new read
- * of different pages starts the count again.
- */
-export function useQuickProgress(session: ManualSession | undefined): QuickProgress {
-    const questions = useMemo(() => (session === undefined ? [] : editableQuestions(session)), [session])
-    const key =
-        session === undefined
-            ? ''
-            : `${session.manualId}:${session.pages.map((page) => page.pageId).join(',')}:${session.rawExtraction === null ? 'unread' : 'read'}`
-    const [progress, setProgress] = useState<{ key: string; total: number; skipped: readonly string[] }>({
-        key,
-        total: questions.length,
-        skipped: [],
-    })
-    let live = progress
-    if (progress.key !== key) {
-        live = { key, total: questions.length, skipped: [] }
-        setProgress(live)
-    }
-    const total = Math.max(live.total, questions.length)
-    const asking = questions.filter((question) => !live.skipped.includes(question.id))
-    const current = asking[0]
-    const position = current === undefined ? 0 : total - questions.length + questions.indexOf(current) + 1
-    const skip = useCallback(
-        (id: string): void => setProgress((now) => ({ ...now, skipped: [...now.skipped, id] })),
-        [],
-    )
-    const unskip = useCallback((): void => setProgress((now) => ({ ...now, skipped: [] })), [])
-    const showing = current !== undefined && current.step.sourceRefs.length > 0
-    return {
-        questions,
-        current,
-        position,
-        total,
-        skipped: live.skipped,
-        skip,
-        unskip,
-        label: showing ? `Question ${position} of ${total}` : undefined,
-    }
-}
-
 type QuickCheckProps = WorkflowScreenProps &
     ChromeProps & {
         entry: LibraryEntry
         readonly nav?: ScreenNav
         readonly progress?: QuickProgress
-        // The model-composed screen, or undefined for the native one. Questions themselves stay the app's own.
-        readonly slot?: ScreenSlot
     }
 
 /**
@@ -116,7 +55,6 @@ export function OverviewScreen({
     chrome = 'inline',
     more: moreProp,
     progress: progressProp,
-    slot,
 }: QuickCheckProps): ReactElement {
     const { session } = entry
     const nav = navProp ?? defaultNav(controller)
@@ -134,13 +72,16 @@ export function OverviewScreen({
     // Nothing has been read yet: no extraction and no steps. (A session that already carries steps is shown as it is.)
     const noRead = session.rawExtraction === null && session.reviewedSteps.length === 0
     const unreadable = current !== undefined && current.step.sourceRefs.length === 0
-
     let sentence: string
     let primary: BarAction | null = null
     let secondary: BarAction | undefined
     if (noRead) {
         sentence = 'Add photos of your manual and read them first.'
-        primary = { label: 'Add photos', compactLabel: 'Add', onPress: nav.editPages }
+        primary = {
+            label: 'Add photos',
+            compactLabel: 'Add',
+            onPress: nav.editPages,
+        }
     } else if (current !== undefined && !unreadable) {
         // Short enough for one line at the normal size, so the manual's own words beneath it show without scrolling.
         // The editor in More keeps the full wording with the step number.
@@ -155,7 +96,11 @@ export function OverviewScreen({
         }
         secondary =
             skipped.length > 0
-                ? { label: 'Answer skipped questions', icon: 'refresh' as const, onPress: unskip }
+                ? {
+                      label: 'Answer skipped questions',
+                      icon: 'refresh' as const,
+                      onPress: unskip,
+                  }
                 : undefined
     } else if (canConfirm || reviewed) {
         sentence = 'Thanks. Your steps are ready.'
@@ -178,14 +123,8 @@ export function OverviewScreen({
             onPress: nav.editPages,
         }
     }
-
     const asking = current !== undefined && !unreadable
-    const composed = slot?.status === 'ready' ? slot.screen : null
-    // A composed Quick check that placed the editor in its body edits there; otherwise Let me fix it opens the sheet.
-    const editorInline =
-        composed !== null &&
-        asking &&
-        composed.guarded.body.some((node) => node.type === 'FactEditor' && node.kind === current.kind)
+
     // A new question moves its picture and sentence together; nothing moves while work, a sheet or a tip holds the screen.
     const scope = useCoachScope()
     const attention = useCoachAttention()
@@ -201,21 +140,24 @@ export function OverviewScreen({
     )
     useCoachScreen('quick-check', {
         suppressed: busy || more.open,
-        candidates: applyTips(
-            quickCheckCandidates({
-                state: asking
-                    ? 'asking'
-                    : primary?.testID === 'quick-check-clearer'
-                      ? 'blocked'
-                      : primary?.testID === 'quick-check-start'
-                        ? 'ready'
-                        : 'none',
-            }),
-            slot,
-        ),
+        candidates: quickCheckCandidates({
+            state: asking
+                ? 'asking'
+                : primary?.testID === 'quick-check-clearer'
+                  ? 'blocked'
+                  : primary?.testID === 'quick-check-start'
+                    ? 'ready'
+                    : 'none',
+        }),
     })
     // The header count already shows progress; "Saved. Thanks." would be a second sentence under the question.
-    const quietState = state.notice !== null && isProgressNotice(state.notice) ? { ...state, notice: null } : state
+    const quietState =
+        state.notice !== null && isProgressNotice(state.notice)
+            ? {
+                  ...state,
+                  notice: null,
+              }
+            : state
     return (
         <ScreenBody testID="overview-screen">
             <View testID="quick-check-screen" style={styles.flex}>
@@ -228,59 +170,39 @@ export function OverviewScreen({
                 ) : null}
                 {asking ? (
                     <>
-                        {composed === null ? (
-                            <ProgressBar
-                                label={`Question ${position} of ${total}`}
-                                value={position - 1}
-                                total={total}
-                            />
-                        ) : null}
-                        {composed !== null ? (
-                            <Animated.View style={[styles.clip, questionMotion]}>
-                                <ComposedHero screen={composed} />
+                        <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
+                        <View style={[styles.hero, styles.clip]}>
+                            <Animated.View style={questionMotion}>
+                                <StepPicture
+                                    reference={current.step.sourceRefs[0]}
+                                    references={current.step.sourceRefs}
+                                    session={session}
+                                    pageUris={state.pageUris}
+                                    height={heroHeight}
+                                    cover
+                                />
                             </Animated.View>
-                        ) : (
-                            <View style={[styles.hero, styles.clip]}>
-                                <Animated.View style={questionMotion}>
-                                    <StepPicture
-                                        reference={current.step.sourceRefs[0]}
-                                        references={current.step.sourceRefs}
-                                        session={session}
-                                        pageUris={state.pageUris}
-                                        height={heroHeight}
-                                        cover
-                                    />
-                                </Animated.View>
-                            </View>
-                        )}
+                        </View>
                         <TextRegion compact>
                             <PlainNotice state={quietState} controller={controller} />
-                            <MandatoryFacts session={session} stepId={current.step.stepId} slot={slot} />
+
                             <Animated.View style={[styles.question, questionMotion]}>
-                                {composed !== null ? (
-                                    <GeneratedBody screen={composed} enabled={!busy && !more.open} pinned />
-                                ) : (
-                                    <>
-                                        <Instruction>{sentence}</Instruction>
-                                        {current.reason === null ? null : (
-                                            <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
-                                        )}
-                                    </>
-                                )}
+                                <>
+                                    <Instruction>{sentence}</Instruction>
+                                    {current.reason === null ? null : (
+                                        <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
+                                    )}
+                                </>
                             </Animated.View>
                         </TextRegion>
                         <FixedBottomBar
-                            primary={
-                                editorInline
-                                    ? null
-                                    : {
-                                          label: 'Let me fix it',
-                                          compactLabel: 'Fix',
-                                          testID: 'quick-check-fix',
-                                          disabled: busy,
-                                          onPress: (): void => more.show('fix'),
-                                      }
-                            }
+                            primary={{
+                                label: 'Let me fix it',
+                                compactLabel: 'Fix',
+                                testID: 'quick-check-fix',
+                                disabled: busy,
+                                onPress: (): void => more.show('fix'),
+                            }}
                             secondary={{
                                 label: 'Skip for now',
                                 icon: 'arrowRight',
@@ -292,33 +214,26 @@ export function OverviewScreen({
                     </>
                 ) : (
                     <>
-                        {composed !== null ? (
-                            <ComposedHero screen={composed} />
-                        ) : (
-                            <View style={styles.hero}>
-                                <StepPicture
-                                    reference={session.reviewedSteps[0]?.sourceRefs[0]}
-                                    references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
-                                    session={session}
-                                    pageUris={state.pageUris}
-                                    height={heroHeight}
-                                    cover
-                                />
-                            </View>
-                        )}
+                        <View style={styles.hero}>
+                            <StepPicture
+                                reference={session.reviewedSteps[0]?.sourceRefs[0]}
+                                references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
+                                session={session}
+                                pageUris={state.pageUris}
+                                height={heroHeight}
+                                cover
+                            />
+                        </View>
                         <TextRegion>
                             <PlainNotice state={quietState} controller={controller} />
-                            {composed !== null ? (
-                                <GeneratedBody screen={composed} enabled={!busy && !more.open} pinned />
-                            ) : slot?.status === 'pending' ? (
-                                <ScreenPending />
-                            ) : (
-                                <Instruction>{sentence}</Instruction>
-                            )}
+                            <Instruction>{sentence}</Instruction>
                         </TextRegion>
                         <FixedBottomBar
-                            {...composeBar({ primary, secondary }, slot, state.storageReadOnly || noRead)}
-                            reason={slot?.status === 'ready' && !noRead ? slot.screen.barReason : null}
+                            {...{
+                                primary,
+                                secondary,
+                            }}
+                            reason={null}
                         />
                     </>
                 )}
@@ -337,7 +252,6 @@ export function OverviewScreen({
         </ScreenBody>
     )
 }
-
 function QuickCheckMore({
     visible,
     onClose,
@@ -459,7 +373,6 @@ function QuickCheckMore({
         </MoreSheet>
     )
 }
-
 function PageStripItem({
     number,
     uri,
@@ -487,12 +400,27 @@ function PageStripItem({
         </PressMotion>
     )
 }
-
 const styles = StyleSheet.create({
-    flex: { flex: 1 },
-    hero: { paddingHorizontal: space.md, paddingTop: space.sm },
-    clip: { overflow: 'hidden' },
-    question: { gap: space.sm },
-    strip: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-    stripItem: { width: 96, minHeight: touchTarget },
+    flex: {
+        flex: 1,
+    },
+    hero: {
+        paddingHorizontal: space.md,
+        paddingTop: space.sm,
+    },
+    clip: {
+        overflow: 'hidden',
+    },
+    question: {
+        gap: space.sm,
+    },
+    strip: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: space.xs,
+    },
+    stripItem: {
+        width: 96,
+        minHeight: touchTarget,
+    },
 })

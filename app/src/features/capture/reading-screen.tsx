@@ -15,17 +15,12 @@ import { readingLanguage } from './reading-language'
 import { ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import type { WorkflowScreenProps } from './workflow-types'
-import { ComposedHero, composeBar, GeneratedBody } from '../screens/host'
-import type { ScreenSlot } from '../screens/use-screen-slot'
-
 type ReadingProps = WorkflowScreenProps & {
     entry: LibraryEntry
     readonly nav?: ScreenNav
     // Native Back while reading asks first. The route sets this; without a router the Cancel button sets it.
     readonly confirming?: boolean
     readonly onConfirmingChange?: (confirming: boolean) => void
-    // The model-composed screen, or undefined for the native one.
-    readonly slot?: ScreenSlot
 }
 
 // The only captions Reading ever shows. They name no step of the pipeline and promise nothing new.
@@ -41,7 +36,6 @@ export function ReadingScreen({
     nav: navProp,
     confirming: confirmingProp,
     onConfirmingChange,
-    slot,
 }: ReadingProps): ReactElement {
     const nav = navProp ?? defaultNav(controller)
     const [internal, setInternal] = useState(false)
@@ -74,7 +68,6 @@ export function ReadingScreen({
         controller.cancel()
         nav.back()
     }
-    const composed = slot?.status === 'ready' && !confirming ? slot.screen : null
     const sentence = reading
         ? confirming
             ? 'Stop reading? You can start again.'
@@ -85,7 +78,12 @@ export function ReadingScreen({
     const bar = reading
         ? confirming
             ? {
-                  primary: { label: 'Stop reading', compactLabel: 'Stop', testID: 'stop-reading', onPress: stop },
+                  primary: {
+                      label: 'Stop reading',
+                      compactLabel: 'Stop',
+                      testID: 'stop-reading',
+                      onPress: stop,
+                  },
                   secondary: {
                       label: 'Keep reading',
                       icon: 'check' as const,
@@ -109,38 +107,46 @@ export function ReadingScreen({
                   onPress: read,
                   disabled: state.pending !== null,
               },
-              secondary: { label: 'Back to pages', icon: 'chevronLeft' as const, onPress: nav.back },
+              secondary: {
+                  label: 'Back to pages',
+                  icon: 'chevronLeft' as const,
+                  onPress: nav.back,
+              },
           }
     return (
         <ScreenBody testID="reading-screen">
-            {composed !== null ? (
-                // The document's own figure is the picture; without one the document chose a screen without a picture.
-                <ComposedHero screen={composed} />
-            ) : (
-                <View style={[styles.hero, { height: heroHeight }]}>
-                    {first === undefined ? (
-                        <SkeletonCard />
-                    ) : (
-                        <PageImage
-                            uri={state.pageUris[first.pageId]}
-                            label="First page of your manual"
-                            aspectRatio={first.width / first.height}
-                        />
-                    )}
-                </View>
-            )}
-            <TextRegion>
-                {composed !== null ? (
-                    <GeneratedBody screen={composed} enabled={!reading} pinned />
+            <View
+                style={[
+                    styles.hero,
+                    {
+                        height: heroHeight,
+                    },
+                ]}
+            >
+                {first === undefined ? (
+                    <SkeletonCard />
                 ) : (
-                    <Instruction>{sentence}</Instruction>
+                    <PageImage
+                        uri={state.pageUris[first.pageId]}
+                        label="First page of your manual"
+                        aspectRatio={first.width / first.height}
+                    />
                 )}
+            </View>
+            <TextRegion>
+                <Instruction>{sentence}</Instruction>
                 {reading ? (
                     <Animated.View
                         testID="reading-indicator"
                         accessibilityElementsHidden={true}
                         importantForAccessibility="no-hide-descendants"
-                        style={[styles.indicator, { backgroundColor: colors.accent }, breath]}
+                        style={[
+                            styles.indicator,
+                            {
+                                backgroundColor: colors.accent,
+                            },
+                            breath,
+                        ]}
                     />
                 ) : null}
                 {reading ? <Caption>{READING_CAPTIONS[caption]}</Caption> : null}
@@ -148,12 +154,20 @@ export function ReadingScreen({
                     <Caption>{plainNotice(state.notice)}</Caption>
                 ) : null}
             </TextRegion>
-            <FixedBottomBar {...composeBar(bar, slot, reading || confirming)} />
+            <FixedBottomBar {...bar} />
         </ScreenBody>
     )
 }
-
 const styles = StyleSheet.create({
-    indicator: { width: space.xl, height: space.xxs, borderRadius: radius.pill },
-    hero: { padding: space.md, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+    indicator: {
+        width: space.xl,
+        height: space.xxs,
+        borderRadius: radius.pill,
+    },
+    hero: {
+        padding: space.md,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 })

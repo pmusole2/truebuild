@@ -34,10 +34,7 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { SettingsSections } from './settings-screen'
 import type { WorkflowScreenProps } from './workflow-types'
-import { applyTips, composeBar, GeneratedBody, MoreIntro, ScreenPending } from '../screens/host'
 import { originId, type RenderOrigin } from '../screens/render-origin'
-import type { ScreenSlot } from '../screens/use-screen-slot'
-
 /** Distance the large title takes to collapse into the small header title. */
 export const COLLAPSE_DISTANCE = 56
 
@@ -45,6 +42,7 @@ export const COLLAPSE_DISTANCE = 56
 // Keep the default literal: Reanimated does not capture references used only in a default parameter.
 export function collapseProgress(offset: number, distance: number = 56): number {
     'worklet'
+
     return Math.max(0, Math.min(1, offset / distance))
 }
 
@@ -59,32 +57,51 @@ export function useHomeTitle(resetKey?: string): {
     readonly onCollapsedChange: (collapsed: boolean) => void
 } {
     const scrollY = useSharedValue(0)
-    const [state, setState] = useState({ key: resetKey, collapsed: false })
+    const [state, setState] = useState({
+        key: resetKey,
+        collapsed: false,
+    })
     useEffect(() => {
         scrollY.value = 0
     }, [resetKey, scrollY])
     const onCollapsedChange = useCallback(
-        (collapsed: boolean): void => setState({ key: resetKey, collapsed }),
+        (collapsed: boolean): void =>
+            setState({
+                key: resetKey,
+                collapsed,
+            }),
         [resetKey],
     )
-    return { scrollY, collapsed: state.key === resetKey && state.collapsed, onCollapsedChange }
+    return {
+        scrollY,
+        collapsed: state.key === resetKey && state.collapsed,
+        onCollapsedChange,
+    }
 }
 
 /** Small title that appears in the header as the large one collapses. Android and previews. */
 export function PinnedTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
-    const style = useAnimatedStyle(() => ({ opacity: collapseProgress(scrollY.value) }))
+    const style = useAnimatedStyle(() => ({
+        opacity: collapseProgress(scrollY.value),
+    }))
     return (
         <Animated.View testID="pinned-title" style={style}>
             <Heading numberOfLines={1}>{title}</Heading>
         </Animated.View>
     )
 }
-
 function CollapsingTitle({ scrollY, title }: { scrollY: SharedValue<number>; title: string }): ReactElement {
     const { reduceMotion } = useFeedback()
     const style = useAnimatedStyle(() => {
         const progress = collapseProgress(scrollY.value)
-        return { opacity: 1 - progress, transform: [{ scale: reduceMotion ? 1 : 1 - progress * 0.2 }] }
+        return {
+            opacity: 1 - progress,
+            transform: [
+                {
+                    scale: reduceMotion ? 1 : 1 - progress * 0.2,
+                },
+            ],
+        }
     })
     return (
         <Animated.View testID="collapsing-title" style={[styles.collapsing, style]}>
@@ -116,8 +133,22 @@ function HomeHeading({
     const style = useAnimatedStyle(() => {
         const progress = collapseProgress(scrollY.value, distance)
         return reduceMotion
-            ? { opacity: 1 - progress, transform: [{ scale: 1 }] }
-            : { opacity: 1 - progress, transform: [{ scale: 1 - progress * 0.2 }] }
+            ? {
+                  opacity: 1 - progress,
+                  transform: [
+                      {
+                          scale: 1,
+                      },
+                  ],
+              }
+            : {
+                  opacity: 1 - progress,
+                  transform: [
+                      {
+                          scale: 1 - progress * 0.2,
+                      },
+                  ],
+              }
     })
     return (
         <Animated.View
@@ -129,12 +160,8 @@ function HomeHeading({
         </Animated.View>
     )
 }
-
 type LibraryProps = WorkflowScreenProps &
     ChromeProps & {
-        // The model-composed Home, or undefined for the native one.
-        readonly slot?: ScreenSlot
-        readonly moreSlot?: ScreenSlot
         readonly nav?: ScreenNav
         // 'content' draws "TrueBuild" inside the scroll (Android, previews). 'heading' (iOS) draws "Your builds" there
         // and reports, through onCollapsedChange, when it has scrolled away so the native bar can show its own title.
@@ -142,7 +169,6 @@ type LibraryProps = WorkflowScreenProps &
         readonly scrollY?: SharedValue<number>
         readonly onCollapsedChange?: (collapsed: boolean) => void
     }
-
 const HOME_HEADING = 'Your builds'
 
 /** Why Add manual is unavailable, so a disabled primary action is never unexplained. */
@@ -158,7 +184,6 @@ function addHint(state: WorkflowScreenProps['state']): string | null {
     }
     return null
 }
-
 const PRIMARY_LABEL = {
     pages: 'Add photos',
     overview: 'Answer a few questions',
@@ -167,8 +192,12 @@ const PRIMARY_LABEL = {
 } as const
 
 // Short visible verbs at accessibility text sizes; the full labels above stay as the accessible names.
-const PRIMARY_COMPACT = { pages: 'Add', overview: 'Answer', guide: 'Resume', done: 'Open' } as const
-
+const PRIMARY_COMPACT = {
+    pages: 'Add',
+    overview: 'Answer',
+    guide: 'Resume',
+    done: 'Open',
+} as const
 export function LibraryScreen({
     state,
     controller,
@@ -178,8 +207,6 @@ export function LibraryScreen({
     largeTitle = chrome === 'inline' ? 'content' : 'heading',
     scrollY: scrollYProp,
     onCollapsedChange,
-    slot,
-    moreSlot,
 }: LibraryProps): ReactElement {
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
@@ -215,11 +242,7 @@ export function LibraryScreen({
             ? 'Your saved builds need another try.'
             : plainNotice(state.notice).replace(/ Try again\.$/u, '')
     const empty = !state.loading && !state.storageReadOnly && state.entries.length === 0
-    // The composed Home only ever replaces the intro; loading and a failed library stay native, with their own recovery.
-    const composed = slot?.status === 'ready' && !state.loading && !failed
-    const waiting = slot?.status === 'pending' && !state.loading && !failed
-    // A composed Home lists the builds itself (a library block). One that did not still lets the person open each build.
-    const listed = slot?.status === 'ready' && slot.screen.guarded.body.some((node) => node.type === 'ManualLibrary')
+
     // Most recently touched first; the first one is where "keep building" goes.
     const entries = [...state.entries].sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))
     const sole = entries.length === 1 ? entries[0] : undefined
@@ -233,7 +256,12 @@ export function LibraryScreen({
         reconcileTitle(offset)
     }
     const primary = state.loading
-        ? { label: 'Add manual', compactLabel: 'Add', onPress: addManual, disabled: true }
+        ? {
+              label: 'Add manual',
+              compactLabel: 'Add',
+              onPress: addManual,
+              disabled: true,
+          }
         : failed
           ? {
                 label: 'Try again',
@@ -262,21 +290,22 @@ export function LibraryScreen({
     // The empty Home has no secondary: How it works is in More. A sole manual keeps one quiet Add beside its resume.
     const secondary =
         sole !== undefined && !addDisabled
-            ? { label: 'Add manual', icon: 'plus' as const, onPress: addManual }
+            ? {
+                  label: 'Add manual',
+                  icon: 'plus' as const,
+                  onPress: addManual,
+              }
             : undefined
     // First-run tips: the real Add or resume primary, and the native header's More. Anything working or covering the
     // screen holds them back; the screen's own state is the only source of what to teach.
     const scope = useCoachScope()
     useCoachScreen('home', {
         suppressed: state.loading || state.pending !== null || state.storageReadOnly || failed || more.open,
-        candidates: applyTips(
-            homeCandidates({
-                add: !failed && !addDisabled && sole === undefined,
-                resume: !failed && !addDisabled && sole !== undefined,
-                more: chrome === 'native',
-            }),
-            slot,
-        ),
+        candidates: homeCandidates({
+            add: !failed && !addDisabled && sole === undefined,
+            resume: !failed && !addDisabled && sole !== undefined,
+            more: chrome === 'native',
+        }),
     })
     // The launch entrance plays once, for the first cold start only, after the content is ready. The heading and the
     // content share one timeline; the header and the bottom bar never move.
@@ -297,7 +326,9 @@ export function LibraryScreen({
                     styles.content,
                     empty && !overlay && styles.centred,
                     empty && overlay && styles.fill,
-                    overlay && { paddingBottom: space.md + barHeight },
+                    overlay && {
+                        paddingBottom: space.md + barHeight,
+                    },
                 ]}
                 keyboardShouldPersistTaps="handled"
                 contentInsetAdjustmentBehavior="automatic"
@@ -311,8 +342,8 @@ export function LibraryScreen({
                             scrollY={scrollY}
                             distance={distance}
                             onHeight={setHeadingHeight}
-                            title={composed ? slot.screen.title : HOME_HEADING}
-                            origin={composed ? slot.screen.headerOrigin : undefined}
+                            title={HOME_HEADING}
+                            origin={undefined}
                         />
                     ) : null}
                 </Animated.View>
@@ -324,20 +355,16 @@ export function LibraryScreen({
                         </Card>
                     ) : failed ? (
                         <Instruction>{recoveryCopy}</Instruction>
-                    ) : composed ? (
-                        <GeneratedBody screen={slot.screen} enabled={motionEnabled} />
-                    ) : waiting ? (
-                        <ScreenPending />
                     ) : empty ? (
                         <View style={[styles.hero, overlay && styles.heroCentred]}>
                             <Icon name="image" />
                             <Instruction>Build furniture with step-by-step help.</Instruction>
                         </View>
                     ) : null}
-                    {composed || sole === undefined ? null : (
+                    {sole === undefined ? null : (
                         <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
                     )}
-                    {(!composed || !listed) && entries.length > 1
+                    {entries.length > 1
                         ? entries.map((entry) => (
                               <ManualRow
                                   key={entry.session.manualId}
@@ -350,13 +377,15 @@ export function LibraryScreen({
                 </Animated.View>
             </ScrollView>
             <FixedBottomBar
-                {...composeBar({ primary, secondary }, slot, state.loading || failed)}
-                reason={hint ?? (composed ? slot.screen.barReason : null)}
+                {...{
+                    primary,
+                    secondary,
+                }}
+                reason={hint ?? null}
                 placement={overlay ? 'overlay' : 'flow'}
                 onHeight={overlay ? setBarHeight : undefined}
             />
             <MoreSheet visible={more.open} title="More" onClose={more.hide}>
-                <MoreIntro slot={moreSlot} />
                 <HowItWorks />
                 <SettingsSections state={state} />
                 <ShowTipsAgainRow onClose={more.hide} />
@@ -365,7 +394,6 @@ export function LibraryScreen({
         </ScreenBody>
     )
 }
-
 const THUMB_WIDTH = 64
 
 /**
@@ -390,8 +418,14 @@ function ManualThumb({
             importantForAccessibility="no-hide-descendants"
             style={[
                 styles.thumb,
-                { backgroundColor: colors.surfaceSunken },
-                shown ? { aspectRatio: page.width / page.height } : styles.thumbFallback,
+                {
+                    backgroundColor: colors.surfaceSunken,
+                },
+                shown
+                    ? {
+                          aspectRatio: page.width / page.height,
+                      }
+                    : styles.thumbFallback,
             ]}
         >
             {shown ? (
@@ -441,7 +475,6 @@ export function ContinueCard({
         </Card>
     )
 }
-
 export function ManualRow({
     entry,
     pageUris,
@@ -464,7 +497,9 @@ export function ManualRow({
             <PressMotion
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${entry.session.title}`}
-                accessibilityState={{ disabled }}
+                accessibilityState={{
+                    disabled,
+                }}
                 disabled={disabled}
                 {...focus.focusHandlers}
                 onPress={onOpen}
@@ -489,20 +524,53 @@ export function ManualRow({
         </Card>
     )
 }
-
 const styles = StyleSheet.create({
-    content: { padding: space.md, gap: space.md },
-    centred: { flexGrow: 1, justifyContent: 'center' },
-    fill: { flexGrow: 1 },
-    heroCentred: { flex: 1, justifyContent: 'center' },
-    group: { gap: space.md },
-    groupFill: { flexGrow: 1 },
-    hero: { gap: space.sm, alignItems: 'flex-start' },
-    collapsing: { transformOrigin: 'left center' },
-    summary: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
-    summaryText: { flex: 1 },
-    thumb: { width: THUMB_WIDTH, borderRadius: radius.md, overflow: 'hidden' },
-    thumbFallback: { height: THUMB_WIDTH, alignItems: 'center', justifyContent: 'center' },
+    content: {
+        padding: space.md,
+        gap: space.md,
+    },
+    centred: {
+        flexGrow: 1,
+        justifyContent: 'center',
+    },
+    fill: {
+        flexGrow: 1,
+    },
+    heroCentred: {
+        flex: 1,
+        justifyContent: 'center',
+    },
+    group: {
+        gap: space.md,
+    },
+    groupFill: {
+        flexGrow: 1,
+    },
+    hero: {
+        gap: space.sm,
+        alignItems: 'flex-start',
+    },
+    collapsing: {
+        transformOrigin: 'left center',
+    },
+    summary: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: space.sm,
+    },
+    summaryText: {
+        flex: 1,
+    },
+    thumb: {
+        width: THUMB_WIDTH,
+        borderRadius: radius.md,
+        overflow: 'hidden',
+    },
+    thumbFallback: {
+        height: THUMB_WIDTH,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     row: {
         flexDirection: 'row',
         alignItems: 'center',

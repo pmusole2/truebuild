@@ -24,30 +24,47 @@ import { PageImage } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import type { WorkflowScreenProps } from './workflow-types'
-import { applyTips, composeBar, GeneratedBody, MoreIntro, ScreenPending } from '../screens/host'
-import type { ScreenSlot } from '../screens/use-screen-slot'
-
 const MAX_PAGES = 20
 
 // Common reading languages by name; the codes are the ones the reader already accepts.
 const LANGUAGES = [
-    { value: 'en', label: 'English' },
-    { value: 'es', label: 'Spanish' },
-    { value: 'fr', label: 'French' },
-    { value: 'de', label: 'German' },
-    { value: 'pt-BR', label: 'Portuguese' },
+    {
+        value: 'en',
+        label: 'English',
+    },
+    {
+        value: 'es',
+        label: 'Spanish',
+    },
+    {
+        value: 'fr',
+        label: 'French',
+    },
+    {
+        value: 'de',
+        label: 'German',
+    },
+    {
+        value: 'pt-BR',
+        label: 'Portuguese',
+    },
 ] as const
-
 export type PagesScreenProps = WorkflowScreenProps &
     ChromeProps & {
         entry: LibraryEntry
         choosePages: (replaceIndex?: number) => void
-        // The model-composed screen, or undefined for the native one.
-        readonly slot?: ScreenSlot
-        readonly moreSlot?: ScreenSlot
     }
-
-type Sheet = { kind: 'page'; pageId: string } | { kind: 'add' } | { kind: 'settings' }
+type Sheet =
+    | {
+          kind: 'page'
+          pageId: string
+      }
+    | {
+          kind: 'add'
+      }
+    | {
+          kind: 'settings'
+      }
 
 /** Add manual: photograph every page, then read. One primary, one quiet secondary; page tools live in More. */
 export function PagesScreen({
@@ -57,35 +74,29 @@ export function PagesScreen({
     choosePages,
     chrome = 'inline',
     more: moreProp,
-    slot,
-    moreSlot,
 }: PagesScreenProps): ReactElement {
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
     const [title, setTitle] = useState(entry.session.title)
     const [language, setLanguage] = useState('en')
-    const [sheet, setSheet] = useState<Sheet>({ kind: 'settings' })
+    const [sheet, setSheet] = useState<Sheet>({
+        kind: 'settings',
+    })
     const { pages } = entry.session
     const initialPages = useRef(new Set(pages.map((page) => page.pageId)))
     const busy = state.pending !== null || state.storageReadOnly
     const full = pages.length >= MAX_PAGES
     const saving =
         state.pending !== null && /^(Choosing manual pages|Preparing page |Saving manual pages)/u.test(state.pending)
-    // Pages still being saved wait as placeholders; a composed gallery leaves them out until they have landed.
-    const arriving = new Set(
-        saving ? pages.filter((page) => !initialPages.current.has(page.pageId)).map((page) => page.pageId) : [],
-    )
-    const composed = slot?.status === 'ready'
-    // A composed Add screen shows the pages in its gallery block; one that left the gallery out still lists them.
-    const galleryShown =
-        slot?.status === 'ready' && slot.screen.guarded.body.some((node) => node.type === 'PageGallery')
     const previewPage = sheet.kind === 'page' ? pages.find((page) => page.pageId === sheet.pageId) : undefined
     const previewIndex = previewPage === undefined ? -1 : pages.indexOf(previewPage)
     // The header's More button opens the general sheet; a tapped page or "Add a page" asks for its own.
     const requested = useRef(false)
     useEffect(() => {
         if (more.open && !requested.current) {
-            setSheet({ kind: 'settings' })
+            setSheet({
+                kind: 'settings',
+            })
         }
         requested.current = false
     }, [more.open])
@@ -97,14 +108,21 @@ export function PagesScreen({
     const close = (): void => more.hide()
     const takePhoto = (): void => {
         close()
-        controller.camera({ kind: 'page' })
+        controller.camera({
+            kind: 'page',
+        })
     }
     const choose = (): void => {
         close()
         choosePages()
     }
     const primary = saving
-        ? { label: 'Adding photos…', compactLabel: 'Adding', busy: true, onPress: (): void => undefined }
+        ? {
+              label: 'Adding photos…',
+              compactLabel: 'Adding',
+              busy: true,
+              onPress: (): void => undefined,
+          }
         : pages.length === 0
           ? {
                 label: 'Take photo',
@@ -126,7 +144,12 @@ export function PagesScreen({
                 },
             }
     const secondary = saving
-        ? { label: 'Cancel', icon: 'close' as const, testID: 'cancel-page-import', onPress: controller.cancel }
+        ? {
+              label: 'Cancel',
+              icon: 'close' as const,
+              testID: 'cancel-page-import',
+              onPress: controller.cancel,
+          }
         : pages.length === 0
           ? {
                 label: 'Choose from photos',
@@ -140,19 +163,19 @@ export function PagesScreen({
                 label: 'Add a page',
                 icon: 'plus' as const,
                 testID: 'add-page',
-                onPress: (): void => open({ kind: 'add' }),
+                onPress: (): void =>
+                    open({
+                        kind: 'add',
+                    }),
                 disabled: busy || full,
             }
     useCoachScreen('pages', {
         suppressed: busy || more.open,
-        candidates: applyTips(
-            pagesCandidates({
-                pages: pages.length,
-                open: !saving && !full,
-                canRead: !saving && pages.length >= 1,
-            }),
-            slot,
-        ),
+        candidates: pagesCandidates({
+            pages: pages.length,
+            open: !saving && !full,
+            canRead: !saving && pages.length >= 1,
+        }),
     })
     const scope = useCoachScope()
     const attention = useCoachAttention()
@@ -163,61 +186,63 @@ export function PagesScreen({
                 <InlineHeader
                     title="Add manual"
                     subtitle={pages.length === 0 ? undefined : `Page ${pages.length} of up to ${MAX_PAGES}`}
-                    more={{ ...more, show: () => open({ kind: 'settings' }) }}
+                    more={{
+                        ...more,
+                        show: () =>
+                            open({
+                                kind: 'settings',
+                            }),
+                    }}
                 />
             ) : null}
             <Animated.View style={[styles.flex, entrance]}>
                 <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
                     <PlainNotice state={state} controller={controller} />
-                    {slot?.status === 'ready' ? (
-                        <GeneratedBody
-                            screen={slot.screen}
-                            enabled={state.pending === null && !more.open}
-                            live={{ pages: { open: (pageId): void => open({ kind: 'page', pageId }), arriving } }}
-                        />
-                    ) : slot?.status === 'pending' ? (
-                        <ScreenPending />
-                    ) : (
-                        <>
-                            {pages.length === 0 ? <Icon name="camera" /> : null}
-                            <Instruction>
-                                {pages.length === 0
-                                    ? 'Take a photo of each page of your paper manual.'
-                                    : 'Add every page, even the parts list.'}
-                            </Instruction>
-                        </>
-                    )}
+                    <>
+                        {pages.length === 0 ? <Icon name="camera" /> : null}
+                        <Instruction>
+                            {pages.length === 0
+                                ? 'Take a photo of each page of your paper manual.'
+                                : 'Add every page, even the parts list.'}
+                        </Instruction>
+                    </>
                     {pages.length > MAX_PARSE_PAGES ? (
                         <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
                     ) : null}
-                    {composed && galleryShown
-                        ? null
-                        : pages.map((page, index) => (
-                              <PageArrival
-                                  key={page.pageId}
-                                  waiting={saving && !initialPages.current.has(page.pageId)}
-                                  animate={
-                                      !initialPages.current.has(page.pageId) &&
-                                      scope.active &&
-                                      !attention &&
-                                      !more.open &&
-                                      state.pending === null
-                                  }
-                              >
-                                  <PageRow
-                                      index={index}
-                                      uri={state.pageUris[page.pageId]}
-                                      aspectRatio={page.width / page.height}
-                                      onPress={(): void => open({ kind: 'page', pageId: page.pageId })}
-                                  />
-                              </PageArrival>
-                          ))}
+                    {pages.map((page, index) => (
+                        <PageArrival
+                            key={page.pageId}
+                            waiting={saving && !initialPages.current.has(page.pageId)}
+                            animate={
+                                !initialPages.current.has(page.pageId) &&
+                                scope.active &&
+                                !attention &&
+                                !more.open &&
+                                state.pending === null
+                            }
+                        >
+                            <PageRow
+                                index={index}
+                                uri={state.pageUris[page.pageId]}
+                                aspectRatio={page.width / page.height}
+                                onPress={(): void =>
+                                    open({
+                                        kind: 'page',
+                                        pageId: page.pageId,
+                                    })
+                                }
+                            />
+                        </PageArrival>
+                    ))}
                     {saving ? <SkeletonCard /> : null}
                 </ScrollView>
             </Animated.View>
             <FixedBottomBar
-                {...composeBar({ primary, secondary }, slot, saving || state.storageReadOnly)}
-                reason={slot?.status === 'ready' && !saving ? slot.screen.barReason : null}
+                {...{
+                    primary,
+                    secondary,
+                }}
+                reason={null}
             />
             <MoreSheet
                 visible={more.open}
@@ -261,7 +286,6 @@ export function PagesScreen({
                     </Stack>
                 ) : (
                     <Stack gap="md">
-                        <MoreIntro slot={moreSlot} />
                         <Caption>{`You can add up to ${MAX_PAGES} pages.`}</Caption>
                         <TextField
                             label="Name this build"
@@ -303,7 +327,6 @@ export function PagesScreen({
         </ScreenBody>
     )
 }
-
 function PageTools({
     index,
     count,
@@ -329,7 +352,10 @@ function PageTools({
                 disabled={busy}
                 onPress={(): void => {
                     onDone()
-                    controller.camera({ kind: 'page', replaceIndex: index })
+                    controller.camera({
+                        kind: 'page',
+                        replaceIndex: index,
+                    })
                 }}
             />
             <AppButton
@@ -388,7 +414,6 @@ function PageArrival({
 }): ReactElement {
     return waiting ? <SkeletonCard /> : <PageArrivalContent animate={animate}>{children}</PageArrivalContent>
 }
-
 function PageArrivalContent({
     animate,
     children,
@@ -399,7 +424,6 @@ function PageArrivalContent({
     const entrance = useLoadEntrance(animate)
     return <Animated.View style={entrance}>{children}</Animated.View>
 }
-
 export function PageRow({
     index,
     uri,
@@ -413,7 +437,6 @@ export function PageRow({
     aspectRatio: number
     onPress: () => void
     nativeID?: string
-    /** A composed gallery may leave the number to the picture's own label. */
     numbered?: boolean
 }): ReactElement {
     const { colors } = useTheme()
@@ -436,11 +459,25 @@ export function PageRow({
         </Card>
     )
 }
-
 const styles = StyleSheet.create({
-    flex: { flex: 1, minHeight: 0 },
-    content: { padding: space.md, gap: space.md },
-    pageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: touchTarget },
-    thumb: { width: 96 },
-    pageInfo: { flex: 1 },
+    flex: {
+        flex: 1,
+        minHeight: 0,
+    },
+    content: {
+        padding: space.md,
+        gap: space.md,
+    },
+    pageRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        minHeight: touchTarget,
+    },
+    thumb: {
+        width: 96,
+    },
+    pageInfo: {
+        flex: 1,
+    },
 })
