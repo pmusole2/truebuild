@@ -56,9 +56,16 @@ test('a complete document owns the frame; off stays local and full publishes hon
     const firstDocument =
         mode !== 'off'
             ? page
-                  .waitForResponse(
-                      (response) => response.url() === `${API}/api/screens/v2` && response.status() === 200,
-                  )
+                  .waitForResponse(async (response) => {
+                      if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                      const published = screensV2ResultSchema.parse(await response.json())
+                      return (
+                          published.status === 'ok' &&
+                          [published.value.document, ...published.value.documents].some(
+                              (document) => document?.metadata.source === 'generated',
+                          )
+                      )
+                  })
                   .then((response) => response.json())
             : null
     await page.goto('/')
@@ -66,15 +73,22 @@ test('a complete document owns the frame; off stays local and full publishes hon
     await prepareGuide(page, true)
     if (firstDocument !== null) {
         const published = screensV2ResultSchema.parse(await firstDocument)
-        expect(published).toMatchObject({
-            status: 'ok',
-            mode: 'fixture',
-            value: {
-                document: {
-                    metadata: { source: 'generated', evidence: 'synthetic-fixture', model: null, effort: null },
-                },
-            },
-        })
+        expect(published).toMatchObject({ status: 'ok', mode: 'fixture' })
+        if (published.status !== 'ok') throw new Error('Expected a published document')
+        expect([published.value.document, ...published.value.documents]).toContainEqual(
+            expect.objectContaining({
+                metadata: expect.objectContaining({
+                    source: 'generated',
+                    evidence: 'synthetic-fixture',
+                    model: null,
+                    effort: null,
+                }),
+            }),
+        )
+        await expect(page.getByTestId('guide-screen')).toHaveAttribute(
+            'id',
+            /(?:^|\|)truebuild-render-origin:generated(?:\||$)/u,
+        )
     }
     await expect(page.getByTestId('guide-screen').getByTestId('bottom-bar')).toHaveCount(1)
     await expect(
