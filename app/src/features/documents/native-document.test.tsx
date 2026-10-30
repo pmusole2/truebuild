@@ -12,6 +12,7 @@ import {
     type ScreenContextInputsV2,
     type ScreenNodeV2,
 } from '@truebuild/contracts'
+import { partSourceRefs } from '../screens/part-source'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider, type HapticPort } from '../../ui/feedback'
 import { DocumentRenderer } from './document-renderer'
@@ -116,6 +117,72 @@ async function setup(
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it('shows freshly parsed facts and parts even when stale reviewed data remains', async () => {
+        const { inputs, bindings } = await setup()
+        const session = manualSessionSchema.parse({
+            ...inputs.session!,
+            reviewStatus: 'unreviewed',
+            rawExtraction: {
+                parts: inputs.session!.parts,
+                steps: inputs.session!.reviewedSteps.map((step) => ({
+                    ...step,
+                    correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+                })),
+                unknowns: [],
+            },
+            parts: inputs.session!.parts.map((part) => ({
+                ...part,
+                name: {
+                    state: 'known',
+                    value: 'Stale reviewed part',
+                    sourceRefs: inputs.session!.pages.map((page) => ({ pageId: page.pageId, region: null })),
+                },
+            })),
+            reviewedSteps: [{ ...inputs.session!.reviewedSteps[0]!, title: 'Stale reviewed instruction' }],
+        })
+        const document = compose(
+            {
+                kind: 'quick-check',
+                session,
+                stepId: null,
+                captureId: null,
+                result: null,
+                failure: null,
+                uiState: { review: { currentQuestion: null, blockers: 0, canConfirm: true } },
+            },
+            [{ type: 'Stepper', binding: 'steps', label: null }],
+        )
+        await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session }} />))
+        expect(screen.getByText('Side panel')).toBeTruthy()
+        expect(screen.getByText('Divider shelf')).toBeTruthy()
+        expect(screen.getByTestId('part-hero-side-panel')).toBeTruthy()
+        expect(screen.getByTestId('part-hero-divider')).toBeTruthy()
+        expect(screen.getByRole('button', { name: inputs.session!.reviewedSteps[1]!.title })).toBeDisabled()
+        expect(screen.queryByText('Stale reviewed instruction')).toBeNull()
+        expect(screen.queryByText('Stale reviewed part')).toBeNull()
+        expect(screen.queryByText(/^×/u)).toBeNull()
+    })
+
+    it('never uses a reviewed-step index to select an unreviewed part quantity citation', async () => {
+        const { inputs } = await setup()
+        const session = manualSessionSchema.parse({
+            ...inputs.session!,
+            reviewStatus: 'unreviewed',
+            rawExtraction: {
+                parts: inputs.session!.parts.map((part) => ({
+                    ...part,
+                    name: { state: 'unknown', reason: 'Unreadable.' },
+                })),
+                steps: inputs.session!.reviewedSteps.map((step) => ({
+                    ...step,
+                    correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+                })),
+                unknowns: [],
+            },
+        })
+        expect(partSourceRefs(session, 'side-panel', 0)).toEqual([])
+    })
+
     it('preserves semantic text roles, selected layout tokens and own-path origins without v1 adaptation', async () => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs, [
@@ -279,6 +346,40 @@ describe('the actual v2 catalog renderer', () => {
         } finally {
             create.mockRestore()
             platform.restore()
+        }
+    })
+
+    it('does not claim a step swipe or change progress for unreviewed facts even if an injected resolver enables capture', async () => {
+        const create = jest.spyOn(PanResponder, 'create')
+        const { inputs, bindings } = await setup()
+        const session = manualSessionSchema.parse({
+            ...inputs.session!,
+            reviewStatus: 'unreviewed',
+            rawExtraction: {
+                parts: inputs.session!.parts,
+                steps: inputs.session!.reviewedSteps.map((step) => ({
+                    ...step,
+                    correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+                })),
+                unknowns: [],
+            },
+        })
+        const step = jest.spyOn(bindings.live!.controller, 'step').mockResolvedValue(undefined)
+        try {
+            await render(
+                wrap(
+                    <DocumentRenderer document={compose({ ...inputs, session })} bindings={{ ...bindings, session }} />,
+                ),
+            )
+            const config = create.mock.calls.find(([candidate]) => candidate.onPanResponderRelease !== undefined)![0]
+            const gesture = { dx: -100, dy: 0, moveX: Dimensions.get('window').width / 2 - 100 } as never
+            const claims = config.onMoveShouldSetPanResponder?.({} as never, gesture)
+            config.onPanResponderRelease?.({} as never, gesture)
+            expect(claims).toBe(false)
+            expect(step).not.toHaveBeenCalled()
+        } finally {
+            create.mockRestore()
+            step.mockRestore()
         }
     })
 

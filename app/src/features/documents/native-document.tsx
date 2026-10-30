@@ -12,6 +12,7 @@ import {
 } from 'react-native'
 import Svg, { Circle } from 'react-native-svg'
 import {
+    screenFacts,
     variantsOfV2,
     type ScreenDocumentV2,
     type ScreenNodeV2,
@@ -79,20 +80,23 @@ export function documentText(document: ScreenDocumentV2, bindings: FrameBindings
     if (bindings.resolveText !== undefined) return bindings.resolveText(ref)
     const entry = bindings.live?.entry
     const session = bindings.session
-    const step = session?.reviewedSteps.find((item) => item.stepId === document.bound.stepId)
+    const facts = screenFacts(session ?? null)
+    const step = facts?.steps.find((item) => item.stepId === document.bound.stepId)
     switch (ref.key) {
         case 'manual-title':
             return session === undefined ? '' : manualDisplayTitle(session)
         case 'step-title':
             return step?.title ?? ''
         case 'step-position':
-            return entry === undefined ? '' : `Step ${entry.stepIndex + 1} of ${session?.reviewedSteps.length ?? 0}`
+            return step === undefined
+                ? ''
+                : `Step ${(facts?.steps.indexOf(step) ?? -1) + 1} of ${facts?.steps.length ?? 0}`
         case 'pages-summary':
             return `${session?.pages.length ?? 0} manual ${(session?.pages.length ?? 0) === 1 ? 'page' : 'pages'}`
         case 'steps-summary':
-            return `${session?.reviewedSteps.length ?? 0} steps`
+            return `${facts?.steps.length ?? 0} steps`
         case 'completion-summary':
-            return `${entry?.completedStepIds.length ?? 0} of ${session?.reviewedSteps.length ?? 0} steps marked done`
+            return `${facts?.reviewed === true ? (entry?.completedStepIds.length ?? 0) : 0} of ${facts?.steps.length ?? 0} steps marked done`
         case 'review-reason':
             return bindings.live?.quick?.current?.reason ?? ''
         case 'review-position':
@@ -144,6 +148,17 @@ type Environment = {
 }
 const marked = (environment: Environment, path: string): string =>
     originId(environment.document.metadata.origins[path] ?? 'fallback')
+
+/** A quantity picture belongs to the document's step, never a different live selection's index. */
+function partRefs(environment: Environment, partId: string): ReturnType<typeof partSourceRefs> {
+    const session = environment.bindings.session
+    if (session === undefined) return []
+    const index =
+        session.reviewStatus === 'reviewed'
+            ? session.reviewedSteps.findIndex((step) => step.stepId === environment.document.bound.stepId)
+            : -1
+    return partSourceRefs(session, partId, index < 0 ? undefined : index)
+}
 
 /** A fact's own citation is rendered with its first visible statement, once per fact identity. */
 function duplicateFactPaths(body: ScreenNodeV2, path: string): Set<string> {
@@ -313,6 +328,7 @@ function ReferenceImage({
             PanResponder.create({
                 onMoveShouldSetPanResponder: (_event, gesture) =>
                     document.kind === 'guide' &&
+                    bindings.session?.reviewStatus === 'reviewed' &&
                     bindings.readOnly !== true &&
                     Math.abs(gesture.dx) > 24 &&
                     Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5 &&
@@ -320,22 +336,29 @@ function ReferenceImage({
                 onPanResponderRelease: (_event, gesture): void => {
                     if (
                         live === null ||
+                        bindings.session?.reviewStatus !== 'reviewed' ||
                         bindings.readOnly === true ||
                         live.state.pending !== null ||
                         live.state.storageReadOnly ||
                         !bindings.resolve({ intent: 'capture', target: 'take-photo' }).enabled
                     )
                         return
-                    const current = live.entry?.stepIndex
-                    if (current === undefined) return
+                    const steps = bindings.session.reviewedSteps
+                    const current = steps.findIndex((step) => step.stepId === document.bound.stepId)
+                    if (
+                        current < 0 ||
+                        live.entry?.session.manualId !== document.bound.manualId ||
+                        live.entry.session.revision !== document.bound.revision ||
+                        live.entry.stepIndex !== current
+                    )
+                        return
                     const next =
                         gesture.dx < -STEP_SWIPE_DISTANCE
                             ? current + 1
                             : gesture.dx > STEP_SWIPE_DISTANCE
                               ? current - 1
                               : null
-                    if (next !== null && next >= 0 && next < (bindings.session?.reviewedSteps.length ?? 0))
-                        void live.controller.step(next)
+                    if (next !== null && next >= 0 && next < steps.length) void live.controller.step(next)
                 },
             }),
         [document.kind, live, width, bindings],
@@ -346,7 +369,7 @@ function ReferenceImage({
             : node.source.kind === 'page'
               ? { pageId: node.source.pageId, region: null }
               : node.source.kind === 'part' && bindings.session !== undefined
-                ? partSourceRefs(bindings.session, node.source.partId, live?.entry?.stepIndex)[0]
+                ? partRefs(environment, node.source.partId)[0]
                 : undefined
     if (source === undefined || bindings.session === undefined) return null
     const content = (
@@ -942,6 +965,8 @@ function NodeContent({
             : null
     const context = contextOf(environment)
     const live = bindings.live
+    const facts = screenFacts(bindings.session ?? null)
+    const targetStep = facts?.steps.find((step) => step.stepId === document.bound.stepId)
     switch (node.type) {
         case 'Stack':
             return (
@@ -1165,12 +1190,14 @@ function NodeContent({
                 return <ReadingProgress environment={environment} label={text(node.label)} mark={mark} />
             const entry = live?.entry
             const pages = node.binding === 'pages'
-            const total = pages ? (bindings.session?.pages.length ?? 0) : (bindings.session?.reviewedSteps.length ?? 0)
+            const total = pages ? (bindings.session?.pages.length ?? 0) : (facts?.steps.length ?? 0)
             const completed = pages
                 ? (bindings.session?.pages.length ?? 0)
                 : node.binding === 'step'
-                  ? (entry?.stepIndex ?? -1) + 1
-                  : (entry?.completedStepIds.length ?? 0)
+                  ? (facts?.steps.findIndex((step) => step.stepId === document.bound.stepId) ?? -1) + 1
+                  : facts?.reviewed === true
+                    ? (entry?.completedStepIds.length ?? 0)
+                    : 0
             return total === 0 ? (
                 <Caption nativeID={mark}>{text(node.label)}</Caption>
             ) : (
@@ -1187,11 +1214,11 @@ function NodeContent({
                 <View nativeID={mark} style={styles.stack}>
                     {node.label === null ? null : <Heading>{text(node.label)}</Heading>}
                     {node.binding === 'steps' && live !== null
-                        ? bindings.session?.reviewedSteps.map((step, index) => (
+                        ? facts?.steps.map((step, index) => (
                               <AppButton
                                   key={step.stepId}
                                   label={step.title}
-                                  variant={live.entry?.stepIndex === index ? 'secondary' : 'quiet'}
+                                  variant={document.bound.stepId === step.stepId ? 'secondary' : 'quiet'}
                                   disabled={
                                       live.state.pending !== null ||
                                       bindings.readOnly === true ||
@@ -1263,25 +1290,25 @@ function NodeContent({
                         ))
                     ) : node.options.binding === 'part-target' &&
                       bindings.session !== undefined &&
+                      facts?.reviewed === true &&
+                      targetStep !== undefined &&
                       live?.entry !== undefined ? (
-                        stepPartChoices(bindings.session, bindings.session.reviewedSteps[live.entry.stepIndex]!).map(
-                            (part) => (
-                                <AppButton
-                                    key={part.partId}
-                                    label={part.label}
-                                    variant={
-                                        live.state.target?.kind === 'part' && live.state.target.partId === part.partId
-                                            ? 'secondary'
-                                            : 'quiet'
-                                    }
-                                    disabled={bindings.readOnly === true || live.state.pending !== null}
-                                    onPress={(): void => {
-                                        if (bindings.readOnly !== true && live.state.pending === null)
-                                            live.controller.targetChanged({ kind: 'part', partId: part.partId })
-                                    }}
-                                />
-                            ),
-                        )
+                        stepPartChoices(bindings.session, targetStep).map((part) => (
+                            <AppButton
+                                key={part.partId}
+                                label={part.label}
+                                variant={
+                                    live.state.target?.kind === 'part' && live.state.target.partId === part.partId
+                                        ? 'secondary'
+                                        : 'quiet'
+                                }
+                                disabled={bindings.readOnly === true || live.state.pending !== null}
+                                onPress={(): void => {
+                                    if (bindings.readOnly !== true && live.state.pending === null)
+                                        live.controller.targetChanged({ kind: 'part', partId: part.partId })
+                                }}
+                            />
+                        ))
                     ) : node.options.mode === 'bound' &&
                       node.options.binding === 'language' &&
                       bindings.language !== undefined ? (
@@ -1352,11 +1379,8 @@ function NodeContent({
                 </View>
             )
         case 'PieceTile': {
-            const part = bindings.session?.parts.find((item) => item.partId === node.partId)
-            const refs =
-                bindings.session === undefined
-                    ? []
-                    : partSourceRefs(bindings.session, node.partId, live?.entry?.stepIndex)
+            const part = facts?.parts.find((item) => item.partId === node.partId)
+            const refs = partRefs(environment, node.partId)
             return part === undefined ? null : (
                 <View nativeID={mark} style={styles.stack}>
                     {refs[0] === undefined || bindings.session === undefined ? null : (
@@ -1370,7 +1394,7 @@ function NodeContent({
                     )}
                     <StatusTag label={part.name.state === 'known' ? part.name.value : 'Part'} />
                     {node.showQuantity
-                        ? bindings.session?.reviewedSteps
+                        ? facts?.steps
                               .find((step) => step.stepId === document.bound.stepId)
                               ?.parts.filter((item) => item.partId === part.partId && item.quantity.state === 'known')
                               .map((item) => (

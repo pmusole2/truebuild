@@ -740,6 +740,9 @@ describe('every other screen is composed from its own document', () => {
         })
         hold = true
         await act(async () => controller.ask())
+        // Answer is a new workflow page: its newly mounted photo must load before its result is revealed.
+        expect(screen.queryByText('The groove faces inward.')).toBeNull()
+        await loadPhoto()
         expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
         const heldPhoto = controller.getSnapshot().capture?.binding.captureId
@@ -750,6 +753,7 @@ describe('every other screen is composed from its own document', () => {
         await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
         expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)
         await press('Back to the guide')
+        await loadPhoto()
         expect((await screen.findAllByText('Looks right')).length).toBeGreaterThan(0)
         expect(controller.getSnapshot().answer?.answer).toBe('The groove faces inward.')
         expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)

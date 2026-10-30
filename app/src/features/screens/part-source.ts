@@ -1,4 +1,5 @@
 import type { ManualSession, SourceRef } from '@truebuild/contracts'
+import { screenFacts } from '@truebuild/contracts'
 
 /**
  * The manual's own citations for one part: where its name is printed, else where this step's count for it is. These are
@@ -7,11 +8,12 @@ import type { ManualSession, SourceRef } from '@truebuild/contracts'
  */
 export function partSourceRefs(session: ManualSession, partId: string, stepIndex: number | undefined): SourceRef[] {
     const pages = new Set(session.pages.map((page) => page.pageId))
-    const named = session.parts.find((part) => part.partId === partId)?.name
+    const facts = screenFacts(session)
+    const named = facts?.parts.find((part) => part.partId === partId)?.name
     const counted =
-        stepIndex === undefined
+        stepIndex === undefined || facts?.reviewed !== true
             ? undefined
-            : session.reviewedSteps[stepIndex]?.parts.find((part) => part.partId === partId)?.quantity
+            : facts?.steps[stepIndex]?.parts.find((part) => part.partId === partId)?.quantity
     const refs = named?.state === 'known' ? named.sourceRefs : counted?.state === 'known' ? counted.sourceRefs : []
     return refs.filter((ref) => pages.has(ref.pageId)).map((ref) => ({ pageId: ref.pageId, region: ref.region }))
 }
