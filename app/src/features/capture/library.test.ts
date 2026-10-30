@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient } from '../../api/model-client'
 import { CaptureController } from './controller'
@@ -23,6 +23,14 @@ const digest = async (bytes: Uint8Array): Promise<string> => {
     return [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, '0')).join('')
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => {
+        resolve = done
+    })
+    return { promise, resolve }
+}
+
 async function entry(): Promise<Parameters<LibraryStorage['save']>[0][number]> {
     const session = createDemoManual()
     const bytes = new Uint8Array([1, 4, 9])
@@ -31,6 +39,92 @@ async function entry(): Promise<Parameters<LibraryStorage['save']>[0][number]> {
 }
 
 describe('durable manual library', () => {
+    it('retains a retired asset until every pending verified read settles, then removes its chunks', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        const bytes = new Uint8Array([1, 4, 9])
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+        const chunk = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+        const get = kv.getItem.bind(kv)
+        const gates = [deferred(), deferred()]
+        let entered = 0
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunk && entered < gates.length) await gates[entered++]!.promise
+            return get(key)
+        })
+        const first = store.readAsset(manual.session.pages[0]!)
+        const second = store.readAsset(manual.session.pages[0]!)
+        try {
+            expect(entered).toBe(2)
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            gates[0]!.resolve()
+            await expect(first).resolves.toEqual(bytes)
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            gates[1]!.resolve()
+            await expect(second).resolves.toEqual(bytes)
+            await vi.waitFor(() => expect(kv.data.has(chunk)).toBe(false))
+            await expect(store.save([])).resolves.toBeUndefined()
+            expect((await new LibraryStorage(kv, digest).restore()).readOnly).toBe(false)
+        } finally {
+            for (const gate of gates) gate.resolve()
+            await Promise.allSettled([first, second])
+        }
+    })
+
+    it('queues released-lease cleanup behind a re-reference commit and rechecks the current registry', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        const bytes = new Uint8Array([1, 4, 9])
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+        const chunk = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+        const get = kv.getItem.bind(kv)
+        const set = kv.setItem.bind(kv)
+        const readGate = deferred()
+        const writeGate = deferred()
+        const writingManifest = deferred()
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunk) await readGate.promise
+            return get(key)
+        })
+        const reading = store.readAsset(manual.session.pages[0]!)
+        let rereferencing: Promise<void> | undefined
+        const remove = vi.spyOn(kv, 'removeItem')
+        try {
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            vi.spyOn(kv, 'setItem').mockImplementation(async (key, value) => {
+                if (key === 'truebuild/library/v1') {
+                    writingManifest.resolve()
+                    await writeGate.promise
+                }
+                await set(key, value)
+            })
+            rereferencing = store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+            await writingManifest.promise
+            readGate.resolve()
+            // A read must settle without awaiting cleanup queued behind this blocked commit.
+            await expect(reading).resolves.toEqual(bytes)
+            expect(kv.data.has(chunk)).toBe(true)
+            expect(remove).not.toHaveBeenCalledWith(chunk)
+            writeGate.resolve()
+            await rereferencing
+            await store.save([manual])
+            expect(remove).not.toHaveBeenCalledWith(chunk)
+            await expect(store.readAsset(manual.session.pages[0]!)).resolves.toEqual(bytes)
+            const restored = await new LibraryStorage(kv, digest).restore()
+            expect(restored.readOnly).toBe(false)
+            expect(restored.entries).toEqual([manual])
+        } finally {
+            readGate.resolve()
+            writeGate.resolve()
+            await Promise.allSettled([reading, ...(rereferencing === undefined ? [] : [rereferencing])])
+        }
+    })
+
     it('starts empty and restores usable bytes with metadata after a new storage instance', async () => {
         const kv = memory()
         const first = new LibraryStorage(kv, digest)
