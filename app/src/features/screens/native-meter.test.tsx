@@ -6,6 +6,7 @@ import { usePathname } from 'expo-router'
 import { MeterRootsContext, useMeterRoot, type MeterRootKind, type MeterRootSelection } from '../../ui/meter-roots'
 import { MeterTriggers, NativeMeterProvider, screenOfPath, useMeterReading, type MeterReading } from './native-meter'
 import type { NativeHostNode, NativeHostRoot } from './native-host-meter'
+import { decodeNativeCheckpointLines } from './native-meter-log'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
 import { entry, runtime } from './test-support/route-harness'
 
@@ -206,7 +207,7 @@ describe('the device host meter wiring', () => {
         expect(latest?.scope).toContain('registered documents')
         expect(reading.current?.snapshot?.stale).toBe(false)
         expect(reading.current?.session).toMatchObject({ status: 'measured', sampleCount: 1 })
-        const events = log.mock.calls.map(([value]) => JSON.parse(String(value)) as Record<string, unknown>)
+        const events = decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))
         expect(events).toContainEqual(
             expect.objectContaining({
                 event: 'render_origin_checkpoint',
@@ -311,9 +312,7 @@ describe('the device host meter wiring', () => {
             status: 'measured',
             counts: { generated: 0, fallback: 2, shell: 2, total: 4 },
         })
-        const events = log.mock.calls.map(
-            ([value]) => JSON.parse(String(value)) as { methods?: unknown; session?: { methods?: unknown } },
-        )
+        const events = decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))
         expect(events.at(-1)).toMatchObject({
             methods: {
                 allMounted: {
@@ -322,17 +321,14 @@ describe('the device host meter wiring', () => {
                 },
                 focusedVisible: { method: 'focused-visible-native-hosts', counts: { total: 4 } },
             },
-            session: {
-                methods: {
-                    focusedVisible: {
-                        routes: [
-                            { route: 'home', counts: { total: 3 } },
-                            { route: 'guide', counts: { total: 4 } },
-                        ],
-                    },
-                },
-            },
         })
+        // Full session route accounting remains in memory; logs retain exact checkpoint methods without repeating it.
+        expect(reading.current?.session?.methods.focusedVisible.routes).toMatchObject([
+            { route: 'home', counts: { total: 3 } },
+            { route: 'guide', counts: { total: 4 } },
+        ])
+        expect(events.at(-1)?.session).not.toHaveProperty('methods')
+        expect(events.at(-1)?.session).not.toHaveProperty('routes')
         await view.unmount()
         log.mockRestore()
     })
