@@ -197,7 +197,9 @@ test('an unknown critical fact is asked as one honest question and blocks starti
     await expect(page.getByTestId('quick-check-editor')).toBeVisible({ timeout: 60_000 })
     await expect(page.getByText('Question 1 of 1', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('The manual says: Arrow is not visible in the photo.', { exact: true })).toBeVisible()
-    await expect(page.getByTestId('quick-check-start')).toBeDisabled()
+    // An unresolved critical fact earns a safe exit, never a start action.
+    await expect(page.getByTestId('quick-check-start')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Back to pages', exact: true })).toBeEnabled()
     // The authored FactEditor now presents the one unresolved detail directly, with its cited picture.
     await expect(page.getByRole('img', { name: 'Picture from your manual' }).first()).toBeVisible()
     await page.getByLabel('Orientation', { exact: true }).fill('The groove faces inward.')
