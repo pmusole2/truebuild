@@ -698,3 +698,42 @@ it('the actual More and nested judge entry publish document owners while their M
     await fireEvent.press(screen.getByTestId('close-sheet'))
     await waitFor(() => check(0))
 })
+
+it('dismisses both real sheets for Compare even when navigation keeps their parent mounted', async () => {
+    await runtime([entry()])
+    await mount()
+    await press('Keep building')
+    await press('More')
+    await fireEvent.press(screen.getByTestId('judge-entry'))
+    await fireEvent.press(await screen.findByRole('switch', { name: 'Show how Meta AI built this' }))
+    const modalCount = (): number =>
+        screen.container.queryAll(() => true).filter((host) => (host as unknown as OwnershipTree).type === 'Modal')
+            .length
+    await waitFor(() => expect(modalCount()).toBe(2))
+    const push = jest.spyOn(router, 'push').mockImplementation(() => undefined)
+    try {
+        await fireEvent.press(await screen.findByTestId('judge-compare'))
+        expect(push).toHaveBeenCalledWith('/compare')
+        await waitFor(() => expect(modalCount()).toBe(0))
+    } finally {
+        push.mockRestore()
+    }
+})
+
+it('the main document ends a failed manual picture read instead of keeping a loading figure', async () => {
+    const { controller, storage, calls } = await runtime([entry()])
+    await mount()
+    await press('Keep building')
+    const read = jest.spyOn(storage, 'readAsset').mockRejectedValue(new Error('Synthetic local read failure'))
+    try {
+        await act(async () => controller.open('navigation-manual', 'guide'))
+        await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
+        expect(await screen.findByText('This manual picture is unavailable.')).toBeTruthy()
+        await fireEvent.press((await screen.findAllByRole('button', { name: 'See it in the manual' }))[0]!)
+        expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
+        expect(screen.queryByText('Loading page…')).toBeNull()
+        expect(calls).toHaveLength(0)
+    } finally {
+        read.mockRestore()
+    }
+})

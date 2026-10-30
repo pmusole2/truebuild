@@ -14,6 +14,8 @@ import Svg, { Circle } from 'react-native-svg'
 import {
     screenFacts,
     variantsOfV2,
+    type CheckResult,
+    type QuestionResult,
     type ScreenDocumentV2,
     type ScreenNodeV2,
     type ScreenVariantV2,
@@ -160,22 +162,106 @@ function partRefs(environment: Environment, partId: string): ReturnType<typeof p
     return partSourceRefs(session, partId, index < 0 ? undefined : index)
 }
 
+/** A result is visible only with its resolved reusable photo and the document's exact held text witness. */
+function heldResultForDocument(
+    document: ScreenDocumentV2,
+    bindings: FrameBindings,
+    kind: 'check' | 'question',
+    photoLoaded: boolean,
+): CheckResult | QuestionResult | null {
+    const result = kind === 'check' ? bindings.live?.state.check : bindings.live?.state.answer
+    const id = kind === 'check' ? 'result:verdict' : 'result:answer'
+    return result != null &&
+        document.requirements.capture &&
+        bindings.capture?.reusable === true &&
+        photoLoaded &&
+        document.facts.some(
+            (fact) =>
+                fact.factId === id &&
+                fact.basis === 'result' &&
+                fact.text === ('reason' in result ? result.reason : result.answer),
+        )
+        ? result
+        : null
+}
+
 /** A fact's own citation is rendered with its first visible statement, once per fact identity. */
-function duplicateFactPaths(body: ScreenNodeV2, path: string): Set<string> {
+function duplicateFactPaths(
+    document: ScreenDocumentV2,
+    bindings: FrameBindings,
+    photoLoaded: boolean,
+    body: ScreenNodeV2,
+    path: string,
+): Set<string> {
     const seen = new Set<string>()
+    const citationsByFact = new Map<string, Set<number>>()
+    const resultText = new Map<string, { refs: Set<string>; indexes: Set<number> }>()
+    const key = (ref: ScreenDocumentV2['sources'][number]): string =>
+        JSON.stringify([
+            ref.pageId,
+            ref.region === null ? null : [ref.region.x, ref.region.y, ref.region.width, ref.region.height],
+        ])
+    const collectResults = (node: ScreenNodeV2, at: string): void => {
+        if (node.type === 'Section' && node.collapsible && !node.initiallyOpen && !containsSafety(node, document))
+            return
+        if (
+            node.type === 'VerdictCard' &&
+            node.showReason &&
+            heldResultForDocument(document, bindings, node.result, photoLoaded) !== null
+        ) {
+            const fact = document.facts.find(
+                (item) => item.factId === (node.result === 'check' ? 'result:verdict' : 'result:answer'),
+            )
+            if (fact !== undefined) {
+                const sources = resultText.get(fact.text) ?? { refs: new Set<string>(), indexes: new Set<number>() }
+                for (const index of document.metadata.sourceMap[at] ?? []) {
+                    const source = document.sources[index]
+                    if (source !== undefined) {
+                        sources.refs.add(key(source))
+                        sources.indexes.add(index)
+                    }
+                }
+                resultText.set(fact.text, sources)
+            }
+        }
+        if ('children' in node) node.children.forEach((child, index) => collectResults(child, `${at}.${index}`))
+    }
+    collectResults(body, path)
     const omitted = new Set<string>()
     const visit = (node: ScreenNodeV2, at: string): void => {
         if (!('children' in node)) return
-        if (node.type === 'Section' && node.collapsible && !node.initiallyOpen) return
+        if (node.type === 'Section' && node.collapsible && !node.initiallyOpen && !containsSafety(node, document))
+            return
         let repeatedFact = false
+        let currentFact: string | null = null
         node.children.forEach((child, index) => {
             const next = `${at}.${index}`
             if (child.type === 'Text' && child.content.kind === 'fact') {
-                repeatedFact = seen.has(child.content.factId)
+                const id = child.content.factId
+                currentFact = id
+                const fact = document.facts.find((item) => item.factId === id)
+                const resultSources = fact === undefined ? undefined : resultText.get(fact.text)
+                const sameCitedResult =
+                    fact !== undefined &&
+                    fact.basis !== 'safety-note' &&
+                    fact.sourceRefs.length > 0 &&
+                    resultSources !== undefined &&
+                    new Set(fact.sourceRefs.map(key)).size === resultSources.refs.size &&
+                    fact.sourceRefs.every((ref) => resultSources.refs.has(key(ref)))
+                if (sameCitedResult && resultSources !== undefined)
+                    citationsByFact.set(id, new Set(resultSources.indexes))
+                repeatedFact = seen.has(id) || sameCitedResult
                 if (repeatedFact) omitted.add(next)
-                else seen.add(child.content.factId)
-            } else if (child.type === 'Citation' && repeatedFact) omitted.add(next)
-            else repeatedFact = false
+                else seen.add(id)
+            } else if (child.type === 'Citation' && currentFact !== null) {
+                const cited = citationsByFact.get(currentFact) ?? new Set<number>()
+                if (repeatedFact && child.sources.every((source) => cited.has(source))) omitted.add(next)
+                else child.sources.forEach((source) => cited.add(source))
+                citationsByFact.set(currentFact, cited)
+            } else {
+                repeatedFact = false
+                currentFact = null
+            }
             visit(child, next)
         })
     }
@@ -311,6 +397,29 @@ function Action({
     )
 }
 
+function manualImageSource(
+    node: Extract<ScreenNodeV2, { type: 'Image' }>,
+    environment: Environment,
+): ScreenDocumentV2['sources'][number] | undefined {
+    return node.source.kind === 'source'
+        ? environment.document.sources[node.source.index]
+        : node.source.kind === 'page'
+          ? { pageId: node.source.pageId, region: null }
+          : node.source.kind === 'part' && environment.bindings.session !== undefined
+            ? partRefs(environment, node.source.partId)[0]
+            : undefined
+}
+function unavailableManualImage(node: Extract<ScreenNodeV2, { type: 'Image' }>, environment: Environment): boolean {
+    const source = manualImageSource(node, environment)
+    const { bindings } = environment
+    return (
+        source !== undefined &&
+        bindings.session !== undefined &&
+        typeof bindings.pageUris[source.pageId] !== 'string' &&
+        (bindings.pageImageStatus === 'ready' || bindings.pageImageStatus === 'unavailable')
+    )
+}
+
 function ReferenceImage({
     node,
     environment,
@@ -363,15 +472,14 @@ function ReferenceImage({
             }),
         [document.kind, live, width, bindings],
     )
-    const source =
-        node.source.kind === 'source'
-            ? document.sources[node.source.index]
-            : node.source.kind === 'page'
-              ? { pageId: node.source.pageId, region: null }
-              : node.source.kind === 'part' && bindings.session !== undefined
-                ? partRefs(environment, node.source.partId)[0]
-                : undefined
+    const source = manualImageSource(node, environment)
     if (source === undefined || bindings.session === undefined) return null
+    if (unavailableManualImage(node, environment))
+        return (
+            <View nativeID={originId('fallback')}>
+                <Caption>This manual picture is unavailable.</Caption>
+            </View>
+        )
     const content = (
         <View
             nativeID={marked(environment, path)}
@@ -618,13 +726,31 @@ function Sources({
         return source === undefined ? [] : [source]
     })
     if (refs.length === 0) return null
+    const pictures = (fit: 'page' | 'frame'): ReactNode =>
+        refs.map((ref, index) =>
+            typeof environment.bindings.pageUris[ref.pageId] !== 'string' &&
+            (environment.bindings.pageImageStatus === 'ready' ||
+                environment.bindings.pageImageStatus === 'unavailable') ? (
+                <View key={index} nativeID={originId('fallback')}>
+                    <Caption>This manual picture is unavailable.</Caption>
+                </View>
+            ) : (
+                <SourceDiagrams
+                    key={index}
+                    refs={[ref]}
+                    session={session}
+                    pageUris={environment.bindings.pageUris}
+                    fit={fit}
+                />
+            ),
+        )
     if (node.type === 'Citation' && node.display === 'thumbnail')
         return (
             <View nativeID={marked(environment, path)} style={styles.stack}>
                 {node.label === null ? null : (
                     <Caption>{documentText(environment.document, environment.bindings, node.label)}</Caption>
                 )}
-                <SourceDiagrams refs={refs} session={session} pageUris={environment.bindings.pageUris} fit="page" />
+                {pictures('page')}
             </View>
         )
     return (
@@ -633,12 +759,7 @@ function Sources({
             initiallyOpen={node.type === 'ManualPage' && node.initiallyOpen}
             mark={marked(environment, path)}
         >
-            <SourceDiagrams
-                refs={refs}
-                session={session}
-                pageUris={environment.bindings.pageUris}
-                fit={node.type === 'ManualPage' && node.fit === 'cover' ? 'frame' : 'page'}
-            />
+            {pictures(node.type === 'ManualPage' && node.fit === 'cover' ? 'frame' : 'page')}
         </Disclosure>
     )
 }
@@ -654,20 +775,8 @@ function Verdict({
     path: string
 }): ReactElement | null {
     const { document, bindings } = environment
-    const live = bindings.live
-    const result = node.result === 'check' ? live?.state.check : live?.state.answer
-    const resultFactId = node.result === 'check' ? 'result:verdict' : 'result:answer'
-    const visible =
-        result != null &&
-        document.requirements.capture &&
-        bindings.capture?.reusable === true &&
-        environment.photoLoaded &&
-        document.facts.some(
-            (fact) =>
-                fact.factId === resultFactId &&
-                fact.basis === 'result' &&
-                fact.text === ('reason' in result ? result.reason : result.answer),
-        )
+    const result = heldResultForDocument(document, bindings, node.result, environment.photoLoaded)
+    const visible = result !== null
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const { hapticOnce } = useFeedback()
@@ -816,7 +925,7 @@ function Judge({
     if (panel === 'about-check')
         return (
             <View nativeID={mark}>
-                <CompareManualsRow />
+                <CompareManualsRow onOpen={environment.bindings.closeOverlays} />
             </View>
         )
     if (!judge.showBuilt) return null
@@ -842,7 +951,7 @@ function Judge({
                       ? 'Composed by Meta AI'
                       : 'App fallback composition'}
             </Caption>
-            <Caption>{`UI count: ${meter.snapshot?.latest?.status === 'measured' ? `${(meter.snapshot.latest.generatedShare * 100).toFixed(1)}%${meter.snapshot.stale ? ' (screen changed)' : ''}` : 'Not recorded'} · session ${meter.session?.status === 'measured' ? `${(meter.session.generatedShare * 100).toFixed(1)}%` : 'Not recorded'}`}</Caption>
+            <Caption>{`App UI now: ${meter.snapshot?.latest?.status === 'measured' ? `${(meter.snapshot.latest.generatedShare * 100).toFixed(1)}%${meter.snapshot.stale ? ' (screen changed)' : ''}` : 'Not recorded'} · session ${meter.session?.status === 'measured' ? `${(meter.session.generatedShare * 100).toFixed(1)}% across ${meter.session.sampleCount} checkpoints` : 'Not recorded'}`}</Caption>
             <AppButton
                 label={details ? 'Hide details' : 'Details'}
                 testID="judge-summary-details"
@@ -853,25 +962,35 @@ function Judge({
                 <View testID="judge-details" style={styles.stack}>
                     <Caption>{`Source: ${metadata.source}`}</Caption>
                     <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture · no model call' : metadata.evidence}`}</Caption>
-                    <Caption>{`Model: ${metadata.evidence === 'synthetic-fixture' ? 'Not recorded' : (metadata.model ?? 'Not recorded')}`}</Caption>
-                    <Caption>{`Effort: ${metadata.evidence === 'synthetic-fixture' ? 'Not recorded' : (metadata.effort ?? 'Not recorded')}`}</Caption>
-                    {Object.entries(metadata.timing).map(([key, value]) => (
-                        <Caption
-                            key={key}
-                        >{`${TIMING_LABELS[key as keyof typeof TIMING_LABELS]}: ${value === null ? 'Not recorded' : `${value} ms`}`}</Caption>
-                    ))}
-                    {Object.entries(metadata.usage).map(([key, value]) => (
-                        <Caption
-                            key={key}
-                        >{`${USAGE_LABELS[key as keyof typeof USAGE_LABELS]}: ${value === null ? 'Not recorded' : value}`}</Caption>
-                    ))}
+                    {metadata.evidence === 'synthetic-fixture' ||
+                    (metadata.model === null &&
+                        metadata.effort === null &&
+                        Object.values(metadata.timing).every((value) => value === null) &&
+                        Object.values(metadata.usage).every((value) => value === null)) ? (
+                        <Caption>Model, effort, provider timings and tokens: Not recorded.</Caption>
+                    ) : (
+                        <>
+                            <Caption>{`Model: ${metadata.model ?? 'Not recorded'}`}</Caption>
+                            <Caption>{`Effort: ${metadata.effort ?? 'Not recorded'}`}</Caption>
+                            {Object.entries(metadata.timing).map(([key, value]) => (
+                                <Caption
+                                    key={key}
+                                >{`${TIMING_LABELS[key as keyof typeof TIMING_LABELS]}: ${value === null ? 'Not recorded' : `${value} ms`}`}</Caption>
+                            ))}
+                            {Object.entries(metadata.usage).map(([key, value]) => (
+                                <Caption
+                                    key={key}
+                                >{`${USAGE_LABELS[key as keyof typeof USAGE_LABELS]}: ${value === null ? 'Not recorded' : value}`}</Caption>
+                            ))}
+                        </>
+                    )}
                     {metadata.fallbackReason === null ? null : (
                         <Caption>{`Fallback: ${metadata.fallbackReason}`}</Caption>
                     )}
                     <Caption>{`Repaired: ${metadata.repaired ? 'yes' : 'no'}`}</Caption>
                     <Caption>{`Cache hit: ${metadata.cacheHit ? 'yes' : 'no'}`}</Caption>
                     <Coverage />
-                    <CompareManualsRow />
+                    <CompareManualsRow onOpen={environment.bindings.closeOverlays} />
                     <StagesPanel
                         check={environment.bindings.live?.state.check ?? null}
                         stages={environment.bindings.live?.state.stages ?? null}
@@ -1004,7 +1123,7 @@ function Node(props: NodeProps): ReactElement {
         >
             <NodeContent {...props} />
             {showSource ? (
-                <Caption>{`${props.node.type} · ${props.environment.document.metadata.origins[props.path] ?? 'fallback'}`}</Caption>
+                <Caption>{`${props.node.type.replace(/([a-z])([A-Z])/gu, '$1 $2')} · ${props.node.type === 'Image' && unavailableManualImage(props.node, props.environment) ? 'fallback' : (props.environment.document.metadata.origins[props.path] ?? 'fallback')}`}</Caption>
             ) : null}
         </View>
     )
@@ -1523,7 +1642,13 @@ export function NativeDocumentRenderer({
         photoLoaded: heldReady,
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
-        omittedDuplicates: duplicateFactPaths(selected.variant.body, `${selected.prefix}body`),
+        omittedDuplicates: duplicateFactPaths(
+            document,
+            bindings,
+            heldReady,
+            selected.variant.body,
+            `${selected.prefix}body`,
+        ),
         trailing: null,
     }
     const findRegions = (node: ScreenNodeV2): boolean =>

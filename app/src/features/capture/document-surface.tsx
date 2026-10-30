@@ -130,6 +130,7 @@ export function DocumentSurface({
     camera,
     compare,
     onClose,
+    dismissParents,
     state: requestedState,
     readingConfirmation,
     resultEvidence,
@@ -148,6 +149,7 @@ export function DocumentSurface({
     camera?: FrameBindings['camera']
     compare?: FrameBindings['compare']
     onClose?: () => void
+    dismissParents?: () => void
     state?: 'ready' | VariantState
     readingConfirmation?: { readonly open: boolean; readonly onChange: (open: boolean) => void }
     resultEvidence?: { readonly document: ScreenDocumentV2; readonly arrivedAt: number | null } | null
@@ -171,6 +173,12 @@ export function DocumentSurface({
     const sheetDismiss = useSheetDismiss()
     const closeSheet = sheetDismiss ?? onClose
     const [judgeOpen, setJudgeOpen] = useState(false)
+    const dismissOverlays = (): void => {
+        more.hide()
+        setJudgeOpen(false)
+        closeSheet?.()
+        dismissParents?.()
+    }
     const questionCapture = useRef<{ before: string | null; manualId: string | null; entered: boolean } | null>(null)
     const previousAnswer = useRef(state.answer)
     const [dismissedAnswer, setDismissedAnswer] = useState<typeof state.answer>(null)
@@ -429,7 +437,11 @@ export function DocumentSurface({
                 entry?.session.reviewStatus === 'reviewed'
             return {
                 enabled: ready,
-                reason: ready ? null : 'Choose a part and write your question.',
+                reason: ready
+                    ? null
+                    : busy
+                      ? 'Wait for the current request to finish.'
+                      : 'Choose a part and write your question.',
                 run: (): void => {
                     if (ready) void controller.ask()
                 },
@@ -509,6 +521,12 @@ export function DocumentSurface({
         },
         session: entry?.session,
         pageUris: state.pageUris,
+        pageImageStatus: state.storageReadOnly
+            ? 'unavailable'
+            : state.loading ||
+                entry?.session.pages.some((page) => typeof state.pageUris[page.pageId] !== 'string') === true
+              ? 'pending'
+              : 'ready',
         capture: state.capture,
         marks: state.stages?.captureId === state.capture?.binding.captureId ? (state.stages?.masks ?? []) : [],
         heroMode: 'inline',
@@ -531,6 +549,7 @@ export function DocumentSurface({
             },
         },
         inspect: judge.showBuilt,
+        closeOverlays: dismissOverlays,
         camera,
         compare,
         resultDocument: resultOnScreen?.document ?? null,
@@ -580,6 +599,7 @@ export function DocumentSurface({
                     <DocumentSurface
                         kind={more.mode === 'ask' ? 'questions' : 'more'}
                         onClose={more.hide}
+                        dismissParents={dismissOverlays}
                         requestQuestionPhoto={takeQuestionPhoto}
                         requestQuestionComposer={(): void => showMore('ask')}
                         runContextAction={(run): void => {
@@ -596,6 +616,7 @@ export function DocumentSurface({
                     <DocumentSurface
                         kind="judge"
                         onClose={(): void => setJudgeOpen(false)}
+                        dismissParents={dismissOverlays}
                         resultEvidence={resultOnScreen}
                     />
                 </MoreSheet>

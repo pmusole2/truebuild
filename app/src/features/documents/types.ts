@@ -140,6 +140,10 @@ export type FrameBindings = {
     readonly live: LiveScreen | null
     readonly session: ManualSession | undefined
     readonly pageUris: Readonly<Record<string, string>>
+    /** Terminal asset loading is distinct from a still-pending native image. */
+    readonly pageImageStatus?: 'pending' | 'ready' | 'unavailable'
+    /** Close all owning sheets before a judge capability changes the native route. */
+    readonly closeOverlays?: () => void
     readonly capture: CaptureView | null
     readonly marks: readonly SegmentMark[]
     readonly heroMode: 'flush' | 'inset' | 'inline'

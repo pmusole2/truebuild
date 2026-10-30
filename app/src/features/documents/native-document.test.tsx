@@ -117,6 +117,25 @@ async function setup(
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it.each(['ready', 'unavailable'] as const)(
+        'ends a missing manual picture honestly after asset loading is %s',
+        async (pageImageStatus) => {
+            const { inputs, bindings } = await setup()
+            await render(
+                wrap(
+                    <DocumentRenderer
+                        document={compose(inputs)}
+                        bindings={{ ...bindings, pageUris: {}, pageImageStatus }}
+                    />,
+                ),
+            )
+            expect(screen.getByText('This manual picture is unavailable.')).toBeTruthy()
+            expect(screen.queryByTestId('guide-hero-frame')).toBeNull()
+            await fireEvent.press(screen.getAllByRole('button', { name: 'See it in the manual' })[0]!)
+            expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
+        },
+    )
+
     it('shows freshly parsed facts and parts even when stale reviewed data remains', async () => {
         const { inputs, bindings } = await setup()
         const session = manualSessionSchema.parse({
@@ -727,6 +746,59 @@ describe('the actual v2 catalog renderer', () => {
         expect(target).toHaveBeenCalledTimes(2)
     })
 
+    it.each(['equal', 'disjoint', 'result-extra', 'manual-extra'] as const)(
+        'shares a result sentence with a manual fact only when their citation sets are equal: %s',
+        async (sourceCase) => {
+            const { inputs, bindings } = await setup(true)
+            const initial = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+            const extra = { pageId: initial.sourceRefs[0]!.pageId, region: { x: 0, y: 0, width: 0.5, height: 0.5 } }
+            const orientation = inputs.session!.reviewedSteps[0]!.orientation
+            if (sourceCase === 'manual-extra' && orientation.state === 'known') orientation.sourceRefs.push(extra)
+            const fact = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+            const check = {
+                ...bindings.live!.state.check!,
+                reason: fact.text,
+                sourceRefs:
+                    sourceCase === 'disjoint'
+                        ? [extra]
+                        : sourceCase === 'result-extra'
+                          ? [...fact.sourceRefs, extra]
+                          : sourceCase === 'manual-extra'
+                            ? [fact.sourceRefs[0]!]
+                            : [...fact.sourceRefs],
+            }
+            const document = compose({ ...inputs, result: { kind: 'check', value: check } })
+            const view = await render(
+                wrap(
+                    <DocumentRenderer
+                        document={document}
+                        bindings={{
+                            ...bindings,
+                            live: { ...bindings.live!, state: { ...bindings.live!.state, check } },
+                        }}
+                    />,
+                ),
+            )
+            await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+                nativeEvent: { layout: { width: 300, height: 200 } },
+            })
+            await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+            expect(screen.getAllByText(fact.text)).toHaveLength(sourceCase === 'equal' ? 1 : 2)
+            await view.rerender(
+                wrap(
+                    <DocumentRenderer
+                        document={document}
+                        bindings={{
+                            ...bindings,
+                            live: { ...bindings.live!, state: { ...bindings.live!.state, check: null } },
+                        }}
+                    />,
+                ),
+            )
+            expect(screen.getAllByText(fact.text)).toHaveLength(1)
+        },
+    )
+
     it('deduplicates repeated facts and their own citation controls by fact id', async () => {
         const { inputs, bindings } = await setup()
         const material = documentMaterialV2(inputs)
@@ -747,6 +819,50 @@ describe('the actual v2 catalog renderer', () => {
             wrap(<DocumentRenderer document={compose(inputs, [...duplicate, ...duplicate])} bindings={bindings} />),
         )
         expect(screen.getAllByText(fact.text)).toHaveLength(1)
+    })
+
+    it('keeps a safety warning even when the held verdict repeats its exact cited sentence', async () => {
+        const { inputs, bindings } = await setup(true)
+        const fact = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+        inputs.session!.reviewedSteps[0]!.safetyNotes = [
+            {
+                noteId: 'keep-warning',
+                note: { state: 'known', value: fact.text, sourceRefs: [...fact.sourceRefs] },
+            },
+        ]
+        const check = { ...bindings.live!.state.check!, reason: fact.text, sourceRefs: [...fact.sourceRefs] }
+        const document = compose({ ...inputs, result: { kind: 'check', value: check } })
+        await render(
+            wrap(
+                <DocumentRenderer
+                    document={document}
+                    bindings={{ ...bindings, live: { ...bindings.live!, state: { ...bindings.live!.state, check } } }}
+                />,
+            ),
+        )
+        await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+            nativeEvent: { layout: { width: 300, height: 200 } },
+        })
+        await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+        expect(screen.getAllByText(fact.text)).toHaveLength(2)
+        expect(screen.getByText('Safety')).toBeTruthy()
+    })
+
+    it('keeps the fact citation when an earlier repeated statement had no citation control', async () => {
+        const { inputs, bindings } = await setup()
+        const material = documentMaterialV2(inputs)
+        const fact = material.facts.find((item) => item.kind === 'orientation')!
+        const bare: ScreenNodeV2 = {
+            type: 'Text',
+            content: { kind: 'fact', factId: fact.factId },
+            role: 'body',
+            emphasis: 'normal',
+            tone: 'neutral',
+            align: 'start',
+        }
+        await render(wrap(<DocumentRenderer document={compose(inputs, [bare])} bindings={bindings} />))
+        expect(screen.getAllByText(fact.text)).toHaveLength(1)
+        expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(material.facts.length)
     })
 
     it('renders a bounded varied set of valid recursive compositions without losing the required frame', async () => {

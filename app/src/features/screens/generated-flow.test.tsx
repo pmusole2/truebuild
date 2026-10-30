@@ -382,19 +382,9 @@ describe('J1: show how Meta AI built this', () => {
         await showDetails()
         expect(guide().getByText(`Source: ${generated ? 'generated' : 'fallback'}`)).toBeTruthy()
         expect(guide().getByText('Evidence: Simulated fixture · no model call')).toBeTruthy()
-        expect(guide().getByText('Model: Not recorded')).toBeTruthy()
-        expect(guide().getByText('Effort: Not recorded')).toBeTruthy()
-        for (const key of [
-            'Before provider',
-            'Provider time',
-            'Validation',
-            'Server total',
-            'Input tokens',
-            'Cached input tokens',
-            'Output tokens',
-            'Reasoning tokens',
-        ])
-            expect(guide().getByText(`${key}: Not recorded`)).toBeTruthy()
+        expect(guide().getByText('Model, effort, provider timings and tokens: Not recorded.')).toBeTruthy()
+        expect(guide().queryByText('Model: Not recorded')).toBeNull()
+        expect(guide().queryByText('Provider time: Not recorded')).toBeNull()
     })
 
     it('names a block and where it came from when it is tapped, while the layer is on', async () => {
@@ -676,7 +666,11 @@ describe('every other screen is composed from its own document', () => {
         expect(screen.getByTestId('add-page')).toBeTruthy()
         await press('Read manual')
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/reading\//u))
-        expect(await screen.findByText('Reading your manual. This can take a minute.')).toBeTruthy()
+        expect(
+            within(screen.getByTestId('document-header-copy')).getByText(
+                'Reading your manual. This can take a minute.',
+            ),
+        ).toBeTruthy()
         // While it reads, the only honest controls are the native ones: stop is never replaced.
         expect(screen.getByRole('button', { name: 'Back' }).props.accessibilityState).toMatchObject({ disabled: false })
         await press('Back')
