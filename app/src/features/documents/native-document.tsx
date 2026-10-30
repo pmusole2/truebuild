@@ -916,6 +916,72 @@ function Coverage(): ReactElement {
     )
 }
 
+/**
+ * One known part in the catalog. A picture is drawn only from the part's own cited figure region; a part cited
+ * without a region never borrows the whole manual page as its thumbnail. Its name and count stay, with its own
+ * cited page one tap away through the same source disclosure as a fact citation.
+ */
+function PieceTile({
+    node,
+    environment,
+    path,
+}: {
+    node: Extract<ScreenNodeV2, { type: 'PieceTile' }>
+    environment: Environment
+    path: string
+}): ReactElement | null {
+    const [open, setOpen] = useState(false)
+    const { document, bindings } = environment
+    const facts = screenFacts(bindings.session ?? null)
+    const part = facts?.parts.find((item) => item.partId === node.partId)
+    const refs = partRefs(environment, node.partId)
+    if (part === undefined) return null
+    const session = bindings.session
+    const grounded = refs.find((ref) => ref.region != null)
+    const label = part.name.state === 'known' ? part.name.value : 'Part'
+    return (
+        <View nativeID={marked(environment, path)} testID={`part-tile-${node.partId}`} style={styles.stack}>
+            {grounded === undefined || session === undefined ? null : (
+                <StepPicture
+                    reference={grounded}
+                    session={session}
+                    pageUris={bindings.pageUris}
+                    height={node.size === 'sm' ? 100 : node.size === 'lg' ? 220 : 160}
+                    testID={`part-hero-${node.partId}`}
+                />
+            )}
+            <StatusTag label={label} />
+            {node.showQuantity
+                ? facts?.steps
+                      .find((step) => step.stepId === document.bound.stepId)
+                      ?.parts.filter((item) => item.partId === part.partId && item.quantity.state === 'known')
+                      .map((item) => (
+                          <Caption key={item.partId}>
+                              {item.quantity.state === 'known' ? `× ${item.quantity.value}` : ''}
+                          </Caption>
+                      ))
+                : null}
+            {grounded !== undefined || refs.length === 0 || session === undefined ? null : (
+                <>
+                    <Pressable
+                        testID="fact-source"
+                        accessibilityRole="button"
+                        accessibilityLabel={open ? `Hide the manual page: ${label}` : `See it in the manual: ${label}`}
+                        accessibilityState={{ expanded: open }}
+                        onPress={(): void => setOpen(!open)}
+                        style={styles.touch}
+                    >
+                        <Caption>{open ? 'Hide the manual page' : 'See it in the manual'}</Caption>
+                    </Pressable>
+                    {open ? (
+                        <SourceDiagrams refs={refs} session={session} pageUris={bindings.pageUris} fit="page" />
+                    ) : null}
+                </>
+            )}
+        </View>
+    )
+}
+
 type NodeProps = { node: ScreenNodeV2; environment: Environment; path: string }
 
 function Node(props: NodeProps): ReactElement {
@@ -1378,34 +1444,8 @@ function NodeContent({
                     )}
                 </View>
             )
-        case 'PieceTile': {
-            const part = facts?.parts.find((item) => item.partId === node.partId)
-            const refs = partRefs(environment, node.partId)
-            return part === undefined ? null : (
-                <View nativeID={mark} style={styles.stack}>
-                    {refs[0] === undefined || bindings.session === undefined ? null : (
-                        <StepPicture
-                            reference={refs[0]}
-                            session={bindings.session}
-                            pageUris={bindings.pageUris}
-                            height={node.size === 'sm' ? 100 : node.size === 'lg' ? 220 : 160}
-                            testID={`part-hero-${node.partId}`}
-                        />
-                    )}
-                    <StatusTag label={part.name.state === 'known' ? part.name.value : 'Part'} />
-                    {node.showQuantity
-                        ? facts?.steps
-                              .find((step) => step.stepId === document.bound.stepId)
-                              ?.parts.filter((item) => item.partId === part.partId && item.quantity.state === 'known')
-                              .map((item) => (
-                                  <Caption key={item.partId}>
-                                      {item.quantity.state === 'known' ? `× ${item.quantity.value}` : ''}
-                                  </Caption>
-                              ))
-                        : null}
-                </View>
-            )
-        }
+        case 'PieceTile':
+            return <PieceTile node={node} environment={environment} path={path} />
         case 'VerdictCard': {
             return <Verdict node={node} environment={environment} path={path} />
         }
@@ -1461,7 +1501,7 @@ export function NativeDocumentRenderer({
     const matchesCapture = captureMatchesDocument(document, bindings.capture)
     const expectedPhoto =
         matchesCapture && bindings.capture !== null
-            ? JSON.stringify([document.screenId, bindings.capture.binding])
+            ? JSON.stringify([document.screenId, bindings.capture.binding, bindings.inspect])
             : null
     useLayoutEffect(() => {
         setLoadedCapture(null)

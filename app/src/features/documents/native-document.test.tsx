@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import { useEffect, type ReactElement } from 'react'
 import { Dimensions, PanResponder, Platform, StyleSheet, View } from 'react-native'
 import {
@@ -155,12 +155,92 @@ describe('the actual v2 catalog renderer', () => {
         await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session }} />))
         expect(screen.getByText('Side panel')).toBeTruthy()
         expect(screen.getByText('Divider shelf')).toBeTruthy()
-        expect(screen.getByTestId('part-hero-side-panel')).toBeTruthy()
-        expect(screen.getByTestId('part-hero-divider')).toBeTruthy()
+        // The parts cite a page with no figure region: no whole-page picture is drawn for either tile.
+        expect(screen.queryByTestId('part-hero-side-panel')).toBeNull()
+        expect(screen.queryByTestId('part-hero-divider')).toBeNull()
+        // Each tile instead offers its own manual page, opened on request.
+        const sideTile = screen.getByTestId('part-tile-side-panel')
+        expect(within(sideTile).queryByTestId('diagram-0')).toBeNull()
+        await fireEvent.press(within(sideTile).getByRole('button', { name: 'See it in the manual: Side panel' }))
+        expect(within(sideTile).getByTestId('diagram-0')).toBeTruthy()
+        expect(within(sideTile).getByText('Picture from your manual · Page 1')).toBeTruthy()
+        expect(within(sideTile).getByRole('button', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
         expect(screen.getByRole('button', { name: inputs.session!.reviewedSteps[1]!.title })).toBeDisabled()
         expect(screen.queryByText('Stale reviewed instruction')).toBeNull()
         expect(screen.queryByText('Stale reviewed part')).toBeNull()
         expect(screen.queryByText(/^×/u)).toBeNull()
+    })
+
+    it('draws a part picture from its own cited figure region while a regionless part stays picture-free', async () => {
+        const { inputs, bindings } = await setup()
+        const pageId = inputs.session!.pages[0]!.pageId
+        const sideName = inputs.session!.parts.find((part) => part.partId === 'side-panel')?.name
+        const session = manualSessionSchema.parse({
+            ...inputs.session!,
+            parts: inputs.session!.parts.map((part) =>
+                part.partId === 'side-panel'
+                    ? {
+                          ...part,
+                          name: {
+                              state: 'known' as const,
+                              value: sideName?.state === 'known' ? sideName.value : 'Side panel',
+                              sourceRefs: [{ pageId, region: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 } }],
+                          },
+                      }
+                    : part,
+            ),
+        })
+        const document = compose(
+            {
+                kind: 'quick-check',
+                session,
+                stepId: null,
+                captureId: null,
+                result: null,
+                failure: null,
+                uiState: { review: { currentQuestion: null, blockers: 0, canConfirm: true } },
+            },
+            [{ type: 'Stepper', binding: 'steps', label: null }],
+        )
+        await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session }} />))
+        expect(screen.getByTestId('part-hero-side-panel')).toBeTruthy()
+        expect(screen.queryByTestId('part-hero-divider')).toBeNull()
+    })
+
+    it('shows neither a picture nor a manual link when a part has no resolved citation', async () => {
+        const { inputs, bindings } = await setup()
+        const session = manualSessionSchema.parse({
+            ...inputs.session!,
+            reviewStatus: 'unreviewed',
+            rawExtraction: {
+                parts: inputs.session!.parts.map((part) => ({
+                    ...part,
+                    name: { state: 'unknown' as const, reason: 'Unreadable.' },
+                })),
+                steps: inputs.session!.reviewedSteps.map((step) => ({
+                    ...step,
+                    correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+                })),
+                unknowns: [],
+            },
+        })
+        const document = compose(
+            {
+                kind: 'quick-check',
+                session: inputs.session!,
+                stepId: null,
+                captureId: null,
+                result: null,
+                failure: null,
+                uiState: { review: { currentQuestion: null, blockers: 0, canConfirm: true } },
+            },
+            [{ type: 'Stepper', binding: 'steps', label: null }],
+        )
+        await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session }} />))
+        expect(screen.queryByTestId('part-hero-side-panel')).toBeNull()
+        const sideTile = screen.getByTestId('part-tile-side-panel')
+        expect(within(sideTile).queryByRole('button', { name: /manual/u })).toBeNull()
+        expect(within(sideTile).queryByTestId('diagram-0')).toBeNull()
     })
 
     it('never uses a reviewed-step index to select an unreviewed part quantity citation', async () => {
@@ -507,6 +587,28 @@ describe('the actual v2 catalog renderer', () => {
         })
         await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
         expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
+    })
+
+    it('waits for the new native photo when inspection adds or removes its wrapper', async () => {
+        const { inputs, bindings } = await setup(true)
+        const document = compose(inputs)
+        const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+        const load = async (): Promise<void> => {
+            await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+                nativeEvent: { layout: { width: 300, height: 200 } },
+            })
+            await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+        }
+        await load()
+        expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
+        for (const inspect of [true, false]) {
+            const previous = screen.getByTestId('frozen-photo-image')
+            await view.rerender(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, inspect }} />))
+            expect(screen.getByTestId('frozen-photo-image')).not.toBe(previous)
+            expect(screen.queryByText(bindings.live!.state.check!.reason)).toBeNull()
+            await load()
+            expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
+        }
     })
 
     it('binds the sole camera primary to the shutter instead of reopening the camera', async () => {
