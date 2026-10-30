@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { screensV2ResultSchema } from '@truebuild/contracts/model'
+import { modelScreensV2MetadataSchema, screensV2ResultSchema } from '@truebuild/contracts/model'
 
 // Browser integration evidence only. Real controller, capture IO seam, client, multipart, API and catalog renderer.
 // The fixture server has no inference transport. No route intercepts or answers an application request.
@@ -54,7 +54,7 @@ test('a complete document owns the frame; off stays local and full publishes hon
     })
     // Consume the first complete response before navigating. Chromium may discard a response body when its route leaves.
     const firstDocument =
-        mode === 'full'
+        mode !== 'off'
             ? page
                   .waitForResponse(
                       (response) => response.url() === `${API}/api/screens/v2` && response.status() === 200,
@@ -83,7 +83,7 @@ test('a complete document owns the frame; off stays local and full publishes hon
     // The synthetic manual explicitly classifies these as directions, kept complete behind More detail.
     await page.getByTestId('guide-screen').getByRole('button', { name: 'More detail', exact: true }).click()
     await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
-    if (mode === 'full') {
+    if (mode !== 'off') {
         expect(documentRequests).toBeGreaterThan(0)
     } else expect(documentRequests).toBe(0)
     await page.reload()
@@ -129,10 +129,65 @@ test('reading cancellation is an authored confirmation and Keep preserves the ru
 test('a closer look, slow question and retained More use the same photo; a fresh passing check completes the build', async ({
     page,
 }) => {
+    // Arm before preparation: the destination may arrive by direct generation or precompute progress.
+    // The fixture's later Guide takes five seconds; navigation retains the real Result until it is ready.
+    const nextGuide =
+        mode !== 'off'
+            ? page.waitForResponse(async (response) => {
+                  if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                  const request = response.request()
+                  const body = request.postDataBuffer()
+                  if (body === null) return false
+                  const form = await new Response(new Uint8Array(body), {
+                      headers: { 'content-type': request.headers()['content-type']! },
+                  }).formData()
+                  const metadata = modelScreensV2MetadataSchema.parse(JSON.parse(String(form.get('metadata'))))
+                  if (metadata.uiState?.busy != null) return false
+                  if (
+                      metadata.op === 'generate' &&
+                      (metadata.kind !== 'guide' || metadata.stepId !== 'step-2' || metadata.captureId !== null)
+                  )
+                      return false
+                  if (!['generate', 'precompute', 'progress'].includes(metadata.op)) return false
+                  const published = screensV2ResultSchema.parse(await response.json())
+                  return (
+                      published.status === 'ok' &&
+                      [published.value.document, ...published.value.documents].some(
+                          (document) =>
+                              document?.kind === 'guide' &&
+                              document.bound.stepId === 'step-2' &&
+                              document.bound.captureId === null &&
+                              document.metadata.source === 'generated',
+                      )
+                  )
+              })
+            : null
     await prepareGuide(page)
+    const manualId = decodeURIComponent(new URL(page.url()).pathname.split('/').at(-1)!)
     await checkPhoto(page)
     await expect(page.getByRole('heading', { name: 'Looks right', exact: true })).toBeVisible()
     await page.getByTestId('guide-primary').click()
+    if (nextGuide !== null) {
+        const published = screensV2ResultSchema.parse(await (await nextGuide).json())
+        if (published.status !== 'ok') throw new Error('Expected next Guide')
+        const document = [published.value.document, ...published.value.documents].find(
+            (candidate) =>
+                candidate?.kind === 'guide' &&
+                candidate.bound.manualId === manualId &&
+                candidate.bound.stepId === 'step-2' &&
+                candidate.bound.captureId === null,
+        )
+        expect(document).toMatchObject({
+            kind: 'guide',
+            bound: { manualId, stepId: 'step-2', captureId: null },
+            metadata: { source: 'generated', evidence: 'synthetic-fixture' },
+        })
+        if (document == null) throw new Error('Expected current next Guide')
+        await expect(page.getByTestId('guide-screen')).toHaveAttribute(
+            'id',
+            new RegExp(`(?:^|\\|)truebuild-document-root:${document.screenId}(?:\\||$)`, 'u'),
+        )
+    }
     await expect(page.getByRole('heading', { name: 'Step 2 of 2', exact: true })).toBeVisible()
     const secondPass = page
         .waitForResponse((response) => response.url() === `${API}/api/checks/second-opinion`)
