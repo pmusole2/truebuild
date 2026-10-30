@@ -119,6 +119,28 @@ async function setup(
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it.each([
+        ['recorded-more-global', 'busy'],
+        ['recorded-more-global', 'pending'],
+        ['recorded-judge-global', 'busy'],
+        ['recorded-judge-global', 'pending'],
+    ] as const)('keeps the authored Close action usable in %s/%s', async (record, variant) => {
+        const { bindings, run } = await setup()
+        await render(
+            wrap(
+                <DocumentRenderer
+                    document={recordedDocumentForTest(record)}
+                    variant={variant}
+                    bindings={{ ...bindings, session: undefined, workInProgress: true }}
+                />,
+            ),
+        )
+        const close = screen.getByRole('button', { name: 'Close' })
+        expect(close).toBeEnabled()
+        await fireEvent.press(close)
+        expect(run).toHaveBeenCalledTimes(1)
+    })
+
     it('keeps the judge bar identity and honors a route-owned secondary identity', async () => {
         const { bindings, run } = await setup()
         const document = recordedDocumentForTest('recorded-more-global')

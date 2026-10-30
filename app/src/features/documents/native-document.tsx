@@ -1819,6 +1819,10 @@ export function NativeDocumentRenderer({
     ): BarAction => {
         const resolved = bindings.resolve(node.intent)
         const isCamera = document.kind === 'camera' && node.intent.intent === 'capture'
+        const isDismiss =
+            node.intent.intent === 'navigate' &&
+            node.intent.target === 'back' &&
+            (node.label === 'Close' || node.label === 'Back')
         return {
             label: node.label,
             accessibilityLabel: node.label,
@@ -1834,8 +1838,7 @@ export function NativeDocumentRenderer({
                 preparingAction(bindings, node.intent) ||
                 (isCamera
                     ? selected.name === 'busy' || bindings.camera?.ready !== true
-                    : (!cancelsWork(node.intent) && (selected.name === 'busy' || selected.name === 'pending')) ||
-                      !resolved.enabled),
+                    : (!isDismiss && (selected.name === 'busy' || selected.name === 'pending')) || !resolved.enabled),
             nativeID: marked(environment, `${selected.prefix}bar.${role}`),
             testID: isCamera
                 ? 'camera-shutter'
