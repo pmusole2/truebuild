@@ -9,8 +9,13 @@ export function hostsOutsideDocuments(tree: OwnershipTree, validDocumentIds: Rea
     const failures: string[] = []
     const visit = (node: OwnershipTree, owner: boolean): void => {
         const id = typeof node.props.nativeID === 'string' ? node.props.nativeID : ''
-        const root = id.match(/^truebuild-document-(?:navigation|root):(.+)$/u)
-        const boundary = id.match(/^truebuild-document-content-boundary:(.+)$/u)
+        // nativeID is '|'-joined trusted segments (ownership marker first, render-origin last); parse per segment.
+        const segments = id.split('|')
+        const root =
+            segments.map((s) => s.match(/^truebuild-document-(?:navigation|root):(.+)$/u)).find((m) => m !== null) ??
+            null
+        const boundary =
+            segments.map((s) => s.match(/^truebuild-document-content-boundary:(.+)$/u)).find((m) => m !== null) ?? null
         const ownRoot = root !== null && validDocumentIds.has(root[1]!)
         const ownBoundary = boundary !== null && validDocumentIds.has(boundary[1]!)
         const nowOwned = ownRoot || ownBoundary || owner

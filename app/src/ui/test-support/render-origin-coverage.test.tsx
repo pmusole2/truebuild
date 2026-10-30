@@ -80,6 +80,44 @@ it('traverses the renderer container for multiple roots without treating it as a
     ])
 })
 
+it('credits navigation and route boundary hosts only, then requires explicit document descendant markers', async () => {
+    const view = await render(
+        <View nativeID="truebuild-document-navigation:app|truebuild-render-origin:generated" testID="navigation">
+            <View testID="native-screen">
+                <View testID="native-header" />
+                <View
+                    nativeID="truebuild-document-content-boundary:guide|truebuild-render-origin:fallback"
+                    testID="route"
+                >
+                    <View testID="safe-area">
+                        <Text testID="framework-chrome">Shell chrome</Text>
+                        <View nativeID="truebuild-document-root:guide|truebuild-render-origin:generated" testID="body">
+                            <Text testID="document-child">Generated body</Text>
+                        </View>
+                    </View>
+                </View>
+            </View>
+            <View testID="background-route" />
+            <Text testID="coach">Shell coach</Text>
+        </View>,
+    )
+    const result = measureRenderOriginTree(view.toJSON(), checkpoint)
+    expect(result.counts).toEqual({ generated: 3, fallback: 1, shell: 6, total: 10 })
+    expect(Object.fromEntries(result.nodes.map((node) => [node.testID, node.origin]))).toEqual({
+        navigation: 'generated',
+        'native-screen': 'shell',
+        'native-header': 'shell',
+        route: 'fallback',
+        'safe-area': 'shell',
+        'framework-chrome': 'shell',
+        body: 'generated',
+        'document-child': 'generated',
+        'background-route': 'shell',
+        coach: 'shell',
+    })
+    expect(result.rawTextCounts).toEqual({ generated: 1, fallback: 0, shell: 2, total: 3 })
+})
+
 it('keeps hidden and non-accessible supplied hosts in the denominator', async () => {
     const view = await render(
         <View nativeID="truebuild-render-origin:generated">
@@ -244,4 +282,15 @@ it('keeps the minimum unavailable when a required checkpoint has no rendered hos
         minimumScreenGeneratedShare: null,
         status: 'unavailable',
     })
+})
+
+it('reads composed ownership and origin markers and rejects a hidden invalid reserved segment', async () => {
+    const view = await render(
+        <View nativeID="truebuild-document-root:abc|truebuild-render-origin:generated">
+            <Text>Generated body</Text>
+        </View>,
+    )
+    expect(measureRenderOriginTree(view.toJSON(), checkpoint).counts).toMatchObject({ generated: 2, shell: 0 })
+    await view.rerender(<View nativeID="truebuild-render-origin:generated|truebuild-document-root:" />)
+    expect(() => measureRenderOriginTree(view.toJSON(), checkpoint)).toThrow('invalid_render_origin_marker')
 })

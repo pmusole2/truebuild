@@ -1,7 +1,20 @@
-import { useEffect, useRef, useState, type ComponentRef, type ReactElement, type ReactNode } from 'react'
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useRef,
+    useState,
+    type ComponentRef,
+    type ReactElement,
+    type ReactNode,
+    type RefObject,
+} from 'react'
 import { Dimensions, Keyboard, Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { useIsFocused, usePathname } from 'expo-router'
+import { screenOfPath } from '../screens/native-meter'
 import { AppButton } from '../../ui/button'
-import { useMeterRoot } from '../../ui/meter-roots'
+import { MeterRootsContext, type MeterRoots } from '../../ui/meter-roots'
+import { useSheetDismiss } from '../../ui/sheet'
 import { Notice } from '../../ui/status'
 import { useTheme } from '../../theme/theme'
 import { space } from '../../theme/tokens'
@@ -43,6 +56,8 @@ export function useHeroHeight(keyboard = false): number {
     return heroHeightFor(viewport, fontScale, keyboard)
 }
 
+const ScreenBodyScope = createContext(false)
+
 /** Canvas fill for a screen body; the native header above and the fixed bar below belong to the screen, not to this. */
 export function ScreenBody({
     children,
@@ -58,18 +73,39 @@ export function ScreenBody({
     const { colors } = useTheme()
     // The host meter counts the whole document this screen sits in; it only needs a ref to reach it.
     const root = useRef<ComponentRef<typeof View>>(null)
-    const attachRoot = useMeterRoot(root, 'app')
+    const meterRoots = useContext(MeterRootsContext)
+    const nested = useContext(ScreenBodyScope)
+    const sheet = useSheetDismiss()
     return (
-        <View
-            ref={attachRoot}
-            testID={testID}
-            nativeID={nativeID}
-            collapsable={false}
-            style={[styles.body, { backgroundColor: colors.canvas, paddingTop: insetTop }]}
-        >
-            {children}
-        </View>
+        <ScreenBodyScope.Provider value={true}>
+            <View
+                ref={root}
+                testID={testID}
+                nativeID={nativeID}
+                collapsable={false}
+                style={[styles.body, { backgroundColor: colors.canvas, paddingTop: insetTop }]}
+            >
+                {children}
+                {meterRoots === null || nested || sheet !== null ? null : (
+                    <FocusedMeterRoot target={root} roots={meterRoots} />
+                )}
+            </View>
+        </ScreenBodyScope.Provider>
     )
+}
+
+/** A meter-free native preview needs no router; the mounted production meter requires its real focus witness. */
+function FocusedMeterRoot({
+    target,
+    roots,
+}: {
+    readonly target: RefObject<ComponentRef<typeof View> | null>
+    readonly roots: MeterRoots
+}): null {
+    const focused = useIsFocused()
+    const screen = screenOfPath(usePathname())
+    useEffect(() => roots.registerRoot(target.current, 'app', { screen, focused }), [target, roots, screen, focused])
+    return null
 }
 
 /** Only text that overflows scrolls. The hero above and the bar below stay put. */

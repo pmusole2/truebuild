@@ -1,8 +1,8 @@
-import { useSyncExternalStore, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import { View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { router } from 'expo-router'
-import type { ScreenMetadata, ScreenDocumentV2 } from '@truebuild/contracts'
+import type { ScreenDocumentV2 } from '@truebuild/contracts'
 import type { CheckStages, StageStatus } from '../capture/controller'
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { FrozenPhoto } from '../assembly/frozen-photo'
@@ -11,7 +11,7 @@ import { AppButton } from '../../ui/button'
 import { useFeedback } from '../../ui/feedback'
 import { useContentFade } from '../../ui/motion'
 import { SettingRow } from '../../ui/fields'
-import { Card, Stack } from '../../ui/surface'
+import { Stack } from '../../ui/surface'
 import { Caption, Heading } from '../../ui/text'
 import { useJudge } from './judge-context'
 import { PROOF_EVIDENCE_LABEL } from '../ai-effort-proof/evidence'
@@ -24,7 +24,6 @@ import {
     type NativeHostSessionSummary,
 } from './native-host-meter'
 import { useMeterReading } from './native-meter'
-import type { GeneratedScreen, ScreenSlot } from './use-screen-slot'
 
 /** The exact label of the one judge preference. */
 export const BUILT_TOGGLE_LABEL = 'Show how Meta AI built this'
@@ -32,8 +31,6 @@ export const NOT_RECORDED = 'Not recorded'
 
 const ms = (value: number | null | undefined): string =>
     value === null || value === undefined ? NOT_RECORDED : `${Math.round(value)} ms`
-const count = (value: number | null | undefined): string =>
-    value === null || value === undefined ? NOT_RECORDED : String(value)
 
 /** The device-only toggle. Off by default; on adds the current screen's attribution and nothing else. */
 export function BuiltToggleRow(): ReactElement {
@@ -70,20 +67,6 @@ function Row({ label, value }: { readonly label: string; readonly value: string 
     return <Caption>{`${label}: ${value}`}</Caption>
 }
 
-function evidenceWord(metadata: ScreenMetadata): string {
-    return metadata.evidence === 'live' ? 'Live model run' : 'Simulated (fixture, no model call)'
-}
-
-function sourceWord(metadata: ScreenMetadata): string {
-    return metadata.source === 'generated'
-        ? metadata.evidence === 'synthetic-fixture' || proofEvidenceLabel() !== null
-            ? 'Simulated composition (generated source)'
-            : 'Composed by the model'
-        : metadata.source === 'fallback'
-          ? `Built by the app from the manual${metadata.fallbackReason === null ? '' : ` (${metadata.fallbackReason})`}`
-          : 'Native screen'
-}
-
 const REASON_WORDS: Readonly<Record<NativeHostFailure, string>> = {
     'no-roots': 'no screen has been counted yet',
     'missing-root': 'a screen or sheet could not be reached',
@@ -96,6 +79,7 @@ const REASON_WORDS: Readonly<Record<NativeHostFailure, string>> = {
     'no-checkpoints': 'nothing has been counted yet',
     'empty-tree': 'there was nothing on screen',
     disposed: 'the counter was turned off',
+    'focus-unavailable': 'the current screen could not be reached',
 }
 
 const percent = (share: number | null): string => (share === null ? NOT_RECORDED : `${(share * 100).toFixed(1)}%`)
@@ -123,7 +107,7 @@ function sessionLine(summary: NativeHostSessionSummary | null): string {
  * screen and the whole session, each with when it was counted, whether it is out of date, and what the count covers. A
  * count that could not be taken says why and shows no number. Nothing is estimated or taken from a document.
  */
-function HostCounts(): ReactElement {
+export function HostCounts(): ReactElement {
     const { active, snapshot, session, measureNow } = useMeterReading()
     if (!active) {
         return <Row label="On-screen elements" value={`${NOT_RECORDED} on this device`} />
@@ -173,58 +157,6 @@ function HostCounts(): ReactElement {
     )
 }
 
-/**
- * Premium attribution for the screen being shown: exactly what the server recorded for this document, and
- * "Not recorded" for anything it did not. Nothing here is estimated, rounded up or filled from a constant.
- */
-export function AttributionCard({ screen }: { readonly screen: GeneratedScreen }): ReactElement {
-    const workflow = useOptionalWorkflow()
-    const store = workflow?.screens ?? null
-    useSyncExternalStore(
-        store?.subscribe ?? ((): (() => void) => (): void => undefined),
-        store?.getVersion ?? ((): number => 0),
-        store?.getVersion ?? ((): number => 0),
-    )
-    const { metadata } = screen.document
-    const counts = store?.shownCounts()
-    // A proof run on simulated IO claims no inference: whatever a document or offer names, nothing here says a model ran.
-    const proof = proofEvidenceLabel()
-    const recorded = proof === null
-    return (
-        <Card testID="attribution-card" tone="raised">
-            <Stack gap="xs">
-                <Heading>How this screen was built</Heading>
-                <Row label="Source" value={sourceWord(metadata)} />
-                <Row label="Evidence" value={proof ?? evidenceWord(metadata)} />
-                <Row label="Model" value={(recorded ? metadata.model : null) ?? NOT_RECORDED} />
-                <Row label="Effort" value={(recorded ? metadata.effort : null) ?? NOT_RECORDED} />
-                <Row
-                    label="Time"
-                    value={`total ${ms(recorded ? metadata.timing.totalMs : null)}, model ${ms(recorded ? metadata.timing.providerMs : null)}, checking ${ms(recorded ? metadata.timing.parseValidateMs : null)}`}
-                />
-                <Row
-                    label="Tokens"
-                    value={`in ${count(recorded ? metadata.usage.inputTokens : null)}, cached ${count(recorded ? metadata.usage.cachedTokens : null)}, out ${count(recorded ? metadata.usage.outputTokens : null)}, reasoning ${count(recorded ? metadata.usage.reasoningTokens : null)}`}
-                />
-                <Row
-                    label="Checked by the app"
-                    value={`${metadata.droppedFacts} dropped, ${metadata.forcedSafety} safety added${metadata.repaired ? ', repaired once' : ''}${metadata.cacheHit ? ', served from cache' : ''}`}
-                />
-                <Row
-                    label="Screens this session"
-                    value={
-                        counts === undefined
-                            ? NOT_RECORDED
-                            : `${counts.generated} generated, ${counts.fallback} app-built, ${counts.shell} native`
-                    }
-                />
-                <HostCounts />
-                <Caption>Tap any part of the screen to see which kind it is.</Caption>
-            </Stack>
-        </Card>
-    )
-}
-
 function stageWord(status: StageStatus, waited = 'measured on this phone'): string {
     switch (status.status) {
         case 'pending':
@@ -235,27 +167,6 @@ function stageWord(status: StageStatus, waited = 'measured on this phone'): stri
             return `Skipped (${status.reason.replace('_', ' ')})`
         case 'failed':
             return `Did not finish (${status.code}${status.elapsedMs === null ? '' : `, ${ms(status.elapsedMs)}`})`
-    }
-}
-
-function resultScreenWord(slot: ScreenSlot | undefined): string {
-    if (slot === undefined || slot.kind !== 'result') return 'Not asked for'
-    switch (slot.status) {
-        case 'pending':
-            return 'Working'
-        case 'native':
-            return `Skipped, the native result is shown (${slot.reason}${slot.code === null ? '' : `, ${slot.code}`})`
-        case 'ready': {
-            const { metadata } = slot.screen.document
-            const simulated = metadata.evidence === 'synthetic-fixture' || proofEvidenceLabel() !== null
-            const description =
-                metadata.source === 'generated'
-                    ? simulated
-                        ? 'simulated composition, generated source'
-                        : 'model-composed'
-                    : `app-built${metadata.fallbackReason === null ? '' : `: ${metadata.fallbackReason}`}`
-            return `Landed (${description}), server total ${ms(simulated ? null : metadata.timing.totalMs)}, model ${simulated ? NOT_RECORDED : (metadata.model ?? NOT_RECORDED)}, effort ${simulated ? NOT_RECORDED : (metadata.effort ?? NOT_RECORDED)}`
-        }
     }
 }
 
@@ -300,13 +211,11 @@ const phoneScope = (at: number | null): string | null =>
 export function StagesPanel({
     check,
     stages,
-    resultSlot,
     resultDocument,
     resultArrivedAt,
 }: {
     readonly check: { readonly model?: string; readonly decision: string; readonly evidence?: string } | null
     readonly stages: CheckStages | null | undefined
-    readonly resultSlot: ScreenSlot | undefined
     readonly resultDocument?: ScreenDocumentV2 | null
     readonly resultArrivedAt?: number | null
 }): ReactElement | null {
@@ -327,11 +236,7 @@ export function StagesPanel({
             : []
     const sameDocument =
         resultDocument?.kind === 'result' && resultDocument.bound.captureId === capture?.binding.captureId
-    const readyAt = sameDocument
-        ? (resultArrivedAt ?? null)
-        : resultSlot?.status === 'ready'
-          ? (workflow?.screens?.readyAt(resultSlot.key) ?? null)
-          : null
+    const readyAt = sameDocument ? (resultArrivedAt ?? null) : null
     const resultAt =
         readyAt !== null && stages?.publishedAt !== undefined ? Math.max(0, readyAt - stages.publishedAt) : null
     const maskAt = stages == null ? null : arrival(stages.segments)
@@ -349,11 +254,11 @@ export function StagesPanel({
             id: 'result' as const,
             at: resultAt,
             label: 'Result screen',
-            identity: `result:${sameDocument ? resultDocument.screenId : (resultSlot?.status ?? 'none')}`,
+            identity: `result:${sameDocument ? resultDocument.screenId : 'none'}`,
             scope: phoneScope(resultAt),
             value: sameDocument
                 ? `${resultDocument.metadata.source === 'fallback' ? `App fallback (${resultDocument.metadata.fallbackReason ?? 'Not recorded'})` : resultDocument.metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture composition, no model call' : 'Model-composed'}, model ${resultDocument.metadata.model ?? NOT_RECORDED}, effort ${resultDocument.metadata.effort ?? NOT_RECORDED}, provider ${ms(resultDocument.metadata.timing.totalMs)}`
-                : resultScreenWord(resultSlot),
+                : 'Not asked for',
         },
         {
             id: 'mask' as const,

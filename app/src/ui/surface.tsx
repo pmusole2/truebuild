@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context'
 import { elevationStyle, type ElevationLevel } from '../theme/elevation'
 import { useTheme } from '../theme/theme'
+import { useOriginNativeId } from './render-origin'
 import { radius, space } from '../theme/tokens'
 
 // With the native header shown, the header already clears the top inset. With it hidden (full-bleed camera), the shell
@@ -56,8 +57,9 @@ export function Stack({
     readonly children: ReactNode
     readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     return (
-        <View nativeID={nativeID} style={{ gap: GAPS[gap] }}>
+        <View nativeID={inheritedId} style={{ gap: GAPS[gap] }}>
             {children}
         </View>
     )
@@ -80,6 +82,7 @@ export function Card({
     readonly testID?: string
     readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors, scheme } = useTheme()
     // In the dark scheme the plain surface sits too close to the canvas, so every card uses the raised surface.
     const raised = tone !== 'surface' || scheme === 'dark'
@@ -87,7 +90,7 @@ export function Card({
     return (
         <View
             testID={testID}
-            nativeID={nativeID}
+            nativeID={inheritedId}
             style={[
                 styles.card,
                 { backgroundColor: raised ? colors.surfaceRaised : colors.surface },

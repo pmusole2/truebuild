@@ -14,6 +14,7 @@ import { useOptionalWorkflow } from '../capture/workflow-context'
 import { useCoach } from '../onboarding/coach-provider'
 import { MeterRootsContext, type MeterRoots } from '../../ui/meter-roots'
 import { useJudge } from './judge-context'
+import { logNativeCheckpoint } from './native-meter-log'
 import {
     NativeHostMeter,
     type NativeHostMeasurement,
@@ -118,8 +119,8 @@ export function NativeMeterProvider({
             control === null
                 ? null
                 : {
-                      registerRoot: (ref, kind): (() => void) => {
-                          const stop = control.meter.registerRoot(ref)
+                      registerRoot: (ref, kind, selection): (() => void) => {
+                          const stop = control.meter.registerRoot(ref, { ...selection, kind })
                           control.note(kind)
                           return (): void => {
                               stop()
@@ -215,59 +216,58 @@ export function MeterTriggers(): null {
             const sampleMs = performance.now() - started
             const session = control.meter.summarizeSession(control.sessionId, control.platform)
             // Only opaque checkpoint names and observed counts. Never native nodes, text, props or photo data.
-            console.info(
-                JSON.stringify({
-                    event: 'render_origin_checkpoint',
-                    evidence: 'native-public-host',
-                    ...measurement,
-                    sampleMs,
-                    session: {
-                        metricsVersion: session.metricsVersion,
-                        status: session.status,
-                        sampleCount: session.sampleCount,
-                        counts: session.counts,
-                        rawTextCounts: session.rawTextCounts,
-                        generatedShare: session.generatedShare,
-                        reason: session.reason,
-                        strictStatus: session.strictStatus,
-                        strictCounts: session.strictCounts,
-                        strictRawTextCounts: session.strictRawTextCounts,
-                        strictGeneratedShare: session.strictGeneratedShare,
-                        strictReason: session.strictReason,
-                        minimumScreenGeneratedShare: session.minimumScreenGeneratedShare,
-                        meanRouteGeneratedShare: session.meanRouteGeneratedShare,
-                        meanRouteStrictGeneratedShare: session.meanRouteStrictGeneratedShare,
-                        exclusions: session.exclusions,
-                        routes: session.routes.map(
-                            ({
-                                route,
-                                status,
-                                sampleCount,
-                                counts,
-                                generatedShare,
-                                reason,
-                                strictStatus,
-                                strictCounts,
-                                strictGeneratedShare,
-                                strictReason,
-                                exclusions,
-                            }) => ({
-                                route,
-                                status,
-                                sampleCount,
-                                counts,
-                                generatedShare,
-                                reason,
-                                strictStatus,
-                                strictCounts,
-                                strictGeneratedShare,
-                                strictReason,
-                                exclusions,
-                            }),
-                        ),
-                    },
-                }),
-            )
+            logNativeCheckpoint({
+                event: 'render_origin_checkpoint',
+                evidence: 'native-public-host',
+                ...measurement,
+                sampleMs,
+                session: {
+                    methods: session.methods,
+                    metricsVersion: session.metricsVersion,
+                    status: session.status,
+                    sampleCount: session.sampleCount,
+                    counts: session.counts,
+                    rawTextCounts: session.rawTextCounts,
+                    generatedShare: session.generatedShare,
+                    reason: session.reason,
+                    strictStatus: session.strictStatus,
+                    strictCounts: session.strictCounts,
+                    strictRawTextCounts: session.strictRawTextCounts,
+                    strictGeneratedShare: session.strictGeneratedShare,
+                    strictReason: session.strictReason,
+                    minimumScreenGeneratedShare: session.minimumScreenGeneratedShare,
+                    meanRouteGeneratedShare: session.meanRouteGeneratedShare,
+                    meanRouteStrictGeneratedShare: session.meanRouteStrictGeneratedShare,
+                    exclusions: session.exclusions,
+                    routes: session.routes.map(
+                        ({
+                            route,
+                            status,
+                            sampleCount,
+                            counts,
+                            generatedShare,
+                            reason,
+                            strictStatus,
+                            strictCounts,
+                            strictGeneratedShare,
+                            strictReason,
+                            exclusions,
+                        }) => ({
+                            route,
+                            status,
+                            sampleCount,
+                            counts,
+                            generatedShare,
+                            reason,
+                            strictStatus,
+                            strictCounts,
+                            strictGeneratedShare,
+                            strictReason,
+                            exclusions,
+                        }),
+                    ),
+                },
+            })
         })
         // A new root, tip or document while one is scheduled replaces it, so a burst becomes one checkpoint.
     }, [control, stale, version, screen, viewIdentity])

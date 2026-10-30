@@ -140,3 +140,27 @@ describe('standalone validated catalog ownership (not production route proof)', 
         expect(failures).toContain('View#forged-owner')
     })
 })
+
+describe('segment-joined ownership markers (regression)', () => {
+    it('recognises an ownership segment joined with a render-origin segment; forged ids still fail', async () => {
+        const document = screenDocumentV2Schema.parse(documentFor('home'))
+        await render(
+            wrap(
+                <View nativeID={`truebuild-document-root:${document.screenId}|truebuild-render-origin:generated`}>
+                    <View testID="inside-joined" />
+                </View>,
+            ),
+        )
+        const tree = screen.container as unknown as OwnershipTree
+        expect(hostsOutsideDocuments(tree, new Set([document.screenId]))).not.toContain('View#inside-joined')
+        const forged = hostsOutsideDocuments(
+            {
+                type: 'View',
+                props: { nativeID: 'truebuild-document-root:forged|truebuild-render-origin:generated' },
+                children: [{ type: 'View', props: { testID: 'x' }, children: [] }],
+            } as OwnershipTree,
+            new Set([document.screenId]),
+        )
+        expect(forged).toContain('View#x')
+    })
+})

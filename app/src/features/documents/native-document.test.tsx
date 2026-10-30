@@ -3,7 +3,7 @@ import { useEffect, type ReactElement } from 'react'
 import { Dimensions, PanResponder, Platform, StyleSheet, View } from 'react-native'
 import {
     assembleDocumentV2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     documentMaterialV2,
     screenDocumentV2Schema,
     manualSessionSchema,
@@ -42,7 +42,7 @@ function compose(
     source: 'generated' | 'fallback' = 'generated',
 ): ScreenDocumentV2 {
     const material = documentMaterialV2(inputs)
-    const proposal = composeProposalV2(material)
+    const proposal = buildFallbackProposalV2(material)
     return screenDocumentV2Schema.parse(
         assembleDocumentV2(
             material,
@@ -177,17 +177,55 @@ describe('the actual v2 catalog renderer', () => {
         // The parts cite a page with no figure region: no whole-page picture is drawn for either tile.
         expect(screen.queryByTestId('part-hero-side-panel')).toBeNull()
         expect(screen.queryByTestId('part-hero-divider')).toBeNull()
-        // Each tile instead offers its own manual page, opened on request.
+        // The same page is already cited by the step overview: one shared opener replaces repeated tile links.
         const sideTile = screen.getByTestId('part-tile-side-panel')
         expect(within(sideTile).queryByTestId('diagram-0')).toBeNull()
-        await fireEvent.press(within(sideTile).getByRole('button', { name: 'See it in the manual: Side panel' }))
-        expect(within(sideTile).getByTestId('diagram-0')).toBeTruthy()
-        expect(within(sideTile).getByText('Picture from your manual · Page 1')).toBeTruthy()
-        expect(within(sideTile).getByRole('button', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
+        expect(within(sideTile).queryByRole('button', { name: 'See it in the manual: Side panel' })).toBeNull()
+        const openers = screen.getAllByRole('button', { name: /^See it in the manual(?:$|:)/u })
+        expect(openers).toHaveLength(1)
+        await fireEvent.press(openers[0]!)
+        expect(screen.getByTestId('diagram-0')).toBeTruthy()
+        expect(screen.getByText('Picture from your manual · Page 1')).toBeTruthy()
         expect(screen.getByRole('button', { name: inputs.session!.reviewedSteps[1]!.title })).toBeDisabled()
         expect(screen.queryByText('Stale reviewed instruction')).toBeNull()
         expect(screen.queryByText('Stale reviewed part')).toBeNull()
         expect(screen.queryByText(/^×/u)).toBeNull()
+    })
+
+    it('keeps a part-only page reachable when no other visible source opener cites it', async () => {
+        const { inputs, bindings } = await setup()
+        const original = inputs.session!
+        const partPage = {
+            ...original.pages[0]!,
+            pageId: 'part-only-page',
+            assetId: 'part-only-asset',
+            contentHash: '2'.repeat(64),
+        }
+        const session = manualSessionSchema.parse({
+            ...original,
+            pages: [...original.pages, partPage],
+            parts: original.parts.map((part) =>
+                part.partId === 'side-panel'
+                    ? {
+                          ...part,
+                          name: {
+                              state: 'known',
+                              value: 'Side panel',
+                              sourceRefs: [{ pageId: partPage.pageId, region: null }],
+                          },
+                      }
+                    : part,
+            ),
+        })
+        await render(
+            wrap(<DocumentRenderer document={compose({ ...inputs, session })} bindings={{ ...bindings, session }} />),
+        )
+        const tile = within(screen.getByTestId('part-tile-side-panel'))
+        expect(tile.queryByTestId('part-hero-side-panel')).toBeNull()
+        await fireEvent.press(tile.getByRole('button', { name: 'See it in the manual: Side panel' }))
+        expect(tile.getByTestId('diagram-0')).toBeTruthy()
+        expect(tile.getByText('Picture from your manual · Page 2')).toBeTruthy()
+        expect(tile.getByRole('button', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
     })
 
     it('draws a part picture from its own cited figure region while a regionless part stays picture-free', async () => {
@@ -575,7 +613,7 @@ describe('the actual v2 catalog renderer', () => {
         await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
         expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
         const material = documentMaterialV2(inputs)
-        const proposal = composeProposalV2(material)
+        const proposal = buildFallbackProposalV2(material)
         for (const { variant } of variantsOfV2(proposal)) {
             if (variant.body.type === 'Scroll' && variant.body.children[0]?.type === 'Stack') {
                 variant.body.children[0].children = [
@@ -862,7 +900,10 @@ describe('the actual v2 catalog renderer', () => {
         }
         await render(wrap(<DocumentRenderer document={compose(inputs, [bare])} bindings={bindings} />))
         expect(screen.getAllByText(fact.text)).toHaveLength(1)
-        expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(material.facts.length)
+        // One citation affordance per exact source on the screen: every demo fact cites the same
+        // page region, so one button offers it however many facts cite it (source access preserved).
+        expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+        expect(material.facts.length).toBeGreaterThan(1)
     })
 
     it('renders a bounded varied set of valid recursive compositions without losing the required frame', async () => {

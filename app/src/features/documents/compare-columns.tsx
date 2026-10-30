@@ -1,10 +1,11 @@
+import type { ScreenDocumentV2 } from '@truebuild/contracts'
 import type { ReactElement } from 'react'
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Card, Stack } from '../../ui/surface'
 import { Caption, Heading } from '../../ui/text'
 import { space } from '../../theme/tokens'
-import { DocumentBody } from './document-renderer'
-import type { FrameBindings, FrameDocument } from './types'
+import { DocumentRenderer } from './document-renderer'
+import type { FrameBindings } from './types'
 
 /** Two panes sit side by side from this width; narrower, they stack in one labelled scroll. */
 export const COMPARE_SIDE_BY_SIDE_WIDTH = 900
@@ -15,7 +16,7 @@ export type ComparePaneInput = {
     /** Real manual title from app state. Panes are told apart by title and first-page hero before any body text. */
     readonly title: string
     readonly note: string
-    readonly document: FrameDocument
+    readonly document: ScreenDocumentV2
     readonly bindings: FrameBindings
 }
 
@@ -39,7 +40,7 @@ export function CompareColumns({ panes }: { readonly panes: readonly ComparePane
                         <Stack gap="sm">
                             <Heading>{pane.title}</Heading>
                             <Caption>{pane.note}</Caption>
-                            <DocumentBody document={pane.document} bindings={pane.bindings} />
+                            <DocumentRenderer document={pane.document} bindings={pane.bindings} />
                             <Caption>{`Main button: ${pane.document.bar.primary.label}`}</Caption>
                         </Stack>
                     </Card>

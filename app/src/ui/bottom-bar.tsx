@@ -8,6 +8,7 @@ import { AppButton, IconButton } from './button'
 import type { IconName } from './icons'
 import { useLargeText } from './large-text'
 import { Callout } from './text'
+import { useOriginNativeId } from './render-origin'
 
 export type BarAction = {
     readonly label: string
@@ -58,6 +59,8 @@ export function FixedBottomBar({
     readonly placement?: 'flow' | 'overlay'
     readonly onHeight?: (height: number) => void
 }): ReactElement {
+    const barId = useOriginNativeId(nativeID)
+    const reasonId = useOriginNativeId(reasonNativeID)
     const { colors } = useTheme()
     const insets = useSafeAreaInsets()
     const large = useLargeText()
@@ -85,7 +88,7 @@ export function FixedBottomBar({
     return (
         <View
             testID={testID}
-            nativeID={nativeID}
+            nativeID={barId}
             onLayout={onHeight === undefined ? undefined : (event): void => onHeight(event.nativeEvent.layout.height)}
             style={[
                 styles.bar,
@@ -95,7 +98,7 @@ export function FixedBottomBar({
         >
             {reason === undefined || reason === null ? null : large ? (
                 <ScrollView
-                    nativeID={reasonNativeID}
+                    nativeID={reasonId}
                     accessibilityLiveRegion="polite"
                     style={{ maxHeight: Math.round(height * REASON_MAX_RATIO) }}
                     contentContainerStyle={styles.reason}
@@ -103,7 +106,7 @@ export function FixedBottomBar({
                     <Callout tone="muted">{reason}</Callout>
                 </ScrollView>
             ) : (
-                <View nativeID={reasonNativeID} accessibilityLiveRegion="polite" style={styles.reason}>
+                <View nativeID={reasonId} accessibilityLiveRegion="polite" style={styles.reason}>
                     <Callout tone="muted">{reason}</Callout>
                 </View>
             )}

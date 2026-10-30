@@ -4,6 +4,7 @@ import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
+import { useOriginNativeId } from './render-origin'
 
 // Verdicts always carry an icon and a text label. Colour is never the only signal.
 export type Verdict = 'pass' | 'refuse' | 'cannot_verify'
@@ -31,12 +32,13 @@ export function StatusTag({
     readonly icon?: IconName
     readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const tokens = TONE[tone]
     const type = typeProps('label')
     const iconColor = colors[tokens.text]
     return (
-        <View nativeID={nativeID} style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
+        <View nativeID={inheritedId} style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
             {icon === undefined ? null : <Icon name={icon} size="sm" color={iconColor} />}
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
@@ -85,11 +87,12 @@ export function Notice({
     readonly tone?: NoticeTone
     readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const type = typeProps('callout')
     return (
         <View
-            nativeID={nativeID}
+            nativeID={inheritedId}
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
             style={[styles.notice, { backgroundColor: colors.surfaceRaised }]}

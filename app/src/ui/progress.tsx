@@ -8,6 +8,7 @@ import { useCoachAttention, useCoachScope } from '../features/onboarding/coach-p
 import { useFeedback } from './feedback'
 import { timing } from './motion'
 import { Icon, type IconName } from './icons'
+import { useOriginNativeId } from './render-origin'
 
 /**
  * The fill is the only part that moves: it eases to a new value on the UI thread and starts at its true value on
@@ -29,6 +30,7 @@ export function ProgressBar({
     readonly animate?: boolean
     readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const { reduceMotion } = useFeedback()
     const scope = useCoachScope()
@@ -54,7 +56,7 @@ export function ProgressBar({
     const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }))
     return (
         <View
-            nativeID={nativeID}
+            nativeID={inheritedId}
             testID="progress-track"
             accessible={slim ? false : true}
             accessibilityElementsHidden={slim}

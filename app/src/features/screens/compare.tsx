@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Stack as RouterStack, useIsFocused } from 'expo-router'
 import type { LibraryEntry } from '../capture/library'
@@ -13,8 +13,10 @@ import { space } from '../../theme/tokens'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { manualDisplayTitle } from '../documents/manual-title'
 import { useDocument } from '../document-runtime/use-document'
+import { documentKey } from '../document-runtime/store'
 import type { FrameBindings } from '../documents/types'
 import { useJudge } from './judge-context'
+import { useOriginNativeId } from '../../ui/render-origin'
 
 export const SIDE_BY_SIDE_WIDTH = 900
 export function comparable(entry: LibraryEntry): boolean {
@@ -23,22 +25,29 @@ export function comparable(entry: LibraryEntry): boolean {
 
 /** Each pane is a real v2 guide with its own facts, citation hero and full frame; actions remain read-only. */
 export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactElement {
-    const { state, controller: reader } = useWorkflow()
+    const chromeOrigin = useOriginNativeId()
+    const { state, controller: reader, documents } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
     const focused = useIsFocused()
-    const reading = useDocument(
-        {
-            kind: 'guide',
-            session: entry.session,
-            stepId: entry.session.reviewedSteps[0]?.stepId ?? null,
-            captureId: null,
-            result: null,
-            failure: null,
-        },
-        { focused: false },
+    const inputs = useMemo(
+        () =>
+            ({
+                kind: 'guide',
+                session: entry.session,
+                stepId: entry.session.reviewedSteps[0]?.stepId ?? null,
+                captureId: null,
+                result: null,
+                failure: null,
+            }) as const,
+        [entry.session],
     )
-    void focused
+    const reading = useDocument(inputs, { focused: false })
+    const key = documentKey(inputs)
+    // Panes stay read-only and never become the shown guide for checking. Their bounded preparation is explicit.
+    useEffect(() => {
+        if (focused) documents?.warmup([inputs])
+    }, [documents, focused, key])
     const { manualId, revision } = entry.session
     const pageKey = manualPageImagesKey(entry.session)
     const [pictures, setPictures] = useState<{
@@ -78,7 +87,7 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
     }
     return (
         <View testID={`compare-pane-${entry.session.manualId}`} style={styles.paneFrame}>
-            <View nativeID="truebuild-render-origin:shell" style={{ padding: space.sm, gap: space.xs }}>
+            <View nativeID={chromeOrigin} style={{ padding: space.sm, gap: space.xs }}>
                 <Heading>{manualDisplayTitle(entry.session)}</Heading>
                 <Caption>
                     {reading.document.metadata.evidence === 'synthetic-fixture'

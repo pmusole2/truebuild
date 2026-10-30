@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react'
 import { Text, type StyleProp, type TextStyle } from 'react-native'
 import { useTheme } from '../theme/theme'
+import { useOriginNativeId } from './render-origin'
 import { typeProps, type TypeRole } from '../theme/typography'
 import type { Colors } from '../theme/tokens'
 
@@ -37,10 +38,11 @@ function Typeset({
     style,
 }: TypeProps & { readonly role: TypeRole; readonly header?: boolean }): ReactElement {
     const { colors } = useTheme()
+    const inheritedId = useOriginNativeId(nativeID)
     const type = typeProps(role)
     return (
         <Text
-            nativeID={nativeID}
+            nativeID={inheritedId}
             accessibilityRole={header ? 'header' : undefined}
             maxFontSizeMultiplier={type.maxFontSizeMultiplier}
             numberOfLines={numberOfLines}

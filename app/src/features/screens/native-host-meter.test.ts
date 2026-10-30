@@ -304,10 +304,14 @@ describe('coverage denominators and exclusions', () => {
                     element('', [text()]),
                     element('truebuild-capability-internals:ManualPage', [element('', [text()], 'Text')]),
                 ]),
-                element('truebuild-meter-exclude:development', [
-                    element('truebuild-render-origin:fallback', [text()]),
-                    element('truebuild-capability-internals:CoachMark', [element('', [text()], 'Text')]),
-                ]),
+                element(
+                    'truebuild-meter-exclude:development',
+                    [
+                        element('truebuild-render-origin:fallback', [text()]),
+                        element('truebuild-capability-internals:CoachMark', [element('', [text()], 'Text')]),
+                    ],
+                    'RN:DebuggingOverlay',
+                ),
                 element('truebuild-render-origin:shell', [], 'RN:RNSScreenStackHeaderConfig'),
             ]),
         ])
@@ -315,7 +319,7 @@ describe('coverage denominators and exclusions', () => {
         meter.registerRoot(documentRoot(root))
         const sample = meter.sample(point)
         expect(sample).toMatchObject({
-            metricsVersion: 2,
+            metricsVersion: 3,
             status: 'measured',
             counts: { generated: 6, fallback: 0, shell: 2, total: 8 },
             rawTextCounts: { generated: 3, fallback: 0, shell: 0, total: 3 },
@@ -346,15 +350,36 @@ describe('coverage denominators and exclusions', () => {
         expect(sample.strictByHostType?.['RN:RNSScreenStackHeaderConfig']?.shell).toBe(1)
     })
 
+    it('excludes only an actual DebuggingOverlay subtree and rejects a marker on application content', () => {
+        const meter = new NativeHostMeter()
+        const stop = meter.registerRoot(
+            documentRoot(
+                element('', [
+                    element('truebuild-render-origin:generated'),
+                    element('', [element(), text()], 'RN:DebuggingOverlay'),
+                ]),
+            ),
+        )
+        expect(meter.sample(point)).toMatchObject({
+            counts: { generated: 1, shell: 1, total: 2 },
+            exclusions: { development: { counts: { shell: 2, total: 2 }, rawTextCounts: { shell: 1, total: 1 } } },
+        })
+        stop()
+        meter.registerRoot(documentRoot(element('truebuild-meter-exclude:development', [element()])))
+        expect(meter.sample(point)).toMatchObject({ status: 'unavailable', reason: 'invalid-marker', counts: null })
+    })
+
     it('partitions development inside capability internals without double-counting nested boundaries', () => {
         const meter = new NativeHostMeter()
         meter.registerRoot(
             documentRoot(
                 element('truebuild-render-origin:generated', [
                     element('truebuild-capability-internals:CameraView', [
-                        element('truebuild-meter-exclude:development', [
-                            element('truebuild-capability-internals:ManualPage', [text()]),
-                        ]),
+                        element(
+                            'truebuild-meter-exclude:development',
+                            [element('truebuild-capability-internals:ManualPage', [text()])],
+                            'RN:DebuggingOverlay',
+                        ),
                     ]),
                 ]),
             ),
@@ -396,11 +421,8 @@ describe('coverage denominators and exclusions', () => {
         const sample = meter.sample(point)
         expect(sample.status).toBe('measured')
         expect(sample.counts).toEqual({ generated: 2, fallback: 2, shell: 0, total: 4 })
-        expect(sample.strictCounts).toEqual({ generated: 1, fallback: 0, shell: 0, total: 1 })
-        expect(sample.exclusions?.byCapability.PieceTile).toEqual({
-            counts: { generated: 1, fallback: 2, shell: 0, total: 3 },
-            rawTextCounts: { generated: 0, fallback: 1, shell: 0, total: 1 },
-        })
+        expect(sample.strictCounts).toEqual(sample.counts)
+        expect(sample.exclusions?.byCapability.PieceTile).toBeUndefined()
         expect(JSON.stringify(sample)).not.toContain('private-unrelated-native-id')
     })
 
@@ -413,13 +435,14 @@ describe('coverage denominators and exclusions', () => {
         'truebuild-meter-exclude:',
         'truebuild-meter-exclude:production',
         'truebuild-render-origin:invented',
+        'truebuild-render-orign:generated',
     ])('fails closed for reserved marker %s even inside a development exclusion', (id) => {
         const meter = new NativeHostMeter()
         meter.registerRoot(
             documentRoot(
                 element('', [
                     element('truebuild-render-origin:generated'),
-                    element('truebuild-meter-exclude:development', [element(id)]),
+                    element('truebuild-meter-exclude:development', [element(id)], 'RN:DebuggingOverlay'),
                 ]),
             ),
         )
@@ -435,26 +458,27 @@ describe('coverage denominators and exclusions', () => {
         })
     })
 
-    it.each(['truebuild-meter-exclude:development', 'truebuild-capability-internals:CameraView'])(
-        'never hides navigation chrome beneath %s',
-        (id) => {
-            const meter = new NativeHostMeter()
-            meter.registerRoot(
-                documentRoot(element('', [element(id, [element('', [], 'RN:RNSScreenStackHeaderSubview')])])),
-            )
-            expect(meter.sample(point)).toMatchObject({
-                status: 'unavailable',
-                reason: 'invalid-marker',
-                counts: null,
-                strictCounts: null,
-                exclusions: null,
-            })
-        },
-    )
+    it.each([
+        ['truebuild-meter-exclude:development', 'RN:DebuggingOverlay', 'RN:RNSScreenStackHeaderSubview'],
+        ['truebuild-capability-internals:CameraView', 'View', 'RN:RNSScreenStackHeaderSubview'],
+        ['truebuild-capability-internals:ManualPage', 'View', 'RN:RNSModalScreen'],
+    ])('never hides navigation chrome beneath %s', (id, parentName, childName) => {
+        const meter = new NativeHostMeter()
+        meter.registerRoot(documentRoot(element('', [element(id, [element('', [], childName)], parentName)])))
+        expect(meter.sample(point)).toMatchObject({
+            status: 'unavailable',
+            reason: 'invalid-marker',
+            counts: null,
+            strictCounts: null,
+            exclusions: null,
+        })
+    })
 
     it('retains the complete exclusion census at a zero denominator and never turns it into a percentage', () => {
         const meter = new NativeHostMeter()
-        const remove = meter.registerRoot(documentRoot(element('truebuild-meter-exclude:development', [text()])))
+        const remove = meter.registerRoot(
+            documentRoot(element('truebuild-meter-exclude:development', [text()], 'RN:DebuggingOverlay')),
+        )
         expect(meter.sample(point)).toMatchObject({
             status: 'unavailable',
             reason: 'empty-tree',
@@ -497,7 +521,9 @@ describe('coverage denominators and exclusions', () => {
         remove()
         const bounded = new NativeHostMeter({ maxNodes: 2 })
         bounded.registerRoot(
-            documentRoot(element('truebuild-meter-exclude:development', [element('', [disconnected])])),
+            documentRoot(
+                element('truebuild-meter-exclude:development', [element('', [disconnected])], 'RN:DebuggingOverlay'),
+            ),
         )
         expect(bounded.sample(point)).toMatchObject({
             status: 'unavailable',
@@ -528,7 +554,7 @@ describe('route-balanced coverage', () => {
         meter.sample(point)
         const session = meter.summarizeSession(point.sessionId, point.platform)
         expect(session).toMatchObject({
-            metricsVersion: 2,
+            metricsVersion: 3,
             sampleCount: 3,
             counts: { generated: 5, fallback: 0, shell: 1, total: 6 },
             generatedShare: 5 / 6,
@@ -581,5 +607,276 @@ describe('route-balanced coverage', () => {
             ['home', 'measured'],
             ['guide', 'unavailable'],
         ])
+    })
+})
+
+describe('focused visible method beside the mounted census', () => {
+    function refAt(node: NativeHostNode, root: NativeHostNode): NativeHostRoot {
+        return Object.assign(node, { ownerDocument: { documentElement: root } })
+    }
+
+    it('keeps wrapper own-host attribution without passing it to native navigation or unrelated route descendants', () => {
+        const focused = element('truebuild-document-root:guide|truebuild-render-origin:generated', [element()])
+        const background = element('truebuild-document-root:home|truebuild-render-origin:generated', [element()])
+        const tree = element(
+            '',
+            [
+                element('truebuild-document-navigation:app|truebuild-render-origin:generated', [
+                    element(
+                        '',
+                        [
+                            element(
+                                '',
+                                [
+                                    element(
+                                        'truebuild-document-content-boundary:home|truebuild-render-origin:fallback',
+                                        [element('', [background], 'SafeAreaView')],
+                                    ),
+                                ],
+                                'RN:RNSScreen',
+                            ),
+                            element(
+                                '',
+                                [
+                                    element('', [], 'RN:RNSScreenStackHeaderConfig'),
+                                    element(
+                                        'truebuild-document-content-boundary:guide|truebuild-render-origin:generated',
+                                        [element('', [focused], 'SafeAreaView')],
+                                    ),
+                                ],
+                                'RN:RNSScreen',
+                            ),
+                        ],
+                        'RN:RNSScreenStack',
+                    ),
+                ]),
+            ],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(focused, tree), { kind: 'app', screen: 'guide', focused: true })
+        meter.registerRoot(refAt(background, tree), { kind: 'app', screen: 'home', focused: false })
+        const sample = meter.sample(point)
+        expect(sample.methods.allMounted.counts).toEqual({ generated: 6, fallback: 1, shell: 7, total: 14 })
+        expect(sample.methods.focusedVisible.counts).toEqual({ generated: 4, fallback: 0, shell: 5, total: 9 })
+        for (const method of Object.values(sample.methods)) {
+            expect(method.byHostType?.['RN:RNSScreenStack']).toMatchObject({ generated: 0, shell: 1 })
+            expect(method.byHostType?.['RN:RNSScreenStackHeaderConfig']).toMatchObject({ generated: 0, shell: 1 })
+            expect(method.byHostType?.SafeAreaView?.generated).toBe(0)
+        }
+    })
+
+    it('selects an iOS modal screen with a full-window coach and excludes retained closing modal content', () => {
+        const body = element('truebuild-document-root:camera|truebuild-render-origin:generated')
+        const previous = element('truebuild-render-origin:fallback', [element()])
+        const coach = element('', [element('', [], 'Text')])
+        const closing = element('truebuild-render-origin:fallback', [element()])
+        const tree = element(
+            '',
+            [
+                element('', [previous], 'RN:RNSScreen'),
+                element('', [body], 'RN:RNSModalScreen'),
+                element('', [coach], 'RN:RNSFullWindowOverlay'),
+                element('', [closing], 'RN:RCTModalHostView'),
+            ],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        const cameraPoint = { ...point, screen: 'camera' }
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen: 'camera', focused: true })
+        meter.registerRoot(refAt(previous, tree), { kind: 'app', screen: 'guide', focused: false })
+        meter.registerRoot(refAt(coach, tree), { kind: 'coach', visible: true })
+        meter.registerRoot(refAt(closing, tree), { kind: 'sheet', visible: false })
+        const sample = meter.sample(cameraPoint)
+        expect(sample.methods.allMounted.counts).toEqual({ generated: 1, fallback: 4, shell: 7, total: 12 })
+        expect(sample.methods.focusedVisible).toMatchObject({
+            status: 'measured',
+            counts: { generated: 1, fallback: 0, shell: 5, total: 6 },
+            selection: {
+                boundary: 'native-screen',
+                overlayRootCount: 1,
+                background: { counts: { generated: 0, fallback: 4, shell: 2, total: 6 } },
+            },
+            byHostType: {
+                'RN:RNSModalScreen': { generated: 0, shell: 1 },
+                'RN:RNSFullWindowOverlay': { generated: 0, shell: 1 },
+            },
+        })
+    })
+
+    it('prunes mounted background screens while retaining focused screen, safe area and native header mechanics', () => {
+        const focused = element('truebuild-document-root:guide|truebuild-render-origin:generated', [element()])
+        const background = element('truebuild-render-origin:generated', [element(), element()])
+        const tree = element(
+            '',
+            [
+                element('', [element('', [background], 'SafeAreaView')], 'RN:RNSScreen'),
+                element(
+                    '',
+                    [element('', [], 'RN:RNSScreenStackHeaderConfig'), element('', [focused], 'SafeAreaView')],
+                    'RN:RNSScreen',
+                ),
+            ],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(focused, tree), { kind: 'app', screen: 'guide', focused: true })
+        meter.registerRoot(refAt(background, tree), { kind: 'app', screen: 'home', focused: false })
+        const sample = meter.sample(point)
+        expect(sample.methods.allMounted.counts).toEqual({ generated: 5, fallback: 0, shell: 6, total: 11 })
+        expect(sample.methods.focusedVisible).toMatchObject({
+            method: 'focused-visible-native-hosts',
+            status: 'measured',
+            counts: { generated: 2, fallback: 0, shell: 4, total: 6 },
+            byHostType: {
+                'RN:RNSScreen': { shell: 1, total: 1 },
+                'RN:RNSScreenStackHeaderConfig': { shell: 1, total: 1 },
+            },
+            selection: {
+                background: { counts: { generated: 3, shell: 2, total: 5 } },
+                focusedRootCount: 1,
+                overlayRootCount: 0,
+            },
+        })
+    })
+
+    it('unions a visible modal nested beneath a background screen without recovering its background content', () => {
+        const focused = element('truebuild-render-origin:generated')
+        const sheet = element('truebuild-document-root:sheet|truebuild-render-origin:fallback', [element()])
+        const background = element('', [element(), element('', [sheet], 'RN:ModalHostView')])
+        const tree = element(
+            '',
+            [element('', [focused], 'RN:RNSScreen'), element('', [background], 'RN:RNSScreen')],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(focused, tree), { kind: 'app', screen: 'guide', focused: true })
+        meter.registerRoot(refAt(background, tree), { kind: 'app', screen: 'home', focused: false })
+        meter.registerRoot(refAt(sheet, tree), { kind: 'sheet', visible: true })
+        const sample = meter.sample(point)
+        expect(sample.methods.focusedVisible).toMatchObject({
+            status: 'measured',
+            counts: { generated: 1, fallback: 2, shell: 3, total: 6 },
+            selection: { focusedRootCount: 1, overlayRootCount: 1 },
+        })
+        expect(meter.summarizeSession(point.sessionId, point.platform).methods.focusedVisible).toMatchObject({
+            status: 'measured',
+            meanRouteGeneratedShare: 1 / 6,
+            minimumScreenGeneratedShare: 1 / 6,
+            routes: [{ route: 'guide', counts: { total: 6 } }],
+        })
+    })
+
+    it('does not union a hidden modal or a mounted camera under a background screen', () => {
+        const body = element('truebuild-render-origin:generated')
+        const camera = element('truebuild-render-origin:generated', [element()])
+        const sheet = element('truebuild-render-origin:fallback')
+        const tree = element(
+            '',
+            [
+                element('', [body, element('', [sheet], 'RN:ModalHostView')], 'RN:RNSScreen'),
+                element('', [camera], 'RN:RNSScreen'),
+            ],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen: 'guide', focused: true })
+        meter.registerRoot(refAt(camera, tree), { kind: 'app', screen: 'camera', focused: false })
+        meter.registerRoot(refAt(camera, tree), { kind: 'camera' })
+        meter.registerRoot(refAt(sheet, tree), { kind: 'sheet', visible: false })
+        expect(meter.sample(point).methods.focusedVisible).toMatchObject({
+            status: 'measured',
+            counts: { generated: 1, fallback: 0, shell: 2, total: 3 },
+            selection: { overlayRootCount: 0 },
+        })
+    })
+
+    it('never marks navigation generated because it contains a generated document', () => {
+        const body = element('truebuild-document-root:abc|truebuild-render-origin:generated')
+        const tree = element(
+            '',
+            [element('', [element('', [], 'RN:RNSScreenStackHeaderConfig'), body], 'RN:RNSScreen')],
+            'RootView',
+        )
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen: 'guide', focused: true })
+        expect(meter.sample(point).methods.focusedVisible.counts).toEqual({
+            generated: 1,
+            fallback: 0,
+            shell: 3,
+            total: 4,
+        })
+    })
+
+    it('keeps mounted counts but fails focused selection closed when focus metadata or the selected host is missing', () => {
+        const meter = new NativeHostMeter()
+        const tree = element('truebuild-render-origin:generated')
+        const stop = meter.registerRoot(documentRoot(tree))
+        expect(meter.sample(point).methods.focusedVisible).toMatchObject({
+            status: 'unavailable',
+            counts: null,
+            reason: 'focus-unavailable',
+        })
+        stop()
+        meter.registerRoot(refAt(element(), tree), { kind: 'app', screen: 'guide', focused: true })
+        expect(meter.sample(point).methods.focusedVisible).toMatchObject({
+            status: 'unavailable',
+            counts: null,
+            reason: 'missing-root',
+        })
+        expect(meter.sample(point).methods.allMounted.status).toBe('measured')
+    })
+
+    it.each([
+        [true, true, 'guide'],
+        [false, false, 'guide'],
+        [true, false, 'other'],
+    ])('fails closed on conflicting, absent, or stale router focus (%s, %s, %s)', (one, two, screen) => {
+        const body = element('truebuild-render-origin:generated')
+        const other = element('truebuild-render-origin:fallback')
+        const tree = element('', [element('', [body], 'RN:RNSScreen'), element('', [other], 'RN:RNSScreen')])
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen, focused: one })
+        meter.registerRoot(refAt(other, tree), { kind: 'app', screen: 'home', focused: two })
+        expect(meter.sample(point).methods.focusedVisible).toMatchObject({
+            status: 'unavailable',
+            reason: 'focus-unavailable',
+            counts: null,
+        })
+    })
+
+    it('does not claim a focused native denominator when multiple route boundaries cannot be identified', () => {
+        const body = element('truebuild-render-origin:generated')
+        const other = element('truebuild-render-origin:fallback')
+        const tree = element('', [element('', [body], 'UnknownScreen'), element('', [other], 'UnknownScreen')])
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen: 'guide', focused: true })
+        meter.registerRoot(refAt(other, tree), { kind: 'app', screen: 'home', focused: false })
+        expect(meter.sample(point).methods.focusedVisible).toMatchObject({
+            status: 'unavailable',
+            reason: 'unsupported-tree',
+            counts: null,
+        })
+    })
+
+    it.each([
+        'truebuild-render-origin:generated|truebuild-render-origin:fallback',
+        'truebuild-render-origin:generated|truebuild-render-orign:generated',
+    ])('validates every background node before publishing either method (%s)', (invalid) => {
+        const body = element('truebuild-render-origin:generated')
+        const tree = element('', [element('', [body], 'RN:RNSScreen'), element(invalid)])
+        const meter = new NativeHostMeter()
+        meter.registerRoot(refAt(body, tree), { kind: 'app', screen: 'guide', focused: true })
+        const sample = meter.sample(point)
+        expect(sample.methods.allMounted).toMatchObject({
+            status: 'unavailable',
+            reason: 'invalid-marker',
+            counts: null,
+        })
+        expect(sample.methods.focusedVisible).toMatchObject({
+            status: 'unavailable',
+            reason: 'invalid-marker',
+            counts: null,
+        })
     })
 })

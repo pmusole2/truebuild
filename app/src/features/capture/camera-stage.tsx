@@ -19,7 +19,7 @@ import { CoachLocalOverlay } from '../onboarding/coach-overlay'
 import { cameraCandidates } from '../onboarding/coach-inventory'
 import { useContentFade } from '../../ui/motion'
 import { useCoach, useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
-import { applyWrittenTips } from '../screens/host'
+import { applyWrittenTips } from '../documents/coach-copy'
 
 /** Assembly guide shown over the live preview: where the person is, one cue, and the full step one tap away. */
 export type AssemblyGuide = {

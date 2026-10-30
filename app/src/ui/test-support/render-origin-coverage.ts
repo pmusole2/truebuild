@@ -1,4 +1,5 @@
 import type { JsonElement } from 'test-renderer'
+import { nativeMeterOriginInheritance, parseNativeMeterMarkers } from '../native-meter-markers'
 
 export type RenderOrigin = 'generated' | 'fallback' | 'shell'
 
@@ -54,8 +55,6 @@ export interface RenderOriginSessionSummary extends RenderOriginTotals {
     readonly minimumScreenGeneratedShare: number | null
 }
 
-const MARKER_NAMESPACE = 'truebuild-render-origin'
-
 function emptyCounts(): RenderOriginCounts {
     return { generated: 0, fallback: 0, shell: 0, total: 0 }
 }
@@ -83,26 +82,21 @@ function minimum(shares: readonly (number | null)[]): number | null {
     return shares.reduce<number>((lowest, value) => Math.min(lowest, value ?? lowest), 1)
 }
 
-function originFor(nativeID: unknown, inherited: RenderOrigin): RenderOrigin {
-    if (typeof nativeID !== 'string') return inherited
-    switch (nativeID) {
-        case `${MARKER_NAMESPACE}:generated`:
-            return 'generated'
-        case `${MARKER_NAMESPACE}:fallback`:
-            return 'fallback'
-        case `${MARKER_NAMESPACE}:shell`:
-            return 'shell'
-        default:
-            if (nativeID === MARKER_NAMESPACE || nativeID.startsWith(`${MARKER_NAMESPACE}:`)) {
-                throw new Error('invalid_render_origin_marker')
-            }
-            return inherited
+function inheritanceFor(
+    nativeID: unknown,
+    inherited: RenderOrigin,
+): { readonly origin: RenderOrigin; readonly childOrigin: RenderOrigin } {
+    try {
+        return nativeMeterOriginInheritance(parseNativeMeterMarkers(nativeID), inherited)
+    } catch {
+        throw new Error('invalid_render_origin_marker')
     }
 }
 
 /**
  * Measures every element in the supplied native test-renderer host tree. Markers belong on existing host
- * roots; the closest marked ancestor owns a node and its raw text unless a nested marker overrides it. Unmarked
+ * roots; the closest marked ancestor owns a node and its raw text unless a nested marker overrides it. Navigation and
+ * route ownership boundaries attribute their own hosts only and reset descendant inheritance to shell. Unmarked
  * roots are shell. No supplied hidden/non-accessible host is filtered. RNTL 14 preserves React-hidden hosts in its
  * JSON; a caller using another renderer must disclose any branches it omits. This does not measure physical
  * Fabric/UIKit/Android views or OS chrome.
@@ -125,7 +119,9 @@ export function measureRenderOriginTree(
         // RNTL 14 toJSON() retains a synthetic type "" container when multiple root hosts are present.
         const container = path === '$' && node.type === ''
         const nativeID: unknown = node.props.nativeID
-        const origin = container ? inherited : originFor(nativeID, inherited)
+        const { origin, childOrigin } = container
+            ? { origin: inherited, childOrigin: inherited }
+            : inheritanceFor(nativeID, inherited)
         if (!container) {
             countOrigin(counts, origin)
             const typeCounts = byHostType.get(node.type) ?? emptyCounts()
@@ -134,7 +130,7 @@ export function measureRenderOriginTree(
             const testID: unknown = node.props.testID
             nodes.push({ path, hostType: node.type, origin, ...(typeof testID === 'string' ? { testID } : {}) })
         }
-        node.children.forEach((child, index) => visit(child, `${path}/${index}`, origin))
+        node.children.forEach((child, index) => visit(child, `${path}/${index}`, childOrigin))
     }
 
     if (tree !== null) visit(tree, '$', 'shell')

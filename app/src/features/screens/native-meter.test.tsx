@@ -2,7 +2,8 @@ import type * as ReactModule from 'react'
 import { act, render } from '@testing-library/react-native'
 import { type ComponentRef, type ReactElement, type RefObject } from 'react'
 import type { View } from 'react-native'
-import { MeterRootsContext, useMeterRoot, type MeterRootKind } from '../../ui/meter-roots'
+import { usePathname } from 'expo-router'
+import { MeterRootsContext, useMeterRoot, type MeterRootKind, type MeterRootSelection } from '../../ui/meter-roots'
 import { MeterTriggers, NativeMeterProvider, screenOfPath, useMeterReading, type MeterReading } from './native-meter'
 import type { NativeHostNode, NativeHostRoot } from './native-host-meter'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
@@ -52,8 +53,16 @@ const tree = (): NativeHostNode =>
         element('truebuild-render-origin:shell'),
     ])
 
-function Root({ target, kind }: { target: RefObject<ComponentRef<typeof View> | null>; kind: MeterRootKind }): null {
-    useMeterRoot(target, kind)
+function Root({
+    target,
+    kind,
+    selection,
+}: {
+    target: RefObject<ComponentRef<typeof View> | null>
+    kind: MeterRootKind
+    selection?: MeterRootSelection
+}): null {
+    useMeterRoot(target, kind, selection)
     return null
 }
 const reading: { current: MeterReading | null } = { current: null }
@@ -265,6 +274,67 @@ describe('the device host meter wiring', () => {
         await on.flush()
         expect(reading.current?.snapshot?.latest?.checkpoint.checkpointId).toContain('requested')
         expect(reading.current?.snapshot?.version).toBeGreaterThan(before ?? 0)
+    })
+
+    it('passes changing router focus metadata and emits both complete named methods', async () => {
+        const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+        const home = element('truebuild-render-origin:generated')
+        const guide = element('truebuild-render-origin:fallback', [element()])
+        const homeScreen = { ...element('', [home]), nodeName: 'RN:RNSScreen' }
+        const guideScreen = { ...element('', [guide]), nodeName: 'RN:RNSScreen' }
+        const document = element('', [homeScreen, guideScreen])
+        const target = (node: NativeHostNode): RefObject<ComponentRef<typeof View> | null> =>
+            ({
+                current: Object.assign(node, { ownerDocument: { documentElement: document } }),
+            }) as unknown as RefObject<ComponentRef<typeof View> | null>
+        const homeRef = target(home)
+        const guideRef = target(guide)
+        function FocusedRoots(): ReactElement {
+            const focused = screenOfPath(usePathname())
+            return (
+                <>
+                    <Root target={homeRef} kind="app" selection={{ screen: 'home', focused: focused === 'home' }} />
+                    <Root target={guideRef} kind="app" selection={{ screen: 'guide', focused: focused === 'guide' }} />
+                </>
+            )
+        }
+        const first = harness({ enabled: true, roots: <FocusedRoots /> })
+        const view = await render(first.ui)
+        await first.flush()
+        expect(reading.current?.snapshot?.latest?.methods.focusedVisible).toMatchObject({
+            method: 'focused-visible-native-hosts',
+            counts: { generated: 1, fallback: 0, shell: 2, total: 3 },
+        })
+        await act(async () => mockPath.set('/guide/manual-private'))
+        await first.flush()
+        expect(reading.current?.snapshot?.latest?.methods.focusedVisible).toMatchObject({
+            status: 'measured',
+            counts: { generated: 0, fallback: 2, shell: 2, total: 4 },
+        })
+        const events = log.mock.calls.map(
+            ([value]) => JSON.parse(String(value)) as { methods?: unknown; session?: { methods?: unknown } },
+        )
+        expect(events.at(-1)).toMatchObject({
+            methods: {
+                allMounted: {
+                    method: 'all-mounted-native-hosts',
+                    counts: { generated: 1, fallback: 2, shell: 3, total: 6 },
+                },
+                focusedVisible: { method: 'focused-visible-native-hosts', counts: { total: 4 } },
+            },
+            session: {
+                methods: {
+                    focusedVisible: {
+                        routes: [
+                            { route: 'home', counts: { total: 3 } },
+                            { route: 'guide', counts: { total: 4 } },
+                        ],
+                    },
+                },
+            },
+        })
+        await view.unmount()
+        log.mockRestore()
     })
 
     it('is inert for a component that registers a root while no meter exists', async () => {

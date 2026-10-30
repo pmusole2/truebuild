@@ -13,6 +13,8 @@ import {
 import Svg, { Circle } from 'react-native-svg'
 import {
     screenFacts,
+    citationPlanV2,
+    sourceKeyV2,
     variantsOfV2,
     type CheckResult,
     type QuestionResult,
@@ -20,6 +22,8 @@ import {
     type ScreenNodeV2,
     type ScreenVariantV2,
     type TextRefV2,
+    type CitationPlanEntryV2,
+    type DocumentSourceV2,
 } from '@truebuild/contracts'
 import { AppButton, IconButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -44,7 +48,7 @@ import { stepPartChoices } from '../assembly/question-state'
 import { FactEditorBlock, ManualLibraryBlock, PageGalleryBlock } from '../screens/blocks-live'
 import type { BlockContext } from '../screens/blocks'
 import { barTestId } from '../screens/bar-ids'
-import { originId } from '../screens/render-origin'
+import { originId, RenderOriginProvider, mergeNativeIds, type RenderOrigin } from '../screens/render-origin'
 import { useJudge } from '../screens/judge-context'
 import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
@@ -146,10 +150,22 @@ type Environment = {
     showRegions: boolean
     loaded: () => void
     omittedDuplicates: ReadonlySet<string>
+    citations: Readonly<Record<string, CitationPlanEntryV2>>
+    planSources: readonly DocumentSourceV2[]
+    sections: Readonly<Record<string, boolean>>
+    sectionChanged: (path: string, open: boolean) => void
     trailing: ReactNode
 }
-const marked = (environment: Environment, path: string): string =>
-    originId(environment.document.metadata.origins[path] ?? 'fallback')
+const marked = (environment: Environment, path: string): string => {
+    const origin = environment.document.metadata.origins[path]
+    if (origin === undefined) throw new Error(`missing-origin:${path}`) // strict: never ??fallback (Sonnet validates completeness)
+    return originId(origin)
+}
+const originAt = (environment: Environment, path: string): RenderOrigin => {
+    const origin = environment.document.metadata.origins[path]
+    if (origin === undefined) throw new Error(`missing-origin:${path}`)
+    return origin
+}
 
 /** A quantity picture belongs to the document's step, never a different live selection's index. */
 function partRefs(environment: Environment, partId: string): ReturnType<typeof partSourceRefs> {
@@ -183,6 +199,60 @@ function heldResultForDocument(
         )
         ? result
         : null
+}
+
+/** Plan the result capability's real source opener alongside document Citation nodes; never alter the document. */
+function citationVariant(
+    document: ScreenDocumentV2,
+    bindings: FrameBindings,
+    photoLoaded: boolean,
+    variant: ScreenVariantV2,
+    prefix: string,
+    omitted: ReadonlySet<string>,
+    sections: Readonly<Record<string, boolean>>,
+    planSources: DocumentSourceV2[],
+    lowPriorityPaths: Set<string>,
+): ScreenVariantV2 {
+    const planNode = (node: ScreenNodeV2, path: string): ScreenNodeV2 => {
+        // A deduplicated fact citation is not an opener. Keep its path position without claiming any source.
+        if (node.type === 'Citation' && omitted.has(path)) return { ...node, sources: [] }
+        if (
+            node.type === 'VerdictCard' &&
+            heldResultForDocument(document, bindings, node.result, photoLoaded) !== null
+        ) {
+            return { type: 'Citation', sources: document.metadata.sourceMap[path] ?? [], label: null, display: 'chip' }
+        }
+        if (node.type === 'PieceTile') {
+            const session = bindings.session
+            const stepIndex =
+                session?.reviewStatus === 'reviewed'
+                    ? session.reviewedSteps.findIndex((step) => step.stepId === document.bound.stepId)
+                    : -1
+            const refs =
+                session === undefined ? [] : partSourceRefs(session, node.partId, stepIndex < 0 ? undefined : stepIndex)
+            const indexes = refs
+                .filter((ref) => ref.region === null)
+                .map((ref) => {
+                    const index = planSources.findIndex((source) => sourceKeyV2(source) === sourceKeyV2(ref))
+                    if (index >= 0) return index
+                    planSources.push(ref)
+                    return planSources.length - 1
+                })
+            lowPriorityPaths.add(path)
+            return { type: 'Citation', sources: indexes, label: null, display: 'chip' }
+        }
+        const visibleNode =
+            node.type === 'Section'
+                ? { ...node, initiallyOpen: containsSafety(node, document) || (sections[path] ?? node.initiallyOpen) }
+                : node
+        return 'children' in visibleNode
+            ? {
+                  ...visibleNode,
+                  children: visibleNode.children.map((child, index) => planNode(child, `${path}.${index}`)),
+              }
+            : visibleNode
+    }
+    return { ...variant, body: planNode(variant.body, `${prefix}body`) }
 }
 
 /** A fact's own citation is rendered with its first visible statement, once per fact identity. */
@@ -253,11 +323,13 @@ function duplicateFactPaths(
                 repeatedFact = seen.has(id) || sameCitedResult
                 if (repeatedFact) omitted.add(next)
                 else seen.add(id)
-            } else if (child.type === 'Citation' && currentFact !== null) {
-                const cited = citationsByFact.get(currentFact) ?? new Set<number>()
-                if (repeatedFact && child.sources.every((source) => cited.has(source))) omitted.add(next)
-                else child.sources.forEach((source) => cited.add(source))
-                citationsByFact.set(currentFact, cited)
+            } else if (child.type === 'Citation') {
+                if (currentFact !== null) {
+                    const cited = citationsByFact.get(currentFact) ?? new Set<number>()
+                    if (repeatedFact && child.sources.every((source) => cited.has(source))) omitted.add(next)
+                    else child.sources.forEach((source) => cited.add(source))
+                    citationsByFact.set(currentFact, cited)
+                }
             } else {
                 repeatedFact = false
                 currentFact = null
@@ -272,7 +344,12 @@ function duplicateFactPaths(
 function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean {
     if (node.type === 'Text' && node.content.kind === 'fact') {
         const id = node.content.factId
-        if (document.facts.some((fact) => fact.factId === id && fact.basis === 'safety-note')) return true
+        if (
+            document.facts.some(
+                (fact) => fact.factId === id && (fact.kind === 'safety' || fact.basis === 'safety-note'),
+            )
+        )
+            return true
     }
     return 'children' in node && node.children.some((child) => containsSafety(child, document))
 }
@@ -319,7 +396,7 @@ function contextOf(environment: Environment): BlockContext {
     const { document, bindings } = environment
     return {
         readOnly: bindings.readOnly,
-        originOf: (path) => document.metadata.origins[path] ?? 'fallback',
+        originOf: (path) => originAt(environment, path),
         origin: document.metadata.source,
         session: bindings.session,
         pageUris: bindings.pageUris,
@@ -512,17 +589,22 @@ function ReferenceImage({
 function Disclosure({
     title,
     initiallyOpen,
+    controlledOpen,
+    onOpenChange,
     forced,
     children,
     mark,
 }: {
     title: string
     initiallyOpen: boolean
+    controlledOpen?: boolean
+    onOpenChange?: (open: boolean) => void
     forced?: boolean
     children: ReactNode
     mark: string
 }): ReactElement {
-    const [open, setOpen] = useState(initiallyOpen)
+    const [localOpen, setOpen] = useState(initiallyOpen)
+    const open = controlledOpen ?? localOpen
     return (
         <View nativeID={mark} style={styles.stack}>
             <Pressable
@@ -531,7 +613,10 @@ function Disclosure({
                 accessibilityLabel={title}
                 accessibilityState={{ expanded: open || forced === true }}
                 disabled={forced}
-                onPress={(): void => setOpen(!open)}
+                onPress={(): void => {
+                    setOpen(!open)
+                    onOpenChange?.(!open)
+                }}
                 style={styles.touch}
             >
                 <Heading>{title}</Heading>
@@ -637,7 +722,7 @@ function Photo({
                 }
                 style={{ height, overflow: 'hidden' }}
             >
-                <View nativeID={originId('shell')} style={StyleSheet.absoluteFill}>
+                <View nativeID={mark} style={StyleSheet.absoluteFill}>
                     <Image
                         nativeID={capability('ManualPage')}
                         testID="frozen-photo-image"
@@ -659,7 +744,7 @@ function Photo({
                 check?.observedRegion == null &&
                 check?.targetRegion == null &&
                 check?.nextPartRegion == null ? null : (
-                    <View nativeID={originId('shell')} pointerEvents="none" style={StyleSheet.absoluteFill}>
+                    <View nativeID={mark} pointerEvents="none" style={StyleSheet.absoluteFill}>
                         {/* Result-proposed region geometry remains counted in every denominator. */}
                         <View style={StyleSheet.absoluteFill}>
                             <Svg width="100%" height="100%">
@@ -721,7 +806,8 @@ function Sources({
 }): ReactElement | null {
     const session = environment.bindings.session
     if (session === undefined) return null
-    const refs = [...new Set(node.sources)].flatMap((index) => {
+    const planned = environment.citations[path]
+    const refs = [...new Set(planned?.show ?? node.sources)].flatMap((index) => {
         const source = environment.document.sources[index]
         return source === undefined ? [] : [source]
     })
@@ -863,7 +949,7 @@ function Pages({
                 path={path}
             />
             {page === undefined ? null : (
-                <View nativeID={originId('shell')} style={styles.stack}>
+                <View nativeID={marked(environment, path)} style={styles.stack}>
                     <Heading>{`Page ${index + 1}`}</Heading>
                     <StepPicture
                         reference={{ pageId: page.pageId, region: null }}
@@ -922,6 +1008,8 @@ function Judge({
     const meter = useMeterReading()
     const [details, setDetails] = useState(false)
     const metadata = environment.document.metadata
+    const visible = meter.snapshot?.latest?.methods.focusedVisible
+    const session = meter.session?.methods.focusedVisible
     if (panel === 'about-check')
         return (
             <View nativeID={mark}>
@@ -935,7 +1023,6 @@ function Judge({
                 <StagesPanel
                     check={environment.bindings.live?.state.check ?? null}
                     stages={environment.bindings.live?.state.stages ?? null}
-                    resultSlot={undefined}
                     resultDocument={environment.bindings.resultDocument}
                     resultArrivedAt={environment.bindings.resultArrivedAt}
                 />
@@ -951,7 +1038,7 @@ function Judge({
                       ? 'Composed by Meta AI'
                       : 'App fallback composition'}
             </Caption>
-            <Caption>{`App UI now: ${meter.snapshot?.latest?.status === 'measured' ? `${(meter.snapshot.latest.generatedShare * 100).toFixed(1)}%${meter.snapshot.stale ? ' (screen changed)' : ''}` : 'Not recorded'} · session ${meter.session?.status === 'measured' ? `${(meter.session.generatedShare * 100).toFixed(1)}% across ${meter.session.sampleCount} checkpoints` : 'Not recorded'}`}</Caption>
+            <Caption>{`Generated elements on this screen: ${visible?.status === 'measured' ? `${(visible.generatedShare * 100).toFixed(1)}%${meter.snapshot?.stale ? ' (screen changed)' : ''}` : 'Not recorded'} · session ${session?.status === 'measured' ? `${(session.generatedShare * 100).toFixed(1)}%` : 'Not recorded'}`}</Caption>
             <AppButton
                 label={details ? 'Hide details' : 'Details'}
                 testID="judge-summary-details"
@@ -962,6 +1049,9 @@ function Judge({
                 <View testID="judge-details" style={styles.stack}>
                     <Caption>{`Source: ${metadata.source}`}</Caption>
                     <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture · no model call' : metadata.evidence}`}</Caption>
+                    {metadata.authoring === undefined ? null : (
+                        <Caption>{`Offline composition author: ${metadata.authoring.model}, ${metadata.authoring.effort} · ${metadata.authoring.recordedAt}. This is not a Meta inference result.`}</Caption>
+                    )}
                     {metadata.evidence === 'synthetic-fixture' ||
                     (metadata.model === null &&
                         metadata.effort === null &&
@@ -994,7 +1084,6 @@ function Judge({
                     <StagesPanel
                         check={environment.bindings.live?.state.check ?? null}
                         stages={environment.bindings.live?.state.stages ?? null}
-                        resultSlot={undefined}
                         resultDocument={environment.bindings.resultDocument}
                         resultArrivedAt={environment.bindings.resultArrivedAt}
                     />
@@ -1008,14 +1097,17 @@ function Judge({
 function Coverage(): ReactElement {
     const meter = useMeterReading()
     const latest = meter.snapshot?.latest
+    const visible = latest?.methods.focusedVisible
+    const session = meter.session?.methods.focusedVisible
     const percent = (value: number | null | undefined): string =>
         value == null ? 'Not recorded' : `${(value * 100).toFixed(2)}%`
     return (
         <View style={styles.stack}>
-            <Caption>{`This screen, all hosts: ${percent(latest?.generatedShare)}`}</Caption>
-            <Caption>{`Session, all hosts: ${percent(meter.session?.generatedShare)}`}</Caption>
-            <Caption>{`Mean across routes: ${percent(meter.session?.meanRouteGeneratedShare)}`}</Caption>
-            <Caption>{`Session, excluding declared native internals: ${percent(meter.session?.strictGeneratedShare)}`}</Caption>
+            <Caption>{`Visible screen and open sheets: ${percent(visible?.generatedShare)}`}</Caption>
+            <Caption>{`Visible-screen session: ${percent(session?.generatedShare)}`}</Caption>
+            <Caption>{`Mean across visible routes: ${percent(session?.meanRouteGeneratedShare)}`}</Caption>
+            <Caption>{`Visible session, excluding camera and manual-image internals: ${percent(session?.strictGeneratedShare)}`}</Caption>
+            <Caption>{`All mounted screens (previous method): ${percent(latest?.methods.allMounted.generatedShare)}; session ${percent(meter.session?.methods.allMounted.generatedShare)}`}</Caption>
             <Caption>
                 {latest == null
                     ? 'Not counted on this device.'
@@ -1023,12 +1115,13 @@ function Coverage(): ReactElement {
                       ? `Counted ${new Date(latest.sampledAt).toLocaleTimeString()}. ${meter.snapshot?.stale === true ? 'Screen changed since count.' : 'Current checkpoint.'}`
                       : `Count unavailable: ${latest.reason}`}
             </Caption>
-            {meter.session?.exclusions == null ? null : (
-                <Caption>{`Excluded development hosts: ${meter.session.exclusions.development.counts.total}; declared capability internals: ${meter.session.exclusions.capabilityInternals.counts.total}.`}</Caption>
+            {session?.exclusions == null ? null : (
+                <Caption>{`Excluded development hosts: ${session.exclusions.development.counts.total}; camera/manual-image internals: ${session.exclusions.capabilityInternals.counts.total}.`}</Caption>
             )}
             <Caption>
-                Counts the registered React Native host tree, including navigation roots. Physical system views are
-                outside this scope.
+                Counts generated elements in the focused screen and visible sheets. Navigation stays included;
+                background screens and development tools are listed separately. Physical system views are outside this
+                scope.
             </Caption>
             <AppButton testID="judge-measure" label="Count again" variant="quiet" onPress={meter.measureNow} />
         </View>
@@ -1054,6 +1147,10 @@ function PieceTile({
     const facts = screenFacts(bindings.session ?? null)
     const part = facts?.parts.find((item) => item.partId === node.partId)
     const refs = partRefs(environment, node.partId)
+    const links = (environment.citations[path]?.show ?? []).flatMap((index) => {
+        const source = environment.planSources[index]
+        return source === undefined ? [] : [source]
+    })
     if (part === undefined) return null
     const session = bindings.session
     const grounded = refs.find((ref) => ref.region != null)
@@ -1080,7 +1177,7 @@ function PieceTile({
                           </Caption>
                       ))
                 : null}
-            {grounded !== undefined || refs.length === 0 || session === undefined ? null : (
+            {links.length === 0 || session === undefined ? null : (
                 <>
                     <Pressable
                         testID="fact-source"
@@ -1093,7 +1190,7 @@ function PieceTile({
                         <Caption>{open ? 'Hide the manual page' : 'See it in the manual'}</Caption>
                     </Pressable>
                     {open ? (
-                        <SourceDiagrams refs={refs} session={session} pageUris={bindings.pageUris} fit="page" />
+                        <SourceDiagrams refs={links} session={session} pageUris={bindings.pageUris} fit="page" />
                     ) : null}
                 </>
             )}
@@ -1106,10 +1203,15 @@ type NodeProps = { node: ScreenNodeV2; environment: Environment; path: string }
 function Node(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
     if (props.environment.omittedDuplicates.has(props.path)) return <></>
-    if (!props.environment.bindings.inspect) return <NodeContent {...props} />
+    if (!props.environment.bindings.inspect)
+        return (
+            <RenderOriginProvider origin={originAt(props.environment, props.path)}>
+                <NodeContent {...props} />
+            </RenderOriginProvider>
+        )
     return (
         <View
-            nativeID={originId('shell')}
+            nativeID={marked(props.environment, props.path)}
             style={
                 props.node.type === 'Scroll' && props.path === `${props.environment.prefix}body`
                     ? styles.grow
@@ -1121,9 +1223,11 @@ function Node(props: NodeProps): ReactElement {
                 setShowSource(!showSource)
             }}
         >
-            <NodeContent {...props} />
+            <RenderOriginProvider origin={originAt(props.environment, props.path)}>
+                <NodeContent {...props} />
+            </RenderOriginProvider>
             {showSource ? (
-                <Caption>{`${props.node.type.replace(/([a-z])([A-Z])/gu, '$1 $2')} · ${props.node.type === 'Image' && unavailableManualImage(props.node, props.environment) ? 'fallback' : (props.environment.document.metadata.origins[props.path] ?? 'fallback')}`}</Caption>
+                <Caption>{`${props.node.type.replace(/([a-z])([A-Z])/gu, '$1 $2')} · ${props.node.type === 'Image' && unavailableManualImage(props.node, props.environment) ? 'fallback' : originAt(props.environment, props.path)}`}</Caption>
             ) : null}
         </View>
     )
@@ -1139,6 +1243,7 @@ function NodeContent({
     path: string
 }): ReactElement | null {
     const { colors } = useTheme()
+    const { width } = useWindowDimensions()
     const { document, bindings } = environment
     const mark = marked(environment, path)
     const text = (ref: TextRefV2 | null): string => documentText(document, bindings, ref)
@@ -1174,6 +1279,7 @@ function NodeContent({
                     {node.children.map((child, index) => (
                         <View
                             key={index}
+                            nativeID={mark}
                             style={{
                                 minWidth: 0,
                                 flexShrink: 1,
@@ -1191,7 +1297,11 @@ function NodeContent({
             return (
                 <View nativeID={mark} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: gap(node.gap) }}>
                     {node.children.map((child, index) => (
-                        <View key={index} style={{ flexBasis: `${100 / node.columns - 3}%`, flexGrow: 1 }}>
+                        <View
+                            key={index}
+                            nativeID={mark}
+                            style={{ flexBasis: `${100 / node.columns - 3}%`, flexGrow: 1 }}
+                        >
                             <Node node={child} environment={environment} path={`${path}.${index}`} />
                         </View>
                     ))}
@@ -1227,6 +1337,8 @@ function NodeContent({
                 <Disclosure
                     title={text(node.title)}
                     initiallyOpen={node.initiallyOpen}
+                    controlledOpen={environment.sections[path] ?? node.initiallyOpen}
+                    onOpenChange={(open): void => environment.sectionChanged(path, open)}
                     forced={containsSafety(node, document)}
                     mark={mark}
                 >
@@ -1247,7 +1359,14 @@ function NodeContent({
                     contentContainerStyle={
                         node.axis === 'horizontal'
                             ? styles.row
-                            : { gap: space.sm, padding: path === `${environment.prefix}body` ? space.md : 0 }
+                            : {
+                                  gap: space.sm,
+                                  padding: path === `${environment.prefix}body` ? space.md : 0,
+                                  // Tablet: cap the reading measure and centre it; header and bar stay full width.
+                                  ...(path === `${environment.prefix}body` && width >= 768
+                                      ? { width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const }
+                                      : {}),
+                              }
                     }
                     keyboardShouldPersistTaps="handled"
                     nestedScrollEnabled
@@ -1599,6 +1718,7 @@ export function NativeDocumentRenderer({
     chrome?: 'full' | 'body-only'
     testID?: string
 }): ReactElement {
+    const { width } = useWindowDimensions()
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
@@ -1635,6 +1755,25 @@ export function NativeDocumentRenderer({
     const gatePhoto = wanted.name === 'ready' && document.requirements.capture && !heldReady
     const selected = gatePhoto ? variants.find((item) => item.name === 'pending')! : wanted
     const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove)
+    const [sectionState, setSectionState] = useState<{ id: string; values: Readonly<Record<string, boolean>> }>(() => ({
+        id: bodyPage,
+        values: {},
+    }))
+    const sections = sectionState.id === bodyPage ? sectionState.values : {}
+    const omitted = duplicateFactPaths(document, bindings, heldReady, selected.variant.body, `${selected.prefix}body`)
+    const planSources = document.sources.slice()
+    const lowPriorityPaths = new Set<string>()
+    const plannedVariant = citationVariant(
+        document,
+        bindings,
+        heldReady,
+        selected.variant,
+        selected.prefix,
+        omitted,
+        sections,
+        planSources,
+        lowPriorityPaths,
+    )
     const environment: Environment = {
         document,
         bindings,
@@ -1642,13 +1781,19 @@ export function NativeDocumentRenderer({
         photoLoaded: heldReady,
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
-        omittedDuplicates: duplicateFactPaths(
-            document,
-            bindings,
-            heldReady,
-            selected.variant.body,
-            `${selected.prefix}body`,
-        ),
+        omittedDuplicates: omitted,
+        planSources,
+        sections,
+        sectionChanged: (path, open): void => {
+            setSectionState((held) => ({
+                id: bodyPage,
+                values: { ...(held.id === bodyPage ? held.values : {}), [path]: open },
+            }))
+        },
+        citations: citationPlanV2(plannedVariant, selected.prefix, planSources, {
+            includeManualPages: true,
+            lowPriorityPaths,
+        }),
         trailing: null,
     }
     const findRegions = (node: ScreenNodeV2): boolean =>
@@ -1656,7 +1801,7 @@ export function NativeDocumentRenderer({
     environment.showRegions = findRegions(selected.variant.body)
     environment.trailing =
         bindings.inspect && document.kind !== 'judge' ? (
-            <Judge environment={environment} panel="built-view" mark={originId('shell')} />
+            <Judge environment={environment} panel="built-view" mark={marked(environment, `${selected.prefix}body`)} />
         ) : null
     const action = (
         node: Omit<ScreenVariantV2['bar']['primary'], 'type'>,
@@ -1690,70 +1835,89 @@ export function NativeDocumentRenderer({
         }
     }
     return (
-        <ScreenBody
-            testID={testID}
-            nativeID={`truebuild-document-root:${document.screenId}`}
-            insetTop={bindings.insetTop}
-        >
-            {chrome === 'full' ? (
-                <View nativeID={marked(environment, `${selected.prefix}header`)} style={styles.header}>
-                    {selected.variant.header.back === null ? null : (
-                        <Action
-                            header
-                            action={selected.variant.header.back}
-                            environment={environment}
-                            path={`${selected.prefix}header.back`}
-                        />
-                    )}
-                    <View testID="document-header-copy" style={{ flex: 1, minWidth: 0, gap: space.xs }}>
-                        <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                        {selected.variant.header.subtitle === null ? null : (
-                            <Caption>{documentText(document, bindings, selected.variant.header.subtitle)}</Caption>
-                        )}
-                    </View>
-                    {selected.variant.header.actions.map((item, index) => (
-                        <Action
-                            header
-                            key={index}
-                            action={item}
-                            environment={environment}
-                            path={`${selected.prefix}header.actions.${index}`}
-                        />
-                    ))}
-                </View>
-            ) : null}
-            <Animated.View
-                key={bodyPage}
-                nativeID={marked(environment, `${selected.prefix}body`)}
-                style={[styles.grow, fade, stepMotion]}
-            >
-                {selected.variant.body.type === 'Scroll' ? (
-                    <Node node={selected.variant.body} environment={environment} path={`${selected.prefix}body`} />
-                ) : (
-                    <ScrollView
-                        keyboardShouldPersistTaps="handled"
-                        nestedScrollEnabled
-                        contentContainerStyle={{ padding: space.md, gap: space.sm }}
-                    >
-                        <Node node={selected.variant.body} environment={environment} path={`${selected.prefix}body`} />
-                        {environment.trailing}
-                    </ScrollView>
+        <RenderOriginProvider origin={originAt(environment, `${selected.prefix}body`)}>
+            <ScreenBody
+                testID={testID}
+                nativeID={mergeNativeIds(
+                    `truebuild-document-root:${document.screenId}`,
+                    marked(environment, `${selected.prefix}body`),
                 )}
-            </Animated.View>
-            <FixedBottomBar
-                nativeID={marked(environment, `${selected.prefix}bar.primary`)}
-                reasonNativeID={originId('fallback')}
-                primary={action(selected.variant.bar.primary, 'primary')}
-                secondary={
-                    selected.variant.bar.secondary === null
-                        ? undefined
-                        : action(selected.variant.bar.secondary, 'secondary')
-                }
-                reason={
-                    document.kind === 'camera' ? null : bindings.resolve(selected.variant.bar.primary.intent).reason
-                }
-            />
-        </ScreenBody>
+                insetTop={bindings.insetTop}
+            >
+                {chrome === 'full' ? (
+                    <View nativeID={marked(environment, `${selected.prefix}header`)} style={styles.header}>
+                        {selected.variant.header.back === null ? null : (
+                            <Action
+                                header
+                                action={selected.variant.header.back}
+                                environment={environment}
+                                path={`${selected.prefix}header.back`}
+                            />
+                        )}
+                        <View
+                            testID="document-header-copy"
+                            nativeID={marked(environment, `${selected.prefix}header`)}
+                            style={{ flex: 1, minWidth: 0, gap: space.xs }}
+                        >
+                            <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
+                            {selected.variant.header.subtitle === null ? null : (
+                                <Caption>{documentText(document, bindings, selected.variant.header.subtitle)}</Caption>
+                            )}
+                        </View>
+                        {selected.variant.header.actions.map((item, index) => (
+                            <Action
+                                header
+                                key={index}
+                                action={item}
+                                environment={environment}
+                                path={`${selected.prefix}header.actions.${index}`}
+                            />
+                        ))}
+                    </View>
+                ) : null}
+                <Animated.View
+                    key={bodyPage}
+                    nativeID={marked(environment, `${selected.prefix}body`)}
+                    style={[styles.grow, fade, stepMotion]}
+                >
+                    {selected.variant.body.type === 'Scroll' ? (
+                        <Node node={selected.variant.body} environment={environment} path={`${selected.prefix}body`} />
+                    ) : (
+                        <ScrollView
+                            keyboardShouldPersistTaps="handled"
+                            nestedScrollEnabled
+                            contentContainerStyle={{
+                                padding: space.md,
+                                gap: space.sm,
+                                ...(width >= 768
+                                    ? { width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const }
+                                    : {}),
+                            }}
+                        >
+                            <Node
+                                node={selected.variant.body}
+                                environment={environment}
+                                path={`${selected.prefix}body`}
+                            />
+                            {environment.trailing}
+                        </ScrollView>
+                    )}
+                </Animated.View>
+                <FixedBottomBar
+                    nativeID={marked(environment, `${selected.prefix}bar.primary`)}
+                    reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}
+                    primary={action(selected.variant.bar.primary, 'primary')}
+                    secondary={
+                        selected.variant.bar.secondary === null
+                            ? undefined
+                            : action(selected.variant.bar.secondary, 'secondary')
+                    }
+                    reason={
+                        document.kind === 'camera' ? null : bindings.resolve(selected.variant.bar.primary.intent).reason
+                    }
+                />
+            </ScreenBody>
+        </RenderOriginProvider>
     )
 }
 

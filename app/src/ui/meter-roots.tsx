@@ -13,12 +13,20 @@ import type { HostInstance, View } from 'react-native'
 /** What kind of root a component hands the host meter; it is only a label for the checkpoint's cause. */
 export type MeterRootKind = 'app' | 'sheet' | 'coach' | 'camera'
 
+export interface MeterRootSelection {
+    /** Opaque route name and router focus, supplied by the mounted screen rather than inferred from native props. */
+    readonly screen?: string
+    readonly focused?: boolean
+    /** Registered overlays are visible while mounted unless their owner explicitly marks them hidden. */
+    readonly visible?: boolean
+}
+
 /**
  * The part of the host meter a component needs: handing over a ref it already holds. The meter reads only the public
  * host instance API of those refs; nothing here touches React internals, observes mutations or polls.
  */
 export interface MeterRoots {
-    readonly registerRoot: (ref: HostInstance | null, kind: MeterRootKind) => () => void
+    readonly registerRoot: (ref: HostInstance | null, kind: MeterRootKind, selection?: MeterRootSelection) => () => void
 }
 
 export const MeterRootsContext = createContext<MeterRoots | null>(null)
@@ -32,6 +40,7 @@ export const MeterRootsContext = createContext<MeterRoots | null>(null)
 export function useMeterRoot(
     ref: RefObject<ComponentRef<typeof View> | null>,
     kind: MeterRootKind,
+    selection?: MeterRootSelection,
 ): RefCallback<ComponentRef<typeof View>> {
     const roots = useContext(MeterRootsContext)
     const [node, setNode] = useState(() => ref.current)
@@ -45,7 +54,11 @@ export function useMeterRoot(
     )
     useEffect(() => {
         if (roots === null) return undefined
-        return roots.registerRoot(node, kind)
-    }, [roots, node, kind])
+        return roots.registerRoot(node, kind, {
+            screen: selection?.screen,
+            focused: selection?.focused,
+            visible: selection?.visible,
+        })
+    }, [roots, node, kind, selection?.screen, selection?.focused, selection?.visible])
     return attach
 }

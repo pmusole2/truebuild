@@ -40,7 +40,8 @@ import { useFeedback } from './feedback'
 import { SPRING_GENTLE, timing } from './motion'
 import { useLargeText } from './large-text'
 import { Body, Heading } from './text'
-import { useDocumentOwnershipId } from '../features/documents/ownership'
+import { DocumentOwnershipScope, useDocumentFrameOwner } from '../features/documents/ownership'
+import { mergeNativeIds, originId, useRenderOrigin } from './render-origin'
 const SheetDismissContext = createContext<(() => void) | null>(null)
 /** A document's own Back/Close action uses the same native dismissal motion and single-use latch as the grabber. */
 export function useSheetDismiss(): (() => void) | null {
@@ -138,32 +139,48 @@ export function BottomSheet({
     /** A complete document owns header, content scrolling and bar; keep only native sheet mechanics. */
     readonly documentFrame?: boolean
 }): ReactElement {
-    const documentId = useDocumentOwnershipId()
+    const parent = useDocumentFrameOwner()
+    const inherited = useRenderOrigin()
     return (
-        <Modal
-            nativeID={documentFrame && documentId !== null ? `truebuild-document-root:${documentId}` : undefined}
-            visible={visible}
-            transparent={true}
-            animationType="none"
-            onRequestClose={onClose}
-            accessibilityViewIsModal={true}
-        >
-            {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}
-            <SafeAreaProvider>
-                <SheetFrame
-                    title={title}
-                    compactTitle={compactTitle}
-                    onClose={onClose}
-                    detents={detents}
-                    initialDetent={initialDetent}
-                    testID={testID}
-                    scrollTestID={scrollTestID}
-                    documentFrame={documentFrame}
-                >
-                    {children}
-                </SheetFrame>
-            </SafeAreaProvider>
-        </Modal>
+        <DocumentOwnershipScope>
+            {(published) => {
+                // Document sheets publish their own frame. A citation disclosure belongs to its actual model-authored node.
+                const owner =
+                    published ??
+                    (!documentFrame && inherited !== null && parent !== null ? { ...parent, origin: inherited } : null)
+                return (
+                    <Modal
+                        nativeID={
+                            owner === null
+                                ? undefined
+                                : mergeNativeIds(`truebuild-document-root:${owner.documentId}`, originId(owner.origin))
+                        }
+                        visible={visible}
+                        transparent={true}
+                        animationType="none"
+                        onRequestClose={onClose}
+                        accessibilityViewIsModal={true}
+                    >
+                        {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}
+                        <SafeAreaProvider>
+                            <SheetFrame
+                                visible={visible}
+                                title={title}
+                                compactTitle={compactTitle}
+                                onClose={onClose}
+                                detents={detents}
+                                initialDetent={initialDetent}
+                                testID={testID}
+                                scrollTestID={scrollTestID}
+                                documentFrame={documentFrame}
+                            >
+                                {children}
+                            </SheetFrame>
+                        </SafeAreaProvider>
+                    </Modal>
+                )
+            }}
+        </DocumentOwnershipScope>
     )
 }
 
@@ -183,6 +200,7 @@ export function MoreSheet(props: {
 }
 
 function SheetFrame({
+    visible,
     title,
     compactTitle,
     onClose,
@@ -193,6 +211,7 @@ function SheetFrame({
     scrollTestID,
     documentFrame,
 }: {
+    readonly visible: boolean
     readonly title: string
     readonly compactTitle: string | undefined
     readonly onClose: () => void
@@ -204,7 +223,8 @@ function SheetFrame({
     readonly documentFrame: boolean
 }): ReactElement {
     const { colors, scheme } = useTheme()
-    const documentId = useDocumentOwnershipId()
+    const frame = useDocumentFrameOwner()
+    const documentId = frame?.documentId ?? null
     const { reduceMotion } = useFeedback()
     const { height } = useWindowDimensions()
     const insets = useSafeAreaInsets()
@@ -254,7 +274,7 @@ function SheetFrame({
     const closing = useRef(false)
     const titleRef = useRef<ComponentRef<typeof View>>(null)
     // The sheet is its own native window; its content is a root the host meter must be able to reach while it is open.
-    const attachMeterRoot = useMeterRoot(titleRef, 'sheet')
+    const attachMeterRoot = useMeterRoot(titleRef, 'sheet', { visible })
 
     const settle = useCallback(
         (to: number): void => {
@@ -418,7 +438,10 @@ function SheetFrame({
                     <View
                         ref={attachMeterRoot}
                         collapsable={false}
-                        nativeID={documentId === null ? undefined : `truebuild-document-content-boundary:${documentId}`}
+                        nativeID={mergeNativeIds(
+                            `truebuild-document-content-boundary:${documentId ?? 'unowned'}`,
+                            originId(frame?.origin ?? 'shell'),
+                        )}
                         style={{ flex: 1, minHeight: 0 }}
                     >
                         <SheetDismissContext.Provider value={close}>{children}</SheetDismissContext.Provider>

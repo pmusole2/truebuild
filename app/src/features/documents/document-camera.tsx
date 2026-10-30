@@ -7,11 +7,27 @@ import { DocumentSurface } from '../capture/document-surface'
 import { useWorkflow } from '../capture/workflow-context'
 import { nativeProofConfig } from '../ai-effort-proof/config'
 import type * as ProofRuntime from '../ai-effort-proof/runtime'
-import { originId } from '../screens/render-origin'
+import { originId, useRenderOrigin } from '../screens/render-origin'
+import type { ReactNode } from 'react'
+
+/**
+ * Preview container for the CameraView document node. The element is constructed here (outside the
+ * renderer's provider) but rendered as the node's child, so the origin is read from context at render
+ * time: the wrapper inherits the node's actual origin; only the CameraView/Image internals are capability.
+ * With no provider above it, the honest shell origin remains.
+ */
+function CameraPreviewShell({ children }: { children: ReactNode }): ReactElement {
+    const origin = useRenderOrigin()
+    return (
+        <View nativeID={originId(origin ?? 'shell')} style={StyleSheet.absoluteFill}>
+            {children}
+        </View>
+    )
+}
 
 /** Native camera IO only. The CameraView document places its preview; its bar is the one shutter. */
 export function DocumentCamera(): ReactElement {
-    if (__DEV__) {
+    if (__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') {
         if (nativeProofConfig(API_BASE_URL) !== null) return <FixtureCamera />
     }
     return <HardwareCamera />
@@ -19,7 +35,8 @@ export function DocumentCamera(): ReactElement {
 
 function FixtureCamera(): ReactElement {
     const workflow = useWorkflow()
-    if (!__DEV__ || nativeProofConfig(API_BASE_URL) === null) throw new Error('Fixture camera disabled')
+    if (!(__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') || nativeProofConfig(API_BASE_URL) === null)
+        throw new Error('Fixture camera disabled')
     // Loaded only inside the explicit DEV/isolated-loopback fixture boundary.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const runtime = require('../ai-effort-proof/runtime') as typeof ProofRuntime
@@ -50,7 +67,7 @@ function FixtureCamera(): ReactElement {
                 ready,
                 permission: 'granted',
                 preview: (
-                    <View nativeID={originId('shell')} style={StyleSheet.absoluteFill}>
+                    <CameraPreviewShell>
                         <Image
                             nativeID="truebuild-capability-internals:CameraView"
                             accessibilityLabel="Synthetic fixture camera image"
@@ -58,7 +75,7 @@ function FixtureCamera(): ReactElement {
                             resizeMode="contain"
                             style={StyleSheet.absoluteFill}
                         />
-                    </View>
+                    </CameraPreviewShell>
                 ),
                 capture: (): void => {
                     if (ready) void controller.shutter(async () => ({ ...asset }))
@@ -86,7 +103,7 @@ function HardwareCamera(): ReactElement {
     }
     const preview =
         allowed && !error ? (
-            <View nativeID={originId('shell')} style={StyleSheet.absoluteFill}>
+            <CameraPreviewShell>
                 <CameraView
                     nativeID="truebuild-capability-internals:CameraView"
                     key={attempt}
@@ -100,7 +117,7 @@ function HardwareCamera(): ReactElement {
                         setReady(false)
                     }}
                 />
-            </View>
+            </CameraPreviewShell>
         ) : null
     return (
         <DocumentSurface

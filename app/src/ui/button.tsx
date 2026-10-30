@@ -7,6 +7,7 @@ import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
 import { focusRingStyle, useFocusRing } from './focus'
 import { MotionPressable, usePressMotion } from './press-motion'
+import { useOriginNativeId } from './render-origin'
 
 // `accent` marks the single primary task on a screen. Quiet actions use text without competing filled containers.
 // A control that cannot act keeps its place, dimmed. The press motion carries this opacity as its resting value.
@@ -55,6 +56,7 @@ export function AppButton({
     compact = false,
     nativeID,
 }: AppButtonProps): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const { haptic } = useFeedback()
     const focus = useFocusRing()
@@ -78,7 +80,7 @@ export function AppButton({
             onPressIn={press.onPressIn}
             onPressOut={press.onPressOut}
             testID={testID}
-            nativeID={nativeID}
+            nativeID={inheritedId}
             style={[
                 styles.base,
                 compact && styles.compact,
@@ -123,6 +125,7 @@ export function IconButton({
     testID,
     nativeID,
 }: IconButtonProps): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const { haptic } = useFeedback()
     const focus = useFocusRing()
@@ -143,7 +146,7 @@ export function IconButton({
             onPressIn={press.onPressIn}
             onPressOut={press.onPressOut}
             testID={testID}
-            nativeID={nativeID}
+            nativeID={inheritedId}
             style={[
                 styles.base,
                 styles.square,

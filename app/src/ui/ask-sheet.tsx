@@ -7,6 +7,7 @@ import { TextField } from './fields'
 import { focusRingStyle, useFocusRing } from './focus'
 import { Caption } from './text'
 import { Stack } from './surface'
+import { originId, parseOrigin } from './render-origin'
 
 export type AskPart = { readonly id: string; readonly label: string }
 
@@ -94,7 +95,7 @@ export function AskSheet({
             <Caption>{targetSummary}</Caption>
             {busy && stillThinking ? (
                 <View
-                    nativeID="truebuild-render-origin:shell"
+                    nativeID={originId(parseOrigin(nativeID) ?? 'shell')}
                     accessible
                     accessibilityLabel="Still thinking…"
                     accessibilityLiveRegion="polite"

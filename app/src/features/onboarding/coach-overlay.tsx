@@ -32,7 +32,7 @@ import { TARGET_HINT } from './coach-inventory'
 import { bubbleMaxHeight, bubbleWidth, cutoutOf, placeBubble, type Placement } from './coach-placement'
 import { useCoach } from './coach-provider'
 import type { ActiveStep, Rect } from './coach-types'
-import { originId } from '../screens/render-origin'
+import { mergeNativeIds, originId } from '../screens/render-origin'
 
 type Controls = {
     readonly next: () => void
@@ -54,10 +54,21 @@ export function CoachRootOverlay({
     evidenceScene?: string
 }): ReactElement {
     const view = <CoachOverlayView step={active} controls={controls} evidenceScene={evidenceScene} />
+    const marker =
+        active.candidate.documentId === undefined
+            ? originId('shell')
+            : mergeNativeIds(
+                  `truebuild-document-root:${active.candidate.documentId}`,
+                  originId(active.candidate.textOrigin ?? 'shell'),
+              )
     return Platform.OS === 'ios' ? (
-        <FullWindowOverlay unstable_accessibilityContainerViewIsModal={true}>{view}</FullWindowOverlay>
+        // FullWindowOverlay does not forward nativeID. This frame contains only this CoachMark's portal.
+        <View nativeID={marker} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+            <FullWindowOverlay unstable_accessibilityContainerViewIsModal={true}>{view}</FullWindowOverlay>
+        </View>
     ) : Platform.OS === 'android' ? (
         <Modal
+            nativeID={marker}
             testID="coach-root-modal"
             transparent
             animationType="none"
@@ -250,6 +261,14 @@ export function CoachOverlayView({
     return (
         <View
             testID="coach-overlay"
+            nativeID={
+                step.candidate.documentId === undefined
+                    ? undefined
+                    : mergeNativeIds(
+                          `truebuild-document-root:${step.candidate.documentId}`,
+                          originId(step.candidate.textOrigin ?? 'shell'),
+                      )
+            }
             style={styles.root}
             pointerEvents="box-none"
             accessibilityViewIsModal={true}

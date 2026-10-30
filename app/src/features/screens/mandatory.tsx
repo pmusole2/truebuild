@@ -16,7 +16,6 @@ import { space, touchTarget } from '../../theme/tokens'
 import type { BlockContext } from './blocks'
 import { originId, type RenderOrigin } from './render-origin'
 import { safetyKey } from './safety'
-import type { ScreenSlot } from './use-screen-slot'
 
 type DirectionsNode = Extract<ScreenNode, { type: 'ManualDirections' }>
 
@@ -192,10 +191,11 @@ export function mandatoryFacts(
     for (const fact of all.values()) {
         if (placed.has(fact.factId) || keys.has(safetyKey(fact.text))) continue
         const entry = published.get(fact.factId)
+        const origin = entry === undefined ? 'fallback' : document?.metadata.origins?.[`facts.${entry.index}`]
+        if (origin === undefined) throw new Error(`missing-origin:facts.${entry?.index}`)
         remaining.push({
             fact,
-            origin:
-                entry === undefined ? 'fallback' : (document?.metadata.origins?.[`facts.${entry.index}`] ?? 'fallback'),
+            origin,
         })
     }
     return remaining
@@ -208,21 +208,18 @@ export function mandatoryFacts(
 export function MandatoryFacts({
     session,
     stepId,
-    slot,
-    enabled = slot !== undefined,
+    enabled = false,
     visibleText,
 }: {
     readonly session: ManualSession | undefined
     readonly stepId: string | null
-    readonly slot: ScreenSlot | undefined
     readonly enabled?: boolean
     /** Complete native text already rendered beside this remainder, never a hidden or shortened summary. */
     readonly visibleText?: string | undefined
 }): ReactElement | null {
     const pageUris = useOptionalWorkflow()?.state.pageUris
     if (!enabled) return null
-    const ready = slot?.status === 'ready' ? slot.screen : null
-    const remaining = mandatoryFacts(session, stepId, ready?.document ?? null, ready?.guarded.body ?? null).filter(
+    const remaining = mandatoryFacts(session, stepId, null).filter(
         ({ fact }) => visibleText === undefined || safetyKey(fact.text) !== safetyKey(visibleText),
     )
     if (remaining.length === 0) return null
