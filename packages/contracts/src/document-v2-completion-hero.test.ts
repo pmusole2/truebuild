@@ -10,6 +10,7 @@ import {
     completionFigureV2,
     createDemoManual,
     documentMaterialV2,
+    earnedStateIssuesV2,
     manualSessionSchema,
     screenContextJsonV2,
     screenDocumentV2Schema,
@@ -95,6 +96,18 @@ const nodesOf = (variant: Parameters<typeof visitVariantNodesV2>[0]): ScreenNode
     const found: ScreenNodeV2[] = []
     visitVariantNodesV2(variant, '', ({ node }) => found.push(node))
     return found
+}
+
+const isCount = (node: ScreenNodeV2): boolean =>
+    node.type === 'Text' && node.content.kind === 'bound' && node.content.key === 'completion-summary'
+const isSuccessCheck = (node: ScreenNodeV2): boolean =>
+    node.type === 'Icon' && node.name === 'check' && node.tone === 'success'
+const childrenOf = (node: ScreenNodeV2 | undefined): ScreenNodeV2[] =>
+    node !== undefined && 'children' in node ? node.children : []
+const tally = (nodes: ScreenNodeV2[]): Record<string, number> => {
+    const counts: Record<string, number> = {}
+    for (const node of nodes) counts[node.type] = (counts[node.type] ?? 0) + 1
+    return counts
 }
 
 describe('the completion figure is the manual’s own, chosen by one shared rule', () => {
@@ -209,6 +222,8 @@ describe('the finished-build document shows that figure with an honest caption a
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(document.requirements.facts).toEqual([])
+        // The earned shape (count grouped with its check) is the one that stays valid at the largest manual.
+        expect(nodesOf(document).filter(isSuccessCheck)).toHaveLength(1)
     })
 
     it('stays grounded: the context key follows the figure, and no other screen’s key moves', () => {
@@ -244,11 +259,99 @@ describe('the finished-build document shows that figure with an honest caption a
             const document = buildFallbackDocumentV2(inputs, deps)
             expect(nodesOf(document).filter((node) => node.type === 'Image' || node.type === 'Citation')).toEqual([])
         }
-        // A local sessionless completion must stay complete without claiming a build progress value.
+        // A local sessionless completion must stay complete without claiming a build progress value or a success mark.
         const empty = buildFallbackDocumentV2(sessionless, deps)
         expect(nodesOf(empty).filter((node) => node.type === 'Progress')).toEqual([])
+        expect(nodesOf(empty).filter((node) => node.type === 'Icon' || node.type === 'Row')).toEqual([])
         expect(verifyDocumentAgainstInputsV2(empty, sessionless, sha256Hex)).toEqual([])
         const document = buildFallbackDocumentV2(pageless, deps)
         expect(verifyDocumentAgainstInputsV2(document, pageless, sha256Hex)).toEqual([])
+    })
+})
+
+describe('the earned completion groups its count with one restrained success check', () => {
+    const figure = manual(3, 3, [{ pageId: 'page-2', region: REGION }])
+
+    it('puts the existing count and one success check in a single Row, straight before the one Progress', () => {
+        const inputs = completion(figure)
+        expect(documentMaterialV2(inputs).completion).toBe('witnessed')
+        const ready = nodesOf(buildFallbackDocumentV2(inputs, deps))
+
+        // The same count text, once, with one small success check ahead of it, and nothing else in the Row.
+        expect(ready.filter(isCount)).toHaveLength(1)
+        expect(ready.filter(isSuccessCheck)).toEqual([{ type: 'Icon', name: 'check', tone: 'success', size: 'sm' }])
+        expect(ready.filter((node) => node.type === 'Row')).toEqual([
+            expect.objectContaining({
+                justify: 'start',
+                wrap: false,
+                children: [
+                    { type: 'Icon', name: 'check', tone: 'success', size: 'sm' },
+                    expect.objectContaining({ type: 'Text', content: { kind: 'bound', key: 'completion-summary' } }),
+                ],
+            }),
+        ])
+
+        // Kept with the manual, its picture and the single indicator.
+        const holders = ready.filter((node) => childrenOf(node).some((child) => child.type === 'Row'))
+        expect(holders).toHaveLength(1)
+        expect(childrenOf(holders[0]).map((child) => child.type)).toEqual([
+            'Text',
+            'Text',
+            'Image',
+            'Citation',
+            'Row',
+            'Progress',
+        ])
+
+        // Nothing is added besides the Row and its icon: no card, spacer, divider, meter or filler.
+        const unearned = nodesOf(buildFallbackDocumentV2(completion(figure, false), deps))
+        expect(tally(ready)).toEqual({ ...tally(unearned), Row: 1, Icon: 1 })
+    })
+
+    it.each([
+        ['nothing is done', figure, []],
+        ['the last step is still open', figure, ['step-1', 'step-2']],
+        [
+            'every step is marked on a manual that was never reviewed',
+            { ...manual(2, 2), reviewStatus: 'unreviewed' as const },
+            ['step-1', 'step-2'],
+        ],
+    ])('earns no success mark when %s', (_name, session, done) => {
+        const inputs: ScreenContextInputsV2 = { ...completion(session, false), completedStepIds: done }
+        expect(documentMaterialV2(inputs).completion).toBe('unwitnessed')
+        const document = buildFallbackDocumentV2(inputs, deps)
+        for (const { name, variant } of variantsOfV2(document)) {
+            expect(
+                nodesOf(variant).filter((node) => node.type === 'Icon' || node.type === 'Row'),
+                name,
+            ).toEqual([])
+        }
+        // The same plain count and the one indicator, as before.
+        const ready = nodesOf(document)
+        expect(ready.filter(isCount)).toHaveLength(1)
+        expect(ready.filter((node) => node.type === 'Progress')).toHaveLength(1)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+    })
+
+    it('keeps every waiting and failing variant of an earned completion free of the mark and the count', () => {
+        const document = buildFallbackDocumentV2(completion(figure), deps)
+        const others = variantsOfV2(document).filter((entry) => entry.name !== 'ready')
+        expect(others.length).toBeGreaterThan(0)
+        for (const { name, variant } of others) {
+            expect(
+                nodesOf(variant).filter((node) => node.type === 'Icon' || node.type === 'Row' || isCount(node)),
+                name,
+            ).toEqual([])
+        }
+    })
+
+    it('is refused by the existing earned-state gate wherever the completion is not witnessed', () => {
+        const earned = buildFallbackDocumentV2(completion(figure), deps)
+        expect(earnedStateIssuesV2(earned, documentMaterialV2(completion(figure)))).toEqual([])
+        expect(
+            earnedStateIssuesV2(earned, documentMaterialV2(completion(figure, false))).some((issue) =>
+                issue.endsWith(':icon_unearned'),
+            ),
+        ).toBe(true)
     })
 })

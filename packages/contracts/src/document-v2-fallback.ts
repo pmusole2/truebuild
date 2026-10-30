@@ -430,6 +430,25 @@ function completionFigure(material: DocumentMaterialV2): { picture: Node[]; sour
 }
 
 /**
+ * The finished build's count: the app's own `completion-summary` text, never rewritten. Only a witnessed completion
+ * groups it with one small success check (the earned-state gate refuses that check anywhere else); every other build
+ * keeps the plain count.
+ */
+function completionCount(material: DocumentMaterialV2): Node {
+    const count = text(bound('completion-summary'))
+    return material.completion === 'witnessed'
+        ? {
+              type: 'Row',
+              gap: 'sm',
+              align: 'center',
+              justify: 'start',
+              wrap: false,
+              children: [{ type: 'Icon', name: 'check', tone: 'success', size: 'sm' }, count],
+          }
+        : count
+}
+
+/**
  * Lets the person say which part a question is about: offered only when the app actually holds a photo to point at and
  * the step has named parts, bound to the app's own target state. No target is ever preselected or invented here.
  */
@@ -720,7 +739,7 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
                     // the opener of the page it came from, kept together.
                     ...figure.picture,
                     ...figure.source,
-                    text(bound('completion-summary')),
+                    completionCount(material),
                     // One witnessed build indicator, kept with its manual and count.
                     { type: 'Progress', binding: 'build', label: null },
                 ]),
