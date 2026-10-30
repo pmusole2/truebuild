@@ -76,7 +76,7 @@ export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; det
 /** The busy variant's authored words per activity (what the app is doing), never a native text override. */
 export const BUSY_COPY_V2: Readonly<Record<BusyActivityV2, { heading: string; detail: string }>> = {
     working: { heading: 'Working on it', detail: 'One moment, please.' },
-    reading: { heading: 'Reading your manual. This can take a minute.', detail: 'Reading each page.' },
+    reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
     checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
     'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
     asking: { heading: 'Asking…', detail: 'This only takes a moment.' },
@@ -128,10 +128,29 @@ const COMMON: readonly string[] = [
 
 /** Wording of the screen itself, by kind (headings, hints and process copy that is true of the screen, not of the build). */
 const KIND_COPY: Readonly<Record<ScreenKindV2, readonly string[]>> = {
-    home: ['Your manuals'],
-    add: ['Add a manual', 'Photograph each page of your manual, one at a time.'],
+    home: [
+        'Your manuals',
+        'How it works',
+        'Photograph your manual.',
+        'Build one step at a time.',
+        'Check with a photo.',
+        'Ask when you need help.',
+    ],
+    add: [
+        'Add a manual',
+        'Photograph each page of your manual, one at a time.',
+        'Keep all four corners in view.',
+        'Check that the words are clear.',
+    ],
     pages: ['Your pages', 'Add a page to begin.'],
-    reading: ['Reading your manual', 'Reading each page. This can take a minute.'],
+    reading: [
+        'Reading your manual',
+        'Reading each page. This can take a minute.',
+        'What we look for',
+        'Steps',
+        'Safety notes',
+        'Unclear details',
+    ],
     'quick-check': ['Quick check', 'Check what we read before you start building.', 'Steps'],
     guide: ['This step'],
     camera: ['Photograph a page', 'Take a photo'],

@@ -726,11 +726,8 @@ describe('every other screen is composed from its own document', () => {
         expect(screen.getByTestId('add-page')).toBeTruthy()
         await press('Read manual')
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/reading\//u))
-        expect(
-            within(screen.getByTestId('document-header-copy')).getByText(
-                'Reading your manual. This can take a minute.',
-            ),
-        ).toBeTruthy()
+        expect(within(screen.getByTestId('document-header-copy')).getByText('Reading your manual')).toBeTruthy()
+        expect(screen.getByText('This can take a minute.')).toBeTruthy()
         // While it reads, the only honest controls are the native ones: stop is never replaced.
         expect(screen.getByRole('button', { name: 'Back' }).props.accessibilityState).toMatchObject({ disabled: false })
         await press('Back')

@@ -257,7 +257,7 @@ describe('state wording is stable', () => {
         })
         expect(BUSY_COPY_V2).toEqual({
             working: { heading: 'Working on it', detail: 'One moment, please.' },
-            reading: { heading: 'Reading your manual. This can take a minute.', detail: 'Reading each page.' },
+            reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
             checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
             'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
             asking: { heading: 'Asking…', detail: 'This only takes a moment.' },

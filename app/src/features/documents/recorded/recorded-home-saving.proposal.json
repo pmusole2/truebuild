@@ -36,6 +36,94 @@
                         "emphasis": "normal",
                         "tone": "neutral",
                         "align": "start"
+                    },
+                    {
+                        "type": "Card",
+                        "surface": "tinted",
+                        "tone": "neutral",
+                        "padding": "md",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "How it works" },
+                                "role": "heading",
+                                "emphasis": "strong",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "camera", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Photograph your manual." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "arrowRight", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Build one step at a time." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "search", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Check with a photo." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "help", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Ask when you need help." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }

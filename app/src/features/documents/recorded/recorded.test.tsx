@@ -291,7 +291,13 @@ describe('raw saving-context siblings', () => {
         const doc = recordedDocumentForTest(name)
         expect(verifyDocumentAgainstInputsV2(doc, inputs, sha256Hex)).toEqual([])
         expect(raw.states.busy?.header.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2.saving.heading })
-        expect(variantLiteralTexts(doc, 'busy')).toEqual([BUSY_COPY_V2.saving.heading, 'One moment, please.'])
+        expect(variantLiteralTexts(doc, 'busy')).toEqual([
+            BUSY_COPY_V2.saving.heading,
+            'One moment, please.',
+            ...(base === 'recorded-reading'
+                ? ['What we look for', 'Steps', 'Parts', 'Safety notes', 'Unclear details']
+                : []),
+        ])
         expect(raw.states.busy?.bar).toEqual(original.states.busy?.bar)
         expect(raw.states.busy?.overlays).toEqual([])
         expect({ header: raw.header, body: raw.body, bar: raw.bar, overlays: raw.overlays }).toEqual({
@@ -343,4 +349,125 @@ it('ships the fifteen raw families without derived document build artifacts', ()
                 !/\.(proposal|inputs|provenance|runtime)\.json$/u.test(name),
         ),
     ).toEqual([])
+})
+
+describe('authored first-use guidance in ready screens', () => {
+    it.each([
+        ['recorded-home', 'home'],
+        ['recorded-home-saving', 'home'],
+        ['recorded-add-empty', 'add'],
+        ['recorded-add-empty-saving', 'add'],
+    ] as const)('%s places only useful capability or capture guidance before its existing controls', (name, kind) => {
+        const raw = screenProposalV2Schema.parse(read(`${name}.proposal.json`))
+        expect(raw.body.type).toBe('Scroll')
+        if (raw.body.type !== 'Scroll') throw new Error('Expected existing scroll body')
+        const column = raw.body.children[0]
+        if (column?.type !== 'Stack') throw new Error('Expected existing ready column')
+        expect(column.children.map((child) => child.type)).toEqual(
+            kind === 'home' ? ['Text', 'Card'] : ['Text', 'Card', 'Section'],
+        )
+        expect(column.children[0]).toMatchObject({
+            type: 'Text',
+            content: {
+                kind: 'literal',
+                text:
+                    kind === 'home'
+                        ? 'Add a manual to start building.'
+                        : 'Photograph each page of your manual, one at a time.',
+            },
+        })
+        const card = column.children[1]
+        if (card?.type !== 'Card') throw new Error('Expected one guidance card')
+        expect(card.tone).toBe('neutral')
+        const expected =
+            kind === 'home'
+                ? [
+                      ['camera', 'Photograph your manual.'],
+                      ['arrowRight', 'Build one step at a time.'],
+                      ['search', 'Check with a photo.'],
+                      ['help', 'Ask when you need help.'],
+                  ]
+                : [
+                      ['image', 'Keep all four corners in view.'],
+                      ['search', 'Check that the words are clear.'],
+                  ]
+        if (kind === 'home')
+            expect(card.children[0]).toMatchObject({
+                type: 'Text',
+                role: 'heading',
+                content: { kind: 'literal', text: 'How it works' },
+            })
+        const rows = kind === 'home' ? card.children.slice(1) : card.children
+        expect(rows).toHaveLength(expected.length)
+        for (const [index, [icon, text]] of expected.entries()) {
+            const row = rows[index]
+            if (row?.type !== 'Row') throw new Error('Expected one meaningful icon/text row per guidance line')
+            expect(row.children).toHaveLength(2)
+            expect(row.children[0]).toMatchObject({ type: 'Icon', name: icon })
+            expect(row.children[1]).toMatchObject({ type: 'Text', role: 'body', content: { kind: 'literal', text } })
+            expect(JSON.stringify(raw.states)).not.toContain(text)
+        }
+        if (kind === 'add')
+            expect(column.children[2]).toMatchObject({
+                type: 'Section',
+                children: [
+                    { type: 'Text', content: { kind: 'bound', key: 'privacy-stay' } },
+                    { type: 'Text', content: { kind: 'bound', key: 'privacy-read' } },
+                ],
+            })
+        expect((read(`${name}.provenance.json`) as Record<string, unknown>).taskReference).toContain('first-use polish')
+    })
+})
+
+describe('authored Reading search categories', () => {
+    it.each(['recorded-reading', 'recorded-reading-active', 'recorded-reading-saving'] as const)(
+        '%s keeps one neutral search-goal card stable across ready, busy and pending',
+        (name) => {
+            const raw = screenProposalV2Schema.parse(read(`${name}.proposal.json`))
+            const cards = []
+            for (const state of ['ready', 'busy', 'pending'] as const) {
+                const variant = state === 'ready' ? raw : raw.states[state]
+                if (variant === null || variant.body.type !== 'Scroll')
+                    throw new Error('Expected existing Reading variant')
+                const column = variant.body.children[0]
+                if (column?.type !== 'Stack') throw new Error('Expected existing Reading column')
+                const card = column.children.at(-1)
+                if (card?.type !== 'Card') throw new Error('Expected search-goal card after existing content')
+                expect(card.surface).toBe('tinted')
+                expect(card.tone).toBe('neutral')
+                expect(card.children).toHaveLength(5)
+                expect(card.children[0]).toMatchObject({
+                    type: 'Text',
+                    role: 'heading',
+                    content: { kind: 'literal', text: 'What we look for' },
+                })
+                const expected = [
+                    ['arrowRight', 'Steps'],
+                    ['image', 'Parts'],
+                    ['alert', 'Safety notes'],
+                    ['help', 'Unclear details'],
+                ]
+                for (const [index, [icon, text]] of expected.entries()) {
+                    const row = card.children[index + 1]
+                    if (row?.type !== 'Row') throw new Error('Expected one icon/text row for each parser category')
+                    expect(row.children).toHaveLength(2)
+                    expect(row.children[0]).toMatchObject({ type: 'Icon', name: icon })
+                    expect(row.children[1]).toMatchObject({
+                        type: 'Text',
+                        role: 'body',
+                        content: { kind: 'literal', text },
+                    })
+                }
+                cards.push(card)
+            }
+            expect(cards[0]).toEqual(cards[1])
+            expect(cards[0]).toEqual(cards[2])
+            for (const state of ['empty', 'error', 'recovery', 'confirming'] as const) {
+                expect(JSON.stringify(raw.states[state])).not.toContain('What we look for')
+            }
+            expect((read(`${name}.provenance.json`) as Record<string, unknown>).taskReference).toContain(
+                'Reading polish',
+            )
+        },
+    )
 })

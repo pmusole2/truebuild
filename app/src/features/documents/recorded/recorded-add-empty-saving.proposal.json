@@ -36,6 +36,50 @@
                         "align": "start"
                     },
                     {
+                        "type": "Card",
+                        "surface": "tinted",
+                        "tone": "neutral",
+                        "padding": "md",
+                        "children": [
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "image", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Keep all four corners in view." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "Row",
+                                "gap": "sm",
+                                "align": "center",
+                                "justify": "start",
+                                "wrap": false,
+                                "children": [
+                                    { "type": "Icon", "name": "search", "tone": "info", "size": "sm" },
+                                    {
+                                        "type": "Text",
+                                        "content": { "kind": "literal", "text": "Check that the words are clear." },
+                                        "role": "body",
+                                        "emphasis": "normal",
+                                        "tone": "neutral",
+                                        "align": "start"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
                         "type": "Section",
                         "title": null,
                         "collapsible": false,

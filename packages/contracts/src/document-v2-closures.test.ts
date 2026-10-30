@@ -191,7 +191,7 @@ describe('2 busy activity witness', () => {
             asking: 'Asking…',
             saving: 'Saving…',
             working: 'Working on it',
-            reading: 'Reading your manual. This can take a minute.',
+            reading: 'Reading your manual',
         }
         expect([...BUSY_ACTIVITIES_V2].sort()).toEqual(Object.keys(copy).sort())
         const keys = new Set<string>()
