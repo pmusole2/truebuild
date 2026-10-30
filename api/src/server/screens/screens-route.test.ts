@@ -165,7 +165,7 @@ describe('GENERATIVE_UI modes', (): void => {
         })
         const app = createApp({ runtime, onDuration: () => {} })
         const page = await document(app, guide())
-        expect(page.metadata).toMatchObject({ source: 'fallback', fallbackReason: 'unconfigured' })
+        expect(page.metadata).toMatchObject({ source: 'shell', fallbackReason: 'unconfigured' })
         expect(fixture).not.toHaveBeenCalled()
     })
 })
@@ -275,8 +275,10 @@ describe('generation, validation, repair and fallback', (): void => {
         async (scenario, dispatches, reason): Promise<void> => {
             const { app, mock } = await boot({}, { screen: { scenario } })
             const page = await document(app, guide())
-            expect(page.metadata).toMatchObject({ source: 'fallback', fallbackReason: reason, evidence: 'live' })
-            expect(page.body.length).toBeGreaterThan(0)
+            expect(page.metadata).toMatchObject({ source: 'shell', fallbackReason: reason, evidence: 'live' })
+            // Version 1 composes no replacement body: the native screen is the screen, and the mandatory facts ride along.
+            expect(page.body).toEqual([])
+            expect(page.manualFacts!.length).toBeGreaterThan(0)
             expect(mock.screenDispatches()).toBe(dispatches)
         },
     )
@@ -285,7 +287,7 @@ describe('generation, validation, repair and fallback', (): void => {
         const { app } = await boot({}, { screen: { scenario: 'incomplete' } })
         const page = await document(app, guide())
         expect(page.metadata).toMatchObject({
-            source: 'fallback',
+            source: 'shell',
             model: 'muse-wonder-1.0',
             effort: 'max',
             usage: { outputTokens: 90, reasoningTokens: 30 },
@@ -293,13 +295,13 @@ describe('generation, validation, repair and fallback', (): void => {
         expect(page.metadata.timing.providerMs).toEqual(expect.any(Number))
     })
 
-    it('answers a slow provider with the deterministic composition, not an error status', async (): Promise<void> => {
+    it('answers a slow provider with the shell, not an error status', async (): Promise<void> => {
         const { app, mock } = await boot(
             { AI_DEADLINE_STEP_PAGES_MS: '1000' },
             { screen: { scenario: 'valid', delayMs: 1_500 } },
         )
         const page = await document(app, guide())
-        expect(page.metadata).toMatchObject({ source: 'fallback', fallbackReason: 'timeout' })
+        expect(page.metadata).toMatchObject({ source: 'shell', fallbackReason: 'timeout' })
         // An ambiguous dispatch is never repaired or retried.
         expect(mock.screenDispatches()).toBe(1)
     })
@@ -314,17 +316,17 @@ describe('generation, validation, repair and fallback', (): void => {
             binding: { ...binding, revision: 2 },
             session: { ...session, revision: 2 },
         })
-        expect((await older).metadata).toMatchObject({ source: 'fallback', fallbackReason: 'stale' })
+        expect((await older).metadata).toMatchObject({ source: 'shell', fallbackReason: 'stale' })
     })
 
-    it('fails fast with a deterministic screen when too many provider calls are in flight', async (): Promise<void> => {
+    it('fails fast with the shell when too many provider calls are in flight', async (): Promise<void> => {
         const { app, mock } = await boot(
             { MODEL_MAX_CONCURRENCY: '1' },
             { screen: { scenario: 'valid', delayMs: 300 } },
         )
         const [first, second] = await Promise.all([document(app, base), document(app, { ...base, kind: 'add' })])
-        expect([first.metadata.source, second.metadata.source].sort()).toEqual(['fallback', 'generated'])
-        const busy = first.metadata.source === 'fallback' ? first : second
+        expect([first.metadata.source, second.metadata.source].sort()).toEqual(['generated', 'shell'])
+        const busy = first.metadata.source === 'shell' ? first : second
         expect(busy.metadata.fallbackReason).toBe('busy')
         expect(mock.screenDispatches()).toBe(1)
     })
@@ -389,7 +391,7 @@ describe('cache, single flight and identity', (): void => {
         const { app, mock } = await boot()
         await document(app, guide('step-1', 2))
         const stale = await document(app, guide('step-1', 1))
-        expect(stale.metadata).toMatchObject({ source: 'fallback', fallbackReason: 'stale' })
+        expect(stale.metadata).toMatchObject({ source: 'shell', fallbackReason: 'stale' })
         expect(mock.screenDispatches()).toBe(1)
     })
 })
@@ -670,11 +672,11 @@ describe('mandatory manual facts survive any composition or document failure', (
         expect(screenComponentPaths(page)).toEqual(Object.keys(page.metadata.origins!))
     })
 
-    it('keeps every note when the model output is invalid or unsupported, in the per-screen fallback', async (): Promise<void> => {
+    it('keeps every note when the model output is invalid or unsupported, in the shell', async (): Promise<void> => {
         for (const scenario of ['invalid', 'unsupported-fact', 'not-json'] as const) {
             const { app } = await boot({}, { screen: { scenario } })
             const page = await document(app, request(withNotes(twentyFive)))
-            expect(page.metadata.source, scenario).toBe('fallback')
+            expect(page.metadata.source, scenario).toBe('shell')
             expect(page.metadata.fallbackReason, scenario).not.toBe('unsupported_content_overflow')
             expect(
                 page.manualFacts!.filter((fact) => fact.kind === 'safety').map((fact) => fact.text),
@@ -688,7 +690,8 @@ describe('mandatory manual facts survive any composition or document failure', (
         const page = await document(app, request(withNotes(twentyFive)))
         expect(page.metadata).toMatchObject({ source: 'shell', fallbackReason: 'disabled' })
         expect(page.body).toEqual([])
-        expect(page.manualFacts).toHaveLength(25 + 4)
+        // The mandatory facts only: a classified step requires its typed notes; its other directions are optional.
+        expect(page.manualFacts).toHaveLength(25)
         expect(page.manualFacts!.every((fact) => fact.placement === 'remainder')).toBe(true)
         expect(mock.screenDispatches()).toBe(0)
     })
@@ -873,7 +876,8 @@ describe('completion wording', (): void => {
             completedStepIds: session.reviewedSteps.map((step) => step.stepId),
         })
         expect(done.header.title).toBe('All steps done')
-        expect(JSON.stringify(done.body)).toContain('You finished all 2 steps.')
+        // The shell states the finished build in its header only when the witness covers every step; it has no body.
+        expect(done.body).toEqual([])
         expect(new Set([untouched, partial, done].map((doc) => doc.bound.contextKey)).size).toBe(2)
     })
 })
@@ -928,10 +932,10 @@ describe('the fixture runtime composes every screen kind for two different manua
             for (const kind of SCREEN_KINDS) {
                 const page = await document(app, metadataFor(kind, manual, stepId))
                 const label = `${kind}/${manual.manualId}`
-                // The monitor arm's question screen is the forced-invalid example: repaired once, then the fallback.
+                // The monitor arm's question screen is the forced-invalid example: repaired once, then the shell.
                 const forced = kind === 'questions' && manual.manualId === 'treadmill-monitor-arm'
                 expect(page.metadata.evidence, label).toBe('synthetic-fixture')
-                expect(page.metadata.source, label).toBe(forced ? 'fallback' : 'generated')
+                expect(page.metadata.source, label).toBe(forced ? 'shell' : 'generated')
                 expect(page.metadata.fallbackReason, label).toBe(forced ? 'repair_failed' : null)
                 // Nothing is observed, so nothing is claimed.
                 expect(page.metadata.model, label).toBeNull()
@@ -1173,7 +1177,7 @@ describe('the fixture runtime composes every screen kind for two different manua
         })
         const page = await document(app, guide())
         expect(page.metadata).toMatchObject({
-            source: 'fallback',
+            source: 'shell',
             evidence: 'synthetic-fixture',
             fallbackReason: 'repair_failed',
         })

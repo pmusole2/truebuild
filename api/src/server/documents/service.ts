@@ -2,7 +2,7 @@ import {
     SCREEN_CATALOG_V2_VERSION,
     assembleDocumentV2,
     canonicalJson,
-    composeProposalV2,
+    buildFallbackProposalV2,
     manualDirectionFacts,
     screenDocumentV2Schema,
     visitVariantNodesV2,
@@ -30,7 +30,8 @@ import {
     type ScreenGenerationInput,
 } from '../../providers/meta-provider'
 import { BudgetError } from '../budget'
-import { RequestStoppedError } from '../deadline'
+import { createDeadline, RequestStoppedError } from '../deadline'
+import { withinModelDeadline } from '../model-multipart'
 import { admission } from '../request-clock'
 import type { AiPolicy, GenerativeUiMode } from '../ai-policy'
 import { PrecomputeRegistry, ScreenCache, SingleFlight, StaleGuard, StaleRevisionError } from '../screens/store'
@@ -289,7 +290,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const document = publish(
             assembleDocumentV2(
                 context.material,
-                composeProposalV2(context.material),
+                buildFallbackProposalV2(context.material),
                 {
                     ...extra,
                     source: 'fallback',
@@ -344,6 +345,10 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         if ((provider === null || !generateDocument) && fixture === null) {
             return { document: deterministic(context, 'unconfigured'), cached: null }
         }
+        // The work gate may settle before a producer that ignores cancellation. Its remaining attempt must then stop
+        // too, rather than continue into publication after the request already received a timeout fallback.
+        const lifetime = new AbortController()
+        const active = AbortSignal.any([signal, lifetime.signal])
         const started = admission.getStore()?.start ?? performance.now()
         const base: ScreenGenerationInput = {
             requestId: `document-${context.bound.contextKey.slice(0, 16)}`,
@@ -411,34 +416,59 @@ export function createDocumentService(options: DocumentServiceOptions): Document
             return { document: deterministic(context, reason, seen), cached: null }
         }
 
-        /** One call of the model (or of the synthetic generator). A rejected call reports what it observed. */
+        /**
+         * One call of the model (or of the synthetic generator). A rejected call reports what it observed. Stopping a
+         * call is a request, not a guarantee: an answer that arrives once the work was stopped (every request gone, or
+         * the revision superseded) is dropped here, so nothing of it is repaired, published or cached.
+         */
         const attempt = async (repairIssues?: readonly string[]): Promise<unknown> => {
             dispatched += 1
-            if (fixture !== null) {
-                const bounded = AbortSignal.any([signal, AbortSignal.timeout(stagePolicy.deadlineMs)])
-                return fixture(
-                    {
-                        kind: context.inputs.kind,
-                        manualId: context.bound.manualId,
-                        revision: context.bound.revision,
-                        stepId: context.bound.stepId,
-                        attempt: repairIssues === undefined ? 1 : 2,
-                        context,
-                    },
-                    bounded,
-                )
-            }
-            const call = (): Promise<ScreenGeneration> =>
-                generateDocument!.call(provider, repairIssues === undefined ? base : { ...base, repairIssues }, signal)
-            const generation = await (repairIssues === undefined ? call() : work.repair(call)).catch(
-                (error: unknown) => {
+            const deadline = createDeadline(stagePolicy.deadlineMs, active)
+            const callAbort = new AbortController()
+            const stop = (): void => callAbort.abort(deadline.signal.reason)
+            deadline.signal.addEventListener('abort', stop, { once: true })
+            try {
+                deadline.checkpoint()
+                if (fixture !== null) {
+                    const answer = await withinModelDeadline(
+                        fixture(
+                            {
+                                kind: context.inputs.kind,
+                                manualId: context.bound.manualId,
+                                revision: context.bound.revision,
+                                stepId: context.bound.stepId,
+                                attempt: repairIssues === undefined ? 1 : 2,
+                                context,
+                            },
+                            callAbort.signal,
+                        ),
+                        deadline,
+                    )
+                    deadline.checkpoint()
+                    return answer
+                }
+                const call = (): Promise<ScreenGeneration> =>
+                    generateDocument!.call(
+                        provider,
+                        repairIssues === undefined ? base : { ...base, repairIssues },
+                        callAbort.signal,
+                    )
+                const generation = await withinModelDeadline(
+                    repairIssues === undefined ? call() : work.repair(call),
+                    deadline,
+                ).catch((error: unknown) => {
                     // A call that answered but was unusable still spent time and tokens; report them honestly.
                     if (error instanceof MetaProviderError && error.telemetry) telemetry.push(error.telemetry)
                     throw error
-                },
-            )
-            telemetry.push(generation.telemetry)
-            return generation.value
+                })
+                telemetry.push(generation.telemetry)
+                deadline.checkpoint()
+                return generation.value
+            } finally {
+                // A completed producer keeps a successful signal; disposal must not send it a new cancellation.
+                deadline.signal.removeEventListener('abort', stop)
+                deadline.dispose()
+            }
         }
         const isMalformed = (error: unknown): boolean =>
             error instanceof MetaProviderError && error.code === 'invalid_output' && error.detail === 'malformed'
@@ -474,10 +504,15 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
         try {
             if (fixture !== null) return await run()
-            return await work.run({ deadlineMs: Math.min(105_000, stagePolicy.deadlineMs * 2 + 2_000), signal }, run)
+            return await work.run(
+                { deadlineMs: Math.min(105_000, stagePolicy.deadlineMs * 2 + 2_000), signal: active },
+                run,
+            )
         } catch (error) {
             // A cancelled provider call reports a generic stop; the abort reason says why it was stopped.
             return failure(signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error))
+        } finally {
+            lifetime.abort(new RequestStoppedError('cancelled'))
         }
     }
 
@@ -506,6 +541,14 @@ export function createDocumentService(options: DocumentServiceOptions): Document
             flightKey(context),
             async (flightSignal) => {
                 const controller = new AbortController()
+                let release: (() => void) | null = null
+                const returnCapacity = (): void => {
+                    const held = release
+                    release = null
+                    held?.()
+                }
+                // A new intentional request may arrive before this cancelled flight's async finally runs.
+                controller.signal.addEventListener('abort', returnCapacity, { once: true })
                 const link = (): void => controller.abort(flightSignal.reason)
                 flightSignal.addEventListener('abort', link, { once: true })
                 if (flightSignal.aborted) link()
@@ -514,13 +557,13 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     manualId !== null && revision !== null
                         ? guard.register(manualId, revision, controller)
                         : (): void => {}
-                let release: (() => void) | null = null
                 try {
                     release = background ? await work.acquire(controller.signal) : work.tryAcquire()
                     if (release === null) return deterministic(context, 'busy')
                     controller.signal.throwIfAborted()
                     const made = await generateWithModel(context, controller.signal)
-                    if (made.cached) cache.set(key, made.cached)
+                    // Work that was stopped while it finished is not kept, however it ended.
+                    if (made.cached && !controller.signal.aborted) cache.set(key, made.cached)
                     return made.document
                 } catch (error) {
                     return deterministic(
@@ -528,9 +571,10 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                         controller.signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error),
                     )
                 } finally {
-                    release?.()
+                    returnCapacity()
                     unregister()
                     flightSignal.removeEventListener('abort', link)
+                    controller.signal.removeEventListener('abort', returnCapacity)
                 }
             },
             waiter,

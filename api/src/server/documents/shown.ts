@@ -60,7 +60,12 @@ interface IssuedAction {
 export function issueShownV2(document: ScreenDocumentV2): IssuedShownV2 {
     const origins = document.metadata.origins
     const facts = new Map(document.facts.map((fact) => [fact.factId, fact.text]))
-    const originOf = (path: string): ShownBlock['origin'] => (origins[path] === 'generated' ? 'generated' : 'fallback')
+    // A published document names the origin of every component it emits; a missing one is an error, never `fallback`.
+    const originOf = (path: string): ShownBlock['origin'] => {
+        const origin = origins[path]
+        if (origin === undefined) throw new Error(`missing_origin:${path}`)
+        return origin
+    }
     const cites = (indexes: readonly number[]): DocumentSourceV2[] =>
         indexes.flatMap((index) => {
             const source = document.sources[index]

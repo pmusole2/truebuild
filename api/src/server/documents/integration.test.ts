@@ -1,5 +1,5 @@
 import {
-    composeProposalV2,
+    buildFallbackProposalV2,
     type ScreenKindV2,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -49,7 +49,7 @@ const ui = (patch: Partial<ScreenUiStateV2> = {}): ScreenUiStateV2 => ({
 const contextOf = (kind: ScreenKindV2, patch: Partial<ScreenUiStateV2> = {}): ReturnType<typeof buildDocumentContext> =>
     buildDocumentContext(documentInputs(kind, demoSession(), ui(patch)))
 const issuesOf = (context: ReturnType<typeof buildDocumentContext>, proposal?: ScreenProposalV2): string[] =>
-    checkProposal(proposal ?? composeProposalV2(context.material), context)
+    checkProposal(proposal ?? buildFallbackProposalV2(context.material), context)
 const telemetry: VerifiedCallTelemetry = {
     stage: 'screens',
     model: 'muse-spark-1.3',
@@ -84,7 +84,7 @@ describe('the gate accepts the complete deterministic composition of every integ
 describe('labels and intents of the new closures', () => {
     it('accepts Back and Close on navigate/back and refuses Close on Home', () => {
         const context = contextOf('more')
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         expect(proposal.bar.primary).toMatchObject({ label: 'Close', intent: { intent: 'navigate', target: 'back' } })
         const asBack: ScreenProposalV2 = {
             ...proposal,
@@ -104,16 +104,16 @@ describe('labels and intents of the new closures', () => {
 
     it('lists Show tips again for the replay and refuses the replay without the tips section', () => {
         const context = contextOf('more')
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         expect(JSON.stringify(proposal.body)).toContain('Show tips again')
         const without = contextOf('more', { sections: ['settings'] })
-        const replay = composeProposalV2(context.material)
+        const replay = buildFallbackProposalV2(context.material)
         expect(issuesOf(without, replay).join()).toContain('intent_not_allowed')
     })
 
     it('lists Saving… as the busy bar wording', () => {
         const context = contextOf('camera', { busy: { activity: 'saving' } })
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         expect(proposal.states.busy!.bar.primary.label).toBe('Saving…')
         expect(issuesOf(context)).toEqual([])
     })
@@ -122,14 +122,14 @@ describe('labels and intents of the new closures', () => {
 describe('what the gate refuses', () => {
     it('refuses the operation notice without the witness', () => {
         const context = contextOf('recovery')
-        const noticed = composeProposalV2(contextOf('recovery', { failure: NOTICE }).material)
+        const noticed = buildFallbackProposalV2(contextOf('recovery', { failure: NOTICE }).material)
         const codes = issuesOf(context, noticed).join()
         expect(codes).toMatch(/bound_unavailable|operation_notice/u)
     })
 
     it('refuses a tooltip that is not a coach mark and a sheet, at the wire', () => {
         const context = contextOf('home')
-        const wire = encodeWireProposal(composeProposalV2(context.material))
+        const wire = encodeWireProposal(buildFallbackProposalV2(context.material))
         const sheet = { ...wire, overlays: [{ kind: 'sheet', anchor: null, content: wire.overlays[0]!.content }] }
         expect(decodeWireProposal(sheet).ok).toBe(false)
         const notCoach = { ...wire, overlays: [{ ...wire.overlays[0]!, content: wire.body }] }
@@ -138,14 +138,14 @@ describe('what the gate refuses', () => {
 
     it('refuses an unimplemented toggle or text-field binding at the wire', () => {
         const context = contextOf('judge')
-        const wire = encodeWireProposal(composeProposalV2(context.material))
+        const wire = encodeWireProposal(buildFallbackProposalV2(context.material))
         const tips = {
             ...wire,
             nodes: wire.nodes.map((node) => (node.type === 'Toggle' ? { ...node, binding: 'tips' } : node)),
         }
         expect(decodeWireProposal(tips).ok).toBe(false)
         const asked = contextOf('questions')
-        const askedWire = encodeWireProposal(composeProposalV2(asked.material))
+        const askedWire = encodeWireProposal(buildFallbackProposalV2(asked.material))
         const field = {
             ...askedWire,
             nodes: askedWire.nodes.map((node) =>
@@ -157,7 +157,7 @@ describe('what the gate refuses', () => {
 
     it('refuses a camera that is not held where the ready screen holds it', () => {
         const context = contextOf('camera')
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const busy = proposal.states.busy!
         const without = (node: ScreenNodeV2): ScreenNodeV2 =>
             'children' in node
@@ -174,7 +174,8 @@ describe('what the gate refuses', () => {
     })
 
     it('shows the model the new witnesses and a prompt version that keys the cache', () => {
-        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThanOrEqual(5)
+        // 10: the generic waiting wording of the closed copy changed, and that copy is part of the supplied view.
+        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThanOrEqual(10)
         for (const phrase of ['requirements.figure', 'requirements.notice', 'navigate / back', 'SAME CameraView']) {
             expect(DOCUMENT_INSTRUCTIONS).toContain(phrase)
         }
@@ -191,7 +192,9 @@ describe('R3 a scripted provider under the fixture runtime is a truthful synthet
     const scripted = (calls: { n: number }): NonNullable<Parameters<typeof createDocumentService>[0]['provider']> => ({
         generateDocument: async (): Promise<{ value: unknown; telemetry: VerifiedCallTelemetry }> => {
             calls.n += 1
-            const good = encodeWireProposal(composeProposalV2(buildDocumentContext(documentInputs('home')).material))
+            const good = encodeWireProposal(
+                buildFallbackProposalV2(buildDocumentContext(documentInputs('home')).material),
+            )
             return { value: good, telemetry }
         },
     })

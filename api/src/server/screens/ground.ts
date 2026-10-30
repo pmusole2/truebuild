@@ -25,7 +25,7 @@ import {
     type Item,
     type Origin,
     type Screen,
-} from './compose'
+} from './required'
 import type { GroundingContext, Witness } from './context'
 import { plain, STEP_KINDS } from './context'
 import { normalize } from './text'

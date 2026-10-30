@@ -136,7 +136,14 @@ export type NativeFixtureOptions = {
     readonly overlayDelayMs?: number
     readonly maskDelayMs?: number
     readonly secondPassDelayMs?: number
-    readonly scenario?: 'full' | 'all-pass' | 'no-overlay' | 'no-mask'
+    readonly scenario?:
+        | 'full'
+        | 'all-pass'
+        | 'no-overlay'
+        | 'no-mask'
+        | 'parse-unavailable'
+        | 'check-unavailable'
+        | 'overlay-unavailable'
 }
 
 /** In-process app for focused verification; it opens no listener. */
@@ -203,6 +210,7 @@ export function createNativeFixtureApp(options: NativeFixtureOptions = {}): {
                     return [page.pageId, match.page.pageId] as const
                 }),
             )
+            if (scenario === 'parse-unavailable') throw new MetaProviderError('provider_error')
             assignments.set(input.binding.manualId, manualIndex)
             const parsed = parsedManualSchema.parse(
                 remap(
@@ -210,6 +218,8 @@ export function createNativeFixtureApp(options: NativeFixtureOptions = {}): {
                         parts: fixture.session.parts,
                         steps: fixture.session.reviewedSteps.map((step) => ({
                             ...step,
+                            // These authored synthetic inputs declare their classification; real manuals are never inferred safe.
+                            safetyNotes: step.safetyNotes ?? [],
                             correction: step.correction === null ? null : { ...step.correction, reviewed: false },
                         })),
                         unknowns: [],
@@ -223,6 +233,7 @@ export function createNativeFixtureApp(options: NativeFixtureOptions = {}): {
             dispatches.check++
             requireFixturePhoto(input)
             await sleep(options.verdictDelayMs ?? 250, signal)
+            if (scenario === 'check-unavailable') throw new MetaProviderError('provider_error')
             const step = stepOf(input)
             const key = `${input.binding.manualId}:${step.stepId}`
             const count = checks.get(key) ?? 0
@@ -269,6 +280,7 @@ export function createNativeFixtureApp(options: NativeFixtureOptions = {}): {
             dispatches.overlay++
             requireFixturePhoto(input)
             await sleep(options.overlayDelayMs ?? 1_600, signal)
+            if (scenario === 'overlay-unavailable') throw new MetaProviderError('timeout')
             const step = stepOf(input)
             const targetPartId = step.parts[0]?.partId
             // Both boxes describe the same part: its present location and its destination, never two part identities.

@@ -1,4 +1,9 @@
-import { composeProposalV2, type ScreenKindV2, type ScreenNodeV2, type ScreenProposalV2 } from '@truebuild/contracts'
+import {
+    buildFallbackProposalV2,
+    type ScreenKindV2,
+    type ScreenNodeV2,
+    type ScreenProposalV2,
+} from '@truebuild/contracts'
 import { describe, expect, it } from 'vitest'
 
 import { demoSession, documentInputs, fullUi } from '../../test-support/document-inputs'
@@ -15,7 +20,7 @@ const withNode = (proposal: ScreenProposalV2, node: ScreenNodeV2): ScreenProposa
 })
 const issuesWith = (kind: ScreenKindV2, node: ScreenNodeV2): string[] => {
     const context = contextOf(kind)
-    return checkProposal(withNode(composeProposalV2(context.material), node), context)
+    return checkProposal(withNode(buildFallbackProposalV2(context.material), node), context)
 }
 
 describe('unsupported live bindings are rejected by the server gate', () => {

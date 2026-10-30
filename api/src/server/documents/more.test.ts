@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import {
-    composeProposalV2,
+    buildFallbackProposalV2,
     questionResultSchema,
     type QuestionResult,
     type ScreenContextInputsV2,
@@ -131,7 +131,7 @@ const wireFor = (
     inputs: ScreenContextInputsV2,
     edit?: (proposal: ScreenProposalV2) => ScreenProposalV2,
 ): WireProposal => {
-    const proposal = composeProposalV2(buildDocumentContext(inputs).material)
+    const proposal = buildFallbackProposalV2(buildDocumentContext(inputs).material)
     return encodeWireProposal(edit ? edit(proposal) : proposal)
 }
 const dropCard = (proposal: ScreenProposalV2, result: 'check' | 'question'): ScreenProposalV2 => {
@@ -150,14 +150,14 @@ const dropCard = (proposal: ScreenProposalV2, result: 'check' | 'question'): Scr
 describe('the gate and the grounding', () => {
     it.each(HELD)('accepts the complete deterministic More with %s held', (held) => {
         const context = buildDocumentContext(more(held))
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         expect(context.stage).toBe('screens')
     })
 
     it('rejects what a global More or a refusal cannot offer or state', () => {
         const withNode = (inputs: ScreenContextInputsV2, node: ScreenNodeV2): string => {
             const context = buildDocumentContext(inputs)
-            const proposal = composeProposalV2(context.material)
+            const proposal = buildFallbackProposalV2(context.material)
             const body = proposal.body
             if (body.type !== 'Scroll' || body.children[0]?.type !== 'Stack') throw new Error('unexpected composition')
             const stack = body.children[0]

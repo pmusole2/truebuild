@@ -1,5 +1,5 @@
 import {
-    composeProposalV2,
+    buildFallbackProposalV2,
     nodeFactIdsV2,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -82,7 +82,7 @@ export function createDocumentFixtureGenerator(): DocumentFixtureGenerator {
             const index = context.material.stepIndex
             if (index > 0) await wait(DOCUMENT_STEP_DELAY_MS, signal)
         }
-        let proposal: ScreenProposalV2 = composeProposalV2(context.material)
+        let proposal: ScreenProposalV2 = buildFallbackProposalV2(context.material)
         if (arrangement(manualId) === 'cards') {
             proposal = { ...proposal, ...rearrange(proposal) }
             // The camera stays mounted while its screen waits: its waiting variants take the same arrangement, so the

@@ -23,20 +23,22 @@ import {
     type ScreenContextInputsV2,
 } from '@truebuild/contracts'
 
-import { ACTION_LABELS } from '../screens/ui-copy'
+import {
+    CAMERA_CUES_V2,
+    CAMERA_PILLS_V2,
+    GENERIC_ACTION_LABELS_V2 as GENERIC_LABELS,
+    labelsForV2 as labelsFor,
+} from '@truebuild/contracts'
+export {
+    CAMERA_CUES_V2,
+    CAMERA_PILLS_V2,
+    GENERIC_ACTION_LABELS_V2 as GENERIC_LABELS,
+    confirmLabelsForV2 as confirmLabelsFor,
+    labelsForV2 as labelsFor,
+} from '@truebuild/contracts'
 import { sha256 } from '../screens/context'
 
 export { sha256 }
-
-/** Interface wording a state variant or a header control may use besides the per-intent labels. */
-export const GENERIC_LABELS = ['Working…', 'Saving…', 'Please wait', 'Try again', 'Home', 'Back', 'More'] as const
-export const CAMERA_CUES_V2 = [
-    'Keep the whole step in view',
-    'Hold steady',
-    'Fill the frame with your work',
-    'Fill the frame with the page',
-] as const
-export const CAMERA_PILLS_V2 = ['Step in view', 'Ready'] as const
 
 export interface DocumentContext {
     inputs: ScreenContextInputsV2
@@ -57,22 +59,6 @@ function allowedIntents(material: DocumentMaterialV2): AppIntent[] {
             .map((target) => ({ intent, target }) as AppIntent)
             .filter((candidate) => intentAllowedV2(candidate, material)),
     )
-}
-
-/** The two confirmation labels of the reading cancellation: each belongs to one intent, in the `confirming` variant only. */
-export function confirmLabelsFor(intent: AppIntent): readonly string[] {
-    if (intent.intent !== 'navigate') return []
-    return intent.target === 'pages'
-        ? [CONFIRM_LABELS_V2.stop]
-        : intent.target === 'reading'
-          ? [CONFIRM_LABELS_V2.keep]
-          : []
-}
-
-/** The wording the server accepts for an action with this intent. */
-export function labelsFor(intent: AppIntent): readonly string[] {
-    const table = ACTION_LABELS[intent.intent] as Readonly<Record<string, readonly string[]>>
-    return table[intent.target] ?? []
 }
 
 export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentContext {

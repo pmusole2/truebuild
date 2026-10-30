@@ -53,6 +53,12 @@ export class SingleFlight<V> {
         // An already-aborted waiter never starts or joins work, and so never holds a waiter count.
         waiter?.throwIfAborted()
         let flight = this.#flights.get(key)
+        // A new intentional request cannot join work whose last waiter already left. The old producer may ignore its
+        // cancelled signal and settle later; its identity-checked cleanup must leave any replacement flight alone.
+        if (flight?.controller.signal.aborted) {
+            this.#flights.delete(key)
+            flight = undefined
+        }
         if (!flight) {
             const controller = new AbortController()
             const created = {

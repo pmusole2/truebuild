@@ -15,7 +15,7 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import { stepFixtures } from '../../test-support/step-fixtures'
-import { composeDeterministic } from './compose'
+import { shellScreen } from './required'
 import { buildContext, plain, type ScreenInputs } from './context'
 import { finalize, groundProposal, intentAllowed, validateProposal, withRequiredContent } from './ground'
 import { splitLossless } from './text'
@@ -96,7 +96,7 @@ function flat(nodes: readonly ScreenNode[]): ScreenNode[] {
 const texts = (nodes: readonly ScreenNode[], type: string): string[] =>
     flat(nodes).flatMap((node) => (node.type === type && 'text' in node ? [node.text] : []))
 
-describe('deterministic composition', (): void => {
+describe('the shell and the facts it must carry', (): void => {
     it.each(['check', 'question'] as const)(
         'preserves operators in actual %s text and missing evidence',
         (kind): void => {
@@ -111,7 +111,7 @@ describe('deterministic composition', (): void => {
                           value: { answer: text, sourceRefs: check.sourceRefs, missingEvidence: [missing] },
                       }
             const context = buildContext(inputs(kind === 'check' ? 'result' : 'answer', { result }))
-            const final = finalize(withRequiredContent(composeDeterministic(context), context).screen, context)
+            const final = finalize(withRequiredContent(shellScreen(context), context).screen, context)
             const node = flat(final.body).find(
                 (entry) => entry.type === (kind === 'check' ? 'ResultBanner' : 'AnswerCard'),
             )
@@ -122,7 +122,7 @@ describe('deterministic composition', (): void => {
     )
     it.each(SCREEN_KINDS)('composes a schema-valid %s screen from validated facts alone', (kind): void => {
         const context = buildContext(inputs(kind))
-        const forced = withRequiredContent(composeDeterministic(context), context)
+        const forced = withRequiredContent(shellScreen(context), context)
         expect(forced.complete).toBe(true)
         const final = finalize(forced.screen, context)
         const origins = Object.fromEntries(Object.keys(final.origins).map((path) => [path, 'fallback']))
@@ -160,28 +160,25 @@ describe('deterministic composition', (): void => {
         expect(Object.keys(origins)).toEqual(screenComponentPaths(document as never))
     })
 
-    it('cites the actual sources of each fact instead of an index and publishes the full original facts', (): void => {
+    it('publishes the full original facts with their own sources instead of an index', (): void => {
         const context = buildContext(inputs('guide'))
-        const final = finalize(withRequiredContent(composeDeterministic(context), context).screen, context)
-        const lead = final.body.find((node) => node.type === 'Instruction')
-        expect(lead).toMatchObject({ text: STEP_TITLE, citations: [0] })
-        expect(final.sources).toEqual([{ pageId: 'demo-page-1', region: null }])
-        const more = final.body.find((node) => node.type === 'DetailsDisclosure')
-        expect(more).toBeUndefined()
-        // The complete originals are the step's published manual facts, named by one fallback ManualDirections block.
+        const forced = withRequiredContent(shellScreen(context), context)
+        expect(forced.complete).toBe(true)
+        const final = finalize(forced.screen, context)
+        // The shell has no body of its own, so it cites nothing by index: every mandatory fact of the step rides in the
+        // remainder, whole, with the manual's own page reference as its source (never an index standing in for one).
+        expect(final.sources).toEqual([])
+        expect(final.body).toEqual([])
         expect(final.manualFacts.map((fact) => [fact.factId, fact.placement])).toEqual([
-            ['title', 'body'],
-            ['orientation', 'body'],
-            ['connection', 'body'],
-            ['check:groove-inward', 'body'],
-            ['correction:turn-panel', 'body'],
+            ['title', 'remainder'],
+            ['orientation', 'remainder'],
+            ['connection', 'remainder'],
+            ['check:groove-inward', 'remainder'],
+            ['correction:turn-panel', 'remainder'],
         ])
         expect(final.manualFacts.find((fact) => fact.factId === 'orientation')).toMatchObject({
             text: ORIENTATION,
             sourceRefs: [{ pageId: 'demo-page-1', region: null }],
-        })
-        expect(final.body.find((node) => node.type === 'ManualDirections')).toMatchObject({
-            factIds: ['title', 'orientation', 'connection', 'check:groove-inward', 'correction:turn-panel'],
         })
     })
 
@@ -204,7 +201,7 @@ describe('deterministic composition', (): void => {
             }
         })
         const context = buildContext(inputs('guide', { session: edited }))
-        const final = finalize(withRequiredContent(composeDeterministic(context), context).screen, context)
+        const final = finalize(withRequiredContent(shellScreen(context), context).screen, context)
         // A fact too long for one up-front instruction is published whole, never clipped or ellipsized.
         expect(final.manualFacts.find((fact) => fact.factId === 'orientation')?.text).toBe(long)
         expect(JSON.stringify(final)).not.toContain('…')
@@ -304,6 +301,19 @@ describe('grounding model proposals against actual manual values', (): void => {
         ).toEqual([STEP_TITLE])
         expect(grounded.tally.droppedBlocks).toBe(1)
         expect(grounded.screen.items[0]!.node).toMatchObject({ citations: [0] })
+    })
+
+    it('keeps a comparison the manual states in the step title word for word when a model shows it', (): void => {
+        const title = 'Hold the load below 5 kg: keep it < 5 kg and > 2 kg'
+        const manual = session((value) => {
+            value.reviewedSteps[0]!.title = title
+        })
+        const grounded = groundProposal(
+            proposal([instruction(title, [0])]),
+            buildContext(inputs('guide', { session: manual })),
+        )!
+        expect(grounded.screen.items[0]!.node).toMatchObject({ type: 'Instruction', text: title })
+        expect(grounded.screen.items[0]!.origin).toBe('generated')
     })
 
     it('drops a numberless contradiction and a known number moved onto the wrong part', (): void => {
@@ -648,11 +658,11 @@ describe('required manual facts: safety notes and conservatively retained direct
         expect(grounded.screen.items.length).toBeLessThanOrEqual(SCREEN_LIMITS.bodyNodes)
         const final = finalize(grounded.screen, context)
         expect(final.manualFacts.map((entry) => entry.text)).toEqual(notes)
-        // Another 25 can never push the body into a shell: the facts are not body nodes.
-        const fallback = withRequiredContent(composeDeterministic(context), context)
-        expect(fallback.complete).toBe(true)
-        expect(fallback.screen.facts.filter((slot) => slot.fact.kind === 'safety')).toHaveLength(25)
-        expect(fallback.screen.items.filter((entry) => entry.node.type === 'ManualDirections')).toHaveLength(1)
+        // Another 25 can never overflow a shell either: the facts are not body nodes.
+        const shell = withRequiredContent(shellScreen(context), context)
+        expect(shell.complete).toBe(true)
+        expect(shell.screen.facts.filter((slot) => slot.fact.kind === 'safety')).toHaveLength(25)
+        expect(finalize(shell.screen, context).manualFacts.map((entry) => entry.text)).toEqual(notes)
     })
 
     it('requires only the typed notes once a step is classified, and offers its directions without forcing them', (): void => {
@@ -769,17 +779,14 @@ describe('required manual facts: safety notes and conservatively retained direct
         expect(finalize(grounded.screen, context).manualFacts[0]!.text).toBe(operator)
     })
 
-    it('applies to the deterministic fallback and to a shell too, so a failed generation never hides a hazard', (): void => {
+    it('applies to the shell too, so a failed generation never hides a hazard', (): void => {
         const context = buildContext(inputs('guide', { session: classified([NOTE]) }))
-        const forced = withRequiredContent(composeDeterministic(context), context)
-        // The typed note first, then the step's other directions: one fallback block names all of them.
-        expect(forced.screen.facts.map((slot) => [slot.fact.factId, slot.placement, slot.origin])).toEqual(
-            ['safety:n0', 'orientation', 'connection', 'check:groove-inward', 'correction:turn-panel'].map((id) => [
-                id,
-                'body',
-                'fallback',
-            ]),
-        )
+        const forced = withRequiredContent(shellScreen(context), context)
+        // A classified step requires only its typed note; the shell publishes it whole in the remainder.
+        expect(forced.screen.facts.map((slot) => [slot.fact.factId, slot.placement, slot.origin])).toEqual([
+            ['safety:n0', 'remainder', 'fallback'],
+        ])
+        expect(finalize(forced.screen, context).manualFacts.map((fact) => fact.text)).toEqual([NOTE])
     })
 
     it('does not publish the facts of a screen that is not bound to a step, and never an unreadable note as a fact', (): void => {
@@ -1005,12 +1012,10 @@ describe('remaining block grounding', (): void => {
         expect(groundProposal(proposal([instruction(finished)]), done)).not.toBeNull()
         // A reviewed but untouched manual is never described as finished.
         expect(groundProposal(proposal([instruction(finished)]), missing)).toBeNull()
-        const neutral = finalize(withRequiredContent(composeDeterministic(missing), missing).screen, missing)
+        const neutral = finalize(withRequiredContent(shellScreen(missing), missing).screen, missing)
         expect(neutral.header.title).toBe('Your build')
         expect(texts(neutral.body, 'Instruction').join(' ')).not.toMatch(/finished|done/iu)
-        expect(finalize(withRequiredContent(composeDeterministic(done), done).screen, done).header.title).toBe(
-            'All steps done',
-        )
+        expect(finalize(withRequiredContent(shellScreen(done), done).screen, done).header.title).toBe('All steps done')
     })
 
     it('replaces a header or title that is not the screen wording or a manual title', (): void => {
@@ -1232,6 +1237,37 @@ describe('whole-screen blocks bind to live app data by reference only', (): void
         expect(groundProposal(proposal([editor('orientation')]), buildContext(inputs('quick-check')))).toBeNull()
     })
 
+    it('keeps the manual reason a quick-check question is about word for word, operators included', (): void => {
+        const reason = 'Keep the load < 5 kg and > 2 kg.'
+        const quick = buildContext(
+            inputs('quick-check', {
+                uiState: { review: { currentQuestion: { ...question, reason }, blockers: 0, canConfirm: false } },
+            }),
+        )
+        const grounded = groundProposal(
+            proposal([
+                {
+                    type: 'FactPrompt',
+                    questionRef: 'current',
+                    prompt: 'Which way does this part face?',
+                    detail: reason,
+                    citations: [],
+                },
+                {
+                    type: 'FactEditor',
+                    questionRef: 'current',
+                    kind: 'orientation',
+                    label: 'Orientation',
+                    saveLabel: 'Save',
+                    cancelLabel: 'Cancel',
+                },
+            ]),
+            quick,
+        )!
+        expect(only(grounded)[0]).toMatchObject({ detail: reason })
+        expect(grounded.screen.items.map((entry) => entry.origin)).toEqual(['generated', 'generated'])
+    })
+
     it('offers the question composer only for a reviewed step with a held capture', (): void => {
         const composer = (partScope: 'step-parts' | 'none'): unknown => ({
             type: 'QuestionComposer',
@@ -1305,24 +1341,6 @@ describe('whole-screen blocks bind to live app data by reference only', (): void
                 buildContext(inputs('result')),
             )!.tally.droppedBlocks,
         ).toBe(1)
-    })
-
-    it('composes a deterministic fallback from the live state the request carried, and nothing when it carried none', (): void => {
-        const kinds = (context: ReturnType<typeof buildContext>): string[] =>
-            composeDeterministic(context).items.map((entry) => entry.node.type)
-        expect(kinds(buildContext(inputs('home', { uiState: { library } })))).toContain('ManualLibrary')
-        expect(kinds(buildContext(inputs('home')))).not.toContain('ManualLibrary')
-        const quick = buildContext(
-            inputs('quick-check', {
-                uiState: { review: { currentQuestion: question, blockers: 0, canConfirm: false } },
-            }),
-        )
-        expect(kinds(quick)).toEqual(expect.arrayContaining(['FactPrompt', 'FactEditor']))
-        expect(kinds(buildContext(inputs('questions', { uiState: { capture } })))).toContain('QuestionComposer')
-        expect(kinds(buildContext(inputs('guide')))).toEqual(
-            expect.arrayContaining(['ManualDirections', 'CameraGuidance']),
-        )
-        expect(kinds(buildContext(inputs('result')))).toContain('SourceDetails')
     })
 })
 

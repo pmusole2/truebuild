@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import {
     COACH_COPY_V2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     type AppIntent,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -32,7 +32,7 @@ const SETTINGS: Camera = { mode: 'build-photo', permission: 'denied', canAskAgai
 const FAILED: Camera = { mode: 'build-photo', permission: 'granted', failed: true }
 
 const issuesOf = (context: ReturnType<typeof buildDocumentContext>, proposal?: ScreenProposalV2): string[] =>
-    checkProposal(proposal ?? composeProposalV2(context.material), context)
+    checkProposal(proposal ?? buildFallbackProposalV2(context.material), context)
 
 const cameraView: ScreenNodeV2 = {
     type: 'CameraView',
@@ -65,7 +65,7 @@ describe('the label registry names the three camera actions', () => {
 describe('the gate accepts the complete composition of every camera access', () => {
     it('rejects a shutter coach when no camera or shutter is available', () => {
         const context = buildDocumentContext(documentInputs('camera', demoSession(), cameraUi(SETTINGS)))
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         proposal.overlays = [
             {
                 kind: 'tooltip',
@@ -99,13 +99,13 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
         ['failed', FAILED],
     ])('rejects a raw CameraView while the camera is %s', (_name, camera) => {
         const context = contextOf(camera)
-        const issues = issuesOf(context, withBody(composeProposalV2(context.material), cameraView))
+        const issues = issuesOf(context, withBody(buildFallbackProposalV2(context.material), cameraView))
         expect(issues.join()).toContain('camera_unavailable')
     })
 
     it('rejects the permission, settings and retry actions without their witness', () => {
         const granted = contextOf(GRANTED)
-        const proposal = composeProposalV2(granted.material)
+        const proposal = buildFallbackProposalV2(granted.material)
         const forged: [string, AppIntent, string][] = [
             ['Allow camera', { intent: 'confirm', target: 'camera-permission' }, 'granted'],
             ['Open settings', { intent: 'open-details', target: 'device-settings' }, 'granted'],
@@ -119,7 +119,7 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
         expect(
             issuesOf(
                 ask,
-                barWith(composeProposalV2(ask.material), 'Open settings', {
+                barWith(buildFallbackProposalV2(ask.material), 'Open settings', {
                     intent: 'open-details',
                     target: 'device-settings',
                 }),
@@ -129,7 +129,7 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
         expect(
             issuesOf(
                 settings,
-                barWith(composeProposalV2(settings.material), 'Allow camera', {
+                barWith(buildFallbackProposalV2(settings.material), 'Allow camera', {
                     intent: 'confirm',
                     target: 'camera-permission',
                 }),
@@ -139,7 +139,7 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
 
     it('rejects the shutter when the camera cannot run, and a missing way forward', () => {
         const ask = contextOf(ASK)
-        const proposal = composeProposalV2(ask.material)
+        const proposal = buildFallbackProposalV2(ask.material)
         const shutter = barWith(proposal, 'Take photo', { intent: 'capture', target: 'take-photo' })
         expect(issuesOf(ask, shutter).join()).toContain('intent_not_allowed')
         expect(issuesOf(ask, shutter).join()).toContain('required_action_is_missing')
@@ -147,7 +147,7 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
 
     it('rejects a failed camera whose error variant does not lead with the camera retry', () => {
         const context = contextOf(FAILED)
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const home: AppIntent = { intent: 'navigate', target: 'home' }
         const forged: ScreenProposalV2 = {
             ...proposal,
@@ -167,7 +167,7 @@ describe('the gate refuses a camera document that disagrees with the witnessed s
 
     it('does not accept an allow-camera label on the settings action', () => {
         const settings = contextOf(SETTINGS)
-        const forged = barWith(composeProposalV2(settings.material), 'Allow camera', {
+        const forged = barWith(buildFallbackProposalV2(settings.material), 'Allow camera', {
             intent: 'open-details',
             target: 'device-settings',
         })
@@ -179,7 +179,7 @@ describe('other kinds cannot request the camera actions', () => {
     it('rejects them on a guide, a result and a recovery whatever the camera state', () => {
         for (const kind of ['guide', 'result', 'recovery', 'add'] as const) {
             const context = buildDocumentContext(documentInputs(kind, demoSession(), cameraUi(SETTINGS)))
-            const proposal = composeProposalV2(context.material)
+            const proposal = buildFallbackProposalV2(context.material)
             for (const [label, intent] of [
                 ['Allow camera', { intent: 'confirm', target: 'camera-permission' }],
                 ['Open settings', { intent: 'open-details', target: 'device-settings' }],

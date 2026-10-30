@@ -1,6 +1,6 @@
 import {
     SCREEN_KINDS_V2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     screenDocumentV2Schema,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -108,7 +108,7 @@ const contextFor = (
 const goodWire = (
     kind: ScreenKindV2,
     ...rest: Parameters<typeof documentInputs> extends [unknown, ...infer R] ? R : never
-): WireProposal => encodeWireProposal(composeProposalV2(contextFor(kind, ...rest).material))
+): WireProposal => encodeWireProposal(buildFallbackProposalV2(contextFor(kind, ...rest).material))
 
 /** Applies `edit` to every node of the proposal (ready variant and every state variant). */
 function editNodes(proposal: ScreenProposalV2, edit: (node: ScreenNodeV2) => ScreenNodeV2): ScreenProposalV2 {
@@ -149,7 +149,7 @@ const dropFact = (proposal: ScreenProposalV2, factId: string): ScreenProposalV2 
 describe('the deterministic composition satisfies the server gate', () => {
     it.each(SCREEN_KINDS_V2)('%s: every rule of the gate accepts the complete fallback proposal', (kind) => {
         const context = contextFor(kind)
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
     })
 
     it('hands the provider the facts, requirements, allowed intents and labels, and no photo', () => {
@@ -174,7 +174,7 @@ describe('the deterministic composition satisfies the server gate', () => {
 
 describe('mandatory omission and unsafe composition are rejected, never patched', () => {
     const guide = contextFor('guide')
-    const proposal = composeProposalV2(guide.material)
+    const proposal = buildFallbackProposalV2(guide.material)
 
     it('rejects an omitted safety fact, then reports only a machine rule', () => {
         const issues = checkProposal(dropFact(proposal, 'safety:n1'), guide)
@@ -247,7 +247,7 @@ describe('mandatory omission and unsafe composition are rejected, never patched'
 
     it('a verdict screen keeps its claim title closed and never softens a refusal', () => {
         const result = contextFor('result')
-        const base = composeProposalV2(result.material)
+        const base = buildFallbackProposalV2(result.material)
         const softened = {
             ...base,
             header: { ...base.header, title: { kind: 'literal' as const, text: 'Looks right' } },
@@ -263,7 +263,7 @@ describe('mandatory omission and unsafe composition are rejected, never patched'
         const manual = demoSession()
         manual.reviewStatus = 'unreviewed'
         const context = buildDocumentContext({ ...documentInputs('guide', manual), session: manual })
-        const base = composeProposalV2(context.material)
+        const base = buildFallbackProposalV2(context.material)
         const offering = {
             ...base,
             bar: {
@@ -284,7 +284,7 @@ describe('the wire table is rebuilt exactly, or rejected', () => {
 
     it('round-trips every kind losslessly', () => {
         for (const kind of SCREEN_KINDS_V2) {
-            const proposal = composeProposalV2(contextFor(kind).material)
+            const proposal = buildFallbackProposalV2(contextFor(kind).material)
             const decoded = decodeWireProposal(JSON.parse(JSON.stringify(encodeWireProposal(proposal))))
             expect(decoded.ok, kind).toBe(true)
             if (decoded.ok) expect(decoded.proposal).toEqual(proposal)
@@ -473,7 +473,7 @@ describe('service: a live provider', () => {
     })
 
     it('repairs once with machine codes only, summing both attempts and never the rejected text', async () => {
-        const rejected = dropFact(composeProposalV2(contextFor('guide').material), 'safety:n1')
+        const rejected = dropFact(buildFallbackProposalV2(contextFor('guide').material), 'safety:n1')
         const { service, inputs } = liveService([encodeWireProposal(rejected), goodWire('guide')])
         const document = await service.generate(documentInputs('guide'))
         expect(document.metadata).toMatchObject({
@@ -488,7 +488,9 @@ describe('service: a live provider', () => {
     })
 
     it('replaces the document when the repair still omits a witness and never appends anything to it', async () => {
-        const rejected = encodeWireProposal(dropFact(composeProposalV2(contextFor('guide').material), 'safety:n1'))
+        const rejected = encodeWireProposal(
+            dropFact(buildFallbackProposalV2(contextFor('guide').material), 'safety:n1'),
+        )
         const { service, inputs } = liveService([rejected, rejected])
         const document = await service.generate(documentInputs('guide'))
         expect(inputs).toHaveLength(2)

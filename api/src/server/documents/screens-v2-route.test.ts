@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
 
-import { SCREEN_KINDS_V2, composeProposalV2, type ScreenContextInputsV2, type ScreenKindV2 } from '@truebuild/contracts'
+import {
+    SCREEN_KINDS_V2,
+    buildFallbackProposalV2,
+    type ScreenContextInputsV2,
+    type ScreenKindV2,
+} from '@truebuild/contracts'
 import {
     modelScreensV2MetadataSchema,
     screensV2GenerateRequest,
@@ -194,7 +199,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
 
     it('sends only documented parameters, a text-only prompt and a finite schema, and records what came back', async () => {
         const inputs = documentInputs('guide')
-        const wire = encodeWireProposal(composeProposalV2(buildDocumentContext(inputs).material))
+        const wire = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs).material))
         const { app, bodies } = liveApp(() => wire)
         const response = await send(app, generate(inputs))
         expect(response.status).toBe(200)
@@ -248,7 +253,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
     it('rejects an answer that omits the safety fact, repairs once with codes only, then publishes the complete fallback', async () => {
         const inputs = documentInputs('guide')
         const context = buildDocumentContext(inputs)
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const omitting = encodeWireProposal({
             ...proposal,
             body: { type: 'Spacer', size: 'md' },
@@ -299,7 +304,7 @@ describe('a verdict check that names a version 2 document', () => {
                 contentHash: createHash('sha256').update(bytes).digest('hex'),
             }
             const inputs = documentInputs('guide', session)
-            const wire = encodeWireProposal(composeProposalV2(buildDocumentContext(inputs).material))
+            const wire = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs).material))
             const transport: typeof fetch = async (url, init) =>
                 String(init?.body).includes('truebuild_document')
                     ? Response.json({

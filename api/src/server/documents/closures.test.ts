@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import {
     CONFIRM_LABELS_V2,
-    composeProposalV2,
+    buildFallbackProposalV2,
     manualDisplayTitleV2,
     type ScreenKindV2,
     type ScreenProposalV2,
@@ -37,7 +37,7 @@ const ui = (patch: Partial<ScreenUiStateV2> = {}): ScreenUiStateV2 => ({
 const contextOf = (kind: ScreenKindV2, patch: Partial<ScreenUiStateV2> = {}): ReturnType<typeof buildDocumentContext> =>
     buildDocumentContext(documentInputs(kind, demoSession(), ui(patch)))
 const issuesOf = (context: ReturnType<typeof buildDocumentContext>, proposal?: ScreenProposalV2): string[] =>
-    checkProposal(proposal ?? composeProposalV2(context.material), context)
+    checkProposal(proposal ?? buildFallbackProposalV2(context.material), context)
 
 describe('the gate accepts the complete deterministic composition of every new closure', () => {
     it.each([
@@ -59,7 +59,7 @@ describe('1 reading confirmation labels belong to the confirming variant only', 
 
     it('accepts Keep/Stop in confirming and rejects them anywhere else or on another intent', () => {
         const context = contextOf('reading', witness)
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         expect(proposal.states.confirming?.bar.primary.label).toBe(CONFIRM_LABELS_V2.keep)
         const swapped: ScreenProposalV2 = {
             ...proposal,
@@ -84,7 +84,7 @@ describe('1 reading confirmation labels belong to the confirming variant only', 
 
     it('rejects Keep without the witness', () => {
         const context = contextOf('reading')
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const forged: ScreenProposalV2 = {
             ...proposal,
             bar: {
@@ -110,7 +110,7 @@ describe('1 reading confirmation labels belong to the confirming variant only', 
 
 describe('3 bound text is available only where the app can resolve it', () => {
     const withBound = (context: ReturnType<typeof buildDocumentContext>, key: string): string[] => {
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const body = proposal.body
         const added: ScreenProposalV2 = {
             ...proposal,
@@ -154,8 +154,8 @@ describe('3 bound text is available only where the app can resolve it', () => {
 
     it('refuses the language Choice on More when the app offers no language', () => {
         const context = contextOf('more', { language: null })
-        // The composer omits it; a model that adds it anyway is rejected.
-        const proposal = composeProposalV2(context.material)
+        // The fallback builder omits it; a model that adds it anyway is rejected.
+        const proposal = buildFallbackProposalV2(context.material)
         const choice = {
             type: 'Choice' as const,
             prompt: null,
@@ -172,7 +172,7 @@ describe('3 bound text is available only where the app can resolve it', () => {
 describe('4 a pending result never wears the verdict', () => {
     it('rejects a claim title in a state variant and a pending variant without the photo', () => {
         const context = contextOf('result')
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const pending = proposal.states.pending!
         const claim: ScreenProposalV2 = {
             ...proposal,

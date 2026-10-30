@@ -1,5 +1,5 @@
 import {
-    composeProposalV2,
+    buildFallbackProposalV2,
     nodeFactIdsV2,
     visitVariantNodesV2,
     type ManualSession,
@@ -46,14 +46,14 @@ const edited = (
     context: ReturnType<typeof buildDocumentContext>,
     edit: (body: ScreenNodeV2) => ScreenNodeV2,
 ): ScreenProposalV2 => {
-    const proposal = composeProposalV2(context.material)
+    const proposal = buildFallbackProposalV2(context.material)
     return { ...proposal, body: edit(proposal.body) }
 }
 
 describe('quick check of a fully known manual on the server', () => {
     it('accepts the complete deterministic composition and tells the model what the ready screen owes', () => {
         const context = contextOf()
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         const document = context.view.dynamic.document as {
             overview: boolean
             readyFacts: string[]
@@ -113,7 +113,7 @@ describe('quick check of a fully known manual on the server', () => {
             ),
         )
         expect(checkProposal(prose, context).join()).toMatch(/literal_not_listed|literal_digits/u)
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const busy = proposal.states.busy!
         const leaked: ScreenProposalV2 = {
             ...proposal,
@@ -141,7 +141,7 @@ describe('quick check of a fully known manual on the server', () => {
             },
         }
         // The overview is earned by the ready screen only: a waiting variant that states a step is refused.
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         expect(checkProposal(leaked, context).join()).toContain('states_the_manual_overview')
         visitVariantNodesV2(proposal.states.pending!, 'states.pending.', ({ node }) =>
             expect(nodeFactIdsV2(node).filter((id) => id.startsWith('overview:'))).toEqual([]),
@@ -169,7 +169,7 @@ describe('quick check of a fully known manual on the server', () => {
         const service = createDocumentService({
             provider: {
                 generateDocument: async () => ({
-                    value: encodeWireProposal(composeProposalV2(context.material)),
+                    value: encodeWireProposal(buildFallbackProposalV2(context.material)),
                     telemetry: {
                         stage: 'screens',
                         model: 'muse-spark-1.3',
@@ -227,7 +227,7 @@ const contextFor = (
 const waiting =
     (name: 'busy' | 'pending' | 'error' | 'recovery', extra: ScreenNodeV2) =>
     (context: ReturnType<typeof buildDocumentContext>): ScreenProposalV2 => {
-        const proposal = composeProposalV2(context.material)
+        const proposal = buildFallbackProposalV2(context.material)
         const variant = proposal.states[name]!
         return {
             ...proposal,
@@ -244,7 +244,7 @@ const waiting =
 describe('the gate holds the overview to its citations, title and parts', () => {
     it('refuses a ready screen that leaves out the citations of the steps it states', () => {
         const context = contextFor(twoPages())
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         const bare = edited(context, (body) => without(body, (node) => node.type === 'Citation'))
         expect(checkProposal(bare, context).join()).toMatch(/required_citation_is_missing/u)
     })
@@ -315,7 +315,7 @@ describe('the gate accepts every part of a large manual, and the deterministic s
         const context = contextFor(withParts(47))
         const document = context.view.dynamic.document as { requirements: { parts: string[] } }
         expect(document.requirements.parts).toHaveLength(49)
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         const short = edited(context, (body) =>
             without(body, (node) => node.type === 'PieceTile' && node.partId === 'extra-46'),
         )
@@ -330,7 +330,7 @@ describe('the gate accepts every part of a large manual, and the deterministic s
         'accepts the deterministic composition, in every variant, when %s',
         (_name, review) => {
             const context = contextFor(demoSession(), review)
-            expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+            expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         },
     )
 })

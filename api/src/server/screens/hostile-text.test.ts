@@ -86,7 +86,7 @@ function inputsFor(kind: ScreenKind, manual: ManualSession): ScreenInputs {
     }
 }
 
-describe('deterministic composition of hostile manual text', (): void => {
+describe('the shell of hostile manual text', (): void => {
     for (const text of HOSTILE) {
         it.each(SCREEN_KINDS)(`publishes a valid %s screen for ${JSON.stringify(text.slice(0, 24))}`, (kind): void => {
             const document = service.fallback(inputsFor(kind, hostileSession(text)), 'timeout')
@@ -95,41 +95,7 @@ describe('deterministic composition of hostile manual text', (): void => {
     }
 })
 
-describe('numeric comparisons in deterministic text', (): void => {
-    it('keeps a comparison the manual states in a guide title shown as an instruction', (): void => {
-        const manual = createDemoManual()
-        manual.reviewedSteps[0]!.title = 'Hold the load below 5 kg: keep it < 5 kg and > 2 kg'
-        const document = service.fallback(inputsFor('guide', manual), 'timeout')
-        const texts = document.body.flatMap((node) => (node.type === 'Instruction' ? [node.text] : []))
-        expect(texts.join(' ')).toContain('keep it < 5 kg and > 2 kg')
-    })
-
-    it('keeps the manual reason a quick-check question is about, word for word', (): void => {
-        const reason = 'Keep the load < 5 kg and > 2 kg.'
-        const document = service.fallback(
-            {
-                ...inputsFor('quick-check', createDemoManual()),
-                uiState: {
-                    review: {
-                        currentQuestion: {
-                            questionId: 'q1',
-                            kind: 'checks',
-                            stepId: 'step-1',
-                            stepOrder: 1,
-                            reason,
-                            parts: [],
-                        },
-                        blockers: 1,
-                        canConfirm: false,
-                    },
-                },
-            },
-            'timeout',
-        )
-        const prompt = document.body.find((node) => node.type === 'FactPrompt')
-        expect(prompt).toMatchObject({ detail: reason })
-    })
-
+describe('markup in manual text published by the shell', (): void => {
     it('still removes markup, links and control characters', (): void => {
         const document = service.fallback(
             {

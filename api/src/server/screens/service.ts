@@ -24,7 +24,7 @@ import {
 import { SCREEN_PROMPT_VERSION } from '../../providers/screen-prompt'
 import type { ShownScreen } from '../../providers/shown-screen'
 import type { AiPolicy, GenerativeUiMode, PolicyStage } from '../ai-policy'
-import { composeDeterministic, Tally } from './compose'
+import { shellScreen, Tally } from './required'
 import { buildContext, canonicalJson, sha256, type Decision, type GroundingContext, type ScreenInputs } from './context'
 import { finalize, groundProposal, validateProposal, withRequiredContent, type FinalScreen } from './ground'
 import { issueShown, resolveShown, type IssuedShown } from './shown'
@@ -79,6 +79,10 @@ export interface ScreenServiceOptions {
     now?: () => Date
 }
 
+/**
+ * @deprecated Version 1 screens protocol: no production caller (the app renders `ScreenDocumentV2` from `/api/screens/v2`). Kept unchanged for the legacy `ScreenStore`, the `/api/screens` route and their tests; new work uses the version 2 document family. Version 1 has no complete deterministic composition: every outcome that is not an accepted
+ * model screen is the honest `shell`.
+ */
 export interface ScreenService {
     generate(inputs: ScreenInputs, waiter?: AbortSignal): Promise<ScreenDocument>
     /** Deterministic document for an already-known failure (for example a route timeout); never calls the model. */
@@ -281,40 +285,36 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
         }
     }
 
-    /** Deterministic composition with required content forced; never calls the model. */
+    /**
+     * The honest shell, never a composed replacement: an empty body (the native screen is the screen) with every mandatory
+     * manual fact in the remainder. Used whenever no model screen is available or acceptable; never calls the model.
+     */
     function deterministic(
         context: GroundingContext,
-        source: 'fallback' | 'shell',
         reason: FallbackReason,
         extra: Partial<ScreenMetadata> = {},
     ): ScreenDocument {
-        const tally = new Tally()
-        const forced = withRequiredContent(composeDeterministic(context), context, tally)
-        // If the actual verdict or answer cannot fit one body, publish an empty shell (the native screen). The
-        // mandatory manual facts are not body blocks: a shell still carries every one of them, all in the remainder.
-        const publishable = source === 'fallback' && forced.complete
+        const forced = withRequiredContent(shellScreen(context), context, new Tally())
+        // The mandatory facts are not body blocks: a shell still carries every one of them, all in the remainder.
         const final = finalize(
-            publishable
-                ? forced.screen
-                : {
-                      ...forced.screen,
-                      items: [],
-                      facts: forced.screen.facts.map((slot) => ({ ...slot, placement: 'remainder' as const })),
-                  },
+            {
+                ...forced.screen,
+                items: [],
+                facts: forced.screen.facts.map((slot) => ({ ...slot, placement: 'remainder' as const })),
+            },
             context,
         )
-        const label = publishable ? ('fallback' as const) : ('shell' as const)
         const document = assemble(
             context,
             final,
-            metadata(context, label, {
-                fallbackReason: source === 'fallback' && !forced.complete ? 'unsupported_content' : reason,
-                origins: Object.fromEntries(Object.keys(final.origins).map((path) => [path, label])),
-                ...(publishable ? groundingMeta(tally) : {}),
+            metadata(context, 'shell', {
+                // Required content that cannot fit one document is reported as such (an honest 'disabled' stays disabled).
+                fallbackReason: !forced.complete && reason !== 'disabled' ? 'unsupported_content' : reason,
+                origins: Object.fromEntries(Object.keys(final.origins).map((path) => [path, 'shell'])),
                 ...extra,
             }),
         )
-        // The deterministic composition is validated by tests; if it ever failed, publish nothing rather than garbage.
+        // The shell is validated by tests; if it ever failed, publish nothing rather than garbage.
         if (document === null) throw new Error('invalid_screen_composition')
         return document
     }
@@ -371,7 +371,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
         const stagePolicy = policy.stages[stage]
         const generateScreen = provider?.generateScreen
         if ((provider === null || !generateScreen) && fixture === null) {
-            return { document: deterministic(context, 'fallback', 'unconfigured'), cached: null }
+            return { document: deterministic(context, 'unconfigured'), cached: null }
         }
         const started = admission.getStore()?.start ?? performance.now()
         const base: ScreenGenerationInput = {
@@ -429,7 +429,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
             }
         }
         const failure = (reason: FallbackReason): Made => ({
-            document: deterministic(context, 'fallback', reason, observed()),
+            document: deterministic(context, reason, observed()),
             cached: null,
         })
 
@@ -520,15 +520,15 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
     async function generate(inputs: ScreenInputs, waiter?: AbortSignal, background = false): Promise<ScreenDocument> {
         const context = buildContext(inputs)
         if (mode === 'off' || (mode === 'steps' && context.kind !== 'guide')) {
-            return deterministic(context, 'shell', 'disabled')
+            return deterministic(context, 'disabled')
         }
         if (provider === null && fixture === null) {
-            return deterministic(context, 'fallback', options.runtimeMode === 'fixture' ? 'fixture' : 'unconfigured')
+            return deterministic(context, options.runtimeMode === 'fixture' ? 'fixture' : 'unconfigured')
         }
         waiter?.throwIfAborted()
         const { manualId, revision } = context.bound
         if (manualId !== null && revision !== null && !guard.observe(manualId, revision)) {
-            return deterministic(context, 'fallback', 'stale')
+            return deterministic(context, 'stale')
         }
         const key = cacheKey(context)
         const hit = cache.get(key)
@@ -549,7 +549,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
                 let release: (() => void) | null = null
                 try {
                     release = background ? await work.acquire(controller.signal) : work.tryAcquire()
-                    if (release === null) return deterministic(context, 'fallback', 'busy')
+                    if (release === null) return deterministic(context, 'busy')
                     controller.signal.throwIfAborted()
                     const made = await generateWithModel(context, controller.signal)
                     if (made.cached) cache.set(key, made.cached)
@@ -557,7 +557,6 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
                 } catch (error) {
                     return deterministic(
                         context,
-                        'fallback',
                         controller.signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error),
                     )
                 } finally {
@@ -577,7 +576,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
     return {
         mode,
         generate,
-        fallback: (inputs, reason) => deterministic(buildContext(inputs), 'fallback', reason),
+        fallback: (inputs, reason) => deterministic(buildContext(inputs), reason),
         observe: (manualId, revision) => guard.observe(manualId, revision),
         resolveStepScreen(session, stepId, screen): StepScreenContext | 'mismatch' | null {
             const context = buildContext(stepInputs(session, stepId))

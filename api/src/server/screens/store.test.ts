@@ -21,6 +21,44 @@ describe('screen cache', (): void => {
 })
 
 describe('single flight', (): void => {
+    it('starts an intentional later request after the old flight was aborted, and late old cleanup cannot remove it', async (): Promise<void> => {
+        const flights = new SingleFlight<number>()
+        const waiter = new AbortController()
+        let finishOld: ((value: number) => void) | undefined
+        let finishFresh: ((value: number) => void) | undefined
+        const old = flights.run(
+            'same-key',
+            () =>
+                new Promise<number>((resolve) => {
+                    finishOld = resolve
+                }),
+            waiter.signal,
+        )
+        const left = expect(old).rejects.toThrow('left')
+        waiter.abort(new Error('left'))
+        await left
+        let starts = 0
+        const fresh = flights.run('same-key', () => {
+            starts += 1
+            return new Promise<number>((resolve) => {
+                finishFresh = resolve
+            })
+        })
+        try {
+            expect(starts).toBe(1)
+            finishOld!(1)
+            await tick()
+            expect(flights.active).toBe(1)
+            finishFresh!(2)
+            expect(await fresh).toBe(2)
+            expect(flights.active).toBe(0)
+        } finally {
+            finishOld?.(1)
+            finishFresh?.(2)
+            await fresh
+        }
+    })
+
     it('shares one computation across concurrent waiters', async (): Promise<void> => {
         const flights = new SingleFlight<number>()
         let starts = 0

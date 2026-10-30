@@ -1,10 +1,8 @@
 import {
-    isPlainScreenText,
     SCREEN_LIMITS,
     type AppIntent,
     type ManualFact,
     type ScreenIcon,
-    type ScreenKind,
     type ScreenLeafNode,
     type ScreenNode,
     type ScreenProposal,
@@ -12,28 +10,23 @@ import {
 
 import { plain, type GroundingContext, type Witness } from './context'
 import { splitLossless } from './text'
-import {
-    canonicalLabel,
-    EMPTY_LIBRARY_TEXT,
-    FACT_CANCEL_LABELS,
-    FACT_EDITOR_LABELS,
-    FACT_PROMPTS,
-    FACT_SAVE_LABELS,
-    failureText,
-    headerTitles,
-    instructionCopy,
-    QUESTION_SUBMIT_LABELS,
-    SOURCE_LABELS,
-} from './ui-copy'
+import { canonicalLabel, headerTitles } from './ui-copy'
 
-type ManualFactKind = ManualFact['kind']
+/**
+ * Required content and replacement chrome of the version 1 grounding (deprecated protocol, see `screens/service.ts`).
+ *
+ * Version 1 grounds a model proposal and may add to it what a person must never be without: the actual verdict or
+ * answer, the manual's safety notes and directions, and a header and bar the screen can stand on when the model's are
+ * not acceptable. This module builds exactly those pieces. It composes no screen: when nothing the model wrote survives,
+ * version 1 publishes the honest `shell` (an empty body, every mandatory fact in the remainder) and the native screen is
+ * the screen. The complete document is version 2's job (`buildFallbackDocumentV2` in the contracts).
+ */
 
 export type Origin = 'generated' | 'fallback'
 export type Header = ScreenProposal['header']
 export type Bar = ScreenProposal['bar']
 type Leaf = ScreenLeafNode
 export type InstructionNode = Extract<ScreenNode, { type: 'Instruction' }>
-export type WarningNode = Extract<ScreenNode, { type: 'Warning' }>
 
 /** One top-level body entry with the server-owned origin of itself and of each child. */
 export interface Item {
@@ -176,186 +169,6 @@ export function answerItems(context: GroundingContext): Item[] {
     ]
 }
 
-function regionBlock(context: GroundingContext): Item[] {
-    const regions = [
-        ...(context.regions.next
-            ? [{ partId: context.regions.next.partId, role: 'next' as const, box: context.regions.next.region }]
-            : []),
-        ...(context.regions.target
-            ? [{ partId: context.regions.target.partId, role: 'target' as const, box: context.regions.target.region }]
-            : []),
-    ]
-    if (context.captureId === null || (regions.length === 0 && context.regions.observed === null)) return []
-    return [
-        item({
-            type: 'PhotoWithRegions',
-            captureId: context.captureId,
-            observed: context.regions.observed,
-            regions,
-        }),
-    ]
-}
-
-/** The step's facts, safety first, then the given kinds, then manual order. Each fact is named once. */
-export function orderedFactIds(context: GroundingContext, lead: readonly ManualFactKind[] = []): string[] {
-    const facts = context.manualFacts
-    const rank = (kind: ManualFactKind): number => (kind === 'safety' ? 0 : lead.includes(kind) ? 1 : 2)
-    return facts
-        .map((fact, index) => ({ fact, index }))
-        .sort((a, b) => rank(a.fact.kind) - rank(b.fact.kind) || a.index - b.index)
-        .map((entry) => entry.fact.factId)
-}
-
-/** One ManualDirections block naming every known fact of the step: the complete, source-witnessed directions. */
-function directionsBlock(context: GroundingContext, lead: readonly ManualFactKind[] = []): Item[] {
-    const factIds = orderedFactIds(context, lead)
-    return factIds.length === 0 ? [] : [item({ type: 'ManualDirections', factIds, emphasis: 'normal' })]
-}
-
-function stepScreen(context: GroundingContext): Item[] {
-    const { step } = context
-    if (!step) return []
-    const title = context.witnesses.find((candidate) => candidate.id === 'title')
-    const items: Item[] = [
-        item({ type: 'StepProgress', current: context.stepIndex + 1, total: context.stepCount, label: null }),
-        ...(title && title.refs.length > 0 && title.complete
-            ? instructionNodes(title.text, title.refs, true).map((n) => item(n))
-            : []),
-    ]
-    // A part name is shown verbatim or not at all: one that is not plain text (markup, a link, a control character) would
-    // make the whole document invalid, and altering it would misname the part. It stays in the manual's own details.
-    const parts = step.parts.slice(0, SCREEN_LIMITS.listItems).flatMap((part) => {
-        const label = context.partNames.get(part.partId)
-        return label === undefined || Array.from(label).length > 60 || !isPlainScreenText(label)
-            ? []
-            : [{ partId: part.partId, label, quantity: context.quantities.get(part.partId) ?? null }]
-    })
-    if (parts.length > 0) items.push(item({ type: 'PartList', items: parts, showQuantities: true }))
-    // The complete original facts, never reduced to a shortened direction.
-    items.push(...directionsBlock(context))
-    if (context.reviewed) {
-        items.push(item({ type: 'CameraGuidance', cue: CAMERA_CUE, pill: null, tipTarget: 'guide-hero-frame' }))
-    }
-    return items
-}
-
-function recoveryItems(context: GroundingContext): Item[] {
-    const lead = instructionCopy(context).flatMap((text) => instructionNodes(text, [], true).map((node) => item(node)))
-    // Corrections lead the complete directions: the fix comes first, after any safety.
-    return [...lead, ...directionsBlock(context, ['correction'])]
-}
-
-/** The sources of the actual result (or of the step) as one collapsed look at the manual pages. */
-function sourceBlock(context: GroundingContext, witnessId: string): Item[] {
-    const witness = context.witnesses.find((candidate) => candidate.id === witnessId)
-    const sources = (witness?.refs ?? []).slice(0, SCREEN_LIMITS.citations)
-    return sources.length === 0
-        ? []
-        : [item({ type: 'SourceDetails', label: SOURCE_LABELS[0], sources, fit: 'contain', initiallyOpen: false })]
-}
-
-const CAMERA_CUE = 'Keep the whole step in view'
-
-/** Full-screen blocks a static kind can honestly show from the live app state the request carried. */
-function stateBlocks(context: GroundingContext): Item[] {
-    const ui = context.ui
-    switch (context.kind) {
-        case 'home':
-            return ui?.library
-                ? [
-                      item({
-                          type: 'ManualLibrary',
-                          entries: 'recent',
-                          layout: 'cards',
-                          showProgress: true,
-                          emptyText: EMPTY_LIBRARY_TEXT[0],
-                      }),
-                  ]
-                : []
-        case 'pages':
-            return ui?.pages
-                ? [item({ type: 'PageGallery', pages: 'session', layout: 'list', showNumbers: true, action: null })]
-                : []
-        case 'quick-check': {
-            const question = ui?.review?.currentQuestion
-            if (!question) return []
-            const title = context.witnesses.find((witness) => witness.id === `title:${question.stepId}`)
-            const detail =
-                question.reason !== null && Array.from(question.reason).length <= SCREEN_LIMITS.text
-                    ? plain(question.reason, SCREEN_LIMITS.text)
-                    : null
-            return [
-                item({
-                    type: 'FactPrompt',
-                    questionRef: 'current',
-                    prompt: FACT_PROMPTS[question.kind][0],
-                    detail,
-                    citations: (title?.complete ? title.refs : []).slice(0, SCREEN_LIMITS.citations),
-                }),
-                item({
-                    type: 'FactEditor',
-                    questionRef: 'current',
-                    kind: question.kind,
-                    label: FACT_EDITOR_LABELS[question.kind][0],
-                    saveLabel: FACT_SAVE_LABELS[0],
-                    cancelLabel: FACT_CANCEL_LABELS[0],
-                }),
-            ]
-        }
-        case 'questions':
-            return ui?.capture
-                ? [
-                      item({
-                          type: 'QuestionComposer',
-                          captureRef: 'current',
-                          prompt: null,
-                          partScope: (context.step?.parts.length ?? 0) > 0 ? 'step-parts' : 'none',
-                          submitLabel: QUESTION_SUBMIT_LABELS[0],
-                      }),
-                  ]
-                : []
-        case 'more':
-            return [
-                ...(ui?.sections?.includes('about-this-check')
-                    ? [
-                          item({
-                              type: 'ActionLink',
-                              label: 'About this check',
-                              icon: 'info',
-                              intent: intent('open-details', 'about-check'),
-                              emphasis: 'normal',
-                          }),
-                      ]
-                    : []),
-                ...(ui?.sections?.includes('tips')
-                    ? [
-                          item({
-                              type: 'ActionLink',
-                              label: 'Show tips',
-                              icon: 'help',
-                              intent: intent('show-tips', 'screen'),
-                              emphasis: 'quiet',
-                          }),
-                      ]
-                    : []),
-            ]
-        default:
-            return []
-    }
-}
-
-const STATIC_KINDS = new Set<ScreenKind>([
-    'home',
-    'add',
-    'pages',
-    'reading',
-    'quick-check',
-    'questions',
-    'more',
-    'completion',
-    'error',
-])
-
 function barFor(context: GroundingContext): Bar {
     const ask = secondary(intent('ask', 'about-step'), 'help')
     switch (context.kind) {
@@ -429,32 +242,19 @@ function headerFor(context: GroundingContext): Header {
     return header(title)
 }
 
-/** The deterministic, always-valid composition of a screen from validated facts alone. */
-export function composeDeterministic(context: GroundingContext): Screen {
-    let items: Item[]
-    if (STATIC_KINDS.has(context.kind)) {
-        items = instructionCopy(context).flatMap((text) => instructionNodes(text, [], true).map((n) => item(n)))
-        if (context.kind === 'reading') items.push(item({ type: 'Skeleton', variant: 'lines', lines: 3 }))
-        if (context.kind === 'error') {
-            items = instructionNodes(failureText(context.failure), [], false).map((n) => item(n))
-        }
-        items.push(...stateBlocks(context))
-    } else if (context.kind === 'guide') items = stepScreen(context)
-    else if (context.kind === 'result') {
-        items = [...verdictItems(context), ...regionBlock(context), ...sourceBlock(context, 'verdict')]
-    } else if (context.kind === 'answer') items = [...answerItems(context), ...sourceBlock(context, 'answer')]
-    else items = recoveryItems(context)
+/** Deterministic header and bar for a kind, used when a model-chosen component is not acceptable. */
+export const fallbackHeader = headerFor
+export const fallbackBar = barFor
+
+/** The screen with no body: only the chrome a kind stands on. Required content is added by `withRequiredContent`. */
+export function shellScreen(context: GroundingContext): Screen {
     return {
         header: headerFor(context),
         headerOrigin: 'fallback',
-        items,
+        items: [],
         bar: barFor(context),
         primaryOrigin: 'fallback',
         secondaryOrigin: 'fallback',
         facts: [],
     }
 }
-
-/** Deterministic header and bar for a kind, used when a model-chosen component is not acceptable. */
-export const fallbackHeader = headerFor
-export const fallbackBar = barFor

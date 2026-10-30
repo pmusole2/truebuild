@@ -47,6 +47,7 @@ const questionDelayMs = z.coerce
 const runtime = createRuntimeFromEnvironment(
     {
         PROVIDER_MODE: 'meta',
+        GENERATIVE_UI: process.env.GENERATIVE_UI,
         MODEL_API_KEY: '<synthetic>',
         MODEL_SECOND_OPINION: secondOpinion ? 'muse-wonder-1.0' : undefined,
         API_SHARED_SECRET: 'truebuild-fixture-demo',

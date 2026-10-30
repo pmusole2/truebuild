@@ -1,5 +1,5 @@
 import {
-    composeProposalV2,
+    buildFallbackProposalV2,
     documentMaterialV2,
     manualSessionSchema,
     type ManualSession,
@@ -62,7 +62,7 @@ const has = (issues: string[], rule: string): boolean => issues.some((issue) => 
 describe('every textual field is grounded (finding 1)', () => {
     const FACTUAL = 'Bolts are tight and the panel is flat.'
     const context = buildDocumentContext(documentInputs('guide'))
-    const good = composeProposalV2(context.material)
+    const good = buildFallbackProposalV2(context.material)
 
     it('accepts the deterministic composition', () => {
         expect(checkProposal(good, context)).toEqual([])
@@ -174,7 +174,7 @@ describe('every textual field is grounded (finding 1)', () => {
     ]
     it.each(slots)('rejects an unlisted literal in a %s', (_slot, kind, node) => {
         const target = buildDocumentContext(documentInputs(kind))
-        const proposal = withBody(composeProposalV2(target.material), node)
+        const proposal = withBody(buildFallbackProposalV2(target.material), node)
         expect(has(checkProposal(proposal, target), 'literal_not_listed')).toBe(true)
     })
 
@@ -212,7 +212,7 @@ describe('every textual field is grounded (finding 1)', () => {
             completedStepIds: ['step-1', 'step-2'],
         })
         expect(done.material.completion).toBe('witnessed')
-        const proposal = composeProposalV2(done.material)
+        const proposal = buildFallbackProposalV2(done.material)
         expect(checkProposal(proposal, done)).toEqual([])
         const checklist: ScreenNodeV2 = {
             type: 'Checklist',
@@ -222,12 +222,15 @@ describe('every textual field is grounded (finding 1)', () => {
         const open = buildDocumentContext({ ...documentInputs('completion'), session: demoSession() })
         expect(open.material.completion).toBe('unwitnessed')
         expect(
-            has(checkProposal(withBody(composeProposalV2(open.material), checklist), open), 'checklist_done_unearned'),
+            has(
+                checkProposal(withBody(buildFallbackProposalV2(open.material), checklist), open),
+                'checklist_done_unearned',
+            ),
         ).toBe(true)
         const refused = buildDocumentContext(documentInputs('result'))
         expect(
             has(
-                checkProposal(withBody(composeProposalV2(refused.material), text('Looks right')), refused),
+                checkProposal(withBody(buildFallbackProposalV2(refused.material), text('Looks right')), refused),
                 'literal_not_listed',
             ),
         ).toBe(true)
@@ -236,7 +239,7 @@ describe('every textual field is grounded (finding 1)', () => {
 
 describe('overlays and state variants cannot discharge requirements through the gate (findings 2, 8)', () => {
     const context = buildDocumentContext(documentInputs('guide'))
-    const good = composeProposalV2(context.material)
+    const good = buildFallbackProposalV2(context.material)
 
     it('rejects the only safety text moved into an unopened section', () => {
         const safety = context.material.facts.find((fact) => fact.kind === 'safety')!
@@ -316,7 +319,7 @@ describe('capture content needs a captured identity (finding 5)', () => {
     it('refuses a live photo on a guide whatever the raw capture id says', () => {
         for (const captureId of ['photo-a', 'photo-b']) {
             const context = buildDocumentContext({ ...documentInputs('guide'), captureId })
-            const issues = checkProposal(withBody(composeProposalV2(context.material), image), context)
+            const issues = checkProposal(withBody(buildFallbackProposalV2(context.material), image), context)
             expect(has(issues, 'no_capture'), captureId).toBe(true)
         }
     })
@@ -325,7 +328,7 @@ describe('capture content needs a captured identity (finding 5)', () => {
         for (const kind of ['result', 'questions'] as const) {
             const context = buildDocumentContext(documentInputs(kind))
             // Appended inside the screen's own stack, so a held photo already there keeps its spine in every variant.
-            const proposal = composeProposalV2(context.material)
+            const proposal = buildFallbackProposalV2(context.material)
             const stack = proposal.body.type === 'Scroll' ? proposal.body.children[0] : undefined
             if (stack?.type !== 'Stack') throw new Error('unexpected composition')
             const appended = {
@@ -362,7 +365,7 @@ describe('a step is only confirmed past a held pass (finding 7)', () => {
         'refuses Next step on a %s screen without a held pass',
         (kind) => {
             const context = buildDocumentContext(documentInputs(kind))
-            const proposal = composeProposalV2(context.material)
+            const proposal = buildFallbackProposalV2(context.material)
             const next = { ...proposal, bar: { ...proposal.bar, secondary: advance } } as ScreenProposalV2
             expect(has(checkProposal(next, context), 'intent_not_allowed')).toBe(true)
         },
@@ -373,7 +376,7 @@ describe('a step is only confirmed past a held pass (finding 7)', () => {
             ...documentInputs('result'),
             result: { kind: 'check', value: createHeroResponse('correct') },
         })
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
     })
 })
 
@@ -427,7 +430,7 @@ describe('the deterministic fallback never turns a valid manual into a failure (
         expect(
             context.material.sources.some((source) => JSON.stringify(source.region) === JSON.stringify(region)),
         ).toBe(true)
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         const prompt = context.view.dynamic.document as { facts: { sources: number[] }[] }
         expect(prompt.facts.find((fact) => fact.sources.length === 0)).toBeUndefined()
     })
@@ -441,12 +444,12 @@ describe('a part-target Choice needs a held photo and named parts', () => {
     }
     it('is accepted with both and refused without a part registry', () => {
         const context = buildDocumentContext(documentInputs('questions'))
-        expect(checkProposal(composeProposalV2(context.material), context)).toEqual([])
+        expect(checkProposal(buildFallbackProposalV2(context.material), context)).toEqual([])
         const partless = demoSession()
         partless.reviewedSteps[0]!.parts = []
         const bare = buildDocumentContext(documentInputs('questions', partless))
         expect(
-            has(checkProposal(withBody(composeProposalV2(bare.material), choice), bare), 'binding_unavailable'),
+            has(checkProposal(withBody(buildFallbackProposalV2(bare.material), choice), bare), 'binding_unavailable'),
         ).toBe(true)
     })
 })
@@ -458,6 +461,23 @@ describe('the prompt names the closed copy (finding 1)', () => {
         expect(view.literalCopy.ready).toContain('Safety')
         expect(view.literalCopy.busy).toContain('Working on it')
         expect(JSON.stringify(view.literalCopy)).not.toContain('Looks right')
+    })
+
+    it('lists one stable calm wording for a generic wait, never a placeholder', () => {
+        const context = buildDocumentContext(documentInputs('guide'))
+        const view = context.view.dynamic.document as { literalCopy: Record<string, string[]> }
+        for (const state of ['busy', 'pending'] as const) {
+            expect(view.literalCopy[state], state).toEqual(
+                expect.arrayContaining(['Working on it', 'One moment, please.']),
+            )
+            for (const retired of [
+                'Getting this ready',
+                'Your screen will appear here.',
+                'This only takes a moment.',
+            ]) {
+                expect(view.literalCopy[state], `${state}: ${retired}`).not.toContain(retired)
+            }
+        }
     })
 })
 

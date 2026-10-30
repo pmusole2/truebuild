@@ -184,7 +184,7 @@ const camera = (tipTarget: 'camera-shutter' | 'guide-hero-frame' | null, arm: bo
     tipTarget,
 })
 
-function compose(request: ScreenFixtureRequest): unknown {
+function authorFixtureScreen(request: ScreenFixtureRequest): unknown {
     const view = readView(request)
     const { kind } = request
     // Two different manuals get two different compositions over the same catalog: order, density, emphasis, blocks.
@@ -583,6 +583,6 @@ export function createScreenFixtureGenerator(options: ScreenFixtureOptions = {})
         const view = readView(request)
         const order = view.screen.step?.order ?? 1
         if (request.kind === 'guide') await sleep(Math.max(0, order - 1) * stepDelay, signal)
-        return compose(request)
+        return authorFixtureScreen(request)
     }
 }
