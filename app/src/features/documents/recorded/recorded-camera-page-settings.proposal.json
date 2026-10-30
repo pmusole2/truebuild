@@ -1,8 +1,18 @@
 {
     "header": {
-        "title": { "kind": "literal", "text": "Camera access is off" },
+        "title": {
+            "kind": "literal",
+            "text": "Camera access is off"
+        },
         "subtitle": null,
-        "back": { "label": "Close", "icon": "chevronLeft", "intent": { "intent": "navigate", "target": "back" } },
+        "back": {
+            "label": "Back",
+            "icon": "chevronLeft",
+            "intent": {
+                "intent": "navigate",
+                "target": "back"
+            }
+        },
         "actions": []
     },
     "body": {
@@ -20,10 +30,18 @@
                         "tone": "neutral",
                         "padding": "md",
                         "children": [
-                            { "type": "Icon", "name": "camera", "tone": "caution", "size": "md" },
+                            {
+                                "type": "Icon",
+                                "name": "camera",
+                                "tone": "caution",
+                                "size": "md"
+                            },
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "Open settings to turn the camera on." },
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "Open settings to turn the camera on."
+                                },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "neutral",
@@ -33,7 +51,10 @@
                     },
                     {
                         "type": "Text",
-                        "content": { "kind": "bound", "key": "privacy-camera" },
+                        "content": {
+                            "kind": "bound",
+                            "key": "privacy-camera"
+                        },
                         "role": "caption",
                         "emphasis": "quiet",
                         "tone": "neutral",
@@ -48,7 +69,10 @@
             "type": "PrimaryAction",
             "label": "Open settings",
             "icon": null,
-            "intent": { "intent": "open-details", "target": "device-settings" }
+            "intent": {
+                "intent": "open-details",
+                "target": "device-settings"
+            }
         },
         "secondary": null
     },
@@ -56,12 +80,21 @@
     "states": {
         "busy": {
             "header": {
-                "title": { "kind": "literal", "text": "Working on it" },
-                "subtitle": { "kind": "literal", "text": "Camera access is off" },
+                "title": {
+                    "kind": "literal",
+                    "text": "Working on it"
+                },
+                "subtitle": {
+                    "kind": "literal",
+                    "text": "Camera access is off"
+                },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "back" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
                 },
                 "actions": []
             },
@@ -80,7 +113,12 @@
                                 "tone": "neutral",
                                 "padding": "md",
                                 "children": [
-                                    { "type": "Icon", "name": "camera", "tone": "caution", "size": "md" },
+                                    {
+                                        "type": "Icon",
+                                        "name": "camera",
+                                        "tone": "caution",
+                                        "size": "md"
+                                    },
                                     {
                                         "type": "Text",
                                         "content": {
@@ -96,16 +134,26 @@
                             },
                             {
                                 "type": "Text",
-                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "content": {
+                                    "kind": "bound",
+                                    "key": "privacy-camera"
+                                },
                                 "role": "caption",
                                 "emphasis": "quiet",
                                 "tone": "neutral",
                                 "align": "start"
                             },
-                            { "type": "Progress", "binding": "build", "label": null },
+                            {
+                                "type": "Progress",
+                                "binding": "build",
+                                "label": null
+                            },
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "One moment, please."
+                                },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "info",
@@ -120,7 +168,10 @@
                     "type": "PrimaryAction",
                     "label": "Please wait",
                     "icon": null,
-                    "intent": { "intent": "open-details", "target": "device-settings" }
+                    "intent": {
+                        "intent": "open-details",
+                        "target": "device-settings"
+                    }
                 },
                 "secondary": null
             },
@@ -128,12 +179,21 @@
         },
         "pending": {
             "header": {
-                "title": { "kind": "literal", "text": "Working on it" },
-                "subtitle": { "kind": "literal", "text": "Camera access is off" },
+                "title": {
+                    "kind": "literal",
+                    "text": "Working on it"
+                },
+                "subtitle": {
+                    "kind": "literal",
+                    "text": "Camera access is off"
+                },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "back" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
                 },
                 "actions": []
             },
@@ -152,7 +212,12 @@
                                 "tone": "neutral",
                                 "padding": "md",
                                 "children": [
-                                    { "type": "Icon", "name": "camera", "tone": "caution", "size": "md" },
+                                    {
+                                        "type": "Icon",
+                                        "name": "camera",
+                                        "tone": "caution",
+                                        "size": "md"
+                                    },
                                     {
                                         "type": "Text",
                                         "content": {
@@ -168,7 +233,10 @@
                             },
                             {
                                 "type": "Text",
-                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "content": {
+                                    "kind": "bound",
+                                    "key": "privacy-camera"
+                                },
                                 "role": "caption",
                                 "emphasis": "quiet",
                                 "tone": "neutral",
@@ -176,7 +244,10 @@
                             },
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "One moment, please."
+                                },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "info",
@@ -191,7 +262,10 @@
                     "type": "PrimaryAction",
                     "label": "Open settings",
                     "icon": null,
-                    "intent": { "intent": "open-details", "target": "device-settings" }
+                    "intent": {
+                        "intent": "open-details",
+                        "target": "device-settings"
+                    }
                 },
                 "secondary": null
             },
@@ -200,12 +274,18 @@
         "empty": null,
         "error": {
             "header": {
-                "title": { "kind": "literal", "text": "Something went wrong" },
+                "title": {
+                    "kind": "literal",
+                    "text": "Something went wrong"
+                },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "back" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
                 },
                 "actions": []
             },
@@ -220,7 +300,10 @@
                         "children": [
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "Try again in a moment." },
+                                "content": {
+                                    "kind": "literal",
+                                    "text": "Try again in a moment."
+                                },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "caution",
@@ -228,7 +311,10 @@
                             },
                             {
                                 "type": "Text",
-                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "content": {
+                                    "kind": "bound",
+                                    "key": "privacy-camera"
+                                },
                                 "role": "caption",
                                 "emphasis": "quiet",
                                 "tone": "neutral",
@@ -243,7 +329,10 @@
                     "type": "PrimaryAction",
                     "label": "Home",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "home" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "home"
+                    }
                 },
                 "secondary": null
             },
@@ -251,12 +340,18 @@
         },
         "recovery": {
             "header": {
-                "title": { "kind": "literal", "text": "Let us get you back on track" },
+                "title": {
+                    "kind": "literal",
+                    "text": "Let us get you back on track"
+                },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "back" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
                 },
                 "actions": []
             },
@@ -266,7 +361,10 @@
                 "children": [
                     {
                         "type": "Text",
-                        "content": { "kind": "literal", "text": "Try again, or go back home." },
+                        "content": {
+                            "kind": "literal",
+                            "text": "Try again, or go back home."
+                        },
                         "role": "body",
                         "emphasis": "normal",
                         "tone": "neutral",
@@ -279,7 +377,10 @@
                     "type": "PrimaryAction",
                     "label": "Home",
                     "icon": "chevronLeft",
-                    "intent": { "intent": "navigate", "target": "home" }
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "home"
+                    }
                 },
                 "secondary": null
             },

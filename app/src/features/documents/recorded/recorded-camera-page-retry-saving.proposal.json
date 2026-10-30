@@ -6,7 +6,7 @@
         },
         "subtitle": null,
         "back": {
-            "label": "Close",
+            "label": "Back",
             "icon": "chevronLeft",
             "intent": {
                 "intent": "navigate",
@@ -89,7 +89,7 @@
                     "text": "The camera did not start"
                 },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -188,7 +188,7 @@
                     "text": "The camera did not start"
                 },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -280,7 +280,7 @@
                 },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -346,7 +346,7 @@
                 },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",

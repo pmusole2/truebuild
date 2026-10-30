@@ -5,10 +5,10 @@
     "authoring": {
         "model": "gpt-6.1-sol",
         "effort": "ultra",
-        "recordedAt": "2026-10-30T15:16:56.000Z",
+        "recordedAt": "2026-10-30T19:14:29.242Z",
         "fixtureId": "recorded-camera-page-sol-v1"
     },
-    "recordedAt": "2026-10-30T15:16:56.000Z",
+    "recordedAt": "2026-10-30T19:14:29.242Z",
     "promptVersion": 0,
     "repaired": false
 }

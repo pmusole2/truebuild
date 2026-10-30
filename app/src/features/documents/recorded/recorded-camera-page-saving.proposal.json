@@ -6,7 +6,7 @@
         },
         "subtitle": null,
         "back": {
-            "label": "Close",
+            "label": "Back",
             "icon": "chevronLeft",
             "intent": {
                 "intent": "navigate",
@@ -154,7 +154,7 @@
                     "text": "Photograph a page"
                 },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -295,7 +295,7 @@
                     "text": "Photograph a page"
                 },
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -429,7 +429,7 @@
                 },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",
@@ -495,7 +495,7 @@
                 },
                 "subtitle": null,
                 "back": {
-                    "label": "Close",
+                    "label": "Back",
                     "icon": "chevronLeft",
                     "intent": {
                         "intent": "navigate",

@@ -90,6 +90,21 @@ function variantLiteralTexts(doc: ScreenDocumentV2, name: string): string[] {
 
 const VARIANT_NAMES = ['ready', 'busy', 'pending', 'empty', 'error', 'recovery', 'confirming'] as const
 
+it.each(ARTIFACTS.filter((name) => name.startsWith('recorded-camera-page')))(
+    '%s keeps the original Back control on every camera state',
+    (name) => {
+        const document = recordedDocumentForTest(name)
+        for (const state of VARIANT_NAMES) {
+            const variant = state === 'ready' ? document : document.states[state]
+            if (variant === null) continue
+            expect(variant.header.back).toMatchObject({
+                label: 'Back',
+                intent: { intent: 'navigate', target: 'back' },
+            })
+        }
+    },
+)
+
 describe('synthetic Sol state proposals (explicit raw trees)', () => {
     it.each(ARTIFACTS)('%s matches its complete canonical publication pin', (name) => {
         const hashes = read('publication-hashes.json') as Record<string, string>
