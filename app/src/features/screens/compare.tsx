@@ -1,7 +1,8 @@
-import { useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Stack as RouterStack, useIsFocused } from 'expo-router'
 import type { LibraryEntry } from '../capture/library'
+import { manualPageImagesKey } from '../capture/controller'
 import { useWorkflowActions } from '../capture/native-routes'
 import { useMoreState } from '../capture/screen-header'
 import { useWorkflow } from '../capture/workflow-context'
@@ -22,7 +23,7 @@ export function comparable(entry: LibraryEntry): boolean {
 
 /** Each pane is a real v2 guide with its own facts, citation hero and full frame; actions remain read-only. */
 export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactElement {
-    const { state } = useWorkflow()
+    const { state, controller: reader } = useWorkflow()
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
     const focused = useIsFocused()
@@ -38,12 +39,38 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
         { focused: false },
     )
     void focused
+    const { manualId, revision } = entry.session
+    const pageKey = manualPageImagesKey(entry.session)
+    const [pictures, setPictures] = useState<{
+        readonly key: string
+        readonly status: 'pending' | 'ready' | 'unavailable'
+        readonly uris: Readonly<Record<string, string>>
+    }>({ key: pageKey, status: 'pending', uris: {} })
+    useEffect(() => {
+        const abort = new AbortController()
+        let active = true
+        setPictures({ key: pageKey, status: 'pending', uris: {} })
+        void reader.pageImages(manualId, revision, abort.signal).then(
+            (uris) => {
+                if (active) setPictures({ key: pageKey, status: 'ready', uris })
+            },
+            () => {
+                if (active) setPictures({ key: pageKey, status: 'unavailable', uris: {} })
+            },
+        )
+        return (): void => {
+            active = false
+            abort.abort()
+        }
+    }, [reader, manualId, revision, pageKey])
+    const currentPictures = pictures.key === pageKey ? pictures : null
     const bindings: FrameBindings = {
         readOnly: true,
         resolve: () => ({ enabled: false, reason: 'Comparison is read only.', run: (): void => undefined }),
         live: { state, entry: { ...entry, stepIndex: 0 }, controller, nav, more },
         session: entry.session,
-        pageUris: state.pageUris,
+        pageUris: currentPictures?.uris ?? {},
+        pageImageStatus: currentPictures?.status ?? 'pending',
         capture: null,
         marks: [],
         heroMode: 'inline',

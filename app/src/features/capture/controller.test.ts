@@ -29,8 +29,7 @@ const digest = async (bytes: Uint8Array): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes)))]
         .map((n) => n.toString(16).padStart(2, '0'))
         .join('')
-function storage(): LibraryStorage {
-    const data = new Map<string, string>()
+function storage(data = new Map<string, string>()): { store: LibraryStorage; kv: KeyValueStorage } {
     const kv: KeyValueStorage = {
         getItem: async (key): Promise<string | null> => data.get(key) ?? null,
         setItem: async (key, value): Promise<void> => {
@@ -41,7 +40,7 @@ function storage(): LibraryStorage {
         },
         getAllKeys: async (): Promise<string[]> => [...data.keys()],
     }
-    return new LibraryStorage(kv, digest)
+    return { store: new LibraryStorage(kv, digest), kv }
 }
 function parsed(pageId: string): ParsedManual {
     const value = JSON.parse(
@@ -64,6 +63,8 @@ function setup(
     controller: CaptureController
     calls: string[]
     store: LibraryStorage
+    data: Map<string, string>
+    kv: KeyValueStorage
 } {
     let id = 0
     const calls: string[] = []
@@ -119,7 +120,8 @@ function setup(
             headers: { 'Content-Type': 'application/json' },
         })
     }
-    const store = storage()
+    const data = new Map<string, string>()
+    const { store, kv } = storage(data)
     const controller = new CaptureController({
         storage: store,
         client: new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: '', fetch: boundary }),
@@ -127,9 +129,16 @@ function setup(
         normalize,
         id: (): string => `test-${++id}`,
     })
-    return { controller, calls, store }
+    return { controller, calls, store, data, kv }
 }
 const controllers: CaptureController[] = []
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => {
+        resolve = done
+    })
+    return { promise, resolve }
+}
 afterEach(() => {
     for (const controller of controllers.splice(0)) {
         controller.dispose()
@@ -146,6 +155,461 @@ async function ready(responder?: ModelFetch): Promise<ReturnType<typeof setup>> 
     await runtime.controller.confirm()
     return runtime
 }
+
+describe('read-only manual page images', () => {
+    it.each(['query', 'open'] as const)(
+        'waits for a retiring save to publish before admitting %s during post-manifest GC',
+        async (reader) => {
+            const { controller, store, data, kv, calls } = await ready()
+            const session = controller.current!.session
+            const chunk = [...data.keys()].find((key) => key.includes(`/bytes/${session.pages[0]!.assetId}/`))!
+            const reached = deferred()
+            const gate = deferred()
+            const remove = kv.removeItem.bind(kv)
+            vi.spyOn(kv, 'removeItem').mockImplementation(async (key) => {
+                if (key === chunk) {
+                    reached.resolve()
+                    await gate.promise
+                }
+                await remove(key)
+            })
+            const editing = controller.editPage(0, 'remove')
+            const dispatched = [...calls]
+            let reading: Promise<unknown> | undefined
+            try {
+                await reached.promise
+                expect(controller.current!.session.pages).toHaveLength(1)
+                expect(JSON.parse(data.get('truebuild/library/v1')!).entries[0].session.pages).toHaveLength(0)
+                expect(controller.getSnapshot().pending).toMatch(/Saving/u)
+                const read = vi.spyOn(store, 'readAsset')
+                reading =
+                    reader === 'query'
+                        ? controller.pageImages(session.manualId, session.revision)
+                        : controller.open(session.manualId, 'pages')
+                const outcome = reading.then(
+                    () => null,
+                    (error: unknown) => error,
+                )
+                expect(read).not.toHaveBeenCalled()
+                expect(controller.getSnapshot().storageReadOnly).toBe(false)
+                gate.resolve()
+                await editing
+                if (reader === 'query') expect(await outcome).toBeInstanceOf(Error)
+                else expect(await outcome).toBeNull()
+                expect(read).not.toHaveBeenCalled()
+                expect(controller.current!.session.pages).toHaveLength(0)
+                expect(controller.getSnapshot().storageReadOnly).toBe(false)
+                await controller.rename('Healthy after save admission')
+                expect(controller.current!.session.title).toBe('Healthy after save admission')
+                expect(calls).toEqual(dispatched)
+                const restored = await new LibraryStorage(kv, digest).restore()
+                expect(restored.readOnly).toBe(false)
+                expect(restored.entries).toEqual(controller.getSnapshot().entries)
+            } finally {
+                gate.resolve()
+                await Promise.allSettled([editing, ...(reading === undefined ? [] : [reading])])
+            }
+        },
+    )
+
+    it('keeps the latest requested manual when two opens wait behind one save', async () => {
+        const { controller, store, kv, calls } = await ready()
+        const firstId = controller.current!.session.manualId
+        await controller.createManual()
+        const lastId = controller.current!.session.manualId
+        const reached = deferred()
+        const gate = deferred()
+        const set = kv.setItem.bind(kv)
+        vi.spyOn(kv, 'setItem').mockImplementation(async (key, value) => {
+            if (key === 'truebuild/library/v1') {
+                reached.resolve()
+                await gate.promise
+            }
+            await set(key, value)
+        })
+        const dispatched = [...calls]
+        const saving = controller.rename('Newest selection')
+        let first: Promise<void> | undefined
+        let last: Promise<void> | undefined
+        try {
+            await reached.promise
+            const read = vi.spyOn(store, 'readAsset')
+            first = controller.open(firstId, 'guide')
+            last = controller.open(lastId, 'pages')
+            expect(read).not.toHaveBeenCalled()
+            gate.resolve()
+            await Promise.all([saving, first, last])
+            expect(controller.getSnapshot().selectedId).toBe(lastId)
+            expect(controller.getSnapshot().route).toBe('pages')
+            expect(controller.getSnapshot().pending).toBeNull()
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+            expect(read).not.toHaveBeenCalled()
+            expect(calls).toEqual(dispatched)
+        } finally {
+            gate.resolve()
+            await Promise.allSettled([
+                saving,
+                ...(first === undefined ? [] : [first]),
+                ...(last === undefined ? [] : [last]),
+            ])
+        }
+    })
+
+    it('resumes an unchanged inactive manual after an unrelated rename publishes, while an aborted waiter does not read or pause writes', async () => {
+        const { controller, store, kv, calls } = await ready()
+        const first = structuredClone(controller.current!)
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        controller.camera({ kind: 'check' })
+        await controller.shutter(async () => photo)
+        const held = controller.getSnapshot().capture
+        const reached = deferred()
+        const gate = deferred()
+        const set = kv.setItem.bind(kv)
+        vi.spyOn(kv, 'setItem').mockImplementation(async (key, value) => {
+            if (key === 'truebuild/library/v1') {
+                reached.resolve()
+                await gate.promise
+            }
+            await set(key, value)
+        })
+        const renaming = controller.rename('Renamed active manual')
+        let reading: Promise<Readonly<Record<string, string>>> | undefined
+        let cancelled: Promise<Readonly<Record<string, string>>> | undefined
+        try {
+            await reached.promise
+            const during = controller.getSnapshot()
+            const dispatched = [...calls]
+            const readAsset = store.readAsset.bind(store)
+            const snapshots: (typeof during)[] = []
+            const read = vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+                snapshots.push(controller.getSnapshot())
+                return readAsset(page)
+            })
+            const abort = new AbortController()
+            cancelled = controller.pageImages(first.session.manualId, first.session.revision, abort.signal)
+            reading = controller.pageImages(first.session.manualId, first.session.revision)
+            expect(read).not.toHaveBeenCalled()
+            abort.abort()
+            await expect(cancelled).rejects.toThrow()
+            expect(controller.getSnapshot()).toBe(during)
+            expect(read).not.toHaveBeenCalled()
+            gate.resolve()
+            await renaming
+            await expect(reading).resolves.toEqual({ [first.session.pages[0]!.pageId]: 'data:image/jpeg;base64,AQID' })
+            expect(read).toHaveBeenCalledTimes(1)
+            expect(snapshots[0]!.pending).toBeNull()
+            expect(
+                snapshots[0]!.entries.find((entry) => entry.session.manualId === during.selectedId)!.session.title,
+            ).toBe('Renamed active manual')
+            expect(controller.getSnapshot().capture).toBe(held)
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+            expect(calls).toEqual(dispatched)
+        } finally {
+            gate.resolve()
+            await Promise.allSettled([
+                renaming,
+                ...(reading === undefined ? [] : [reading]),
+                ...(cancelled === undefined ? [] : [cancelled]),
+            ])
+        }
+    })
+
+    it('rechecks write settlement between page reads before touching a page retired by a later save', async () => {
+        const { controller, store, kv, data, calls } = await ready()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        const session = controller.current!.session
+        expect(session.pages).toHaveLength(2)
+        const [first, second] = session.pages
+        const chunks = [first!, second!].map((page) =>
+            [...data.keys()].find((key) => key.includes(`/bytes/${page.assetId}/`))!,
+        )
+        const firstReached = deferred()
+        const firstGate = deferred()
+        const cleanupReached = deferred()
+        const cleanupGate = deferred()
+        const verified = deferred()
+        const get = kv.getItem.bind(kv)
+        const remove = kv.removeItem.bind(kv)
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunks[0]) {
+                firstReached.resolve()
+                await firstGate.promise
+            }
+            return get(key)
+        })
+        vi.spyOn(kv, 'removeItem').mockImplementation(async (key) => {
+            if (key === chunks[1]) {
+                cleanupReached.resolve()
+                await cleanupGate.promise
+            }
+            await remove(key)
+        })
+        const readAsset = store.readAsset.bind(store)
+        const read = vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+            const bytes = await readAsset(page)
+            if (page.assetId === first!.assetId) verified.resolve()
+            return bytes
+        })
+        const dispatched = [...calls]
+        const reading = controller.pageImages(session.manualId, session.revision)
+        const outcome = reading.then(
+            () => null,
+            (error: unknown) => error,
+        )
+        let editing: Promise<void> | undefined
+        try {
+            await firstReached.promise
+            editing = controller.editPage(1, 'remove')
+            await cleanupReached.promise
+            firstGate.resolve()
+            await verified.promise
+            // Drain the read's promise continuations while the actual post-manifest cleanup is still held.
+            await new Promise<void>((resolve) => setImmediate(resolve))
+            expect(read.mock.calls.map(([page]) => page.assetId)).toEqual([first!.assetId])
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+            cleanupGate.resolve()
+            await editing
+            expect(await outcome).toBeInstanceOf(Error)
+            expect(read.mock.calls.map(([page]) => page.assetId)).toEqual([first!.assetId])
+            expect(controller.current!.session.pages).toHaveLength(1)
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+            await controller.rename('Healthy between page reads')
+            expect(controller.current!.session.title).toBe('Healthy between page reads')
+            expect(calls).toEqual(dispatched)
+            expect((await new LibraryStorage(kv, digest).restore()).readOnly).toBe(false)
+        } finally {
+            firstGate.resolve()
+            cleanupGate.resolve()
+            await Promise.allSettled([reading, ...(editing === undefined ? [] : [editing])])
+        }
+    })
+
+    it('reads an inactive manual through verified storage without changing selection, progress, capture or dispatching', async () => {
+        const { controller, store, calls } = await ready()
+        const first = structuredClone(controller.current!)
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        controller.camera({ kind: 'check' })
+        await controller.shutter(async () => photo)
+        const before = controller.getSnapshot()
+        const dispatched = [...calls]
+        const read = vi.spyOn(store, 'readAsset')
+        expect(typeof controller.pageImages).toBe('function')
+        const uris = await controller.pageImages(first.session.manualId, first.session.revision)
+        expect(uris).toEqual({ [first.session.pages[0]!.pageId]: 'data:image/jpeg;base64,AQID' })
+        expect(read).toHaveBeenCalledWith(first.session.pages[0])
+        expect(controller.getSnapshot()).toBe(before)
+        expect(controller.getSnapshot().capture).not.toBeNull()
+        expect(calls).toEqual(dispatched)
+        await controller.rename('Active manual remains writable')
+        expect(controller.current!.session.title).toBe('Active manual remains writable')
+        expect(controller.getSnapshot().capture).toBe(before.capture)
+        expect(controller.getSnapshot().storageReadOnly).toBe(false)
+    })
+
+    it.each(['manualId', 'revision', 'pageId', 'assetId', 'contentHash', 'width', 'height', 'mimeType'] as const)(
+        'drops a read when its %s witness changes while storage is pending',
+        async (field) => {
+            const { controller, store } = await ready()
+            const entry = controller.current!
+            const revision = entry.session.revision
+            const read = store.readAsset.bind(store)
+            let release!: () => void
+            const gate = new Promise<void>((resolve) => {
+                release = resolve
+            })
+            vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+                await gate
+                return read(page)
+            })
+            expect(typeof controller.pageImages).toBe('function')
+            const pending = controller.pageImages(entry.session.manualId, revision)
+            const page = entry.session.pages[0]!
+            if (field === 'manualId') entry.session.manualId = 'replacement-manual'
+            else if (field === 'revision') entry.session.revision++
+            else if (field === 'width' || field === 'height') page[field]++
+            else if (field === 'mimeType') page.mimeType = 'image/png'
+            else if (field === 'contentHash') page.contentHash = 'f'.repeat(64)
+            else page[field] = `changed-${field}`
+            release()
+            await expect(pending).rejects.toThrow()
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+        },
+    )
+
+    it('cancels a pending read without waiting for storage or publishing its late value', async () => {
+        const { controller, store } = await ready()
+        const entry = controller.current!
+        const before = controller.getSnapshot()
+        const read = store.readAsset.bind(store)
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+            await gate
+            return read(page)
+        })
+        const abort = new AbortController()
+        const pending = controller.pageImages(entry.session.manualId, entry.session.revision, abort.signal)
+        abort.abort()
+        await expect(pending).rejects.toThrow()
+        release()
+        await Promise.resolve()
+        expect(controller.getSnapshot()).toBe(before)
+        await controller.rename('Still writable after cancellation')
+        expect(controller.current!.session.title).toBe('Still writable after cancellation')
+        expect(controller.getSnapshot().storageReadOnly).toBe(false)
+    })
+
+    it('rejects missing, stale and cancelled admission without reading storage or pausing writes', async () => {
+        const { controller, store, calls } = await ready()
+        const entry = controller.current!
+        const abort = new AbortController()
+        abort.abort()
+        const read = vi.spyOn(store, 'readAsset')
+        expect(typeof controller.pageImages).toBe('function')
+        await expect(controller.pageImages('missing-manual', entry.session.revision)).rejects.toThrow()
+        await expect(controller.pageImages(entry.session.manualId, entry.session.revision + 1)).rejects.toThrow()
+        await expect(
+            controller.pageImages(entry.session.manualId, entry.session.revision, abort.signal),
+        ).rejects.toThrow()
+        expect(read).not.toHaveBeenCalled()
+        expect(controller.getSnapshot().storageReadOnly).toBe(false)
+        entry.session.pages[0]!.contentHash = 'f'.repeat(64)
+        const before = controller.getSnapshot()
+        const dispatched = [...calls]
+        await expect(controller.pageImages(entry.session.manualId, entry.session.revision)).rejects.toThrow()
+        expect(controller.getSnapshot().storageReadOnly).toBe(true)
+        expect(controller.getSnapshot().notice).toMatch(/Local library images could not be read/u)
+        expect(controller.getSnapshot().selectedId).toBe(before.selectedId)
+        expect(controller.getSnapshot().entries).toBe(before.entries)
+        expect(controller.getSnapshot().capture).toBe(before.capture)
+        expect(calls).toEqual(dispatched)
+    })
+
+    it.each([false, true])(
+        'reports a corrupt inactive-manual read and retains original bytes while saves are paused (caller aborted: %s)',
+        async (cancelled) => {
+            const { controller, store, calls, data } = await ready()
+            const first = structuredClone(controller.current!)
+            await controller.createManual()
+            await controller.importPages(async () => [photo])
+            await controller.parse()
+            await controller.confirm()
+            controller.camera({ kind: 'check' })
+            await controller.shutter(async () => photo)
+            const before = controller.getSnapshot()
+            const dispatched = [...calls]
+            const chunk = [...data.keys()].find((key) => key.includes(`/bytes/${first.session.pages[0]!.assetId}/`))!
+            expect(chunk).toBeDefined()
+            data.set(chunk, 'AAEC')
+            const retained = new Map(data)
+            const read = store.readAsset.bind(store)
+            let release!: () => void
+            const gate = new Promise<void>((resolve) => {
+                release = resolve
+            })
+            vi.spyOn(store, 'readAsset').mockImplementation(async (page) => {
+                await gate
+                return read(page)
+            })
+            const abort = new AbortController()
+            const pending = controller.pageImages(first.session.manualId, first.session.revision, abort.signal)
+            if (cancelled) {
+                abort.abort()
+                await expect(pending).rejects.toThrow()
+                expect(controller.getSnapshot()).toBe(before)
+                release()
+                await vi.waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
+            } else {
+                release()
+                await expect(pending).rejects.toThrow()
+            }
+            const paused = controller.getSnapshot()
+            expect(paused.storageReadOnly).toBe(true)
+            expect(paused.notice).toMatch(/Local library images could not be read/u)
+            expect({ ...paused, notice: before.notice, storageReadOnly: before.storageReadOnly }).toEqual(before)
+            const save = vi.spyOn(store, 'save')
+            await controller.rename('Must not save while paused')
+            expect(save).not.toHaveBeenCalled()
+            expect(controller.getSnapshot()).toBe(paused)
+            await expect(store.save(before.entries)).rejects.toThrow(/read.only/u)
+            expect(data).toEqual(retained)
+            expect(calls).toEqual(dispatched)
+        },
+    )
+
+    it('retains a cancelled KV read through legitimate page removal and cleans it after settlement without pausing healthy saves', async () => {
+        const { controller, store, data, kv, calls } = await ready()
+        const session = controller.current!.session
+        const chunk = [...data.keys()].find((key) => key.includes(`/bytes/${session.pages[0]!.assetId}/`))!
+        const get = kv.getItem.bind(kv)
+        let entered!: () => void
+        let release!: () => void
+        const reached = new Promise<void>((resolve) => {
+            entered = resolve
+        })
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunk) {
+                entered()
+                await gate
+            }
+            return get(key)
+        })
+        const before = controller.getSnapshot()
+        const dispatched = [...calls]
+        const abort = new AbortController()
+        const pending = controller.pageImages(session.manualId, session.revision, abort.signal)
+        try {
+            await reached
+            abort.abort()
+            await expect(pending).rejects.toThrow()
+            expect(controller.getSnapshot()).toBe(before)
+            await controller.editPage(0, 'remove')
+            const edited = controller.getSnapshot()
+            expect(controller.current!.session.pages).toHaveLength(0)
+            expect(edited.storageReadOnly).toBe(false)
+            expect(data.has(chunk)).toBe(true)
+            release()
+            await vi.waitFor(() => expect(data.has(chunk)).toBe(false))
+            expect(controller.getSnapshot()).toBe(edited)
+            await controller.rename('Healthy after the retired read')
+            expect(controller.current!.session.title).toBe('Healthy after the retired read')
+            expect(controller.getSnapshot().storageReadOnly).toBe(false)
+            expect(calls).toEqual(dispatched)
+            const restored = await new LibraryStorage(kv, digest).restore()
+            expect(restored.readOnly).toBe(false)
+            expect(restored.entries).toEqual(controller.getSnapshot().entries)
+            await expect(store.save(controller.getSnapshot().entries)).resolves.toBeUndefined()
+        } finally {
+            release()
+        }
+    })
+
+    it.each(['__proto__', 'constructor', 'toString'])(
+        'keeps the valid page id %s as an own URI entry',
+        async (pageId) => {
+            const { controller } = await ready()
+            const session = controller.current!.session
+            session.pages[0]!.pageId = pageId
+            const uris = await controller.pageImages(session.manualId, session.revision)
+            expect(Object.hasOwn(uris, pageId)).toBe(true)
+            expect(uris[pageId]).toBe('data:image/jpeg;base64,AQID')
+            expect(Object.getPrototypeOf(uris)).toBeNull()
+        },
+    )
+})
 
 function manualBinding(controller: CaptureController): ManualBinding {
     const { manualId, revision } = controller.current!.session

@@ -22,6 +22,7 @@ export type WorkflowController = Pick<
     | 'restore'
     | 'step'
     | 'targetChanged'
->
+> &
+    Partial<Pick<CaptureController, 'pageImages'>>
 
 export type WorkflowScreenProps = { state: WorkflowState; controller: WorkflowController }

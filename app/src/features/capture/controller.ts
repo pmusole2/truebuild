@@ -44,6 +44,22 @@ const LOCAL_LIBRARY_READ_FAILURE =
 const LOCAL_LIBRARY_SAVE_FAILURE =
     'Could not save on this device. Original library data is retained. Retry reading the local library before making changes.'
 
+/** The complete registered page identity, independent of whichever manual is currently selected. */
+export function manualPageImagesKey(session: Pick<ManualSession, 'manualId' | 'revision' | 'pages'>): string {
+    return JSON.stringify([
+        session.manualId,
+        session.revision,
+        session.pages.map((page) => [
+            page.pageId,
+            page.assetId,
+            page.contentHash,
+            page.width,
+            page.height,
+            page.mimeType,
+        ]),
+    ])
+}
+
 export type ScreenRoute = 'library' | 'pages' | 'overview' | 'guide' | 'camera'
 export type CameraIntent = { kind: 'page'; replaceIndex?: number } | { kind: 'check' | 'question' }
 export type CaptureView = { binding: CaptureBinding; observation: Observation; capturedAt: number; reusable: boolean }
@@ -190,6 +206,8 @@ export class CaptureController {
         pageUris: {},
     }
     private saving = false
+    private writeSettlement: Promise<void> | null = null
+    private openRequest = 0
     private readonly listeners = new Set<() => void>()
     private epoch = 0
     private operation: AbortController | null = null
@@ -326,6 +344,14 @@ export class CaptureController {
         }
     }
     async open(manualId: string, route: 'pages' | 'overview' | 'guide' = 'overview'): Promise<void> {
+        // A durable replacement may precede its controller publication while cleanup settles.
+        // Wait before invalidating: a later navigation supersedes this request, and the save keeps its pending owner.
+        const requestedAt = this.epoch
+        const request = ++this.openRequest
+        while (this.writeSettlement !== null) {
+            await this.writeSettlement
+            if (requestedAt !== this.epoch || request !== this.openRequest) return
+        }
         this.invalidate()
         const token = this.epoch
         const entry = this.state.entries.find((e) => e.session.manualId === manualId)
@@ -371,6 +397,40 @@ export class CaptureController {
             }
         }
     }
+    /** Reads without selecting a manual; genuine storage failures report the library's global write pause. */
+    async pageImages(
+        manualId: string,
+        revision: number,
+        signal?: AbortSignal,
+    ): Promise<Readonly<Record<string, string>>> {
+        const session = this.state.entries.find((entry) => entry.session.manualId === manualId)?.session
+        if (session === undefined || session.revision !== revision) throw new Error('Manual pictures unavailable.')
+        const key = manualPageImagesKey(session)
+        const pages = session.pages.map((page) => ({ ...page }))
+        const assertCurrent = (): void => {
+            const current = this.state.entries.find((entry) => entry.session.manualId === manualId)?.session
+            if (signal?.aborted === true || current === undefined || manualPageImagesKey(current) !== key)
+                throw new Error('Manual pictures are no longer current.')
+        }
+        const uris = Object.create(null) as Record<string, string>
+        for (const page of pages) {
+            while (this.writeSettlement !== null) {
+                const settling = this.writeSettlement
+                if (signal === undefined) await settling
+                else await awaitStopped(settling, signal)
+                assertCurrent()
+            }
+            assertCurrent()
+            // Attach the integrity-error reporter before racing cancellation: even a late failed verification
+            // pauses writes in LibraryStorage, so the workflow must explain that pause immediately.
+            const pending = this.readPage(page)
+            const bytes = signal === undefined ? await pending : await awaitStopped(pending, signal)
+            assertCurrent()
+            uris[page.pageId] = bytesToDataUri(bytes, page.mimeType)
+        }
+        assertCurrent()
+        return uris
+    }
     home = (): void => {
         this.invalidate()
         this.publish({ route: 'library', selectedId: null, notice: null, pageUris: {} })
@@ -406,6 +466,11 @@ export class CaptureController {
             return false
         }
         this.saving = true
+        let settle!: () => void
+        const settlement = new Promise<void>((resolve) => {
+            settle = resolve
+        })
+        this.writeSettlement = settlement
         const token = this.epoch
         const operation = this.operation
         const previous = this.state.pending
@@ -424,8 +489,14 @@ export class CaptureController {
             return false
         } finally {
             this.saving = false
-            if (token === this.epoch && operation === this.operation) {
-                this.publish({ pending: previous })
+            try {
+                if (token === this.epoch && operation === this.operation) {
+                    this.publish({ pending: previous })
+                }
+            } finally {
+                // A publication listener may already have started a later write; never clear its settlement.
+                if (this.writeSettlement === settlement) this.writeSettlement = null
+                settle()
             }
         }
     }
