@@ -42,6 +42,6 @@ export function barTestId(kind: ScreenKind, role: 'primary' | 'secondary', inten
         case 'completion':
             return role === 'primary' ? 'done-home' : undefined
         case 'more':
-            return undefined
+            return intent.intent === 'open-details' && intent.target === 'about-check' ? 'judge-entry' : undefined
     }
 }

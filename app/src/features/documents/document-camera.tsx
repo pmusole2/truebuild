@@ -1,11 +1,10 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { Image, Linking, StyleSheet, View } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import { API_BASE_URL } from '../../config'
 import { ownTemporaryImage } from '../../media/owned-temporary-images'
 import { DocumentSurface } from '../capture/document-surface'
 import { useWorkflow } from '../capture/workflow-context'
-import { nativeProofConfig } from '../ai-effort-proof/config'
+import { cameraPreparationState, fixtureCameraEnabled, observedCameraAccess } from '../capture/native-routes'
 import type * as ProofRuntime from '../ai-effort-proof/runtime'
 import { originId, useRenderOrigin } from '../screens/render-origin'
 import type { ReactNode } from 'react'
@@ -27,16 +26,13 @@ function CameraPreviewShell({ children }: { children: ReactNode }): ReactElement
 
 /** Native camera IO only. The CameraView document places its preview; its bar is the one shutter. */
 export function DocumentCamera(): ReactElement {
-    if (__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') {
-        if (nativeProofConfig(API_BASE_URL) !== null) return <FixtureCamera />
-    }
+    if (fixtureCameraEnabled()) return <FixtureCamera />
     return <HardwareCamera />
 }
 
 function FixtureCamera(): ReactElement {
     const workflow = useWorkflow()
-    if (!(__DEV__ || process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') || nativeProofConfig(API_BASE_URL) === null)
-        throw new Error('Fixture camera disabled')
+    if (!fixtureCameraEnabled()) throw new Error('Fixture camera disabled')
     // Loaded only inside the explicit DEV/isolated-loopback fixture boundary.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const runtime = require('../ai-effort-proof/runtime') as typeof ProofRuntime
@@ -64,8 +60,8 @@ function FixtureCamera(): ReactElement {
         <DocumentSurface
             kind="camera"
             camera={{
+                ...cameraPreparationState(controller)!,
                 ready,
-                permission: 'granted',
                 preview: (
                     <CameraPreviewShell>
                         <Image
@@ -88,11 +84,14 @@ function FixtureCamera(): ReactElement {
 function HardwareCamera(): ReactElement {
     const { controller, state } = useWorkflow()
     const camera = useRef<CameraView>(null)
-    const [permission, requestPermission] = useCameraPermissions()
+    const prepared = cameraPreparationState(controller)
+    // The explicit intent already queried this permission; do not race another initial SDK query against its binding.
+    const [permission, requestPermission] = useCameraPermissions({ get: prepared === null })
     const [ready, setReady] = useState(false)
     const [error, setError] = useState(false)
     const [attempt, setAttempt] = useState(0)
-    const allowed = permission?.granted === true
+    const access = permission === null ? (prepared ?? observedCameraAccess(null)) : observedCameraAccess(permission)
+    const allowed = access.permission === 'granted'
     const capture = (): void => {
         if (!allowed || !ready || error || state.pending !== null || camera.current === null) return
         void controller.shutter(async () => {
@@ -126,12 +125,12 @@ function HardwareCamera(): ReactElement {
                 ready: allowed && ready && !error && state.pending === null,
                 preview,
                 capture,
-                permission: permission === null ? 'undetermined' : allowed ? 'granted' : 'denied',
+                permission: access.permission,
                 failed: error,
-                canAskAgain: permission?.canAskAgain ?? null,
+                canAskAgain: access.canAskAgain,
                 requestPermission: (): void => {
                     // An OS permission request rejecting does not establish that CameraView failed to mount.
-                    if (permission?.canAskAgain !== false) void requestPermission().catch((): void => undefined)
+                    if (access.canAskAgain !== false) void requestPermission().catch((): void => undefined)
                 },
                 openSettings: (): void => {
                     void Linking.openSettings().catch((): void => undefined)

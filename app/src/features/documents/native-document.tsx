@@ -65,6 +65,13 @@ import { CoachTarget, useCoachAttention, useCoachScope } from '../onboarding/coa
 const gap = (token: 'none' | 'xs' | 'sm' | 'md' | 'lg' | 'xl'): number => (token === 'none' ? 0 : space[token])
 const align = { start: 'flex-start', end: 'flex-end', center: 'center', stretch: 'stretch' } as const
 const tone = { neutral: 'default', info: 'accent', success: 'pass', caution: 'caution', critical: 'refuse' } as const
+const mutationsEnabled = (bindings: FrameBindings): boolean =>
+    bindings.readOnly !== true && bindings.workInProgress !== true
+const cancelsWork = (intent: ScreenVariantV2['bar']['primary']['intent']): boolean =>
+    intent.intent === 'navigate' &&
+    (intent.target === 'back' || intent.target === 'home' || intent.target === 'pages' || intent.target === 'reading')
+const preparingAction = (bindings: FrameBindings, intent: ScreenVariantV2['bar']['primary']['intent']): boolean =>
+    bindings.workInProgress === true && !cancelsWork(intent)
 const TIMING_LABELS = {
     timeToProviderMs: 'Before provider',
     providerMs: 'Provider time',
@@ -394,7 +401,7 @@ function ReadingProgress({
 function contextOf(environment: Environment): BlockContext {
     const { document, bindings } = environment
     return {
-        readOnly: bindings.readOnly,
+        readOnly: !mutationsEnabled(bindings),
         originOf: (path) => originAt(environment, path),
         origin: document.metadata.source,
         session: bindings.session,
@@ -422,8 +429,12 @@ function Action({
     header?: boolean
 }): ReactElement {
     const resolved =
-        environment.bindings.readOnly === true
-            ? { enabled: false, reason: 'Comparison is read only.', run: (): void => undefined }
+        environment.bindings.readOnly === true || preparingAction(environment.bindings, action.intent)
+            ? {
+                  enabled: false,
+                  reason: environment.bindings.readOnly === true ? 'Comparison is read only.' : 'Working on it',
+                  run: (): void => undefined,
+              }
             : environment.bindings.resolve(action.intent)
     const element =
         header && action.icon !== null ? (
@@ -514,7 +525,7 @@ function ReferenceImage({
                 onMoveShouldSetPanResponder: (_event, gesture) =>
                     document.kind === 'guide' &&
                     bindings.session?.reviewStatus === 'reviewed' &&
-                    bindings.readOnly !== true &&
+                    mutationsEnabled(bindings) &&
                     Math.abs(gesture.dx) > 24 &&
                     Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5 &&
                     !startsAtStepSystemEdge(gesture.moveX - gesture.dx, width, I18nManager.isRTL, Platform.OS),
@@ -522,7 +533,7 @@ function ReferenceImage({
                     if (
                         live === null ||
                         bindings.session?.reviewStatus !== 'reviewed' ||
-                        bindings.readOnly === true ||
+                        !mutationsEnabled(bindings) ||
                         live.state.pending !== null ||
                         live.state.storageReadOnly ||
                         !bindings.resolve({ intent: 'capture', target: 'take-photo' }).enabled
@@ -679,7 +690,7 @@ function Photo({
     const check = environment.showRegions ? environment.bindings.live?.state.check : null
     const live = environment.bindings.live
     const canPoint =
-        environment.bindings.readOnly !== true &&
+        mutationsEnabled(environment.bindings) &&
         environment.document.kind === 'questions' &&
         live !== null &&
         live.state.pending === null &&
@@ -933,7 +944,7 @@ function Pages({
     if (live === null || session === undefined) return null
     const index = session.pages.findIndex((page) => page.pageId === selected)
     const page = session.pages[index]
-    const blocked = environment.bindings.readOnly === true || live.state.pending !== null || live.state.storageReadOnly
+    const blocked = !mutationsEnabled(environment.bindings) || live.state.pending !== null || live.state.storageReadOnly
     return (
         <View nativeID={marked(environment, path)} style={styles.stack}>
             <PageGalleryBlock
@@ -1524,13 +1535,13 @@ function NodeContent({
                                   variant={document.bound.stepId === step.stepId ? 'secondary' : 'quiet'}
                                   disabled={
                                       live.state.pending !== null ||
-                                      bindings.readOnly === true ||
+                                      !mutationsEnabled(bindings) ||
                                       live.state.storageReadOnly ||
                                       bindings.session?.reviewStatus !== 'reviewed'
                                   }
                                   onPress={(): void => {
                                       if (
-                                          bindings.readOnly !== true &&
+                                          mutationsEnabled(bindings) &&
                                           live.state.pending === null &&
                                           !live.state.storageReadOnly &&
                                           bindings.session?.reviewStatus === 'reviewed'
@@ -1569,9 +1580,9 @@ function NodeContent({
                             testID={node.binding === 'built-view' ? 'judge-built-toggle' : undefined}
                             label={text(node.label)}
                             value={toggle.value}
-                            disabled={bindings.readOnly === true}
+                            disabled={!mutationsEnabled(bindings)}
                             onValueChange={(value): void => {
-                                if (bindings.readOnly !== true) toggle.onChange(value)
+                                if (mutationsEnabled(bindings)) toggle.onChange(value)
                             }}
                         />
                     )}
@@ -1605,9 +1616,9 @@ function NodeContent({
                                         ? 'secondary'
                                         : 'quiet'
                                 }
-                                disabled={bindings.readOnly === true || live.state.pending !== null}
+                                disabled={!mutationsEnabled(bindings) || live.state.pending !== null}
                                 onPress={(): void => {
-                                    if (bindings.readOnly !== true && live.state.pending === null)
+                                    if (mutationsEnabled(bindings) && live.state.pending === null)
                                         live.controller.targetChanged({ kind: 'part', partId: part.partId })
                                 }}
                             />
@@ -1625,9 +1636,9 @@ function NodeContent({
                                 { value: 'pt-BR', label: 'Portuguese' },
                             ]}
                             value={bindings.language.value}
-                            disabled={bindings.readOnly === true}
+                            disabled={!mutationsEnabled(bindings)}
                             onChange={(value): void => {
-                                if (bindings.readOnly !== true) bindings.language?.onChange(value)
+                                if (mutationsEnabled(bindings)) bindings.language?.onChange(value)
                             }}
                         />
                     ) : null}
@@ -1670,10 +1681,10 @@ function NodeContent({
                             placeholder={node.placeholder ?? undefined}
                             value={live.state.question}
                             onChangeText={(value): void => {
-                                if (bindings.readOnly !== true && live.state.pending === null)
+                                if (mutationsEnabled(bindings) && live.state.pending === null)
                                     live.controller.questionChanged(value)
                             }}
-                            editable={bindings.readOnly !== true && live.state.pending === null}
+                            editable={mutationsEnabled(bindings) && live.state.pending === null}
                             multiline
                         />
                     ) : (
@@ -1813,24 +1824,28 @@ export function NativeDocumentRenderer({
             accessibilityLabel: node.label,
             icon: node.icon ?? undefined,
             onPress:
-                bindings.readOnly === true
+                bindings.readOnly === true || preparingAction(bindings, node.intent)
                     ? (): void => undefined
                     : isCamera
                       ? (bindings.camera?.capture ?? resolved.run)
                       : resolved.run,
             disabled:
                 bindings.readOnly === true ||
+                preparingAction(bindings, node.intent) ||
                 (isCamera
                     ? selected.name === 'busy' || bindings.camera?.ready !== true
-                    : selected.name === 'busy' || selected.name === 'pending' || !resolved.enabled),
+                    : (!cancelsWork(node.intent) && (selected.name === 'busy' || selected.name === 'pending')) ||
+                      !resolved.enabled),
             nativeID: marked(environment, `${selected.prefix}bar.${role}`),
             testID: isCamera
                 ? 'camera-shutter'
                 : role === 'primary' && bindings.testIds?.primary !== undefined
                   ? bindings.testIds.primary
-                  : ['camera', 'judge', 'compare'].includes(document.kind)
-                    ? undefined
-                    : barTestId(document.kind as never, role, node.intent),
+                  : role === 'secondary' && bindings.testIds?.secondary !== undefined
+                    ? bindings.testIds.secondary
+                    : ['camera', 'judge', 'compare'].includes(document.kind)
+                      ? undefined
+                      : barTestId(document.kind as never, role, node.intent),
         }
     }
     return (

@@ -21,6 +21,7 @@ import type { FrameBindings } from './types'
 import { entry, runtime, source } from '../screens/test-support/route-harness'
 import { defaultNav } from '../capture/screen-nav'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
+import { recordedDocumentForTest } from './recorded/test-support'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -118,6 +119,41 @@ async function setup(
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it('keeps the judge bar identity and honors a route-owned secondary identity', async () => {
+        const { bindings, run } = await setup()
+        const document = recordedDocumentForTest('recorded-more-global')
+        const view = await render(
+            wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session: undefined }} />),
+        )
+        await fireEvent.press(screen.getByTestId('judge-entry'))
+        expect(run).toHaveBeenCalledTimes(1)
+        await view.rerender(
+            wrap(
+                <DocumentRenderer
+                    document={document}
+                    bindings={{ ...bindings, session: undefined, testIds: { secondary: 'existing-secondary' } }}
+                />,
+            ),
+        )
+        expect(screen.queryByTestId('judge-entry')).toBeNull()
+        await fireEvent.press(screen.getByTestId('existing-secondary'))
+        expect(run).toHaveBeenCalledTimes(2)
+    })
+
+    it('blocks intrinsic mutations during document preparation while keeping Back available', async () => {
+        const { bindings, inputs, controller, run } = await setup()
+        const step = jest.spyOn(controller, 'step')
+        const document = compose(inputs, [{ type: 'Stepper', binding: 'steps', label: null }])
+        await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, workInProgress: true }} />))
+        const next = screen.getByRole('button', { name: inputs.session!.reviewedSteps[1]!.title })
+        expect(next.props.accessibilityState.disabled).toBe(true)
+        await fireEvent.press(next)
+        expect(step).not.toHaveBeenCalled()
+        expect(screen.getByTestId('guide-primary').props.accessibilityState.disabled).toBe(true)
+        await fireEvent.press(screen.getByRole('button', { name: /^Back$/u }))
+        expect(run).toHaveBeenCalledTimes(1)
+    })
+
     it.each(['ready', 'unavailable'] as const)(
         'ends a missing manual picture honestly after asset loading is %s',
         async (pageImageStatus) => {

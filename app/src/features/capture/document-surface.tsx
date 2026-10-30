@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 import { Linking, Platform } from 'react-native'
 import { MoreSheet, useSheetDismiss } from '../../ui/sheet'
-import { useIsFocused } from 'expo-router'
+import { useIsFocused, usePathname } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
     baseKindV2,
@@ -9,10 +9,9 @@ import {
     type AppIntent,
     type ScreenKindV2,
     type VariantState,
-    type BusyActivityV2,
     type ScreenDocumentV2,
 } from '@truebuild/contracts'
-import { useDocument } from '../document-runtime/use-document'
+import { activeDocumentVariant, useDocument } from '../document-runtime/use-document'
 import { documentKey } from '../document-runtime/store'
 import { futureDocumentStates } from '../document-runtime/future-states'
 import { DocumentRenderer } from '../documents/document-renderer'
@@ -22,25 +21,14 @@ import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
 import { useJudge } from '../screens/judge-context'
 import { resolveIntent, type ResolvedIntent } from '../screens/intents'
-import { useWorkflowActions } from './native-routes'
+import { useNavigationPreparation, useWorkflowActions } from './native-routes'
 import { readingLanguage, setReadingLanguage } from './reading-language'
 import { useMoreState, type MoreMode } from './screen-header'
 import type { QuickProgress } from '../screens/quick-progress'
 import { documentInputs } from './document-inputs'
 export { documentInputs } from './document-inputs'
-import { useWorkflow } from './workflow-context'
+import { useWorkflow, type WorkflowValue } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
-
-function activityOf(pending: string | null): BusyActivityV2 | null {
-    if (pending === null) return null
-    if (pending.startsWith('Taking a closer look') || pending.startsWith('Second opinion')) return 'second-opinion'
-    if (pending.startsWith('Still thinking')) return 'question-waiting'
-    if (pending.startsWith('Reading')) return 'reading'
-    if (pending.startsWith('Checking') || pending.startsWith('Freezing')) return 'checking'
-    if (pending.startsWith('Asking')) return 'asking'
-    if (pending.startsWith('Saving')) return 'saving'
-    return 'working'
-}
 
 /** One production route adapter. It binds live mechanics, never screen content or a parallel action bar. */
 export function DocumentSurface({
@@ -82,10 +70,21 @@ export function DocumentSurface({
     runContextAction?: (run: () => void) => void
     testID?: string
 }): ReactElement {
-    const workflow = useWorkflow()
+    const actualWorkflow = useWorkflow()
+    const focused = useIsFocused()
+    const pathname = usePathname()
+    const preparation = useNavigationPreparation()
+    const preparing = focused && onClose === undefined && preparation?.sourcePath === pathname
+    const retained = useRef<{
+        readonly workflow: WorkflowValue
+        readonly quick: QuickProgress | undefined
+        readonly document: ScreenDocumentV2
+    } | null>(null)
+    const held = preparing ? retained.current : null
+    const workflow = held?.workflow ?? actualWorkflow
+    const progress = held === null ? quick : held.quick
     const { state, entry } = workflow
     const { controller, nav } = useWorkflowActions()
-    const focused = useIsFocused()
     const more = useMoreState()
     const coach = useCoach()
     const judge = useJudge()
@@ -124,7 +123,7 @@ export function DocumentSurface({
                       ? 'recovery'
                       : 'guide'
               : kind
-    const inputs = documentInputs(effectiveKind, workflow, quick, contextualMore)
+    const inputs = documentInputs(effectiveKind, workflow, progress, contextualMore)
     const cancelledPages = effectiveKind === 'pages' && state.notice?.startsWith('Cancelled.') === true
     const notice =
         operationNotice ??
@@ -132,8 +131,6 @@ export function DocumentSurface({
     if (['error', 'recovery', 'reading'].includes(effectiveKind))
         inputs.uiState = { ...inputs.uiState, failure: notice === null ? null : { notice: true } }
     if (cancelledPages) inputs.uiState = { ...inputs.uiState, cancelled: { reading: true } }
-    const activity = activityOf(state.pending)
-    inputs.uiState = { ...inputs.uiState, busy: activity === null ? null : { activity } }
     if (effectiveKind === 'camera' && camera !== undefined && inputs.uiState?.camera != null)
         inputs.uiState.camera = {
             ...inputs.uiState.camera,
@@ -141,9 +138,9 @@ export function DocumentSurface({
             failed: camera.failed ?? false,
             canAskAgain: camera.canAskAgain ?? null,
         }
-    const busy = state.pending !== null || state.loading
+    const busy = state.pending !== null || state.loading || preparing
     const contextualParent = ['guide', 'result', 'answer', 'recovery'].includes(effectiveKind)
-    const moreWarmInput = documentInputs('more', workflow, quick, true)
+    const moreWarmInput = documentInputs('more', workflow, progress, true)
     const moreWarmKey =
         contextualParent && !busy && focused && !more.open && !judgeOpen ? documentKey(moreWarmInput) : null
     const warmInput = useRef(moreWarmInput)
@@ -151,8 +148,8 @@ export function DocumentSurface({
     useEffect(() => {
         if (moreWarmKey !== null) workflow.documents?.warmup([warmInput.current])
     }, [workflow.documents, moreWarmKey])
-    const reading = useDocument(inputs, {
-        focused: focused && !more.open && !judgeOpen,
+    const queried = useDocument(inputs, {
+        focused: focused && !preparing && !more.open && !judgeOpen,
         state:
             readingConfirmation?.open === true
                 ? 'confirming'
@@ -160,6 +157,38 @@ export function DocumentSurface({
                   ? 'error'
                   : (requestedState ?? (busy ? 'busy' : 'ready')),
     })
+    const reading =
+        held === null
+            ? queried
+            : {
+                  ...queried,
+                  document: held.document,
+                  ...activeDocumentVariant(held.document, 'busy'),
+                  status: 'ready' as const,
+                  issue: null,
+              }
+    useLayoutEffect(() => {
+        const ownsRoute =
+            kind === 'home'
+                ? state.route === 'library'
+                : kind === 'reading'
+                  ? state.route === 'pages'
+                  : kind === 'quick-check'
+                    ? state.route === 'overview'
+                    : kind === 'guide'
+                      ? state.route === 'guide'
+                      : true
+        if (
+            !preparing &&
+            ownsRoute &&
+            onClose === undefined &&
+            queried.status === 'ready' &&
+            queried.document.metadata.source === 'generated'
+        ) {
+            // Keep the committed whole document with the actual old facts that made it valid, never a patched donor.
+            retained.current = { workflow: actualWorkflow, quick, document: queried.document }
+        }
+    }, [actualWorkflow, state.route, kind, onClose, preparing, quick, queried.status, queried.document])
     const futureInputs = useRef(inputs)
     futureInputs.current = inputs
     const futureKey =
@@ -237,6 +266,10 @@ export function DocumentSurface({
         else more.show(mode)
     }
     const resolve = (intent: AppIntent): ResolvedIntent => {
+        if (preparing)
+            return intent.intent === 'navigate' && intent.target === 'back'
+                ? { enabled: true, reason: null, run: nav.back }
+                : { enabled: false, reason: null, run: (): void => {} }
         if (effectiveKind === 'more' && intent.intent === 'ask' && requestQuestionComposer !== undefined) {
             const resolved = resolveIntent(intent, {
                 kind: 'more',
@@ -448,7 +481,7 @@ export function DocumentSurface({
             controller,
             nav,
             more,
-            ...(quick === undefined ? {} : { quick }),
+            ...(progress === undefined ? {} : { quick: progress }),
             pages: {
                 open: (pageId): void => {
                     const index = entry?.session.pages.findIndex((page) => page.pageId === pageId) ?? -1
@@ -476,9 +509,14 @@ export function DocumentSurface({
         testIds:
             primaryTestId !== undefined
                 ? { primary: primaryTestId }
-                : kind === 'home' && state.storageReadOnly
-                  ? { primary: 'retry-library' }
-                  : undefined,
+                : closeSheet !== undefined &&
+                    reading.variant.header.back === null &&
+                    reading.variant.bar.primary.intent.intent === 'navigate' &&
+                    reading.variant.bar.primary.intent.target === 'back'
+                  ? { primary: 'close-sheet' }
+                  : kind === 'home' && state.storageReadOnly
+                    ? { primary: 'retry-library' }
+                    : undefined,
         workInProgress: busy || more.open || judgeOpen,
         language: {
             value: language,
