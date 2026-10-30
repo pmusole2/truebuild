@@ -42,6 +42,8 @@ import {
 import {
     BUSY_COPY_V2,
     CAMERA_ACCESS_COPY_V2,
+    CAMERA_TIPS_V2,
+    COMPLETION_MANUAL_COPY_V2,
     CONFIRM_LABELS_V2,
     COACH_COPY_V2,
     EMPTY_COPY_V2,
@@ -218,7 +220,7 @@ function titleOf(material: DocumentMaterialV2): Built {
         case 'completion':
             return {
                 title: lit(material.completion === 'witnessed' ? 'All steps done' : 'Your build'),
-                subtitle: bound('manual-title'),
+                subtitle: null,
             }
         case 'error':
             return { title: lit('Something went wrong'), subtitle: null }
@@ -429,6 +431,22 @@ const cameraView = (material: DocumentMaterialV2): Node => {
     }
 }
 
+/** The two tips under a working camera: one card of two rows, repeated at the same place while the camera waits. */
+const cameraTips = (material: DocumentMaterialV2): Node =>
+    card(
+        CAMERA_TIPS_V2[material.inputs.uiState?.camera?.mode ?? 'build-photo'].map((tip, index): Node => ({
+            type: 'Row',
+            gap: 'sm',
+            align: 'start',
+            justify: 'start',
+            wrap: false,
+            children: [
+                { type: 'Icon', name: index === 0 ? 'image' : 'search', tone: 'info', size: 'sm' },
+                text(lit(tip)),
+            ],
+        })),
+    )
+
 const labelText = (words: string): Node => text(lit(words), { role: 'label', emphasis: 'strong' })
 const boundText = (key: Extract<TextRefV2, { kind: 'bound' }>['key'], quiet = false): Node =>
     text({ kind: 'bound', key }, quiet ? { role: 'caption', tone: 'info' } : {})
@@ -625,7 +643,7 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
                     ...factNodes(material, true),
                 ]
             }
-            return [cameraView(material), ...factNodes(material, true)]
+            return [cameraView(material), cameraTips(material), ...factNodes(material, true)]
         }
         case 'result':
             return [...capturedImage(material), ...resultNodes(material, 'banner'), ...factNodes(material, true)]
@@ -651,11 +669,21 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
         case 'more':
             return moreBody(material)
         case 'completion':
-            return [
-                text(bound('completion-summary'), { role: 'heading' }),
-                // One indicator of the build count: a Progress and a Meter of the same binding would publish it twice.
-                { type: 'Progress', binding: 'build', label: null },
-            ]
+            return inputs.session === null
+                ? [
+                      text(bound('completion-summary'), { role: 'heading' }),
+                      { type: 'Progress', binding: 'build', label: null },
+                  ]
+                : [
+                      card([
+                          text(lit(COMPLETION_MANUAL_COPY_V2.label), { role: 'label', emphasis: 'strong' }),
+                          text(bound('manual-title'), { role: 'heading' }),
+                          text(bound('completion-summary')),
+                          // One witnessed build indicator, kept with its manual and count.
+                          { type: 'Progress', binding: 'build', label: null },
+                      ]),
+                      text(lit(COMPLETION_MANUAL_COPY_V2.hint), { tone: 'info' }),
+                  ]
         case 'error':
             return [
                 { type: 'Icon', name: 'alert', tone: 'caution', size: 'lg' },
@@ -887,7 +915,7 @@ function stateVariant(state: VariantState, material: DocumentMaterialV2, ready: 
         header: stateHeader(state, material, ready),
         body: scroll([
             stack([
-                ...(holdCamera ? [cameraView(material)] : []),
+                ...(holdCamera ? [cameraView(material), cameraTips(material)] : []),
                 // The held photo keeps the SAME spine as in `ready` (ancestors, types and child indexes), so the native
                 // image is never remounted between pending, ready and a failure: a step-scoped More repeats its heading and
                 // figures block, every other photo-first screen leads with the photo.

@@ -8,6 +8,7 @@ import {
     appIntentSchema,
     cameraAccessV2,
     buildFallbackDocumentV2,
+    cameraSpineV2,
     createDemoManual,
     documentMaterialV2,
     intentAllowedV2,
@@ -23,6 +24,7 @@ import {
     type ScreenDocumentV2,
     type ScreenKindV2,
     type ScreenNodeV2,
+    type ScreenVariantV2,
     type ScreenUiStateV2,
 } from './index'
 
@@ -287,5 +289,82 @@ describe('a request-bound client refuses a document that places a camera it cann
             },
         }
         expect(verifyDocumentAgainstInputsV2(forged, inputs)).toContain('camera_retry_missing')
+    })
+})
+
+describe('a working camera carries two framing and clarity tips that stay put while it waits', () => {
+    const TIPS = {
+        'build-photo': [
+            'Step back so the whole step fits in the frame.',
+            'Use good light and hold steady for a sharp photo.',
+        ],
+        'manual-page': ['Keep all four corners in view.', 'Check that the words are clear.'],
+    } as const
+    type VariantName = 'ready' | 'busy' | 'pending' | 'error' | 'recovery'
+    const variantOf = (document: ScreenDocumentV2, name: VariantName): ScreenVariantV2 =>
+        variantsOfV2(document).find((entry) => entry.name === name)!.variant
+    const tipCards = (document: ScreenDocumentV2, name: VariantName): ScreenNodeV2[] => {
+        const cards: ScreenNodeV2[] = []
+        visitVariantNodesV2(variantOf(document, name), '', ({ node }) => {
+            if (node.type === 'Card') cards.push(node)
+        })
+        return cards
+    }
+    const tipTexts = (node: ScreenNodeV2): string[] =>
+        node.type === 'Text' && node.content.kind === 'literal'
+            ? [node.content.text]
+            : 'children' in node
+              ? node.children.flatMap(tipTexts)
+              : []
+
+    it.each(['build-photo', 'manual-page'] as const)(
+        '%s: one card of exactly two listed tips right under the camera, the same in ready, busy and pending',
+        (mode) => {
+            const document = fallbackFor(inputsOf(camera({ mode })))
+            const spines = new Set<string | null>()
+            for (const name of ['ready', 'busy', 'pending'] as const) {
+                const variant = variantOf(document, name)
+                spines.add(cameraSpineV2(variant))
+                const stack = (variant.body as Extract<ScreenNodeV2, { type: 'Scroll' }>).children[0] as Extract<
+                    ScreenNodeV2,
+                    { type: 'Stack' }
+                >
+                expect(stack.children[0]!.type, name).toBe('CameraView')
+                const card = stack.children[1] as Extract<ScreenNodeV2, { type: 'Card' }>
+                expect(card.type, name).toBe('Card')
+                expect(tipTexts(card), name).toEqual([...TIPS[mode]])
+                expect(tipCards(document, name).filter((entry) => entry === card)).toHaveLength(1)
+            }
+            // The camera stays mounted: one spine in ready, busy and pending.
+            expect(spines.size).toBe(1)
+            // Each waiting variant keeps its single primary action and no second one.
+            for (const name of ['busy', 'pending'] as const) expect(variantOf(document, name).bar.secondary).toBeNull()
+            expect(verifyDocumentAgainstInputsV2(document, inputsOf(camera({ mode })))).toEqual([])
+            expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+        },
+    )
+
+    it.each([
+        ['denied', camera({ permission: 'denied', canAskAgain: false })],
+        ['undetermined', camera({ permission: 'undetermined' })],
+        ['failed', camera({ failed: true })],
+    ])('a %s camera shows its access copy and no tips, in any variant', (_name, state) => {
+        const document = fallbackFor(inputsOf(state))
+        const literals = variantsOfV2(document).flatMap((entry) => {
+            const found: string[] = []
+            visitVariantNodesV2(entry.variant, entry.prefix, ({ node }) => {
+                if (node.type === 'Text' && node.content.kind === 'literal') found.push(node.content.text)
+            })
+            return found
+        })
+        for (const tip of [...TIPS['build-photo'], ...TIPS['manual-page']]) expect(literals).not.toContain(tip)
+    })
+
+    it("tips are listed per mode: the other mode's wording is refused", () => {
+        const document = fallbackFor(inputsOf(camera({ mode: 'build-photo' })))
+        const forged = JSON.parse(JSON.stringify(document).replaceAll(TIPS['build-photo'][0], TIPS['manual-page'][0]))
+        expect(verifyDocumentAgainstInputsV2(forged, inputsOf(camera({ mode: 'build-photo' }))).length).toBeGreaterThan(
+            0,
+        )
     })
 })

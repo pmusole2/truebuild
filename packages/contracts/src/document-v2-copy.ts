@@ -97,6 +97,23 @@ export const CAMERA_ACCESS_COPY_V2: Readonly<
     retry: { heading: 'The camera did not start', detail: 'Try the camera again.' },
 }
 
+/**
+ * The two framing and clarity tips a working camera shows under the viewfinder, by what it is photographing (listed only
+ * for a camera that runs; the manual-page pair is the Add screen's own wording).
+ */
+export const CAMERA_TIPS_V2 = {
+    'build-photo': [
+        'Step back so the whole step fits in the frame.',
+        'Use good light and hold steady for a sharp photo.',
+    ],
+    'manual-page': ['Keep all four corners in view.', 'Check that the words are clear.'],
+} as const
+
+export const COMPLETION_MANUAL_COPY_V2 = {
+    label: 'Your manual',
+    hint: 'Find your manual on Home.',
+} as const
+
 /** Said by a quick check whose question step has no usable source picture (listed only then): nothing is invented. */
 export const NO_FIGURE_COPY_V2 = 'No picture to show for this detail.'
 /** Said by the overview of a quick check when no step cites a page the manual has (listed only then). */
@@ -218,6 +235,8 @@ function contextCopy(material: DocumentMaterialV2, variant: CopyVariant): string
     const { inputs } = material
     // Claim wording makes a claim about the held result: only the revealed (ready) screen may say it.
     const copy: string[] = variant === 'ready' ? [...claimWordingV2(material)] : []
+    if (inputs.kind === 'completion' && variant === 'ready' && inputs.session !== null)
+        copy.push(COMPLETION_MANUAL_COPY_V2.label, COMPLETION_MANUAL_COPY_V2.hint)
     if (inputs.kind === 'home') {
         copy.push(
             (inputs.uiState?.library?.entries.length ?? 0) > 0
@@ -231,6 +250,7 @@ function contextCopy(material: DocumentMaterialV2, variant: CopyVariant): string
     if (inputs.kind === 'camera') {
         const access = cameraAccessV2(inputs.uiState?.camera)
         if (access !== 'ready') copy.push(CAMERA_ACCESS_COPY_V2[access].heading, CAMERA_ACCESS_COPY_V2[access].detail)
+        else copy.push(...CAMERA_TIPS_V2[inputs.uiState?.camera?.mode ?? 'build-photo'])
     }
     if (
         inputs.kind === 'quick-check' &&

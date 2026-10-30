@@ -178,7 +178,10 @@ describe('completion publishes one build indicator', () => {
                         node.content.key === 'completion-summary',
                 ),
             ).toBe(true)
-            expect(document.header.subtitle).toEqual({ kind: 'bound', key: 'manual-title' })
+            expect(document.header.subtitle).toBeNull()
+            expect(ready).toContainEqual(
+                expect.objectContaining({ type: 'Text', content: { kind: 'bound', key: 'manual-title' } }),
+            )
             expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
             expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
         }
