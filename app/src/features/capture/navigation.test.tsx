@@ -9,7 +9,9 @@ import { createDemoManual, screenDocumentV2Schema, type CheckResult, type Parsed
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
 import { CaptureController } from './controller'
-import { createController } from './controller-factory'
+import { createController, createDocuments } from './controller-factory'
+import { DocumentStore } from '../document-runtime/store'
+import { fixtureDocuments } from '../screens/test-support/fixture-server'
 import RootLayout from '../../../app/_layout'
 import IndexRoute from '../../../app/index'
 import { DocumentRouteBoundary } from '../documents/ownership'
@@ -650,6 +652,34 @@ it('leaves a failed reading for Home when its recovery action says Home, not for
     await waitFor(() => expect(view.getPathname()).toBe('/'))
     expect(controller.getSnapshot().route).toBe('library')
     expect(screen.getByTestId('library-screen')).toBeTruthy()
+})
+
+it('returns a failed recorded reading to Pages without claiming that reading was stopped', async () => {
+    const previous = process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES
+    process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES = '1'
+    let sequence = 0
+    const documents = new DocumentStore({
+        mode: 'full',
+        client: fixtureDocuments(),
+        id: (): string => `reading-notice-${++sequence}`,
+    })
+    jest.mocked(createDocuments).mockReturnValueOnce(documents)
+    try {
+        const { controller } = await runtime([entry('failed-read', 'unparsed')], { parseFailureOnce: true })
+        await mount()
+        await press('Continue building')
+        await press('Read my manual')
+        await screen.findByRole('button', { name: 'Back to pages' })
+        await press('Back to pages')
+        await waitFor(() => expect(controller.getSnapshot().route).toBe('pages'))
+        expect(await screen.findByTestId('pages-screen')).toBeTruthy()
+        expect(controller.getSnapshot().notice).toBeNull()
+        expect(screen.queryByText('Stopped, so nothing more will be shown.')).toBeNull()
+    } finally {
+        await act(async () => documents.dispose())
+        if (previous === undefined) delete process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES
+        else process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES = previous
+    }
 })
 
 type TestFiber = { type: unknown; memoizedProps?: Record<string, unknown>; return: TestFiber | null }

@@ -700,6 +700,12 @@ function Photo({
     const { reduceMotion } = useFeedback()
     const { width: viewportWidth } = useWindowDimensions()
     const tabletHero = viewportWidth >= 768 && ratio === 'hero'
+    const tabletContained =
+        viewportWidth >= 768 &&
+        (ratio === 'hero' ||
+            environment.document.kind === 'result' ||
+            environment.document.kind === 'answer' ||
+            environment.document.kind === 'questions')
     const capture = environment.bindings.capture
     const matches = captureMatchesDocument(environment.document, capture)
     const photoIdentity = matches && capture !== null ? JSON.stringify(capture.binding) : null
@@ -744,7 +750,7 @@ function Photo({
         check?.nextPartRegion?.region,
     ].flatMap((region) => (region == null ? [] : [region]))
     const displayed =
-        fit === 'cover' && !tabletHero
+        fit === 'cover' && !tabletContained
             ? heroImageRect({ width, height }, observation, protectedRegions)
             : containRect({ width, height }, observation)
     return (

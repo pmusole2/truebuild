@@ -117,6 +117,19 @@ test('refusal shows the expected diagram and your photo side by side in More, an
     await expect(page.getByRole('heading', { name: 'Not quite right', exact: true }).first()).toBeVisible({
         timeout: 90_000,
     })
+    // The primary tablet result keeps every edge of the held photo visible before opening the comparison in More.
+    expect(page.viewportSize()!.width).toBeGreaterThanOrEqual(768)
+    const resultFrame = await page.getByTestId('frozen-photo-frame').boundingBox()
+    const resultPhoto = await page.getByTestId('frozen-photo-image').boundingBox()
+    expect(resultFrame).not.toBeNull()
+    expect(resultPhoto).not.toBeNull()
+    expect(resultPhoto!.width).toBeGreaterThan(0)
+    expect(resultPhoto!.height).toBeGreaterThan(0)
+    // Browser layout rounds fractional image bounds to subpixels.
+    expect(resultPhoto!.x).toBeGreaterThanOrEqual(resultFrame!.x - 1)
+    expect(resultPhoto!.y).toBeGreaterThanOrEqual(resultFrame!.y - 1)
+    expect(resultPhoto!.x + resultPhoto!.width).toBeLessThanOrEqual(resultFrame!.x + resultFrame!.width + 1)
+    expect(resultPhoto!.y + resultPhoto!.height).toBeLessThanOrEqual(resultFrame!.y + resultFrame!.height + 1)
     await openMore(page)
     const figures = page.getByTestId('more-sheet')
     const diagram = figures.getByRole('img', { name: 'Picture from your manual', exact: true }).first()

@@ -208,7 +208,11 @@ function scrollViewOf(host: TestInstance): unknown {
 }
 
 describe('the actual v2 catalog renderer', () => {
-    it('keeps the whole held photo inside a tablet hero frame at largest text', async () => {
+    it.each(
+        (['result', 'answer', 'questions'] as const).flatMap((kind) =>
+            (['hero', 'wide', 'square', 'tall'] as const).map((ratio) => ({ kind, ratio })),
+        ),
+    )('keeps the whole held photo inside a tablet $kind $ratio frame at largest text', async ({ kind, ratio }) => {
         const previous = { window: Dimensions.get('window'), screen: Dimensions.get('screen') }
         const { inputs, bindings, controller } = await setup(true)
         Dimensions.set({
@@ -216,19 +220,30 @@ describe('the actual v2 catalog renderer', () => {
             screen: { ...previous.screen, width: 1032, fontScale: 3 },
         })
         try {
-            const hero = (node: ScreenNodeV2): ScreenNodeV2 =>
+            const photo = (node: ScreenNodeV2): ScreenNodeV2 =>
                 node.type === 'Image' && node.source.kind === 'capture'
-                    ? { ...node, fit: 'cover', ratio: 'hero' }
+                    ? { ...node, fit: 'cover', ratio }
                     : 'children' in node
-                      ? { ...node, children: node.children.map(hero) }
+                      ? { ...node, children: node.children.map(photo) }
                       : node
-            const document = composeEdited(inputs, hero)
+            const photoInputs =
+                kind === 'answer'
+                    ? heldPages(inputs, bindings).answerInputs
+                    : {
+                          ...inputs,
+                          kind,
+                          ...(kind === 'questions'
+                              ? { result: null, uiState: captureUiState(bindings.live!.state) }
+                              : {}),
+                      }
+            const document = composeEdited(photoInputs, photo)
             await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
             await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
                 nativeEvent: { layout: { width: 688, height: 560 } },
             })
             const frame = StyleSheet.flatten(screen.getByTestId('frozen-photo-frame').props.style)
             const image = StyleSheet.flatten(screen.getByTestId('frozen-photo-image').props.style)
+            expect(frame.height).toBeCloseTo({ hero: 560, wide: 387, square: 688, tall: 917.3333333333 }[ratio])
             expect(image.left).toBeGreaterThanOrEqual(0)
             expect(image.top).toBeGreaterThanOrEqual(0)
             expect(image.left + image.width).toBeLessThanOrEqual(688)

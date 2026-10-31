@@ -451,11 +451,12 @@ export function DocumentSurface({
                     else if (state.pending?.startsWith('Reading') === true && readingConfirmation?.open !== true)
                         readingConfirmation?.onChange(true)
                     else {
+                        const stopping = state.pending?.startsWith('Reading') === true
                         if (entry !== undefined) workflow.documents?.cancelReading(entry.session.manualId)
-                        controller.cancel()
+                        if (stopping) controller.cancel()
                         readingConfirmation?.onChange(false)
                         if (intent.target === 'home') setTimeout((): void => nav.leave(), 0)
-                        else setTimeout((): void => nav.editPages({ keepNotice: true }), 0)
+                        else setTimeout((): void => nav.editPages(stopping ? { keepNotice: true } : undefined), 0)
                     }
                 },
             }
