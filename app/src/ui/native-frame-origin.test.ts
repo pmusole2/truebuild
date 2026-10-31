@@ -8,6 +8,7 @@ import {
     type NativeFrameNode,
     type NativeFrameOriginDiagnostic,
 } from './native-frame-origin'
+import { parseNativeMeterMarkers } from './native-meter-markers'
 
 const document = recordedDocumentForTest('recorded-home')
 const point: NativeHostCheckpoint = { sessionId: 'frame-test', platform: 'ios', screen: 'home', checkpointId: 'ready' }
@@ -146,6 +147,137 @@ describe('exclusive native modal frames', () => {
 })
 
 describe('native document frame origin', () => {
+    it.each([false, true])(
+        'never submits an empty ID to a formed plain View across replacement and clear (reflecting getter: %s)',
+        (reflecting) => {
+            const tree = fixture()
+            const plain = tree.screen.parentNode!.parentNode!
+            if (reflecting)
+                plain.setNativeProps = ({ nativeID }): void => {
+                    plain.commands.push(nativeID)
+                    plain.id = nativeID
+                }
+            const first = nativeFrameOrigins.bind(tree.anchor, document, { focused: true })
+            expect(measure(tree.root).counts).toEqual({ generated: 10, fallback: 0, shell: 5, total: 15 })
+            first()
+            const neutral = plain.commands.at(-1)
+            expect(neutral).toMatch(/^truebuild_frame_retained_\d+$/u)
+            expect(parseNativeMeterMarkers(neutral)).toEqual({
+                origin: null,
+                capability: null,
+                development: false,
+                documentRoot: null,
+                documentNavigation: null,
+                documentContentBoundary: null,
+            })
+            expect(nativeFrameOrigins.markerFor(plain)).toBeUndefined()
+            expect(measure(tree.root).counts).toEqual({ generated: 3, fallback: 0, shell: 12, total: 15 })
+            const replacement = sharedFallbackDocument({
+                kind: 'home',
+                session: null,
+                stepId: null,
+                captureId: null,
+                result: null,
+                failure: null,
+            })
+            tree.anchor.id = `truebuild-document-content-boundary:${replacement.screenId}|truebuild-render-origin:fallback`
+            tree.anchor.childNodes[0]!.id = 'truebuild-render-origin:fallback'
+            tree.root.childNodes[0]!.childNodes[0]!.id = `truebuild-document-navigation:${replacement.screenId}|truebuild-render-origin:fallback`
+            const second = nativeFrameOrigins.bind(tree.anchor, replacement, { focused: true })
+            expect(nativeFrameOrigins.markerFor(plain)).toContain(
+                `truebuild-document-content-boundary:${replacement.screenId}`,
+            )
+            expect(measure(tree.root).counts).toEqual({ generated: 0, fallback: 10, shell: 5, total: 15 })
+            second()
+            expect(plain.commands.at(-1)).toBe(neutral)
+            expect(plain.commands).not.toContain('')
+            expect(nativeFrameOrigins.markerFor(plain)).toBeUndefined()
+            expect(measure(tree.root).counts).toEqual({ generated: 0, fallback: 3, shell: 12, total: 15 })
+            // Native SDK hosts keep their original empty ID; this exception is only for layout-only plain Views.
+            expect(tree.wrapper.commands.at(-1)).toBe('')
+            expect(tree.screen.commands.at(-1)).toBe('')
+            expect(tree.header.commands.at(-1)).toBe('')
+        },
+    )
+
+    it('restores a plain View ordinary ID and rejects a foreign ID after neutral release', () => {
+        const tree = fixture()
+        const plain = tree.screen.parentNode!.parentNode!
+        plain.id = 'ordinary-sdk-id'
+        const registry = new NativeFrameOriginRegistry()
+        const release = registry.bind(tree.anchor, document, { focused: true })
+        release()
+        expect(plain.commands.at(-1)).toBe('ordinary-sdk-id')
+        expect(registry.markerFor(plain)).toBeUndefined()
+
+        const retained = fixture()
+        const releasedPlain = retained.screen.parentNode!.parentNode!
+        registry.bind(retained.anchor, document, { focused: true })()
+        releasedPlain.id = 'foreign-owner'
+        registry.bind(retained.anchor, document, { focused: true })
+        expect(() => registry.markerFor(releasedPlain)).toThrow('invalid_native_frame_origin')
+    })
+
+    it('reports source invocation emptiness for add, neutral retention and SDK restoration', () => {
+        const tree = fixture()
+        const registry = new NativeFrameOriginRegistry()
+        const diagnostics: NativeFrameOriginDiagnostic[] = []
+        const release = registry.bind(tree.anchor, document, {
+            focused: true,
+            diagnostic: (entry): void => {
+                diagnostics.push(entry)
+            },
+        })
+        release()
+        expect(
+            diagnostics.filter((entry) => entry.nodeName === 'RN:View' && entry.status === 'command-submitted'),
+        ).toEqual([
+            {
+                nodeName: 'RN:View',
+                role: 'route',
+                status: 'command-submitted',
+                reason: 'native-id-invocation-returned',
+                previousSubmittedEmpty: null,
+                declaredEmpty: true,
+                nextSubmittedEmpty: false,
+            },
+            {
+                nodeName: 'RN:View',
+                role: 'route',
+                status: 'command-submitted',
+                reason: 'native-id-retention-invocation-returned',
+                previousSubmittedEmpty: false,
+                declaredEmpty: true,
+                nextSubmittedEmpty: false,
+            },
+        ])
+        expect(diagnostics).toContainEqual({
+            nodeName: 'RN:RNSScreenContentWrapper',
+            role: 'route',
+            status: 'command-submitted',
+            reason: 'native-id-release-invocation-returned',
+            previousSubmittedEmpty: false,
+            declaredEmpty: true,
+            nextSubmittedEmpty: true,
+        })
+        const rebound = registry.bind(tree.anchor, document, {
+            focused: true,
+            diagnostic: (entry): void => {
+                diagnostics.push(entry)
+            },
+        })
+        expect(diagnostics).toContainEqual({
+            nodeName: 'RN:RNSScreenContentWrapper',
+            role: 'route',
+            status: 'command-submitted',
+            reason: 'native-id-invocation-returned',
+            previousSubmittedEmpty: true,
+            declaredEmpty: true,
+            nextSubmittedEmpty: false,
+        })
+        rebound()
+    })
+
     it('submits native marker commands for exact frame hosts without crediting unrelated descendants or coach siblings', () => {
         const tree = fixture()
         const release = nativeFrameOrigins.bind(tree.anchor, document, { focused: true })
@@ -332,16 +464,20 @@ describe('native document frame origin', () => {
         release()
     })
 
-    it('keeps failed cleanup unavailable instead of claiming restoration succeeded', () => {
-        const tree = fixture()
-        const registry = new NativeFrameOriginRegistry()
-        const release = registry.bind(tree.anchor, document, { focused: true })
-        tree.wrapper.setNativeProps = (): never => {
-            throw new Error('restore failed')
-        }
-        release()
-        expect(() => registry.markerFor(tree.wrapper)).toThrow('invalid_native_frame_origin')
-    })
+    it.each(['sdk', 'plain'] as const)(
+        'keeps failed %s cleanup unavailable instead of claiming restoration succeeded',
+        (kind) => {
+            const tree = fixture()
+            const registry = new NativeFrameOriginRegistry()
+            const release = registry.bind(tree.anchor, document, { focused: true })
+            const host = kind === 'sdk' ? tree.wrapper : tree.screen.parentNode!.parentNode!
+            host.setNativeProps = (): never => {
+                throw new Error('restore failed')
+            }
+            release()
+            expect(() => registry.markerFor(host)).toThrow('invalid_native_frame_origin')
+        },
+    )
     it.each(['update', 'cleanup'])('never claims a %s command succeeded after a native writer disappears', (action) => {
         const tree = fixture()
         const registry = new NativeFrameOriginRegistry()
@@ -372,6 +508,9 @@ describe('native document frame origin', () => {
             role: 'route',
             status: 'command-submitted',
             reason: 'native-id-invocation-returned',
+            previousSubmittedEmpty: null,
+            declaredEmpty: true,
+            nextSubmittedEmpty: false,
         })
         release()
     })

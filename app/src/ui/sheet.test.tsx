@@ -22,6 +22,73 @@ jest.mock(
 )
 
 describe('BottomSheet', () => {
+    it.each(['0', '1'])(
+        'keeps native show diagnostics separate from logical mounting in fixture mode %s',
+        async (mode) => {
+            const prior = process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+            process.env.EXPO_PUBLIC_RELEASE_FIXTURE = mode
+            const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+            const onClose = jest.fn()
+            const view = await render(
+                <BottomSheet visible title="Instructions" onClose={onClose}>
+                    <Text>First content</Text>
+                </BottomSheet>,
+            )
+            const modal = (): ReturnType<typeof screen.getByTestId> => {
+                let node = screen.getByTestId('bottom-sheet')
+                while (node.type !== 'Modal' && node.parent !== null) node = node.parent
+                expect(node.type).toBe('Modal')
+                return node
+            }
+            let mounted = true
+            try {
+                if (mode === '0') expect(modal().props.onShow).toBeUndefined()
+                await fireEvent(modal(), 'show')
+                await view.rerender(
+                    <BottomSheet visible title="Instructions" onClose={onClose}>
+                        <Text>Next content</Text>
+                    </BottomSheet>,
+                )
+                await fireEvent(modal(), 'show')
+                await view.unmount()
+                mounted = false
+                const records = log.mock.calls.flatMap(([value]) =>
+                    typeof value === 'string' && value.startsWith('{"event":"native_sheet_lifecycle"')
+                        ? [
+                              JSON.parse(value) as {
+                                  instance: number
+                                  phase: string
+                                  receivedAt: number
+                                  visible?: boolean
+                              },
+                          ]
+                        : [],
+                )
+                if (mode === '0') expect(records).toEqual([])
+                else {
+                    expect(records.map((record) => record.phase)).toEqual([
+                        'mount',
+                        'visibility',
+                        'native-show',
+                        'native-show',
+                        'unmount',
+                    ])
+                    expect(new Set(records.map((record) => record.instance)).size).toBe(1)
+                    expect(records.every((record) => Number.isFinite(record.receivedAt))).toBe(true)
+                    expect(
+                        records.filter((record) => record.phase === 'visibility').map((record) => record.visible),
+                    ).toEqual([true])
+                }
+                expect(onClose).not.toHaveBeenCalled()
+            } finally {
+                if (mounted) await view.unmount()
+                log.mockRestore()
+                if (prior === undefined) delete process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+                else process.env.EXPO_PUBLIC_RELEASE_FIXTURE = prior
+            }
+        },
+    )
+
     it('shows its title as a header and its content while visible', async () => {
         await render(
             <BottomSheet visible={true} title="Instructions" onClose={(): void => undefined}>

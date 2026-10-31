@@ -48,6 +48,31 @@ import {
 } from '../features/documents/ownership'
 import { mergeNativeIds, originId, RenderOriginProvider, useRenderOrigin } from './render-origin'
 const SheetDismissContext = createContext<(() => void) | null>(null)
+let fixtureSheetSequence = 0
+
+/** Fixture-only callback diagnostics: a native show receipt is not a physical paint witness. */
+function traceFixtureSheet(
+    instance: number | null,
+    phase: 'mount' | 'unmount' | 'native-show' | 'visibility',
+    frame?: DocumentFrameOwner | null,
+    visible?: boolean,
+): void {
+    if (instance === null) return
+    try {
+        console.info(
+            JSON.stringify({
+                event: 'native_sheet_lifecycle',
+                instance,
+                phase,
+                receivedAt: Date.now(),
+                ...(visible === undefined ? {} : { visible }),
+                ...(frame === undefined ? {} : { kind: frame?.document.kind ?? null, state: frame?.state ?? null }),
+            }),
+        )
+    } catch {
+        // Diagnostic delivery cannot change the sheet's native lifecycle.
+    }
+}
 /** A document's own Back/Close action uses the same native dismissal motion and single-use latch as the grabber. */
 export function useSheetDismiss(): (() => void) | null {
     return useContext(SheetDismissContext)
@@ -144,6 +169,16 @@ export function BottomSheet({
     /** A complete document owns header, content scrolling and bar; keep only native sheet mechanics. */
     readonly documentFrame?: boolean
 }): ReactElement {
+    const [fixtureInstance] = useState(() =>
+        process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1' ? ++fixtureSheetSequence : null,
+    )
+    useEffect(() => {
+        traceFixtureSheet(fixtureInstance, 'mount')
+        return (): void => traceFixtureSheet(fixtureInstance, 'unmount')
+    }, [fixtureInstance])
+    useEffect(() => {
+        traceFixtureSheet(fixtureInstance, 'visibility', undefined, visible)
+    }, [fixtureInstance, visible])
     const parent = useDocumentFrameOwner()
     const inherited = useRenderOrigin()
     return (
@@ -172,6 +207,11 @@ export function BottomSheet({
                         transparent={true}
                         animationType="none"
                         onRequestClose={onClose}
+                        onShow={
+                            fixtureInstance === null
+                                ? undefined
+                                : (): void => traceFixtureSheet(fixtureInstance, 'native-show', owner, visible)
+                        }
                         accessibilityViewIsModal={true}
                     >
                         {/* Modal is its own native root, so it gets its own safe-area measurement for the bottom inset. */}

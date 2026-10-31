@@ -20,7 +20,18 @@ export interface NativeFrameOriginDiagnostic {
     readonly nodeName: string
     readonly role: 'route' | 'modal'
     readonly status: 'observed' | 'command-submitted' | 'preserved' | 'unsupported'
-    readonly reason: string
+    readonly reason:
+        | 'validated-public-parent-chain'
+        | 'unsupported-frame-path'
+        | 'explicit-marker-or-unsupported-writer'
+        | 'native-id-invocation-returned'
+        | 'native-id-release-invocation-returned'
+        | 'native-id-retention-invocation-returned'
+        | 'native-id-command-threw'
+    /** Source invocation state only; none of these fields establishes native application/readback. */
+    readonly previousSubmittedEmpty?: boolean | null
+    readonly declaredEmpty?: boolean
+    readonly nextSubmittedEmpty?: boolean
 }
 interface BindingOptions {
     readonly focused: boolean
@@ -41,6 +52,7 @@ interface Claim {
 }
 interface HeldHost {
     readonly baseId: string
+    readonly releaseId: string
     readonly name: string
     readonly claims: Map<Claim, string>
     submittedId: string
@@ -163,6 +175,7 @@ export class InvalidNativeFrameOrigin extends Error {
  */
 export class NativeFrameOriginRegistry {
     private readonly hosts = new WeakMap<NativeFrameNode, HeldHost>()
+    private nextRetainedId = 0
 
     bindModal(
         anchor: unknown,
@@ -211,10 +224,15 @@ export class NativeFrameOriginRegistry {
         node: NativeFrameNode,
         options: BindingOptions,
         status: NativeFrameOriginDiagnostic['status'],
-        reason: string,
+        reason: NativeFrameOriginDiagnostic['reason'],
+        write?: {
+            readonly previousSubmittedEmpty: boolean | null
+            readonly declaredEmpty: boolean
+            readonly nextSubmittedEmpty: boolean
+        },
     ): void {
         try {
-            options.diagnostic?.({ nodeName: node.nodeName, role: options.role ?? 'route', status, reason })
+            options.diagnostic?.({ nodeName: node.nodeName, role: options.role ?? 'route', status, reason, ...write })
         } catch {
             // Diagnostic delivery cannot change attribution.
         }
@@ -249,6 +267,7 @@ export class NativeFrameOriginRegistry {
 
     private add(node: NativeFrameNode, claim: Claim): void {
         let held = this.hosts.get(node)
+        const previousSubmittedEmpty = held === undefined ? null : held.submittedId === ''
         try {
             if (held === undefined) {
                 const baseId = node.id ?? ''
@@ -266,7 +285,13 @@ export class NativeFrameOriginRegistry {
                     this.diagnostic(node, claim.options, 'preserved', 'explicit-marker-or-unsupported-writer')
                     return
                 }
-                held = { baseId, name: node.nodeName, claims: new Map(), submittedId: baseId, failed: false }
+                // A nativeID forms a layout-only View in Fabric. Releasing credit must not flatten that host.
+                // This ordinary opaque ID retains no document/origin/capability marker; baseId still owns planning.
+                const releaseId =
+                    baseId === '' && nameOf(node) === 'View'
+                        ? `truebuild_frame_retained_${++this.nextRetainedId}`
+                        : baseId
+                held = { baseId, releaseId, name: node.nodeName, claims: new Map(), submittedId: baseId, failed: false }
             } else if (!this.validHost(node, held)) return
             const marker = composeNativeMeterMarkers(
                 held.baseId,
@@ -274,12 +299,17 @@ export class NativeFrameOriginRegistry {
                 `truebuild-render-origin:${claim.origin}`,
             )
             if (typeof node.setNativeProps !== 'function') throw new InvalidNativeFrameOrigin()
+            const declaredEmpty = (node.id ?? '') === ''
             node.setNativeProps({ nativeID: marker })
             held.claims.set(claim, marker)
             held.submittedId = marker
             held.failed = false
             this.hosts.set(node, held)
-            this.diagnostic(node, claim.options, 'command-submitted', 'native-id-invocation-returned')
+            this.diagnostic(node, claim.options, 'command-submitted', 'native-id-invocation-returned', {
+                previousSubmittedEmpty,
+                declaredEmpty,
+                nextSubmittedEmpty: marker === '',
+            })
         } catch {
             if (held !== undefined) {
                 if (held.claims.size !== 0) held.failed = true
@@ -319,10 +349,23 @@ export class NativeFrameOriginRegistry {
                 return
             }
             const remaining = [...held.claims].findLast(([owner]) => this.valid(owner))
-            const marker = remaining?.[1] ?? held.baseId
+            const marker = remaining?.[1] ?? held.releaseId
             if (typeof node.setNativeProps !== 'function') throw new InvalidNativeFrameOrigin()
+            const previousSubmittedEmpty = held.submittedId === ''
+            const declaredEmpty = (node.id ?? '') === ''
             node.setNativeProps({ nativeID: marker })
             held.submittedId = marker
+            this.diagnostic(
+                node,
+                claim.options,
+                'command-submitted',
+                remaining !== undefined
+                    ? 'native-id-invocation-returned'
+                    : held.releaseId !== held.baseId
+                      ? 'native-id-retention-invocation-returned'
+                      : 'native-id-release-invocation-returned',
+                { previousSubmittedEmpty, declaredEmpty, nextSubmittedEmpty: marker === '' },
+            )
         } catch {
             held.failed = true
         }
@@ -335,7 +378,7 @@ export class NativeFrameOriginRegistry {
             if (!this.validHost(node, held)) throw new InvalidNativeFrameOrigin()
             const owner = [...held.claims].findLast(([claim]) => this.valid(claim))
             if (owner === undefined) {
-                if (held.claims.size !== 0 || held.submittedId !== held.baseId) throw new InvalidNativeFrameOrigin()
+                if (held.claims.size !== 0 || held.submittedId !== held.releaseId) throw new InvalidNativeFrameOrigin()
                 return undefined
             }
             if (owner[1] !== held.submittedId) throw new InvalidNativeFrameOrigin()
