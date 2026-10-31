@@ -35,7 +35,8 @@ import { canonicalJson } from './screen-context'
  * - `ResultCard`      a VerdictCard bound to the current check or question;
  * - `{kind:'state'}`  the closed state/busy heading or detail copy of the variant being compiled (never in `ready`);
  * - `RepeatFacts`     one model-authored row per fact of a fact set, optionally grouped in model-authored containers;
- * - `WhenFacts`       its children only when the fact set is not empty (no dangling heading over nothing).
+ * - `WhenFacts`       its children only when the fact set is not empty (no dangling heading over nothing);
+ * - `WhenPartTargets` (version 3, the held Question) its children only when a bound part chooser can resolve.
  *
  * Everything else is the existing catalog, unchanged and strictly typed. Actions live only in each variant's `bar` and
  * in the typed header controls; the compiler adds none. The existing shared gates (structure, mandatory witnesses,
@@ -47,6 +48,13 @@ export const LAYOUT_TEMPLATE_V2_VERSION = 1 as const
  * returns (see `pendingCheckV2`). Version 1 records are unchanged and cannot compile that screen.
  */
 export const LAYOUT_TEMPLATE_V2_CHECKING_VERSION = 2 as const
+/**
+ * `questions` records exist only in this version: the Question sheet over the photo the app holds (one ready variant
+ * and the five waiting, empty and failing variants, no result). They alone may place the catalog's `TextField` (the
+ * question) and its bound part-target `Choice` (the latter only inside `WhenPartTargets`); versions 1 and 2 refuse
+ * all three.
+ */
+export const LAYOUT_TEMPLATE_V2_QUESTIONS_VERSION = 3 as const
 
 /**
  * Resource guards of the RECORD itself (the compiled document keeps `DOCUMENT_V2_LIMITS` untouched). They bound the work
@@ -191,6 +199,23 @@ const LEAVES = [
 
 export type TemplateLeafV2 = z.infer<(typeof LEAVES)[number]>
 
+/**
+ * The catalog's own two Question leaves, re-typed narrowly (version 3 only). The field binds the question and nothing
+ * else; the chooser binds the part target and nothing else, so it can never offer intents or languages or carry a part.
+ */
+const textFieldNode = node('TextField', {
+    binding: z.literal('question'),
+    label: templateLabelRefSchema,
+    placeholder: z.null(),
+})
+const choiceNode = node('Choice', {
+    prompt: labelOrNull,
+    options: z.strictObject({ mode: z.literal('bound'), binding: z.literal('part-target') }),
+})
+const QUESTION_LEAVES = [textFieldNode, choiceNode] as const
+
+export type TemplateQuestionLeafV2 = z.infer<(typeof QUESTION_LEAVES)[number]>
+
 type Bare<T extends { children: unknown }> = Omit<T, 'children'>
 
 export interface TemplateStackV2 extends Bare<StackNodeV2> {
@@ -237,31 +262,24 @@ export interface WhenFactsV2 {
     source: FactSetV2
     children: TemplateNodeV2[]
 }
-export type TemplateNodeV2 = TemplateLeafV2 | TemplateContainerV2 | RepeatFactsV2 | WhenFactsV2
+/**
+ * Version 3 only. Its children, placed directly in the parent, only when the current material can resolve a bound
+ * part-target `Choice`: the app holds the photo and the step has at least one named part. The record supplies no part,
+ * id, label or figure; the part list stays the app's own.
+ */
+export interface WhenPartTargetsV2 {
+    type: 'WhenPartTargets'
+    children: TemplateNodeV2[]
+}
+/** Every node any record version may place; which versions accept which node is decided by their schemas. */
+export type TemplateNodeV2 =
+    TemplateLeafV2 | TemplateQuestionLeafV2 | TemplateContainerV2 | RepeatFactsV2 | WhenFactsV2 | WhenPartTargetsV2
 
 const children = (schema: z.ZodType<TemplateNodeV2>): z.ZodArray<z.ZodType<TemplateNodeV2>> =>
     z.array(schema).max(DOCUMENT_V2_LIMITS.children)
 
 const GROUP_TYPES = ['Stack', 'Row', 'Grid', 'Card', 'Scroll'] as const
 const factSet = z.enum(FACT_SETS_V2)
-
-function containerSchema(type: keyof typeof CONTAINER_SHAPES_V2): z.ZodType<TemplateContainerV2> {
-    const shape =
-        type === 'Section' ? { ...CONTAINER_SHAPES_V2.Section, title: labelOrNull } : CONTAINER_SHAPES_V2[type]
-
-    return node(type, { ...shape, children: children(templateNodeSchema) }) as unknown as z.ZodType<TemplateContainerV2>
-}
-
-const rowSchema: z.ZodType<TemplateContainerV2> = z.lazy(() =>
-    z.discriminatedUnion('type', [
-        containerSchema('Stack'),
-        containerSchema('Row'),
-        containerSchema('Grid'),
-        containerSchema('Card'),
-        containerSchema('Section'),
-        containerSchema('Scroll'),
-    ] as unknown as [z.ZodObject<{ type: z.ZodLiteral<string> }>]),
-) as unknown as z.ZodType<TemplateContainerV2>
 
 const groupSchema = z.strictObject({
     size: z.number().int().min(1).max(DOCUMENT_V2_LIMITS.children),
@@ -273,19 +291,55 @@ const groupSchema = z.strictObject({
     ),
 })
 
-export const templateNodeSchema: z.ZodType<TemplateNodeV2> = z.lazy(() =>
-    z.discriminatedUnion('type', [
-        ...LEAVES,
-        containerSchema('Stack'),
-        containerSchema('Row'),
-        containerSchema('Grid'),
-        containerSchema('Card'),
-        containerSchema('Section'),
-        containerSchema('Scroll'),
-        node('RepeatFacts', { source: factSet, group: groupSchema.nullable(), row: rowSchema }),
-        node('WhenFacts', { source: factSet, children: children(templateNodeSchema) }),
-    ] as unknown as [(typeof LEAVES)[number]]),
-) as unknown as z.ZodType<TemplateNodeV2>
+interface Dialect {
+    node: z.ZodType<TemplateNodeV2>
+    row: z.ZodType<TemplateContainerV2>
+}
+
+/**
+ * The recursive schemas of one record dialect. Versions 1 and 2 share the first; version 3 (the held Question) adds the
+ * form field, the part chooser and the part conditional to the nodes a record may place, and nothing else, so the older
+ * dialects refuse all three exactly as they always have.
+ */
+function dialectOf(question: boolean): Dialect {
+    const containerOf = (type: keyof typeof CONTAINER_SHAPES_V2): z.ZodType<TemplateContainerV2> => {
+        const shape =
+            type === 'Section' ? { ...CONTAINER_SHAPES_V2.Section, title: labelOrNull } : CONTAINER_SHAPES_V2[type]
+
+        return node(type, { ...shape, children: children(nodeSchema) }) as unknown as z.ZodType<TemplateContainerV2>
+    }
+    const row: z.ZodType<TemplateContainerV2> = z.lazy(() =>
+        z.discriminatedUnion('type', [
+            containerOf('Stack'),
+            containerOf('Row'),
+            containerOf('Grid'),
+            containerOf('Card'),
+            containerOf('Section'),
+            containerOf('Scroll'),
+        ] as unknown as [z.ZodObject<{ type: z.ZodLiteral<string> }>]),
+    ) as unknown as z.ZodType<TemplateContainerV2>
+    const nodeSchema: z.ZodType<TemplateNodeV2> = z.lazy(() =>
+        z.discriminatedUnion('type', [
+            ...LEAVES,
+            ...(question ? QUESTION_LEAVES : []),
+            containerOf('Stack'),
+            containerOf('Row'),
+            containerOf('Grid'),
+            containerOf('Card'),
+            containerOf('Section'),
+            containerOf('Scroll'),
+            node('RepeatFacts', { source: factSet, group: groupSchema.nullable(), row }),
+            node('WhenFacts', { source: factSet, children: children(nodeSchema) }),
+            ...(question ? [node('WhenPartTargets', { children: children(nodeSchema) })] : []),
+        ] as unknown as [(typeof LEAVES)[number]]),
+    ) as unknown as z.ZodType<TemplateNodeV2>
+
+    return { node: nodeSchema, row }
+}
+
+const baseDialect = dialectOf(false)
+const questionsDialect = dialectOf(true)
+export const templateNodeSchema: z.ZodType<TemplateNodeV2> = baseDialect.node
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Variants and the record.
@@ -299,17 +353,20 @@ const templateHeaderSchema = z.strictObject({
 })
 export type TemplateHeaderV2 = z.infer<typeof templateHeaderSchema>
 
-/** One variant. No overlays: a result or answer screen carries no coach target. The bar is the existing typed bar. */
+/** One variant. No overlays: a result, answer or question screen has no coach target. The bar is the typed bar. */
 export interface TemplateVariantV2 {
     header: TemplateHeaderV2
     body: TemplateContainerV2
     bar: z.infer<typeof barV2Schema>
 }
-export const templateVariantSchema = z.strictObject({
-    header: templateHeaderSchema,
-    body: rowSchema,
-    bar: barV2Schema,
-}) as unknown as z.ZodType<TemplateVariantV2>
+const variantSchemaOf = (body: z.ZodType<TemplateContainerV2>): z.ZodType<TemplateVariantV2> =>
+    z.strictObject({
+        header: templateHeaderSchema,
+        body,
+        bar: barV2Schema,
+    }) as unknown as z.ZodType<TemplateVariantV2>
+export const templateVariantSchema = variantSchemaOf(baseDialect.row)
+const questionsVariantSchema = variantSchemaOf(questionsDialect.row)
 
 /** The waiting and failing variants every result or answer screen owes (`requiredStatesV2`); empty and confirming do not exist. */
 export interface TemplateStatesV2 {
@@ -323,6 +380,17 @@ const statesSchema = z.strictObject({
     pending: templateVariantSchema,
     error: templateVariantSchema,
     recovery: templateVariantSchema,
+})
+/** The variants a Question sheet owes (`requiredStatesV2('questions')`): the same four, and the empty one. */
+export interface QuestionsTemplateStatesV2 extends TemplateStatesV2 {
+    empty: TemplateVariantV2
+}
+const questionsStatesSchema = z.strictObject({
+    busy: questionsVariantSchema,
+    pending: questionsVariantSchema,
+    empty: questionsVariantSchema,
+    error: questionsVariantSchema,
+    recovery: questionsVariantSchema,
 })
 
 /** The decisions of a held check, each its own explicit ready variant. */
@@ -354,7 +422,17 @@ export interface AnswerLayoutTemplateV2 extends TemplateBaseV2<typeof LAYOUT_TEM
     kind: 'answer'
     ready: TemplateVariantV2
 }
-export type LayoutTemplateV2 = ResultLayoutTemplateV2 | CheckingResultLayoutTemplateV2 | AnswerLayoutTemplateV2
+/**
+ * A Question, version 3: the sheet over the photo the app holds. One ready variant (no decision, no checking, no
+ * result) and the five states it owes. The only record that may place `TextField`, `Choice` and `WhenPartTargets`.
+ */
+export interface QuestionsLayoutTemplateV2 extends TemplateBaseV2<typeof LAYOUT_TEMPLATE_V2_QUESTIONS_VERSION> {
+    kind: 'questions'
+    ready: TemplateVariantV2
+    states: QuestionsTemplateStatesV2
+}
+export type LayoutTemplateV2 =
+    ResultLayoutTemplateV2 | CheckingResultLayoutTemplateV2 | AnswerLayoutTemplateV2 | QuestionsLayoutTemplateV2
 
 const resultTemplateSchema = z.strictObject({
     version: z.literal(LAYOUT_TEMPLATE_V2_VERSION),
@@ -386,10 +464,18 @@ const checkingResultTemplateSchema = z.strictObject({
     }),
     states: statesSchema,
 })
+const questionsTemplateSchema = z.strictObject({
+    version: z.literal(LAYOUT_TEMPLATE_V2_QUESTIONS_VERSION),
+    fixtureId: fixtureIdV2Schema,
+    kind: z.literal('questions'),
+    ready: questionsVariantSchema,
+    states: questionsStatesSchema,
+})
 /** Version 1 records, exactly as they have always parsed. */
 const layoutTemplateV1Schema = z.discriminatedUnion('kind', [resultTemplateSchema, answerTemplateSchema])
 /** Every record version. `parseLayoutTemplateV2` selects the schema by the record's own version, for precise issues. */
 export const layoutTemplateV2Schema = z.union([
+    questionsTemplateSchema,
     checkingResultTemplateSchema,
     layoutTemplateV1Schema,
 ]) as unknown as z.ZodType<LayoutTemplateV2>
@@ -426,14 +512,23 @@ function nestsDeeperThan(value: unknown, max: number): boolean {
     return false
 }
 
+const WAITING_STATES = ['busy', 'pending', 'error', 'recovery'] as const
+const QUESTION_STATES = ['busy', 'pending', 'empty', 'error', 'recovery'] as const
+
 /**
- * Every variant of a record with its template path (`ready.pass`, `ready`, `ready.checking`, `states.busy`, ...), whether
- * it fills the document's ready slot, and whether it may state the actual result (`result`: the decision branches and the
- * answer; not a state variant and not the checking branch, which have no result to state).
+ * Every variant of a record with its template path (`ready.pass`, `ready`, `ready.checking`, `states.busy`, ...),
+ * whether it fills the document's ready slot, whether it may state the actual result (`result`: the decision branches
+ * and the answer; not a state variant, not the checking branch and not a Question, which have no result to state), and
+ * whether it may use the closed state copy of a waiting or failing screen (`stateCopy`: the state variants and the
+ * checking branch; never a variant that states a verdict, nor the ready Question, which uses its own words).
  */
-export function layoutTemplateVariantsV2(
-    template: LayoutTemplateV2,
-): { path: string; ready: boolean; result: boolean; variant: TemplateVariantV2 }[] {
+export function layoutTemplateVariantsV2(template: LayoutTemplateV2): {
+    path: string
+    ready: boolean
+    result: boolean
+    stateCopy: boolean
+    variant: TemplateVariantV2
+}[] {
     const ready =
         template.kind === 'result'
             ? [
@@ -441,19 +536,46 @@ export function layoutTemplateVariantsV2(
                       path: `ready.${decision}`,
                       ready: true,
                       result: true,
+                      stateCopy: false,
                       variant: template.ready[decision],
                   })),
                   ...(template.version === LAYOUT_TEMPLATE_V2_CHECKING_VERSION
-                      ? [{ path: 'ready.checking', ready: true, result: false, variant: template.ready.checking }]
+                      ? [
+                            {
+                                path: 'ready.checking',
+                                ready: true,
+                                result: false,
+                                stateCopy: true,
+                                variant: template.ready.checking,
+                            },
+                        ]
                       : []),
               ]
-            : [{ path: 'ready', ready: true, result: true, variant: template.ready }]
-    const states = (['busy', 'pending', 'error', 'recovery'] as const).map((state) => ({
-        path: `states.${state}`,
-        ready: false,
-        result: false,
-        variant: template.states[state],
-    }))
+            : [
+                  {
+                      path: 'ready',
+                      ready: true,
+                      result: template.kind === 'answer',
+                      stateCopy: false,
+                      variant: template.ready,
+                  },
+              ]
+    const states =
+        template.kind === 'questions'
+            ? QUESTION_STATES.map((state) => ({
+                  path: `states.${state}`,
+                  ready: false,
+                  result: false,
+                  stateCopy: true,
+                  variant: template.states[state],
+              }))
+            : WAITING_STATES.map((state) => ({
+                  path: `states.${state}`,
+                  ready: false,
+                  result: false,
+                  stateCopy: true,
+                  variant: template.states[state],
+              }))
 
     return [...ready, ...states]
 }
@@ -486,10 +608,16 @@ function refsOf(item: TemplateNodeV2): (TemplateBodyRefV2 | TemplateLabelRefV2)[
             return item.items.map((entry) => entry.label)
         case 'Section':
             return item.title === null ? [] : [item.title]
+        case 'TextField':
+            return [item.label]
+        case 'Choice':
+            return item.prompt === null ? [] : [item.prompt]
         default:
             return []
     }
 }
+
+type VariantEntry = ReturnType<typeof layoutTemplateVariantsV2>[number]
 
 /**
  * Rules of the record alone, before any input is known: where slots and state copy may stand and the size of the record.
@@ -502,29 +630,42 @@ export function layoutTemplateIssuesV2(template: LayoutTemplateV2): string[] {
         issues.add(`template:${path}:${rule}`)
     }
     let count = 0
-    const walk = (item: TemplateNodeV2, path: string, depth: number, result: boolean, row: boolean): void => {
+    const walk = (
+        item: TemplateNodeV2,
+        path: string,
+        depth: number,
+        rules: Pick<VariantEntry, 'result' | 'stateCopy'>,
+        row: boolean,
+        partTargets: boolean,
+    ): void => {
         count += 1
         if (depth > LAYOUT_TEMPLATE_LIMITS_V2.depth) add(path, 'too_deep')
         if (row && !ROW_LEAVES.has(item.type) && !CONTAINERS.has(item.type)) add(path, 'not_in_row')
         if ((item.type === 'FactText' || item.type === 'FactCitations') && !row) add(path, 'slot_outside_row')
-        if (item.type === 'ResultCard' && !result) add(path, 'result_slot_in_state')
-        if (refsOf(item).some((ref) => ref.kind === 'state') && result) add(path, 'state_copy_in_ready')
+        if (item.type === 'ResultCard' && !rules.result) add(path, 'result_slot_in_state')
+        if (refsOf(item).some((ref) => ref.kind === 'state') && !rules.stateCopy) add(path, 'state_copy_in_ready')
         if (item.type === 'RepeatFacts' || item.type === 'WhenFacts') {
-            if (!result && RESULT_FACT_SETS_V2.includes(item.source)) add(path, 'result_slot_in_state')
+            if (!rules.result && RESULT_FACT_SETS_V2.includes(item.source)) add(path, 'result_slot_in_state')
         }
+        // A chooser outside the conditional could not compile for a step without parts: refused here, not per input.
+        if (item.type === 'Choice' && !partTargets) add(path, 'choice_outside_when_part_targets')
         if (item.type === 'RepeatFacts') {
             count += item.group === null ? 0 : 1
-            walk(item.row, `${path}.row`, depth + (item.group === null ? 1 : 2), result, true)
+            walk(item.row, `${path}.row`, depth + (item.group === null ? 1 : 2), rules, true, partTargets)
         } else if ('children' in item) {
-            item.children.forEach((child, index) => walk(child, `${path}.children.${index}`, depth + 1, result, row))
+            const inside = partTargets || item.type === 'WhenPartTargets'
+            item.children.forEach((child, index) =>
+                walk(child, `${path}.children.${index}`, depth + 1, rules, row, inside),
+            )
         }
         if (item.type === 'WhenFacts' && row) add(path, 'not_in_row')
     }
-    for (const { path, result, variant } of layoutTemplateVariantsV2(template)) {
-        if ([variant.header.title, variant.header.subtitle].some((ref) => ref?.kind === 'state') && result) {
-            add(`${path}.header`, 'state_copy_in_ready')
+    for (const entry of layoutTemplateVariantsV2(template)) {
+        const { header } = entry.variant
+        if ([header.title, header.subtitle].some((ref) => ref?.kind === 'state') && !entry.stateCopy) {
+            add(`${entry.path}.header`, 'state_copy_in_ready')
         }
-        walk(variant.body, `${path}.body`, 1, result, false)
+        walk(entry.variant.body, `${entry.path}.body`, 1, entry, false, false)
     }
     if (count > LAYOUT_TEMPLATE_LIMITS_V2.nodes) add('', 'too_many_nodes')
 
@@ -537,9 +678,14 @@ export type LayoutTemplateParseV2 =
 /** The schema of a record's own version (a record that names no known version is judged as version 1, as before). */
 function layoutTemplateSchemaOf(raw: unknown): z.ZodType<LayoutTemplateV2> {
     const version = typeof raw === 'object' && raw !== null ? (raw as { version?: unknown }).version : undefined
-    return (version === LAYOUT_TEMPLATE_V2_CHECKING_VERSION
-        ? checkingResultTemplateSchema
-        : layoutTemplateV1Schema) as unknown as z.ZodType<LayoutTemplateV2>
+    const schema =
+        version === LAYOUT_TEMPLATE_V2_CHECKING_VERSION
+            ? checkingResultTemplateSchema
+            : version === LAYOUT_TEMPLATE_V2_QUESTIONS_VERSION
+              ? questionsTemplateSchema
+              : layoutTemplateV1Schema
+
+    return schema as unknown as z.ZodType<LayoutTemplateV2>
 }
 
 /**

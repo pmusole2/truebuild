@@ -11,12 +11,18 @@ import {
     componentPathsV2,
     createDemoManual,
     documentMaterialV2,
+    isNonfactualVariantV2,
     layoutTemplateSha256V2,
+    layoutTemplateV2Schema,
     manualSessionSchema,
+    nodeIntentsV2,
     parseLayoutTemplateV2,
     photoSpineV2,
     questionResultSchema,
+    rebindGeneratedStatesV2,
     screenDocumentV2Schema,
+    semanticIssuesV2,
+    sourceResolverV2,
     structureOfV2,
     verifyDocumentAgainstInputsV2,
     visitVariantNodesV2,
@@ -27,6 +33,7 @@ import {
     type LayoutBranchV2,
     type LayoutTemplateV2,
     type ManualSession,
+    type QuestionsLayoutTemplateV2,
     type ResultLayoutTemplateV2,
     type ScreenContextInputsV2,
     type ScreenNodeV2,
@@ -1195,3 +1202,769 @@ describe('a version 2 record also owns the held photo before its check returns',
         ).toBe(true)
     })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Version 3: the held Question. Authored like the others, with its own order and copy choices: the held photo first at
+// one spine in all six variants, then the form, then the manual's facts. No verdict, result slot, confirm or check.
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe('a version 3 record owns the held Question', () => {
+    type QuestionState = 'busy' | 'pending' | 'empty' | 'error' | 'recovery'
+    const STATES: readonly QuestionState[] = ['busy', 'pending', 'empty', 'error', 'recovery']
+    const VARIANTS = ['ready', ...STATES] as const
+    type VariantName = (typeof VARIANTS)[number]
+
+    const heldPhoto: TemplateNodeV2 = {
+        type: 'Image',
+        source: { kind: 'capture' },
+        fit: 'contain',
+        ratio: 'hero',
+        caption: null,
+    }
+    const questionField: TemplateNodeV2 = {
+        type: 'TextField',
+        binding: 'question',
+        label: lit('Your question'),
+        placeholder: null,
+    }
+    const partChoice: TemplateNodeV2 = {
+        type: 'Choice',
+        prompt: lit('Which part is your question about?'),
+        options: { mode: 'bound', binding: 'part-target' },
+    }
+    const whenParts = (children: TemplateNodeV2[]): TemplateNodeV2 => ({ type: 'WhenPartTargets', children })
+
+    function variantOf(name: VariantName): TemplateVariantV2 {
+        const asks = name === 'ready' || name === 'empty'
+        const lead: TemplateNodeV2[] =
+            name === 'ready'
+                ? [card([questionField, whenParts([partChoice])])]
+                : name === 'empty'
+                  ? [
+                        text(lit('Ask anything about this step.'), 'heading'),
+                        text(lit('Which part is your question about?')),
+                    ]
+                  : [text(state('heading'), 'heading'), text(state('detail'))]
+        return {
+            header: {
+                title: asks ? lit('Ask about this step') : state('heading'),
+                subtitle: { kind: 'bound', key: 'step-title' },
+                back: { label: 'Close', icon: 'close', intent: { intent: 'navigate', target: 'back' } },
+                actions: [],
+            },
+            body: scroll([
+                stack([
+                    heldPhoto,
+                    ...lead,
+                    listing('Safety', 'safety', 6),
+                    listing('Directions', 'directions', 20),
+                    ...(name === 'ready' ? [listing('More detail', 'details', 20, true)] : []),
+                ]),
+            ]),
+            bar: asks
+                ? {
+                      primary: {
+                          type: 'PrimaryAction',
+                          label: 'Ask',
+                          icon: 'help',
+                          intent: { intent: 'ask', target: 'about-step' },
+                      },
+                      secondary: {
+                          type: 'SecondaryAction',
+                          label: 'Take photo',
+                          icon: 'camera',
+                          intent: { intent: 'capture', target: 'take-photo' },
+                      },
+                  }
+                : {
+                      primary: {
+                          type: 'PrimaryAction',
+                          label: 'Close',
+                          icon: 'close',
+                          intent: { intent: 'navigate', target: 'back' },
+                      },
+                      secondary: null,
+                  },
+        }
+    }
+
+    function questionsTemplate(): QuestionsLayoutTemplateV2 {
+        return {
+            version: 3,
+            fixtureId: 'layout-questions-sol-v1',
+            kind: 'questions',
+            ready: variantOf('ready'),
+            states: {
+                busy: variantOf('busy'),
+                pending: variantOf('pending'),
+                empty: variantOf('empty'),
+                error: variantOf('error'),
+                recovery: variantOf('recovery'),
+            },
+        }
+    }
+
+    /** The held Question sheet: a reviewed manual's step, the photo the app holds, no result and no failure. */
+    function heldQuestion(
+        patch: Partial<ScreenContextInputsV2> = {},
+        session: ManualSession = manual(),
+    ): ScreenContextInputsV2 {
+        return {
+            kind: 'questions',
+            session,
+            stepId: 'step-1',
+            captureId: 'cap-1',
+            result: null,
+            failure: null,
+            uiState: ui,
+            ...patch,
+        }
+    }
+
+    /** The demo step with exactly `count` named parts (zero: a non-assembly step that owns none). */
+    function withParts(session: ManualSession, count: number): ManualSession {
+        const next = clone(session)
+        const step = next.reviewedSteps[0]!
+        if (count === 0) {
+            step.kind = 'adjust'
+            step.requirements = { orientation: true, connection: true, visibleChecks: true }
+            step.parts = []
+        } else {
+            const evidence = [{ pageId: PAGE, region: null }]
+            for (let at = step.parts.length; at < count; at += 1) {
+                const partId = `extra-${at}`
+                next.parts.push({ partId, name: { state: 'known', value: `Extra part ${at}`, sourceRefs: evidence } })
+                step.parts.push({ partId, quantity: { state: 'known', value: 1, sourceRefs: evidence } })
+            }
+        }
+        return manualSessionSchema.parse(next)
+    }
+
+    const stackOf = (variant: TemplateVariantV2): TemplateNodeV2[] => {
+        const root = variant.body.children[0]
+        if (root?.type !== 'Stack') throw new Error('Expected the authored stack')
+        return root.children
+    }
+    const variantAt = (template: QuestionsLayoutTemplateV2, name: VariantName): TemplateVariantV2 =>
+        name === 'ready' ? template.ready : template.states[name]
+    const recordPath = (name: VariantName): string => (name === 'ready' ? 'ready' : `states.${name}`)
+    /** Appends a node to the authored stack of one variant; returns its raw record path. */
+    const append = (template: QuestionsLayoutTemplateV2, name: VariantName, node: TemplateNodeV2): string => {
+        const items = stackOf(variantAt(template, name))
+        items.push(node)
+        return `${recordPath(name)}.body.children.0.children.${items.length - 1}`
+    }
+    const parseIssues = (record: unknown): string[] => {
+        const parsed = parseLayoutTemplateV2(record)
+        return parsed.ok ? [] : parsed.issues
+    }
+    const choices = (document: ReturnType<typeof compiled>['document'], name: VariantName): ScreenNodeV2[] =>
+        nodesOf(document, name).filter((node) => node.type === 'Choice')
+
+    it('compiles the held Question: six variants from the record, the witnessed facts, no verdict anywhere', () => {
+        const inputs = heldQuestion({}, manual(3, 2))
+        const template = questionsTemplate()
+        const result = compiled(inputs, template)
+        const material = documentMaterialV2(inputs)
+        const { document } = result
+        expect(result.branch).toBe('questions')
+        expect(document.kind).toBe('questions')
+        expect(document.states.confirming).toBeNull()
+        for (const name of STATES) expect(document.states[name], name).not.toBeNull()
+        // The record's own header and bar; the server tables are the exact current material, never the record's.
+        expect(document.header.title).toEqual(template.ready.header.title)
+        expect(document.bar.primary).toEqual(template.ready.bar.primary)
+        expect(document.bar.secondary).toEqual(template.ready.bar.secondary)
+        expect(document.facts).toEqual(material.facts)
+        expect(document.sources).toEqual(material.sources)
+        expect(document.requirements).toEqual(material.requirements)
+        expect(document.requirements.capture).toBe(true)
+        expect(document.bound).toMatchObject({ manualId: 'demo-divider', stepId: 'step-1', captureId: 'cap-1' })
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+        expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+        expect(result.templateSha256).toBe(layoutTemplateSha256V2(template, sha256Hex))
+        // Generated synthetic authoring only: no provider observation, every component attributed to the record.
+        expect(document.metadata).toMatchObject({
+            source: 'generated',
+            evidence: 'synthetic-fixture',
+            model: null,
+            effort: null,
+            cacheHit: false,
+            authoring: authoring(template),
+        })
+        expect(new Set(Object.values(document.metadata.origins))).toEqual(new Set(['generated']))
+        // The form and the chooser are the catalog's own nodes, built by the compiler from the record's words.
+        expect(nodesOf(document).filter((node) => node.type === 'TextField')).toEqual([
+            { type: 'TextField', binding: 'question', label: lit('Your question'), placeholder: null },
+        ])
+        expect(choices(document, 'ready')).toEqual([
+            {
+                type: 'Choice',
+                prompt: lit('Which part is your question about?'),
+                options: { mode: 'bound', binding: 'part-target' },
+            },
+        ])
+        // A Question owns no result: no verdict card, no result fact, nothing to confirm or check, in any variant.
+        expect(document.facts.some((fact) => fact.basis === 'result')).toBe(false)
+        for (const { name, variant, prefix } of variantsOfV2(document)) {
+            expect(
+                nodesOf(document, name).some((node) => node.type === 'VerdictCard'),
+                name,
+            ).toBe(false)
+            const intents = [variant.header.back, ...variant.header.actions].flatMap((action) =>
+                action === null ? [] : [action.intent.intent],
+            )
+            visitVariantNodesV2(variant, prefix, ({ node }) =>
+                intents.push(...nodeIntentsV2(node).map((intent) => intent.intent)),
+            )
+            expect(
+                intents.filter((intent) => intent === 'confirm' || intent === 'check'),
+                name,
+            ).toEqual([])
+        }
+        // Deterministic, and a different layout is a different screen.
+        expect(canonicalJson(compiled(inputs, template).document)).toBe(canonicalJson(document))
+        const other = clone(template)
+        other.ready.header.title = lit('Your question')
+        expect(compile(inputs, other).ok && compiled(inputs, other).document.screenId).not.toBe(document.screenId)
+    })
+
+    it('repeats every safety and direction fact with its exact citations in all six variants', () => {
+        const inputs = heldQuestion({}, manual(3, 2))
+        const material = documentMaterialV2(inputs)
+        const { document } = compiled(inputs, questionsTemplate())
+        const required = material.requirements.facts
+        expect(
+            required.filter((id) => document.facts.some((fact) => fact.factId === id && fact.kind === 'safety')),
+        ).toHaveLength(3)
+        expect(variantsOfV2(document).map((entry) => entry.name)).toEqual(['ready', ...STATES])
+        for (const name of VARIANTS) {
+            const nodes = nodesOf(document, name)
+            for (const id of required) expect(factIdsStated(nodes), `${name} states ${id}`).toContain(id)
+            const cited = new Set(nodes.flatMap((node) => (node.type === 'Citation' ? node.sources : [])))
+            for (const index of material.requirements.sources)
+                expect(cited.has(index), `${name} cites ${index}`).toBe(true)
+        }
+    })
+
+    it.each([
+        ['asking', 'Asking…'],
+        ['question-waiting', 'Still thinking…'],
+    ] as const)('names the witnessed %s activity in the busy header and nowhere else', (activity, heading) => {
+        const idle = compiled(heldQuestion(), questionsTemplate()).document
+        expect(idle.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        const inputs = heldQuestion({ uiState: { ...ui, busy: { activity } } })
+        const { document } = compiled(inputs, questionsTemplate())
+        expect(document.states.busy!.header.title).toEqual({ kind: 'literal', text: heading })
+        expect(document.states.pending!.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        expect(document.header.title).toEqual({ kind: 'literal', text: 'Ask about this step' })
+        // The activity is part of the context: another key, and the document verifies only against its own inputs.
+        expect(document.bound.contextKey).not.toBe(idle.bound.contextKey)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+        expect(verifyDocumentAgainstInputsV2(idle, inputs, sha256Hex)).toContain('bound_mismatch')
+    })
+
+    it.each([0, 1, 14])('offers the part chooser only when the step has named parts: %i part(s)', (count) => {
+        const inputs = heldQuestion({}, withParts(manual(), count))
+        const material = documentMaterialV2(inputs)
+        expect(material.partIds).toHaveLength(Math.min(count, 12))
+        const { document, lineage } = compiled(inputs, questionsTemplate())
+        // The conditional is the record's; with no parts neither the chooser nor anything it wraps is placed.
+        expect(choices(document, 'ready')).toHaveLength(count === 0 ? 0 : 1)
+        for (const name of STATES) expect(choices(document, name), name).toHaveLength(0)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+        // It supplies no id, name or label of a part: the node carries only the record's prompt and the binding.
+        expect(JSON.stringify(document.body)).not.toContain('extra-')
+        expect(JSON.stringify(document.body)).not.toContain('side-panel')
+        const at = Object.entries(lineage).filter(([path]) => lookup(document, path)?.type === 'Choice')
+        expect(at.map(([, entry]) => entry.template)).toEqual(
+            count === 0 ? [] : ['ready.body.children.0.children.1.children.1.children.0'],
+        )
+        // The same rule the shared gate applies to a chooser placed without the conditional: the two agree exactly.
+        const bare = clone(document)
+        stackOfBody(bare).push({ type: 'Choice', prompt: null, options: { mode: 'bound', binding: 'part-target' } })
+        const unavailable = semanticIssuesV2(bare, material).filter((issue) => issue.endsWith(':binding_unavailable'))
+        expect(unavailable.length > 0).toBe(count === 0)
+    })
+
+    it.each<[string, Partial<ScreenContextInputsV2>, string]>([
+        ['no manual', { session: null }, 'inputs::not_reviewed'],
+        [
+            'a manual that is not reviewed',
+            { session: { ...manual(), reviewStatus: 'unreviewed' } },
+            'inputs::not_reviewed',
+        ],
+        ['no current step', { stepId: null }, 'inputs::no_step'],
+        ['a step the reviewed manual does not have', { stepId: 'step-9' }, 'inputs::no_step'],
+        ['no photo held', { captureId: null, uiState: { ...ui, capture: null } }, 'inputs::no_capture'],
+        ['a photo named that the app does not hold', { uiState: { ...ui, capture: null } }, 'inputs::no_capture'],
+        ['a photo held but not named', { captureId: null }, 'inputs::no_capture'],
+        ['a stale photo', { captureId: 'cap-9' }, 'inputs::no_capture'],
+        ['a held check', { result: checkInputs('reversed').result }, 'inputs::result_provided'],
+        ['a held answer', { result: answerInputs().result }, 'inputs::result_provided'],
+        [
+            'a companion answer the document would silently ignore',
+            {
+                companionAnswer: {
+                    question: 'Which way?',
+                    value: questionResultSchema.parse({ answer: 'Inward.', sourceRefs: [], missingEvidence: [] }),
+                },
+            },
+            'inputs::result_provided',
+        ],
+        ['a failure', { failure: 'provider_error' }, 'inputs::failure_provided'],
+    ])('fails closed without a document: %s', (_name, patch, code) => {
+        expect(failed(heldQuestion(patch), questionsTemplate())).toContain(code)
+    })
+
+    it('belongs to the Question sheet alone', () => {
+        expect(failed(checkInputs('reversed'), questionsTemplate())).toEqual(
+            expect.arrayContaining(['template::kind_mismatch', 'inputs::kind_unsupported']),
+        )
+        expect(failed(answerInputs(), questionsTemplate())).toContain('template::kind_mismatch')
+        expect(failed(heldQuestion(), resultTemplate())).toContain('template::kind_mismatch')
+        expect(failed(heldQuestion(), answerTemplate())).toContain('template::kind_mismatch')
+        // A held Question still compiles with a camera or sections in the app state: they are not part of its context.
+        expect(compile(heldQuestion({ uiState: { capture: ui.capture } }), questionsTemplate()).ok).toBe(true)
+    })
+
+    it('keeps every result slot out of every Question variant, ready included', () => {
+        for (const name of VARIANTS) {
+            const template = questionsTemplate()
+            const card = append(template, name, {
+                type: 'ResultCard',
+                variant: 'card',
+                showReason: true,
+                showRegions: true,
+            })
+            expect(parseIssues(template), `${name} ResultCard`).toContain(`template:${card}:result_slot_in_state`)
+            for (const source of ['verdict', 'missing'] as const) {
+                const sets = questionsTemplate()
+                const when = append(sets, name, listing('Details', source, 4))
+                expect(parseIssues(sets), `${name} ${source}`).toContain(`template:${when}:result_slot_in_state`)
+            }
+        }
+    })
+
+    it('refuses state copy in the ready Question, and keeps it for the five waiting and failing variants', () => {
+        expect(parseLayoutTemplateV2(questionsTemplate())).toMatchObject({ ok: true })
+        const bad = (edit: (template: QuestionsLayoutTemplateV2) => string): string[] => {
+            const template = questionsTemplate()
+            const at = edit(template)
+            return parseIssues(template).filter((issue) => issue.startsWith(`template:${at}`))
+        }
+        expect(bad((t) => append(t, 'ready', text(state('detail'))))).toEqual([
+            expect.stringMatching(/:state_copy_in_ready$/u),
+        ])
+        expect(
+            bad((t) => {
+                t.ready.header.title = state('heading')
+                return 'ready.header'
+            }),
+        ).toEqual(['template:ready.header:state_copy_in_ready'])
+        const form = (t: QuestionsLayoutTemplateV2): { children: TemplateNodeV2[] } =>
+            stackOf(t.ready)[1] as unknown as { children: TemplateNodeV2[] }
+        expect(
+            bad((t) => {
+                form(t).children[0] = { ...questionField, label: state('heading') } as TemplateNodeV2
+                return 'ready.body.children.0.children.1.children.0'
+            }),
+        ).toEqual(['template:ready.body.children.0.children.1.children.0:state_copy_in_ready'])
+        expect(
+            bad((t) => {
+                form(t).children[1] = whenParts([{ ...partChoice, prompt: state('detail') } as TemplateNodeV2])
+                return 'ready.body.children.0.children.1.children.1.children.0'
+            }),
+        ).toEqual(['template:ready.body.children.0.children.1.children.1.children.0:state_copy_in_ready'])
+    })
+
+    it('places the chooser only under the conditional, and the form and conditional never inside a fact row', () => {
+        const bare = questionsTemplate()
+        const chooser = append(bare, 'ready', partChoice)
+        expect(parseIssues(bare)).toContain(`template:${chooser}:choice_outside_when_part_targets`)
+        // Nested below the conditional (a Card, a Section) is still conditional.
+        const nested = questionsTemplate()
+        append(nested, 'ready', whenParts([card([section('Details', [partChoice])])]))
+        expect(parseIssues(nested)).toEqual([])
+        for (const node of [questionField, partChoice, whenParts([])]) {
+            const template = questionsTemplate()
+            const at = append(template, 'ready', {
+                type: 'RepeatFacts',
+                source: 'directions',
+                group: null,
+                row: card([row([factText()]), node]),
+            })
+            expect(parseIssues(template), node.type).toContain(`template:${at}.row.children.1:not_in_row`)
+        }
+    })
+
+    it('accepts only the bound part-target Choice and the question TextField, strictly', () => {
+        const rejected = (node: unknown, placement: 'conditional' | 'plain' = 'plain'): boolean => {
+            const template = questionsTemplate() as unknown as {
+                ready: { body: { children: [{ children: unknown[] }] } }
+            }
+            template.ready.body.children[0].children.push(
+                placement === 'conditional' ? { type: 'WhenPartTargets', children: [node] } : node,
+            )
+            return !parseLayoutTemplateV2(template).ok
+        }
+        const choice = (options: unknown, extra: object = {}): object => ({
+            type: 'Choice',
+            prompt: lit('Which part is your question about?'),
+            options,
+            ...extra,
+        })
+        const field = (extra: object): object => ({ ...questionField, ...extra })
+        // The control: the permitted shapes do parse.
+        expect(rejected(partChoice, 'conditional')).toBe(false)
+        expect(rejected({ ...partChoice, prompt: null }, 'conditional')).toBe(false)
+        expect(rejected(questionField)).toBe(false)
+        for (const node of [
+            choice({ mode: 'bound', binding: 'language' }),
+            choice({ mode: 'intents', items: [] }),
+            choice({ mode: 'intents', items: [{ label: 'A', intent: { intent: 'ask', target: 'about-step' } }] }),
+            choice({ mode: 'bound', binding: 'part-target', ids: ['side-panel'] }),
+            choice({ mode: 'bound', binding: 'part-target' }, { parts: ['side-panel'] }),
+            choice({ mode: 'bound', binding: 'part-target' }, { prompt: { kind: 'fact', factId: 'result:verdict' } }),
+            choice({ mode: 'bound', binding: 'part-target' }, { prompt: lit('Which {part}?') }),
+        ]) {
+            expect(rejected(node, 'conditional'), JSON.stringify(node)).toBe(true)
+        }
+        for (const node of [
+            field({ binding: 'draft' }),
+            field({ placeholder: 'Type here' }),
+            field({ label: { kind: 'fact', factId: 'x' } }),
+            field({ label: null }),
+            field({ maxLength: 40 }),
+        ]) {
+            expect(rejected(node), JSON.stringify(node)).toBe(true)
+        }
+        expect(rejected({ type: 'WhenPartTargets', children: [], extra: 1 })).toBe(true)
+        expect(rejected({ type: 'WhenPartTargets', partIds: ['a'], children: [] })).toBe(true)
+        expect(rejected({ type: 'WhenPartTargets' })).toBe(true)
+    })
+
+    it('leaves versions 1 and 2 as they were: they refuse the Question nodes, and the versions do not mix', () => {
+        const checking = (): CheckingResultLayoutTemplateV2 => {
+            const base = resultTemplate()
+            return { ...base, version: 2, ready: { ...base.ready, checking: waitingVariant('busy', 'result') } }
+        }
+        const olds: [string, LayoutTemplateV2, string[]][] = [
+            ['result v1', resultTemplate(), ['ready.pass', 'states.busy']],
+            ['answer v1', answerTemplate(), ['ready', 'states.error']],
+            ['result v2', checking(), ['ready.checking', 'ready.refuse']],
+        ]
+        const nodes: TemplateNodeV2[] = [questionField, whenParts([partChoice]), whenParts([]), partChoice]
+        for (const [name, record, places] of olds) {
+            expect(parseLayoutTemplateV2(record), name).toMatchObject({ ok: true })
+            for (const place of places) {
+                for (const node of nodes) {
+                    const edited = clone(record)
+                    const variant = place
+                        .split('.')
+                        .reduce<Record<string, unknown>>(
+                            (value, key) => value[key] as Record<string, unknown>,
+                            edited as never,
+                        )
+                    const items = (variant as unknown as TemplateVariantV2).body.children
+                    items.push(node)
+                    const issues = parseIssues(edited)
+                    const at = `template:${place}.body.children.${items.length - 1}`
+                    expect(
+                        issues.some((issue) => issue.startsWith(at)),
+                        `${name} ${place} ${node.type}: ${issues.join(' ')}`,
+                    ).toBe(true)
+                }
+            }
+        }
+        // The same nodes are accepted in a version 3 record (so the refusals above are the dialect, not the position).
+        const accepted = questionsTemplate()
+        append(accepted, 'ready', whenParts([card([section('Details', [partChoice])])]))
+        append(accepted, 'busy', whenParts([partChoice]))
+        expect(parseIssues(accepted)).toEqual([])
+        // Version 3 is the Question and nothing else, and the Question is version 3 and nothing else. The exported
+        // union schema (which selects nothing by version) must agree with `parseLayoutTemplateV2`, which does.
+        const record = questionsTemplate()
+        expect(layoutTemplateV2Schema.safeParse(record).success).toBe(true)
+        for (const edited of [
+            { ...record, version: 1 },
+            { ...record, version: 2 },
+            { ...resultTemplate(), version: 3 },
+            { ...answerTemplate(), version: 3 },
+            { ...record, kind: 'result' },
+            { ...record, ready: { ...record.ready, checking: record.ready } },
+            { ...record, states: { ...record.states, confirming: record.ready } },
+        ]) {
+            const name = JSON.stringify(Object.keys(edited))
+            expect(parseLayoutTemplateV2(edited), name).toMatchObject({ ok: false })
+            expect(layoutTemplateV2Schema.safeParse(edited).success, name).toBe(false)
+        }
+        const { empty: _empty, ...withoutEmpty } = record.states
+        expect(parseLayoutTemplateV2({ ...record, states: withoutEmpty })).toMatchObject({ ok: false })
+        expect(
+            parseLayoutTemplateV2({ ...resultTemplate(), states: { ...resultTemplate().states, empty: record.ready } }),
+        ).toMatchObject({
+            ok: false,
+        })
+    })
+
+    it('names the raw record path of every compiled component, exactly', () => {
+        const inputs = heldQuestion({}, withParts(manual(3, 7), 2))
+        const template = questionsTemplate()
+        const { document, lineage } = compiled(inputs, template)
+        expect(Object.keys(lineage).sort()).toEqual(componentPathsV2(document).sort())
+        const rawAt = (path: string): { type?: string } | undefined =>
+            path
+                .split('.')
+                .reduce<unknown>(
+                    (value, key) =>
+                        typeof value === 'object' && value !== null
+                            ? (value as Record<string, unknown>)[key]
+                            : undefined,
+                    template,
+                ) as { type?: string } | undefined
+        const rawTypes: Readonly<Record<string, string[]>> = {
+            Text: ['Text', 'FactText'],
+            Citation: ['FactCitations'],
+        }
+        let nodes = 0
+        for (const [path, entry] of Object.entries(lineage)) {
+            const variant = path.startsWith('states.') ? path.split('.').slice(0, 2).join('.') : 'ready'
+            expect(entry.template.startsWith(`${variant}.`), `${path} -> ${entry.template}`).toBe(true)
+            const node = lookup(document, path)
+            if (node === undefined) continue
+            nodes += 1
+            expect(rawTypes[node.type] ?? [node.type], `${path} -> ${entry.template}`).toContain(
+                rawAt(entry.template)?.type,
+            )
+        }
+        // Every node of every variant (bars included) was traced to its authoring node, none skipped.
+        expect(nodes).toBe(structureOfV2(document).nodes)
+        expect(lineage.header!.template).toBe('ready.header')
+        expect(lineage['header.back']!.template).toBe('ready.header.back')
+        expect(lineage['bar.secondary']!.template).toBe('ready.bar.secondary')
+        for (const name of STATES) {
+            expect(lineage[`states.${name}.header`]!.template).toBe(`states.${name}.header`)
+            expect(lineage[`states.${name}.bar.primary`]!.template).toBe(`states.${name}.bar.primary`)
+        }
+        // The form and the chooser come from their own nodes, the chooser through the conditional.
+        const where = (type: string): string[] =>
+            Object.entries(lineage)
+                .filter(([path]) => lookup(document, path)?.type === type)
+                .map(([, entry]) => entry.template)
+        expect(where('TextField')).toEqual(['ready.body.children.0.children.1.children.0'])
+        expect(where('Choice')).toEqual(['ready.body.children.0.children.1.children.1.children.0'])
+        // Every safety row names its fact and position, in every variant, including the empty one.
+        const safety = documentMaterialV2(inputs)
+            .facts.filter((fact) => fact.kind === 'safety')
+            .map((fact) => fact.factId)
+        for (const name of VARIANTS) {
+            const rows = Object.entries(lineage).filter(
+                ([path, entry]) =>
+                    (name === 'ready' ? !path.startsWith('states.') : path.startsWith(`states.${name}.`)) &&
+                    entry.repeat?.set === 'safety' &&
+                    entry.repeat.role === 'row' &&
+                    lookup(document, path)?.type === 'Text',
+            )
+            expect(
+                rows.map(([, entry]) => entry.repeat!.factId),
+                name,
+            ).toEqual(safety)
+            expect(
+                rows.map(([, entry]) => entry.repeat!.index),
+                name,
+            ).toEqual([0, 1, 2])
+        }
+    })
+
+    it('keeps one photo spine across all six variants and holds the record to the shared gates', () => {
+        const inputs = heldQuestion({}, manual(2))
+        const { document } = compiled(inputs, questionsTemplate())
+        const spines = variantsOfV2(document).map(({ variant }) => photoSpineV2(variant))
+        expect(spines).toHaveLength(6)
+        expect(new Set(spines)).toEqual(new Set(['Scroll.0>Stack.0']))
+        const bad = (edit: (template: QuestionsLayoutTemplateV2) => void): string[] => {
+            const template = questionsTemplate()
+            edit(template)
+            return failed(inputs, template)
+        }
+        const has = (issues: string[], part: string): boolean => issues.some((issue) => issue.includes(part))
+        expect(
+            has(
+                bad((t) => stackOf(t.states.pending).shift()),
+                'held_photo',
+            ),
+        ).toBe(true)
+        expect(
+            has(
+                bad((t) => stackOf(t.states.error).unshift(text(lit('Your question')))),
+                'moves_the_held_photo',
+            ),
+        ).toBe(true)
+        expect(
+            has(
+                bad((t) => stackOf(t.ready).splice(1, 1)),
+                'required_textfield',
+            ),
+        ).toBe(true)
+        expect(
+            has(
+                bad((t) => stackOf(t.states.empty).splice(3, 1)),
+                'required_fact',
+            ),
+        ).toBe(true)
+        expect(
+            has(
+                bad((t) => {
+                    t.states.empty.bar.primary = t.states.busy.bar.primary
+                }),
+                'required_action',
+            ),
+        ).toBe(true)
+        expect(
+            has(
+                bad((t) => {
+                    t.ready.bar.primary = readyVariant('pass').bar.primary
+                }),
+                'intent',
+            ),
+        ).toBe(true)
+        // Copy outside the closed registry is refused at the record's own node.
+        const unlisted = questionsTemplate()
+        ;(stackOf(unlisted.ready)[1] as unknown as { children: TemplateNodeV2[] }).children[0] = {
+            ...questionField,
+            label: lit('Type your words here'),
+        } as TemplateNodeV2
+        const refused = compile(inputs, unlisted)
+        expect(refused.ok).toBe(false)
+        expect(!refused.ok && Object.values(refused.where)).toContain('ready.body.children.0.children.1.children.0')
+    })
+
+    it('binds the document to the exact current context and refuses a forged record', () => {
+        const inputs = heldQuestion()
+        const template = questionsTemplate()
+        const good = provenanceOf(template)
+        expect(failed(inputs, template, { ...good, templateSha256: sha256Hex('another record') })).toContain(
+            'provenance::hash_mismatch',
+        )
+        expect(
+            failed(inputs, template, { ...good, authoring: { ...good.authoring, fixtureId: 'layout-other-v1' } }),
+        ).toContain('provenance::fixture_mismatch')
+        const edited = clone(template)
+        edited.ready.bar.primary.label = 'Ask another'
+        expect(failed(inputs, edited, good)).toContain('provenance::hash_mismatch')
+        for (const claimed of [
+            { ...good, source: 'generated' },
+            { ...good, authoring: { ...good.authoring, model: 'muse-spark-1.3' } },
+            { ...good, authoring: { ...good.authoring, effort: 'high' } },
+        ]) {
+            expect(failed(inputs, template, claimed).some((issue) => issue.startsWith('provenance:'))).toBe(true)
+        }
+        // A later context is another document: it never verifies for the context it was not compiled for.
+        const { document } = compiled(inputs, template)
+        const held = { captureId: 'cap-2', reusable: true, target: null, questionDraftPresent: false }
+        const later = heldQuestion({ captureId: 'cap-2', uiState: { ...ui, capture: held } })
+        const laterDocument = compiled(later, template).document
+        expect(laterDocument.bound.captureId).toBe('cap-2')
+        expect(laterDocument.bound.contextKey).not.toBe(document.bound.contextKey)
+        expect(verifyDocumentAgainstInputsV2(document, later, sha256Hex)).toContain('bound_mismatch')
+        const nextStep = heldQuestion({ stepId: 'step-2' })
+        expect(verifyDocumentAgainstInputsV2(document, nextStep, sha256Hex)).toContain('bound_mismatch')
+        const revised = heldQuestion({}, { ...manual(), revision: 2 })
+        expect(verifyDocumentAgainstInputsV2(document, revised, sha256Hex)).toContain('bound_mismatch')
+        // Its waiting and failing variants state this step's facts, so no other context can ever borrow them.
+        for (const name of STATES) expect(isNonfactualVariantV2(document.states[name]!), name).toBe(false)
+        const target = buildFallbackDocumentV2(later, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
+        const rebound = rebindGeneratedStatesV2(later, target, [document], deps)
+        expect(rebound.carried).toEqual([])
+        expect(rebound.document.metadata.source).toBe('fallback')
+        expect(rebound.document.metadata.carried).toBeUndefined()
+    })
+
+    it.each([
+        [0, 1],
+        [1, 1],
+        [0, 100],
+        [1, 100],
+    ])('fits the largest valid step with %i named parts, 100 notes and %i region(s) each', (count, regions) => {
+        const inputs = heldQuestion({}, withParts(manual(100, regions), count))
+        const material = documentMaterialV2(inputs)
+        expect(material.sourcePrecision).toBe(regions === 100 ? 'page' : 'region')
+        const { document } = compiled(inputs, questionsTemplate())
+        expect(structureOfV2(document).variantNodes).toBeLessThanOrEqual(DOCUMENT_V2_LIMITS.nodes)
+        expect(structureOfV2(document).nodes).toBeLessThanOrEqual(DOCUMENT_V2_LIMITS.documentNodes)
+        expect(document.facts).toEqual(material.facts)
+        if (regions === 100) expect(document.sources.every((source) => source.region === null)).toBe(true)
+        const safety = document.facts.filter((fact) => fact.kind === 'safety').map((fact) => fact.factId)
+        expect(safety).toHaveLength(100)
+        for (const name of VARIANTS) {
+            const nodes = nodesOf(document, name)
+            expect(
+                factIdsStated(nodes).filter((id) => safety.includes(id)),
+                name,
+            ).toEqual(safety)
+            const cited = new Set(nodes.flatMap((node) => (node.type === 'Citation' ? node.sources : [])))
+            for (const index of document.requirements.sources) expect(cited.has(index), `${name} ${index}`).toBe(true)
+        }
+        expect(choices(document, 'ready')).toHaveLength(count === 0 ? 0 : 1)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+    })
+
+    it.each([0, 1])(
+        'cites one region once for distinct facts, and each fact still cites it: %i named parts',
+        (count) => {
+            const session = manual(3, 1)
+            const [first, second] = session.reviewedSteps[0]!.safetyNotes!.map((entry) => entry.note)
+            // Notes 0 and 1 cite the identical region; note 2 cites another region of the same page.
+            if (first?.state !== 'known' || second?.state !== 'known') throw new Error('Expected known safety notes')
+            second.sourceRefs = clone(first.sourceRefs)
+            const shared = canonicalJson(first.sourceRefs[0]!.region)
+            const inputs = heldQuestion({}, withParts(manualSessionSchema.parse(session), count))
+            const material = documentMaterialV2(inputs)
+            const { document, lineage } = compiled(inputs, questionsTemplate())
+            expect(
+                document.sources.filter((source) => source.pageId === PAGE && canonicalJson(source.region) === shared),
+            ).toHaveLength(1)
+            const resolve = sourceResolverV2(document.sources)
+            const facts = material.facts.filter((fact) => fact.kind === 'safety' && fact.basis !== 'unresolved-safety')
+            expect(facts).toHaveLength(3)
+            expect(resolve(facts[0]!.sourceRefs)).toEqual(resolve(facts[1]!.sourceRefs))
+            expect(resolve(facts[2]!.sourceRefs)).not.toEqual(resolve(facts[0]!.sourceRefs))
+            for (const fact of facts) {
+                for (const name of VARIANTS) {
+                    const cited = Object.entries(lineage)
+                        .filter(
+                            ([path, entry]) =>
+                                (name === 'ready' ? !path.startsWith('states.') : path.startsWith(`states.${name}.`)) &&
+                                entry.repeat?.factId === fact.factId,
+                        )
+                        .flatMap(([path]) => {
+                            const node = lookup(document, path)
+                            return node?.type === 'Citation' ? node.sources : []
+                        })
+                    expect(cited, `${fact.factId} in ${name}`).toEqual(resolve(fact.sourceRefs))
+                }
+            }
+            expect(choices(document, 'ready')).toHaveLength(count === 0 ? 0 : 1)
+            expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+        },
+    )
+
+    it('splices the conditional into its parent under the same children guard, naming the raw path', () => {
+        const template = questionsTemplate()
+        const spacers = (count: number): TemplateNodeV2[] =>
+            Array.from({ length: count }, () => ({ type: 'Spacer', size: 'xs' }) as const)
+        stackOf(template.ready).splice(1, 0, ...spacers(40), whenParts(spacers(40)))
+        // Without parts the conditional adds nothing; with one it would push the parent past 64 children.
+        expect(compile(heldQuestion({}, withParts(manual(), 0)), template).ok).toBe(true)
+        expect(failed(heldQuestion(), template)).toContain('expansion:children:ready.body.children.0.children')
+    })
+})
+
+/** The ready stack of a compiled document, to place a node the record could not (a chooser outside its conditional). */
+function stackOfBody(document: ReturnType<typeof compiled>['document']): ScreenNodeV2[] {
+    const scrollNode = document.body
+    const root = scrollNode.type === 'Scroll' ? scrollNode.children[0] : undefined
+    if (root?.type !== 'Stack') throw new Error('Expected the compiled stack')
+    return root.children
+}

@@ -3,6 +3,7 @@ import {
     VARIANT_STATES,
     componentPathsV2,
     isRequiredFactV2,
+    requiredStatesV2,
     screenDocumentV2Schema,
     sourceResolverV2,
     variantPolicyV2,
@@ -45,10 +46,11 @@ import { verifyDocumentAgainstInputsV2 } from './document-v2-verify'
 import { canonicalJson } from './screen-context'
 
 /**
- * Which ready variant of the record was compiled: the actual decision of a held check, the one of an answer, or
- * `checking`, the held photo before its check returns (version 2 records only).
+ * Which ready variant of the record was compiled: the actual decision of a held check, the one of an answer,
+ * `checking`, the held photo before its check returns (version 2 records only), or `questions`, the one ready
+ * variant of the Question sheet over the held photo (version 3 records only).
  */
-export type LayoutBranchV2 = LayoutDecisionV2 | 'answer' | 'checking'
+export type LayoutBranchV2 = LayoutDecisionV2 | 'answer' | 'checking' | 'questions'
 
 /**
  * Where a compiled component came from in the raw record. `template` is the raw JSON path of the template node that
@@ -148,6 +150,10 @@ function expandVariant(
     const withheld = new Set([...policy.forbiddenFacts, ...policy.forbiddenOverview])
     const available = material.facts.filter((fact) => !withheld.has(fact.factId))
     const resolve = sourceResolverV2(material.sources)
+    // What a bound part-target Choice needs, exactly the complement of the shared `binding_unavailable` rule
+    // (document-v2-semantic.ts): the app holds the photo and the step has a named part. Nothing else is read.
+    const partTargets =
+        (inputs.uiState?.capture ?? null) !== null && inputs.captureId !== null && material.partIds.length > 0
     const resultKind = inputs.result?.kind ?? 'check'
     const activity = inputs.uiState?.busy?.activity
     // Closed registry copy, selected by the actual witness (the busy activity) and the variant: nothing the app composes.
@@ -237,6 +243,8 @@ function expandVariant(
                 return repeat(item, at, depth)
             case 'WhenFacts':
                 return pick(item.source).length === 0 ? [] : list(item.children, `${at}.children`, depth, scope)
+            case 'WhenPartTargets':
+                return partTargets ? list(item.children, `${at}.children`, depth, scope) : []
             case 'FactCitations': {
                 if (scope === null) throw new Stop(`slot:${at}`)
                 const indexes = resolve(scope.fact.sourceRefs)
@@ -265,7 +273,10 @@ function expandVariant(
 
     // One node per template node (slots included, except the multi-node FactCitations and the repeat/when wrappers).
     const single = (
-        item: Exclude<TemplateNodeV2, RepeatFactsV2 | { type: 'WhenFacts' } | { type: 'FactCitations' }>,
+        item: Exclude<
+            TemplateNodeV2,
+            RepeatFactsV2 | { type: 'WhenFacts' } | { type: 'WhenPartTargets' } | { type: 'FactCitations' }
+        >,
         at: string,
         depth: number,
         scope: Scope | null,
@@ -319,6 +330,27 @@ function expandVariant(
             case 'Progress':
             case 'Meter':
                 return emit({ ...item, label: labelOrNull(item.label, at) }, depth, lineage)
+            case 'TextField':
+                return emit(
+                    {
+                        type: 'TextField',
+                        binding: 'question',
+                        label: label(item.label, at) as LabelTextRefV2,
+                        placeholder: null,
+                    },
+                    depth,
+                    lineage,
+                )
+            case 'Choice':
+                return emit(
+                    {
+                        type: 'Choice',
+                        prompt: labelOrNull(item.prompt, at),
+                        options: { mode: 'bound', binding: 'part-target' },
+                    },
+                    depth,
+                    lineage,
+                )
             case 'FactText': {
                 if (scope === null) throw new Stop(`slot:${at}`)
                 const { role, emphasis, tone, align } = item
@@ -393,6 +425,28 @@ function failure(issues: readonly string[], where: Record<string, string> = {}):
     return { ok: false, issues: [...new Set(issues)].slice(0, 16), where }
 }
 
+/**
+ * What the held Question sheet needs of its inputs, all of it witnessed and none of it predicted: a reviewed manual
+ * that has the current step, the photo the app actually holds (named by the inputs and by the held-capture state), and
+ * no result and no failure. A result or failure is refused in the raw inputs as well as the normalized ones, so nothing
+ * a caller sent is silently ignored. Without the witnesses there is no Question to compile (the app shows its camera
+ * first).
+ */
+function questionInputIssues(raw: ScreenContextInputsV2, material: DocumentMaterialV2): string[] {
+    const { inputs } = material
+    if (inputs.kind !== 'questions') return ['inputs::kind_unsupported']
+    const issues: string[] = []
+    if (!material.reviewed) issues.push('inputs::not_reviewed')
+    if (material.step === null) issues.push('inputs::no_step')
+    if (inputs.captureId === null || raw.captureId !== inputs.captureId) issues.push('inputs::no_capture')
+    if (raw.result !== null || inputs.result !== null || (raw.companionAnswer ?? null) !== null) {
+        issues.push('inputs::result_provided')
+    }
+    if (raw.failure !== null || inputs.failure !== null) issues.push('inputs::failure_provided')
+
+    return issues
+}
+
 function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     const provenance = layoutTemplateProvenanceV2Schema.safeParse(args.provenance)
     if (!provenance.success) {
@@ -410,7 +464,9 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     if (provenance.data.authoring.fixtureId !== template.fixtureId) bad.push('provenance::fixture_mismatch')
     const material = documentMaterialV2(args.inputs)
     const held = material.inputs.result
-    if (material.inputs.kind !== 'result' && material.inputs.kind !== 'answer') bad.push('inputs::kind_unsupported')
+    if (template.kind === 'questions') bad.push(...questionInputIssues(args.inputs, material))
+    else if (material.inputs.kind !== 'result' && material.inputs.kind !== 'answer')
+        bad.push('inputs::kind_unsupported')
     else if (held === null && !material.pendingCheck) bad.push('inputs::no_result')
     else if (held !== null && held.kind !== (material.inputs.kind === 'result' ? 'check' : 'question'))
         bad.push('inputs::result_mismatch')
@@ -419,7 +475,11 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     const decision = material.decision
     let ready: TemplateVariantV2
     let branch: LayoutBranchV2
-    if (template.kind === 'result' && material.pendingCheck) {
+    if (template.kind === 'questions') {
+        // The Question sheet has one ready screen: no decision, no checking, no result to choose from.
+        ready = template.ready
+        branch = 'questions'
+    } else if (template.kind === 'result' && material.pendingCheck) {
         // The held photo before its check returns: only a version 2 record owns that screen; a version 1 record cannot.
         if (template.version !== LAYOUT_TEMPLATE_V2_CHECKING_VERSION) return failure(['inputs::pending_unsupported'])
         ready = template.ready.checking
@@ -443,16 +503,11 @@ function compile(args: CompileLayoutTemplateArgsV2): LayoutCompileResultV2 {
     try {
         readyExpanded = expandVariant(ready, readyAt, 'ready', material, budget, nodeLineage, branch === 'checking')
         Object.assign(headerLineage, readyExpanded.headerLineage)
-        for (const state of ['busy', 'pending', 'error', 'recovery'] as const) {
-            const expanded = expandVariant(
-                template.states[state],
-                `states.${state}`,
-                state,
-                material,
-                budget,
-                nodeLineage,
-                false,
-            )
+        // The variants this kind owes, as the shared contract names them (a Question also owes `empty`).
+        for (const state of requiredStatesV2(template.kind)) {
+            const authored = (template.states as Partial<Record<VariantState, TemplateVariantV2>>)[state]
+            if (authored === undefined) return failure([`template:states.${state}:missing`])
+            const expanded = expandVariant(authored, `states.${state}`, state, material, budget, nodeLineage, false)
             states[state] = expanded.variant
             Object.assign(headerLineage, expanded.headerLineage)
         }
