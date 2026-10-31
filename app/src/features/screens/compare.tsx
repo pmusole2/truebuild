@@ -10,6 +10,7 @@ import { DocumentSurface } from '../capture/document-surface'
 import { AppButton } from '../../ui/button'
 import { Caption, Heading } from '../../ui/text'
 import { space } from '../../theme/tokens'
+import { useLargeText } from '../../ui/large-text'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { manualDisplayTitle } from '../documents/manual-title'
 import { useDocument } from '../document-runtime/use-document'
@@ -95,7 +96,7 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
                 <Heading>{manualDisplayTitle(entry.session)}</Heading>
                 <Caption>
                     {reading.document.metadata.evidence === 'synthetic-fixture'
-                        ? 'Simulated fixture'
+                        ? 'Test fixture'
                         : reading.document.metadata.source === 'generated'
                           ? 'Model-composed guide'
                           : 'App fallback guide'}
@@ -109,10 +110,12 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
 function Columns(): ReactElement {
     const { state } = useWorkflow()
     const { width } = useWindowDimensions()
+    const large = useLargeText()
     const [chosen, setChosen] = useState<readonly string[] | null>(null)
     const { available, defaults } = compareChoices(state.entries)
     const selected = (chosen ?? defaults).filter((id) => available.includes(id))
-    const wide = width >= SIDE_BY_SIDE_WIDTH
+    // At accessibility text sizes half-width columns split words, so the manuals stack at any width.
+    const wide = width >= SIDE_BY_SIDE_WIDTH && !large
     const panes = compareEntries(state.entries, selected)
     return (
         <View style={styles.content}>

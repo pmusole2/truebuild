@@ -1,18 +1,5 @@
 {
-    "authoring": {
-        "model": "gpt-6.1-sol",
-        "effort": "ultra",
-        "recordedAt": "2026-10-30T17:46:30.000Z",
-        "fixtureId": "recorded-answer-layout-sol-v1"
-    },
-    "templateSha256": "6ce5f5a74bbcd86636ce2662c31d8dbb1a49b2bb0cf222edb09277c2c4b84a4d",
-    "rawSha256": "f83f6768f8b2117cee252f7931ac8645e5711a26c0e60943cd08141400033ae8",
-    "prompt": "Author two original parameterized TrueBuild v2 layout records from scratch using only the frozen layout-template DSL, for actual held check results (pass, refuse, cannot_verify) and held question answers. Choose all layout composition, grouping, spacing, styling, copy and typed actions yourself. A calm premium composition should foreground the unmodified captured photo, one actual ResultCard with reason, regions and its native missing-evidence list, actual result citations grouped up to twenty references per opener, always-visible required safety and directions, and optionally collapsed manual detail. Preserve the same photo spine in busy/pending/error/recovery; select closed state/activity copy, never old result claims. Pass offers Next step, other checks Retake photo, answer Back to the guide. Use only current FactText/FactCitations/ResultCard slots; invent no facts, manuals, photos, future verdicts, sources or provider receipts. All current safety, exact facts, source geometry, actions, identities, requirements and compiler gates must pass unchanged. Authoring is self-attested gpt-6.1-sol / ultra, offline synthetic composition; provider model/effort/timing/usage are null. Keep this full prompt out of runtime imports.",
-    "promptSha256": "0092d60719b1ae7697a788295169141f6f7e917c0eb2a9820f14cc3341d437f7",
-    "evidence": "synthetic-fixture",
-    "model": null,
-    "effort": null,
-    "timing": null,
-    "usage": null,
-    "attestation": "Original model-authored parameterized composition. Local serialization repeats the authored state structures; no fallback output, manual facts or provider receipt was used."
+    "fixtureId": "recorded-answer-layout-sol-v1",
+    "schemaVersion": 1,
+    "description": "Test fixture for answer layout."
 }

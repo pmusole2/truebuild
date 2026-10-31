@@ -953,9 +953,9 @@ export type DocumentEvidenceV2 = (typeof DOCUMENT_EVIDENCE_V2)[number]
 /** Identity of one recording: lowercase words, digits, dots, dashes and underscores (`recorded-home-first-launch-v1`). */
 export const fixtureIdV2Schema = z.string().regex(/^[a-z0-9][a-z0-9._-]{2,80}$/u)
 
-/** Actual offline composition author; separate from a Meta inference response and its effort/usage. */
+/** Test fixture identity; separate from a Meta inference response and its effort/usage. */
 export const syntheticAuthorV2Schema = z.strictObject({
-    model: z.literal('gpt-6.1-sol'),
+    model: z.literal('Test fixture'),
     effort: z.literal('ultra'),
     recordedAt: z.iso.datetime(),
     fixtureId: fixtureIdV2Schema,

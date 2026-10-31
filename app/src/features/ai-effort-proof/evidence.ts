@@ -4,4 +4,4 @@ export const PROOF_EVIDENCE = Object.freeze({
     inference: false,
 })
 
-export const PROOF_EVIDENCE_LABEL = 'Simulated fixture · no model call'
+export const PROOF_EVIDENCE_LABEL = 'Test fixture · no model call'

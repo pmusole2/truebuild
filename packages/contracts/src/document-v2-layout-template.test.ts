@@ -364,8 +364,8 @@ const clone = <T>(value: T): T => structuredClone(value)
 
 const authoring = (
     template: LayoutTemplateV2,
-): { model: 'gpt-6.1-sol'; effort: 'ultra'; recordedAt: string; fixtureId: string } => ({
-    model: 'gpt-6.1-sol',
+): { model: 'Test fixture'; effort: 'ultra'; recordedAt: string; fixtureId: string } => ({
+    model: 'Test fixture',
     effort: 'ultra',
     recordedAt: AUTHORED_AT,
     fixtureId: template.fixtureId,

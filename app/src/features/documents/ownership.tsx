@@ -220,6 +220,23 @@ export function useDocumentOwner(
         const prefix = state === 'ready' ? '' : `states.${state}.`
         const origin = document.metadata.origins[`${prefix}body`]
         if (origin === undefined) return undefined
+        if (
+            process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1' &&
+            focused &&
+            visible &&
+            document.metadata.source === 'fallback'
+        ) {
+            console.info(
+                JSON.stringify({
+                    event: 'document_fallback',
+                    documentId: document.screenId,
+                    kind: document.kind,
+                    state,
+                    evidence: document.metadata.evidence,
+                    fallbackReason: document.metadata.fallbackReason,
+                }),
+            )
+        }
         const claim: Claim = { document, origin, focused: focused && visible, state }
         // A retained route still renders its own document, even though only a focused publisher owns global chrome.
         registerRoute?.(token.current, { ...claim, focused: frameFocused && visible })

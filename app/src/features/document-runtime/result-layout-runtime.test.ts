@@ -23,6 +23,7 @@ import resultProvenance from '../documents/recorded-layouts/recorded-result-layo
 import answer from '../documents/recorded-layouts/recorded-answer-layout-sol-v1.template.json'
 import answerRuntime from '../documents/recorded-layouts/recorded-answer-layout-sol-v1.runtime.json'
 import answerProvenance from '../documents/recorded-layouts/recorded-answer-layout-sol-v1.provenance.json'
+import layoutHashes from '../documents/recorded-layouts/publication-hashes.json'
 import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { resultLayoutDocument } from './result-layout-runtime'
@@ -47,7 +48,7 @@ describe('authored current-result layout records', () => {
         (orientation) => {
             const document = recordedDocument(checkContext(orientation))
             expect(document?.metadata.source).toBe('generated')
-            expect(document?.metadata.authoring?.model).toBe('gpt-6.1-sol')
+            expect(document?.metadata.authoring?.model).toBe('Test fixture')
         },
     )
     it('immediately composes a held current answer without a prior document', () => {
@@ -73,18 +74,25 @@ describe('authored current-result layout records', () => {
         ['result', result, resultRuntime, resultProvenance],
         ['answer', answer, answerRuntime, answerProvenance],
     ] as const)(
-        'binds the %s raw bytes, canonical record, prompt, and minimal runtime projection to their attestations',
+        'binds the %s raw bytes, canonical record, fixture identity and minimal metadata to their integrity pins',
         (kind, template, runtime, full) => {
             const raw = readFileSync(
                 new URL(`../documents/recorded-layouts/recorded-${kind}-layout-sol-v1.template.json`, import.meta.url),
                 'utf8',
             )
-            expect(sha256Hex(raw)).toBe(full.rawSha256)
-            expect(sha256Hex(canonicalJson(template))).toBe(full.templateSha256)
-            expect(sha256Hex(full.prompt)).toBe(full.promptSha256)
-            expect(runtime).toEqual({ authoring: full.authoring, templateSha256: full.templateSha256 })
-            expect([full.model, full.effort, full.timing, full.usage]).toEqual([null, null, null, null])
-            expect(JSON.stringify(runtime)).not.toContain(full.prompt)
+            const pin = Object.entries(layoutHashes).find(([id]) => id === full.fixtureId)?.[1]
+            expect(pin).toBeDefined()
+            expect(sha256Hex(raw)).toBe(pin!.rawSha256)
+            expect(sha256Hex(canonicalJson(template))).toBe(pin!.templateSha256)
+            expect(runtime.templateSha256).toBe(pin!.templateSha256)
+            expect(runtime.authoring.fixtureId).toBe(full.fixtureId)
+            expect(full).toEqual({
+                fixtureId: runtime.authoring.fixtureId,
+                schemaVersion: 1,
+                description: expect.any(String),
+            })
+            expect(full.description).not.toMatch(/[\r\n]/u)
+            expect(runtime.authoring.model).toBe('Test fixture')
             expect(JSON.stringify(template)).not.toMatch(/demo-page|current-photo|factId|sourceRefs|"kind":"fact"/u)
         },
     )

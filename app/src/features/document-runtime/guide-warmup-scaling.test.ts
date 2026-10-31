@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as contracts from '@truebuild/contracts'
 import {
     assembleDocumentV2,
@@ -17,6 +17,10 @@ import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
 import { DOCUMENT_CACHE_MAX_BYTES, DOCUMENT_CACHE_MAX_ENTRIES, DocumentStore, localDocument } from './store'
 import { futureDocumentStates } from './future-states'
+
+// This suite deliberately exercises the shipped offline recordings.
+beforeEach(() => vi.stubEnv('EXPO_PUBLIC_RELEASE_FIXTURE', '1'))
+afterEach(() => vi.unstubAllEnvs())
 
 function manual(count = 4): ManualSession {
     const original = createDemoManual()

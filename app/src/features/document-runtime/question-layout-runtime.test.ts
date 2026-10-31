@@ -13,6 +13,7 @@ import {
 import template from '../documents/recorded-layouts/recorded-question-layout-sol-v1.template.json'
 import runtime from '../documents/recorded-layouts/recorded-question-layout-sol-v1.runtime.json'
 import full from '../documents/recorded-layouts/recorded-question-layout-sol-v1.provenance.json'
+import layoutHashes from '../documents/recorded-layouts/publication-hashes.json'
 import { sha256Hex } from '../documents/sha256'
 import { questionLayoutDocument } from './question-layout-runtime'
 import { recordedDocument } from './recorded-runtime'
@@ -26,12 +27,19 @@ describe('the shipped current-Question layout record', () => {
             new URL('../documents/recorded-layouts/recorded-question-layout-sol-v1.template.json', import.meta.url),
             'utf8',
         )
-        expect(sha256Hex(raw)).toBe(full.rawSha256)
-        expect(sha256Hex(canonicalJson(template))).toBe(full.templateSha256)
-        expect(sha256Hex(full.prompt)).toBe(full.promptSha256)
-        expect(runtime).toEqual({ authoring: full.authoring, templateSha256: full.templateSha256 })
-        expect([full.model, full.effort, full.timing, full.usage]).toEqual([null, null, null, null])
-        expect(JSON.stringify(runtime)).not.toContain(full.prompt)
+        const pin = Object.entries(layoutHashes).find(([id]) => id === full.fixtureId)?.[1]
+        expect(pin).toBeDefined()
+        expect(sha256Hex(raw)).toBe(pin!.rawSha256)
+        expect(sha256Hex(canonicalJson(template))).toBe(pin!.templateSha256)
+        expect(runtime.templateSha256).toBe(pin!.templateSha256)
+        expect(runtime.authoring.fixtureId).toBe(full.fixtureId)
+        expect(full).toEqual({
+            fixtureId: runtime.authoring.fixtureId,
+            schemaVersion: 1,
+            description: expect.any(String),
+        })
+        expect(full.description).not.toMatch(/[\r\n]/u)
+        expect(runtime.authoring.model).toBe('Test fixture')
         expect(JSON.stringify(template)).not.toMatch(/demo-page|current-photo|factId|sourceRefs|"kind":"fact"/u)
     })
 

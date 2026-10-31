@@ -3,12 +3,14 @@
     "model": null,
     "effort": null,
     "authoring": {
-        "model": "gpt-6.1-sol",
+        "model": "Test fixture",
         "effort": "ultra",
         "recordedAt": "2026-10-30T15:16:56.000Z",
         "fixtureId": "recorded-judge-global-sol-v1"
     },
     "recordedAt": "2026-10-30T15:16:56.000Z",
     "promptVersion": 0,
-    "repaired": false
+    "repaired": false,
+    "rawJsonSha256": "79dd68d8a403aadcf08f3b900315b5ebb9dc344e44e3332a3b7a9eabc74f1c48",
+    "proposalSha256": "f3fe97c7d68fa66392496450bf7ff2699665cb1a89ce251fbefd54d723dd9eb3"
 }

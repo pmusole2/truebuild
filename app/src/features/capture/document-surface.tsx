@@ -454,7 +454,8 @@ export function DocumentSurface({
                         if (entry !== undefined) workflow.documents?.cancelReading(entry.session.manualId)
                         controller.cancel()
                         readingConfirmation?.onChange(false)
-                        setTimeout((): void => nav.editPages({ keepNotice: true }), 0)
+                        if (intent.target === 'home') setTimeout((): void => nav.leave(), 0)
+                        else setTimeout((): void => nav.editPages({ keepNotice: true }), 0)
                     }
                 },
             }
@@ -646,7 +647,7 @@ export function DocumentSurface({
             ? {
                   summary:
                       reading.document.metadata.evidence === 'synthetic-fixture'
-                          ? 'Simulated fixture'
+                          ? 'Test fixture'
                           : reading.document.metadata.source,
                   onShowDetails: (): void => setJudgeOpen(true),
               }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
     assembleDocumentV2,
     buildFallbackProposalV2,
@@ -21,6 +21,10 @@ import {
 import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
 import { DOCUMENT_CACHE_MAX_BYTES, DOCUMENT_COLLECTION_DEADLINE_MS, DocumentStore, localDocument } from './store'
+
+// This suite deliberately exercises the shipped offline recordings.
+beforeEach(() => vi.stubEnv('EXPO_PUBLIC_RELEASE_FIXTURE', '1'))
+afterEach(() => vi.unstubAllEnvs())
 
 const session = createDemoManual()
 const inputs: ScreenContextInputsV2 = {
@@ -97,7 +101,7 @@ describe('whole-document runtime store', () => {
             const entry = store.request(context)
             expect(entry.status).toBe('ready')
             expect(entry.document.metadata.source).toBe('generated')
-            expect(entry.document.metadata.authoring?.model).toBe('gpt-6.1-sol')
+            expect(entry.document.metadata.authoring?.model).toBe('Test fixture')
             expect(screensV2).not.toHaveBeenCalled()
             expect(store.readyAt(context)).toBeNull()
         } finally {
@@ -232,7 +236,7 @@ describe('whole-document runtime store', () => {
                 source: 'generated',
                 evidence: 'synthetic-fixture',
                 model: null,
-                authoring: { model: 'gpt-6.1-sol', effort: 'ultra' },
+                authoring: { model: 'Test fixture', effort: 'ultra' },
             })
             expect(store.readyAt(home)).toBeNull()
             expect(screensV2).not.toHaveBeenCalled()

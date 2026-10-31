@@ -19,6 +19,15 @@ const { renderRouter } = jest.requireActual<{
     renderRouter: (directory: string) => Promise<RenderResult & { getPathname: () => string }>
 }>('expo-router/testing-library')
 
+const fixtureFlag = process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES
+beforeEach(() => {
+    process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES = '1'
+})
+afterEach(() => {
+    if (fixtureFlag === undefined) delete process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES
+    else process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES = fixtureFlag
+})
+
 export type Mounted = {
     view: Awaited<ReturnType<typeof renderRouter>>
     controller: CaptureController

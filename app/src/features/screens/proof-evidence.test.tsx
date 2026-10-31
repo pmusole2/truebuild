@@ -50,9 +50,9 @@ describe('the judge layer in a native proof run', () => {
     })
 
     it('says the IO was simulated, names no model, and labels every wait as the phone waiting, never the provider', async () => {
-        mockProof.label = 'Simulated fixture · no model call'
+        mockProof.label = 'Test fixture · no model call'
         await panel()
-        expect(screen.getByText('Evidence: Simulated fixture · no model call')).toBeTruthy()
+        expect(screen.getByText('Evidence: Test fixture · no model call')).toBeTruthy()
         expect(
             screen.getByText('1. Verdict: Not recorded, 240 ms (device wait on simulated IO, not provider time)'),
         ).toBeTruthy()

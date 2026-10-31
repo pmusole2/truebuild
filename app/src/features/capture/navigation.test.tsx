@@ -637,6 +637,21 @@ it.each([
     ])
 })
 
+it('leaves a failed reading for Home when its recovery action says Home, not for Pages', async () => {
+    const { controller } = await runtime([entry('failed-read', 'unparsed'), entry('other-manual', 'unparsed')], {
+        parseFailureOnce: true,
+    })
+    const view = await mount()
+    await press('Open failed-read')
+    await press('Read my manual')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
+    expect(view.getPathname()).toBe('/reading/failed-read')
+    await fireEvent.press(screen.getByRole('button', { name: 'Home' }))
+    await waitFor(() => expect(view.getPathname()).toBe('/'))
+    expect(controller.getSnapshot().route).toBe('library')
+    expect(screen.getByTestId('library-screen')).toBeTruthy()
+})
+
 type TestFiber = { type: unknown; memoizedProps?: Record<string, unknown>; return: TestFiber | null }
 function actualDocumentIds(): Set<string> {
     const ids = new Set<string>()

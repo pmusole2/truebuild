@@ -96,6 +96,7 @@ export default defineConfig({
                 CI: '1',
                 EXPO_NO_TELEMETRY: '1',
                 EXPO_NO_DOTENV: '1',
+                EXPO_PUBLIC_DOCUMENT_FIXTURES: '1',
                 NODE_OPTIONS: '--dns-result-order=ipv4first',
                 EXPO_PUBLIC_API_BASE_URL: API_ORIGIN,
                 EXPO_PUBLIC_API_SECRET: FIXTURE_DEMO_KEY,

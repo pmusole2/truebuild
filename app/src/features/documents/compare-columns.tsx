@@ -4,6 +4,7 @@ import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Card, Stack } from '../../ui/surface'
 import { Caption, Heading } from '../../ui/text'
 import { space } from '../../theme/tokens'
+import { useLargeText } from '../../ui/large-text'
 import { DocumentRenderer } from './document-renderer'
 import type { FrameBindings } from './types'
 
@@ -27,7 +28,8 @@ export type ComparePaneInput = {
  */
 export function CompareColumns({ panes }: { readonly panes: readonly ComparePaneInput[] }): ReactElement {
     const { width } = useWindowDimensions()
-    const wide = width >= COMPARE_SIDE_BY_SIDE_WIDTH
+    const large = useLargeText()
+    const wide = width >= COMPARE_SIDE_BY_SIDE_WIDTH && !large
     const content = (
         <View testID="compare-panes" style={[styles.panes, wide ? styles.row : styles.column]}>
             {panes.map((pane) => (

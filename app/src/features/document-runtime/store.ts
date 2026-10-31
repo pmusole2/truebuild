@@ -256,7 +256,11 @@ export class DocumentStore {
     }
     private previewEntry(inputs: ScreenContextInputsV2, carry: boolean): DocumentRuntimeEntry {
         const enabled = this.enabled(inputs) && this.options.client !== undefined && !this.disposed
-        const recorded = enabled ? (this.options.recordings ?? recordedDocument)(inputs) : null
+        const recorded =
+            enabled &&
+            (process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1' || process.env.EXPO_PUBLIC_DOCUMENT_FIXTURES === '1')
+                ? (this.options.recordings ?? recordedDocument)(inputs)
+                : null
         if (
             recorded !== null &&
             this.documentByteSize(recorded) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)

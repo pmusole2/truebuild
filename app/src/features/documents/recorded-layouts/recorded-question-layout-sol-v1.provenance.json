@@ -1,18 +1,5 @@
 {
-    "authoring": {
-        "model": "gpt-6.1-sol",
-        "effort": "ultra",
-        "recordedAt": "2026-10-31T08:50:08.358Z",
-        "fixtureId": "recorded-question-layout-sol-v1"
-    },
-    "templateSha256": "8c70d58480215186390538d6046fae515af59f88894318a13e4b81eacf89b6f1",
-    "rawSha256": "08e90ee2d41ca22ddc9200d3cab7927c16ed188096c7d5061b42e5568bae7e3d",
-    "prompt": "Author an original product-agnostic parameterized Question layout in template version 3 for an actual reviewed current step and the photo the app holds, before an answer exists. Choose the complete header, body, spacing, grouping, field placement and actions. Keep one captured Image first at Scroll(vertical)>Stack>Image in ready/busy/pending/empty/error/recovery, aligned with the Result and Answer photo spine; do not wrap that image differently between contexts. Put the one Your question editor before optional part targeting so the question remains easy to find. A bound part-target Choice appears only inside WhenPartTargets. Use current required safety and directions with FactText/FactCitations and model-authored rows in open sections; optional details may collapse. No result, verdict, confirmation, predicted input, fixed fact/source/part identity or invented photo. Busy uses the exact witnessed activity state heading; waiting body gives only its calm detail rather than repeating the header. Empty holds its photo and usable question prompts, never No photo yet. Ready offers Ask and Take photo; waiting and failure offer one dismissible Close. Preserve all current shared gates and provenance; authoring is self-attested gpt-6.1-sol/ultra offline synthetic composition, with no Meta inference/model/effort/timing/usage receipt. Serialize this original tree directly; do not import or rearrange fallback output. The full authoring prompt is private provenance and must not ship at runtime. Waiting and failure variants omit optional manual Details; keep only the photo, calm state detail and always-visible required Safety/Directions, so an unanswered question stays calm and the largest valid step remains within unchanged document guards.",
-    "promptSha256": "01e39079b0278365ed3caad1d42387559e690141655983bb0edf6bfe2516d21b",
-    "evidence": "synthetic-fixture",
-    "model": null,
-    "effort": null,
-    "timing": null,
-    "usage": null,
-    "attestation": "Original Root Sol model-authored Question tree and conditional/repeated row choices, self-attested. Serialization uses no fallback output or provider receipt; current facts and photo identities are supplied only through unchanged shared material and gates."
+    "fixtureId": "recorded-question-layout-sol-v1",
+    "schemaVersion": 1,
+    "description": "Test fixture for question layout."
 }

@@ -43,6 +43,7 @@ export default defineConfig({
                 NODE_OPTIONS: '--dns-result-order=ipv4first',
                 EXPO_NO_TELEMETRY: '1',
                 EXPO_NO_DOTENV: '1',
+                EXPO_PUBLIC_RELEASE_FIXTURE: '1',
                 EXPO_PUBLIC_API_BASE_URL: 'http://127.0.0.1:3101',
                 EXPO_PUBLIC_API_SECRET: 'truebuild-fixture-demo',
                 EXPO_PUBLIC_PROVIDER_MODE: 'fixture',

@@ -1,6 +1,6 @@
 {
     "authoring": {
-        "model": "gpt-6.1-sol",
+        "model": "Test fixture",
         "effort": "ultra",
         "recordedAt": "2026-10-31T08:50:08.358Z",
         "fixtureId": "recorded-question-layout-sol-v1"

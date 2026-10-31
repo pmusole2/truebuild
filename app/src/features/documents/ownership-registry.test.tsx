@@ -64,3 +64,34 @@ it('restores the remaining real publisher when another focused document closes',
         'fallback',
     )
 })
+
+it.each([
+    ['1', true, true],
+    ['1', false, false],
+    ['0', true, false],
+] as const)('records the displayed fallback cause only for a focused fixture (%s, %s)', async (flag, focused, logs) => {
+    const previous = process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+    process.env.EXPO_PUBLIC_RELEASE_FIXTURE = flag
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+        await render(<Claim doc={fallback} focused={focused} />)
+        expect(info.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual(
+            logs
+                ? [
+                      {
+                          event: 'document_fallback',
+                          documentId: fallback.screenId,
+                          kind: 'home',
+                          state: 'ready',
+                          evidence: fallback.metadata.evidence,
+                          fallbackReason: fallback.metadata.fallbackReason,
+                      },
+                  ]
+                : [],
+        )
+    } finally {
+        info.mockRestore()
+        if (previous === undefined) delete process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+        else process.env.EXPO_PUBLIC_RELEASE_FIXTURE = previous
+    }
+})

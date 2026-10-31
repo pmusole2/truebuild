@@ -22,6 +22,15 @@ import { useDocument } from './use-document'
 import { recordedDocument } from './recorded-runtime'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 
+const fixtureFlag = process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+beforeEach(() => {
+    process.env.EXPO_PUBLIC_RELEASE_FIXTURE = '1'
+})
+afterEach(() => {
+    if (fixtureFlag === undefined) delete process.env.EXPO_PUBLIC_RELEASE_FIXTURE
+    else process.env.EXPO_PUBLIC_RELEASE_FIXTURE = fixtureFlag
+})
+
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',

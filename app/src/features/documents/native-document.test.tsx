@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { useEffect, type ReactElement } from 'react'
 import { Dimensions, PanResponder, Platform, ScrollView, StyleSheet, View } from 'react-native'
 import type { TestInstance } from 'test-renderer'
@@ -208,6 +208,42 @@ function scrollViewOf(host: TestInstance): unknown {
 }
 
 describe('the actual v2 catalog renderer', () => {
+    it('keeps the whole held photo inside a tablet hero frame at largest text', async () => {
+        const previous = { window: Dimensions.get('window'), screen: Dimensions.get('screen') }
+        const { inputs, bindings, controller } = await setup(true)
+        Dimensions.set({
+            window: { ...previous.window, width: 1032, fontScale: 3 },
+            screen: { ...previous.screen, width: 1032, fontScale: 3 },
+        })
+        try {
+            const hero = (node: ScreenNodeV2): ScreenNodeV2 =>
+                node.type === 'Image' && node.source.kind === 'capture'
+                    ? { ...node, fit: 'cover', ratio: 'hero' }
+                    : 'children' in node
+                      ? { ...node, children: node.children.map(hero) }
+                      : node
+            const document = composeEdited(inputs, hero)
+            await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+            await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+                nativeEvent: { layout: { width: 688, height: 560 } },
+            })
+            const frame = StyleSheet.flatten(screen.getByTestId('frozen-photo-frame').props.style)
+            const image = StyleSheet.flatten(screen.getByTestId('frozen-photo-image').props.style)
+            expect(image.left).toBeGreaterThanOrEqual(0)
+            expect(image.top).toBeGreaterThanOrEqual(0)
+            expect(image.left + image.width).toBeLessThanOrEqual(688)
+            expect(image.top + image.height).toBeLessThanOrEqual(frame.height)
+            expect(image.width / image.height).toBeCloseTo(
+                bindings.capture!.observation.width / bindings.capture!.observation.height,
+            )
+        } finally {
+            await act(async () => {
+                Dimensions.set(previous)
+                controller.dispose()
+            })
+        }
+    })
+
     it('a pending check shows its actual bound photo without reuse permission and never exposes an old live verdict', async () => {
         const { inputs, bindings } = await setup(true)
         const pendingInputs: ScreenContextInputsV2 = {

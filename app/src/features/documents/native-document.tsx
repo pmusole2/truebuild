@@ -69,6 +69,7 @@ import Animated from 'react-native-reanimated'
 import { useContentFade } from '../../ui/motion'
 import { useIconReveal, useReadingLoop, useStepTransition } from '../../ui/motion'
 import { useFeedback } from '../../ui/feedback'
+import { useLargeText } from '../../ui/large-text'
 import { PRIVACY_COPY } from '../capture/privacy-copy'
 import { DocumentNodeOrigin } from './ownership'
 import { startsAtStepSystemEdge, STEP_SWIPE_DISTANCE } from '../capture/gesture-policy'
@@ -84,6 +85,10 @@ const cancelsWork = (intent: ScreenVariantV2['bar']['primary']['intent']): boole
     (intent.target === 'back' || intent.target === 'home' || intent.target === 'pages' || intent.target === 'reading')
 const preparingAction = (bindings: FrameBindings, intent: ScreenVariantV2['bar']['primary']['intent']): boolean =>
     bindings.workInProgress === true && !cancelsWork(intent)
+const FIXTURE_LABEL = 'Test fixture'
+// At accessibility text sizes the manual-page opener keeps to one line; its full wording stays the accessibility label.
+const MANUAL_OPENER = 'See it in the manual'
+const MANUAL_OPENER_SHORT = 'Manual page'
 const TIMING_LABELS = {
     timeToProviderMs: 'Before provider',
     providerMs: 'Provider time',
@@ -182,7 +187,7 @@ type Environment = {
 }
 const marked = (environment: Environment, path: string): string => {
     const origin = environment.document.metadata.origins[path]
-    if (origin === undefined) throw new Error(`missing-origin:${path}`) // strict: never ??fallback (Sonnet validates completeness)
+    if (origin === undefined) throw new Error(`missing-origin:${path}`)
     return originId(origin)
 }
 const originAt = (environment: Environment, path: string): RenderOrigin => {
@@ -645,6 +650,7 @@ function Disclosure({
     mark: string
 }): ReactElement {
     const [localOpen, setOpen] = useState(initiallyOpen)
+    const large = useLargeText()
     const open = controlledOpen ?? localOpen
     return (
         <View nativeID={mark} style={styles.stack}>
@@ -660,7 +666,7 @@ function Disclosure({
                 }}
                 style={styles.touch}
             >
-                <Heading>{title}</Heading>
+                <Heading>{large && title === MANUAL_OPENER ? MANUAL_OPENER_SHORT : title}</Heading>
             </Pressable>
             {open || forced === true ? children : null}
         </View>
@@ -692,6 +698,8 @@ function Photo({
     ratio: 'hero' | 'wide' | 'square' | 'tall'
 }): ReactElement | null {
     const { reduceMotion } = useFeedback()
+    const { width: viewportWidth } = useWindowDimensions()
+    const tabletHero = viewportWidth >= 768 && ratio === 'hero'
     const capture = environment.bindings.capture
     const matches = captureMatchesDocument(environment.document, capture)
     const photoIdentity = matches && capture !== null ? JSON.stringify(capture.binding) : null
@@ -717,7 +725,9 @@ function Photo({
                 ? width
                 : ratio === 'tall'
                   ? (width * 4) / 3
-                  : 340
+                  : tabletHero
+                    ? Math.min(Math.max(340, (width * observation.height) / observation.width), 560)
+                    : 340
     const check = environment.showRegions ? environment.bindings.live?.state.check : null
     const live = environment.bindings.live
     const canPoint =
@@ -734,7 +744,7 @@ function Photo({
         check?.nextPartRegion?.region,
     ].flatMap((region) => (region == null ? [] : [region]))
     const displayed =
-        fit === 'cover'
+        fit === 'cover' && !tabletHero
             ? heroImageRect({ width, height }, observation, protectedRegions)
             : containRect({ width, height }, observation)
     return (
@@ -882,7 +892,7 @@ function Sources({
         )
     return (
         <Disclosure
-            title={documentText(environment.document, environment.bindings, node.label) || 'See it in the manual'}
+            title={documentText(environment.document, environment.bindings, node.label) || MANUAL_OPENER}
             initiallyOpen={node.type === 'ManualPage' && node.initiallyOpen}
             mark={marked(environment, path)}
         >
@@ -1074,9 +1084,9 @@ function Judge({
             <Heading>How this screen was built</Heading>
             <Caption>
                 {metadata.evidence === 'synthetic-fixture'
-                    ? 'Simulated fixture composition'
+                    ? FIXTURE_LABEL
                     : metadata.source === 'generated'
-                      ? 'Composed by Meta AI'
+                      ? `Composed by ${metadata.model ?? 'the model'}${metadata.effort === null ? '' : `, ${metadata.effort} effort`}`
                       : 'App fallback composition'}
             </Caption>
             <Caption>{`Generated elements on this screen: ${visible?.status === 'measured' ? `${(visible.generatedShare * 100).toFixed(1)}%${meter.snapshot?.stale ? ' (screen changed)' : ''}` : 'Not recorded'} · session ${session?.status === 'measured' ? `${(session.generatedShare * 100).toFixed(1)}%` : 'Not recorded'}`}</Caption>
@@ -1089,10 +1099,7 @@ function Judge({
             {details ? (
                 <View testID="judge-details" style={styles.stack}>
                     <Caption>{`Source: ${metadata.source}`}</Caption>
-                    <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? 'Simulated fixture' : metadata.evidence}`}</Caption>
-                    {metadata.authoring === undefined ? null : (
-                        <Caption>{`Offline composition author: ${metadata.authoring.model}, ${metadata.authoring.effort} · ${metadata.authoring.recordedAt}. This is not a Meta inference result.`}</Caption>
-                    )}
+                    <Caption>{`Evidence: ${metadata.evidence === 'synthetic-fixture' ? FIXTURE_LABEL : metadata.evidence}`}</Caption>
                     {metadata.evidence === 'synthetic-fixture' ||
                     (metadata.model === null &&
                         metadata.effort === null &&
@@ -1184,6 +1191,7 @@ function PieceTile({
     path: string
 }): ReactElement | null {
     const [open, setOpen] = useState(false)
+    const large = useLargeText()
     const { document, bindings } = environment
     const facts = screenFacts(bindings.session ?? null)
     const part = facts?.parts.find((item) => item.partId === node.partId)
@@ -1223,12 +1231,12 @@ function PieceTile({
                     <Pressable
                         testID="fact-source"
                         accessibilityRole="button"
-                        accessibilityLabel={open ? `Hide the manual page: ${label}` : `See it in the manual: ${label}`}
+                        accessibilityLabel={open ? `Hide the manual page: ${label}` : `${MANUAL_OPENER}: ${label}`}
                         accessibilityState={{ expanded: open }}
                         onPress={(): void => setOpen(!open)}
                         style={styles.touch}
                     >
-                        <Caption>{open ? 'Hide the manual page' : 'See it in the manual'}</Caption>
+                        <Caption>{open ? 'Hide the manual page' : large ? MANUAL_OPENER_SHORT : MANUAL_OPENER}</Caption>
                     </Pressable>
                     {open ? (
                         <SourceDiagrams refs={links} session={session} pageUris={bindings.pageUris} fit="page" />
@@ -1295,6 +1303,7 @@ function NodeContent({
 }): ReactElement | null {
     const { colors } = useTheme()
     const { width } = useWindowDimensions()
+    const large = useLargeText()
     const { document, bindings } = environment
     const mark = marked(environment, path)
     const text = (ref: TextRefV2 | null): string => documentText(document, bindings, ref)
@@ -1319,25 +1328,36 @@ function NodeContent({
             return (
                 <View
                     nativeID={mark}
-                    style={{
-                        flexDirection: 'row',
-                        gap: gap(node.gap),
-                        alignItems: align[node.align],
-                        justifyContent: node.justify === 'between' ? 'space-between' : align[node.justify],
-                        flexWrap: node.wrap ? 'wrap' : 'nowrap',
-                    }}
+                    style={
+                        // At accessibility text sizes side-by-side children stack: squeezed columns split words.
+                        large
+                            ? { flexDirection: 'column', gap: gap(node.gap), alignItems: 'stretch' }
+                            : {
+                                  flexDirection: 'row',
+                                  gap: gap(node.gap),
+                                  alignItems: align[node.align],
+                                  justifyContent: node.justify === 'between' ? 'space-between' : align[node.justify],
+                                  flexWrap: node.wrap ? 'wrap' : 'nowrap',
+                              }
+                    }
                 >
                     {node.children.map((child, index) => (
                         <View
                             key={index}
                             nativeID={mark}
-                            style={{
-                                minWidth: 0,
-                                flexShrink: 1,
-                                ...(['Image', 'ManualPage', 'Card', 'PageList', 'CompareColumns'].includes(child.type)
-                                    ? { flex: 1 }
-                                    : {}),
-                            }}
+                            style={
+                                large
+                                    ? { minWidth: 0 }
+                                    : {
+                                          minWidth: 0,
+                                          flexShrink: 1,
+                                          ...(['Image', 'ManualPage', 'Card', 'PageList', 'CompareColumns'].includes(
+                                              child.type,
+                                          )
+                                              ? { flex: 1 }
+                                              : {}),
+                                      }
+                            }
                         >
                             <Node node={child} environment={environment} path={`${path}.${index}`} />
                         </View>
@@ -1351,7 +1371,7 @@ function NodeContent({
                         <View
                             key={index}
                             nativeID={mark}
-                            style={{ flexBasis: `${100 / node.columns - 3}%`, flexGrow: 1 }}
+                            style={{ flexBasis: large ? '100%' : `${100 / node.columns - 3}%`, flexGrow: 1 }}
                         >
                             <Node node={child} environment={environment} path={`${path}.${index}`} />
                         </View>
@@ -2018,7 +2038,7 @@ const styles = StyleSheet.create({
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },
-    touch: { minHeight: touchTarget, justifyContent: 'center' },
+    touch: { minHeight: touchTarget, justifyContent: 'center', alignSelf: 'stretch', flexShrink: 0 },
     camera: { height: 360, overflow: 'hidden', borderRadius: radius.lg },
     judge: { gap: space.xs, padding: space.md },
 })

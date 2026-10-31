@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDemoManual, type ScreenContextInputsV2 } from '@truebuild/contracts'
 import type { ModelApiClient } from '../../api/model-client'
 import { DocumentStore, localDocument } from './store'
+
+// This suite deliberately exercises the shipped offline recordings.
+beforeEach(() => vi.stubEnv('EXPO_PUBLIC_RELEASE_FIXTURE', '1'))
+afterEach(() => vi.unstubAllEnvs())
 
 it('aborts pending Reading documents and refuses a late completion after the person stops', async () => {
     const reading: ScreenContextInputsV2 = {

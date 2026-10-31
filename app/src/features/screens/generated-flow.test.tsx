@@ -505,7 +505,7 @@ describe('Result composed after an immediate verdict', () => {
             const details = within(await screen.findByTestId('judge-details'))
             expect(
                 details.getByText(
-                    /^2\. Result screen: Simulated fixture composition, model Not recorded, effort Not recorded, provider Not recorded$/u,
+                    /^2\. Result screen: Test fixture, model Not recorded, effort Not recorded, provider Not recorded$/u,
                 ),
             ).toBeTruthy()
             expect(details.queryByText(/Result screen:.*provider 3420 ms/u)).toBeNull()
@@ -613,6 +613,7 @@ describe('J1: show how Meta AI built this', () => {
         expect(guide().getByText('Evidence: live')).toBeTruthy()
         expect(guide().getByText('Model: muse-wonder-1.0')).toBeTruthy()
         expect(guide().getByText('Effort: max')).toBeTruthy()
+        expect(guide().getByText('Composed by muse-wonder-1.0, max effort')).toBeTruthy()
         for (const text of [
             'Before provider: 15 ms',
             'Provider time: 3400 ms',
@@ -645,7 +646,9 @@ describe('J1: show how Meta AI built this', () => {
         await atGuideWithJudge({ screens: generated ? { generated: ['guide'] } : {} })
         await showDetails()
         expect(guide().getByText(`Source: ${generated ? 'generated' : 'fallback'}`)).toBeTruthy()
-        expect(guide().getByText('Evidence: Simulated fixture')).toBeTruthy()
+        expect(guide().getByText('Test fixture')).toBeTruthy()
+        expect(guide().getByText('Evidence: Test fixture')).toBeTruthy()
+        expect(guide().queryByText(/Offline composition|Simulated fixture|not a Meta inference/iu)).toBeNull()
         expect(guide().getByText('Model, effort, provider timings and tokens: Not recorded.')).toBeTruthy()
         expect(guide().queryByText('Model: Not recorded')).toBeNull()
         expect(guide().queryByText('Provider time: Not recorded')).toBeNull()
@@ -744,7 +747,8 @@ describe('J2: compare two manuals', () => {
         expect(within(b).getByRole('button', { name: 'Take a photo' }).props.accessibilityState).toMatchObject({
             disabled: true,
         })
-        expect(screen.getAllByText('Simulated fixture')).toHaveLength(2)
+        expect(within(a).getByText('Test fixture')).toBeTruthy()
+        expect(within(b).getByText('Test fixture')).toBeTruthy()
         const composed = server.requests.flatMap((request) =>
             request.op === 'generate' ? [request.session?.manualId] : [],
         )
@@ -901,7 +905,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
         const details = within(screen.getByTestId('judge-details', { hidden: true }))
         expect(
             details.getByText(
-                /^2\. Result screen: Simulated fixture composition, model Not recorded, effort Not recorded, provider Not recorded$/u,
+                /^2\. Result screen: Test fixture, model Not recorded, effort Not recorded, provider Not recorded$/u,
             ),
         ).toBeTruthy()
         expect(details.getByText('3. Precise mask: Not offered')).toBeTruthy()

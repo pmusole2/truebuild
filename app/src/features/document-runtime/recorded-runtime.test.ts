@@ -22,6 +22,31 @@ const base: ScreenContextInputsV2 = {
 }
 
 describe('bound recorded model documents', () => {
+    it.each(['working', null] as const)('binds the held Reading problem notice with activity=%s', (activity) => {
+        const inputs: ScreenContextInputsV2 = {
+            ...base,
+            kind: 'reading',
+            session: createDemoManual(),
+            uiState: {
+                reading: { cancellation: 'confirm-before-stop' },
+                failure: { notice: true },
+                busy: activity === null ? null : { activity },
+            },
+        }
+        const document = recordedDocument(inputs)
+        expect(document).not.toBeNull()
+        expect(document!.metadata.authoring?.fixtureId).toBe('recorded-reading-notice-sol-v1')
+        expect(verifyDocumentAgainstInputsV2(document!, inputs, sha256Hex)).toEqual([])
+        for (const { name, variant, prefix } of variantsOfV2(document!)) {
+            let notices = 0
+            visitVariantNodesV2(variant, prefix, ({ node }) => {
+                if (node.type === 'Text' && node.content.kind === 'bound' && node.content.key === 'operation-notice')
+                    notices++
+            })
+            expect(notices).toBe(name === 'error' || name === 'recovery' ? 1 : 0)
+        }
+    })
+
     const globals: ScreenContextInputsV2[] = [
         {
             ...base,
@@ -168,7 +193,7 @@ describe('bound recorded model documents', () => {
         expect(doc!.metadata.model).toBeNull()
         expect(doc!.metadata.effort).toBeNull()
         expect(doc!.metadata.authoring).toMatchObject({
-            model: 'gpt-6.1-sol',
+            model: 'Test fixture',
             effort: 'ultra',
             fixtureId: 'recorded-home-sol-v1',
         })
@@ -300,6 +325,18 @@ describe('recorded-generation metadata boundary', () => {
         vi.resetModules()
     })
 
+    it('refuses an otherwise valid synthetic proposal when its retained integrity pin differs', async () => {
+        vi.resetModules()
+        const runtime = await vi.importActual<{ default: Record<string, unknown> }>(
+            '../documents/recorded/recorded-home.runtime.json',
+        )
+        vi.doMock('../documents/recorded/recorded-home.runtime.json', () => ({
+            default: { ...runtime.default, proposalSha256: '0'.repeat(64) },
+        }))
+        const isolated = await import('./recorded-runtime')
+        expect(isolated.recordedDocument(base)).toBeNull()
+    })
+
     it('fails closed if an initial global source asks for an unavailable binding', async () => {
         vi.resetModules()
         const raw = await vi.importActual<{ default: { body: unknown } }>(
@@ -343,7 +380,7 @@ describe('recorded-generation metadata boundary', () => {
                 ...(withAuthor
                     ? {
                           authoring: {
-                              model: 'gpt-6.1-sol',
+                              model: 'Test fixture',
                               effort: 'ultra',
                               recordedAt: '2026-10-30T00:00:00.000Z',
                               fixtureId: 'unexpected-synthetic-author',

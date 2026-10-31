@@ -26,6 +26,12 @@ export function recordedDocumentForTest(name: string): ScreenDocumentV2 {
     if (runtime.evidence !== 'synthetic-fixture' || runtime.model !== null || runtime.effort !== null) {
         throw new Error(`${name}: unexpected recording evidence`)
     }
+    if (
+        runtime.rawJsonSha256 !== sha256Hex(readFileSync(join(__dirname, `${name}.proposal.json`), 'utf8')) ||
+        runtime.proposalSha256 !== sha256Hex(canonicalJson(proposal))
+    ) {
+        throw new Error(`${name}: proposal integrity mismatch`)
+    }
     const author = syntheticAuthorV2Schema.parse(runtime.authoring)
     const document = screenDocumentV2Schema.parse(
         assembleDocumentV2(documentMaterialV2(inputs), proposal, syntheticDocumentFactsV2(author), {

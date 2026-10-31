@@ -1,5 +1,6 @@
 import {
     assembleDocumentV2,
+    canonicalJson,
     cameraAccessV2,
     documentMaterialV2,
     recordedDocumentFactsV2,
@@ -26,6 +27,8 @@ import stopped from '../documents/recorded/recorded-pages-cancelled.proposal.jso
 import stoppedProvenance from '../documents/recorded/recorded-pages-cancelled.runtime.json'
 import reading from '../documents/recorded/recorded-reading.proposal.json'
 import readingProvenance from '../documents/recorded/recorded-reading.runtime.json'
+import readingNotice from '../documents/recorded/recorded-reading-notice.proposal.json'
+import readingNoticeProvenance from '../documents/recorded/recorded-reading-notice.runtime.json'
 import activeReading from '../documents/recorded/recorded-reading-active.proposal.json'
 import activeReadingProvenance from '../documents/recorded/recorded-reading-active.runtime.json'
 import homeSaving from '../documents/recorded/recorded-home-saving.proposal.json'
@@ -118,6 +121,11 @@ function recordingFor(inputs: ScreenContextInputsV2): Recording | null {
                   ? { proposal: pagesSaving, provenance: pagesSavingProvenance }
                   : { proposal: pages, provenance: pagesProvenance }
         case 'reading':
+            if (
+                inputs.uiState?.failure?.notice === true &&
+                (inputs.uiState.busy == null || inputs.uiState.busy.activity === 'working')
+            )
+                return { proposal: readingNotice, provenance: readingNoticeProvenance }
             return inputs.uiState?.busy?.activity === 'reading'
                 ? { proposal: activeReading, provenance: activeReadingProvenance }
                 : saving
@@ -176,6 +184,7 @@ export function recordedDocument(inputs: ScreenContextInputsV2): ScreenDocumentV
     if (source.evidence === 'synthetic-fixture') {
         const author = syntheticAuthorV2Schema.safeParse(source.authoring)
         if (!proposal.success || !author.success || source.model !== null || source.effort !== null) return null
+        if (source.proposalSha256 !== sha256Hex(canonicalJson(proposal.data))) return null
         const candidate = assembleDocumentV2(
             documentMaterialV2(inputs),
             proposal.data,

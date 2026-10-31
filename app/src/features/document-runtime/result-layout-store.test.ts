@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
     isNonfactualVariantV2,
     nodeFactIdsV2,
@@ -11,6 +11,10 @@ import { fixtureDocuments } from '../screens/test-support/fixture-server'
 import resultRuntime from '../documents/recorded-layouts/recorded-result-layout-sol-v1.runtime.json'
 import { DocumentStore } from './store'
 import { answerContext, checkContext, pendingCheckContext } from './test-support/result-layout-inputs'
+
+// This suite deliberately exercises the shipped offline recordings.
+beforeEach(() => vi.stubEnv('EXPO_PUBLIC_RELEASE_FIXTURE', '1'))
+afterEach(() => vi.unstubAllEnvs())
 
 describe('progressive authored result composition through the real model client', () => {
     it.each([false, true])(
@@ -62,7 +66,7 @@ describe('progressive authored result composition through the real model client'
                 const first = store.request(inputs)
                 expect(first.status).toBe('ready')
                 expect(first.document.metadata.source).toBe('generated')
-                expect(first.document.metadata.authoring?.model).toBe('gpt-6.1-sol')
+                expect(first.document.metadata.authoring?.model).toBe('Test fixture')
                 expect(first.exactGeneration).toBe('pending')
                 expect(store.readyAt(inputs)).toBeNull()
                 store.retry(inputs)

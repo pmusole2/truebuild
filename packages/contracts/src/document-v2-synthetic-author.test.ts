@@ -16,7 +16,7 @@ import {
 } from './index'
 
 const author = {
-    model: 'gpt-6.1-sol',
+    model: 'Test fixture',
     effort: 'ultra',
     recordedAt: '2026-10-30T08:00:00.000Z',
     fixtureId: 'test-author-v1',

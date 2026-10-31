@@ -40,7 +40,7 @@ function wrap(node: ReactElement): ReactElement {
     )
 }
 
-/** The renderer consumes the real exported v2 contracts: Sonnet's deterministic composer is the document source. */
+/** The renderer consumes the real exported v2 contracts: The deterministic composer is the document source. */
 describe('ScreenDocumentV2 through the native renderer', () => {
     it('renders a composed fallback guide document with header, body and one primary bar', async () => {
         const document = buildFallbackDocumentV2(

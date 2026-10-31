@@ -24,24 +24,23 @@ import { recordedDocumentForTest } from './test-support'
 
 const read = (name: string): unknown => JSON.parse(readFileSync(join(__dirname, name), 'utf8'))
 
-describe('synthetic Sol proposal', () => {
+describe('synthetic test fixture proposal', () => {
     it('validates as a strict v2 generated home document with complete origins', () => {
         const doc = recordedDocumentForTest('recorded-home')
         expect(doc.kind).toBe('home')
         expect(doc.metadata.source).toBe('generated')
         expect(doc.metadata.origins['header']).toBe('generated')
         expect(doc.metadata.origins['bar.primary']).toBe('generated')
-        const prov = JSON.parse(readFileSync(join(__dirname, 'recorded-home.provenance.json'), 'utf8')) as {
-            model: null
-            effort: null
-            authoring: { model: string; effort: string }
-            tokens: unknown
-        }
-        expect(prov.model).toBeNull()
-        expect(prov.authoring.model).toBe('gpt-6.1-sol')
-        expect(prov.effort).toBeNull()
-        expect(prov.authoring.effort).toBe('ultra')
-        expect(prov.tokens).toBeNull()
+        const prov = read('recorded-home.provenance.json')
+        expect(prov).toEqual({
+            fixtureId: 'recorded-home-sol-v1',
+            schemaVersion: 1,
+            description: expect.any(String),
+        })
+        expect(doc.metadata.authoring?.model).toBe('Test fixture')
+        expect(doc.metadata.model).toBeNull()
+        expect(doc.metadata.effort).toBeNull()
+        expect(Object.values(doc.metadata.usage).every((value) => value === null)).toBe(true)
     })
 })
 
@@ -53,6 +52,7 @@ const ARTIFACTS = [
     'recorded-pages',
     'recorded-pages-cancelled',
     'recorded-reading',
+    'recorded-reading-notice',
     'recorded-reading-active',
     'recorded-home-saving',
     'recorded-home-library-single-saving',
@@ -105,7 +105,7 @@ it.each(ARTIFACTS.filter((name) => name.startsWith('recorded-camera-page')))(
     },
 )
 
-describe('synthetic Sol state proposals (explicit raw trees)', () => {
+describe('synthetic test fixture state proposals (explicit raw trees)', () => {
     it.each(ARTIFACTS)('%s matches its complete canonical publication pin', (name) => {
         const hashes = read('publication-hashes.json') as Record<string, string>
         expect(sha256Hex(canonicalJson(recordedDocumentForTest(name)))).toBe(hashes[name])
@@ -131,24 +131,21 @@ describe('synthetic Sol state proposals (explicit raw trees)', () => {
             states: doc.states,
         }).toEqual(proposal)
         const provenance = read(`${name}.provenance.json`) as Record<string, unknown>
-        expect(provenance.evidence).toBe('synthetic-fixture')
-        expect(provenance.model).toBeNull()
-        expect(provenance.effort).toBeNull()
-        expect(provenance.authoring).toEqual({
-            model: 'gpt-6.1-sol',
-            effort: 'ultra',
-            recordedAt: provenance.recordedAt,
+        const runtime = read(`${name}.runtime.json`) as Record<string, unknown>
+        expect(provenance).toEqual({
             fixtureId: `${name}-sol-v1`,
+            schemaVersion: 1,
+            description: expect.any(String),
         })
-        expect(provenance.inputPromptSha256).toBe(sha256Hex(provenance.inputPrompt as string))
-        expect(provenance.rawJsonSha256).toBe(sha256Hex(readFileSync(join(__dirname, `${name}.proposal.json`), 'utf8')))
-        expect(doc.metadata.generatedAt).toBe(provenance.recordedAt)
-        expect(doc.metadata.authoring).toEqual(provenance.authoring)
+        expect(provenance.description).not.toMatch(/[\r\n]/u)
+        expect(runtime.rawJsonSha256).toBe(sha256Hex(readFileSync(join(__dirname, `${name}.proposal.json`), 'utf8')))
+        expect(runtime.proposalSha256).toBe(sha256Hex(canonicalJson(proposal)))
+        expect(doc.metadata.generatedAt).toBe(runtime.recordedAt)
+        expect(doc.metadata.authoring).toEqual(runtime.authoring)
+        expect(doc.metadata.authoring?.model).toBe('Test fixture')
         expect(doc.metadata.fixtureId).toBeUndefined()
-        expect(provenance.tokens).toBeNull()
-        expect(provenance.timingMs).toBeNull()
-        expect(typeof provenance.inputPromptSha256).toBe('string')
-        expect(typeof provenance.rawJsonSha256).toBe('string')
+        expect(Object.values(doc.metadata.timing).every((value) => value === null)).toBe(true)
+        expect(Object.values(doc.metadata.usage).every((value) => value === null)).toBe(true)
     })
 
     it('cancelled-reading pages states the bound notice once, with PageList, privacy and Read manual', () => {
@@ -360,18 +357,26 @@ describe('raw saving-context siblings', () => {
 })
 
 describe('minimal runtime recording metadata', () => {
-    it.each(ARTIFACTS)('%s ships only the safe provenance projection with honest author identity', (name) => {
+    it.each(ARTIFACTS)('%s ships only fixture metadata and integrity pins', (name) => {
         expect(existsSync(join(__dirname, `${name}.runtime.json`))).toBe(true)
-        const full = read(`${name}.provenance.json`) as Record<string, unknown>
-        const runtime = read(`${name}.runtime.json`)
+        const publicMetadata = read(`${name}.provenance.json`) as Record<string, unknown>
+        const runtime = read(`${name}.runtime.json`) as Record<string, unknown>
+        expect(Object.keys(publicMetadata).sort()).toEqual(['description', 'fixtureId', 'schemaVersion'])
         expect(runtime).toEqual({
-            evidence: full.evidence,
-            model: full.model,
-            effort: full.effort,
-            authoring: full.authoring,
-            recordedAt: full.recordedAt,
-            promptVersion: full.promptVersion,
-            repaired: full.repaired,
+            evidence: 'synthetic-fixture',
+            model: null,
+            effort: null,
+            authoring: {
+                model: 'Test fixture',
+                effort: 'ultra',
+                fixtureId: publicMetadata.fixtureId,
+                recordedAt: runtime.recordedAt,
+            },
+            recordedAt: expect.any(String),
+            promptVersion: 0,
+            repaired: false,
+            rawJsonSha256: sha256Hex(readFileSync(join(__dirname, `${name}.proposal.json`), 'utf8')),
+            proposalSha256: sha256Hex(canonicalJson(read(`${name}.proposal.json`))),
         })
         expect(JSON.stringify(runtime)).not.toMatch(/inputPrompt|taskReference|binding|\/Users\/|\/home\//u)
     })
@@ -385,7 +390,7 @@ describe('minimal runtime recording metadata', () => {
     })
 })
 
-it('ships all twenty-five raw families without derived document build artifacts', () => {
+it('ships all twenty-six raw families without derived document build artifacts', () => {
     const names = readdirSync(__dirname)
     expect(
         names
@@ -393,7 +398,7 @@ it('ships all twenty-five raw families without derived document build artifacts'
             .map((name) => name.replace('.proposal.json', ''))
             .sort(),
     ).toEqual([...ARTIFACTS].sort())
-    expect(names.filter((name) => name.endsWith('.proposal.json'))).toHaveLength(25)
+    expect(names.filter((name) => name.endsWith('.proposal.json'))).toHaveLength(26)
     expect(
         names.filter(
             (name) =>
@@ -476,7 +481,6 @@ describe('authored first-use guidance across ready and waiting screens', () => {
                     { type: 'Text', content: { kind: 'bound', key: 'privacy-read' } },
                 ],
             })
-        expect((read(`${name}.provenance.json`) as Record<string, unknown>).taskReference).toContain('first-use polish')
     })
 })
 
@@ -632,9 +636,6 @@ describe('authored Reading search categories', () => {
             for (const state of ['empty', 'error', 'recovery', 'confirming'] as const) {
                 expect(JSON.stringify(raw.states[state])).not.toContain('What we look for')
             }
-            expect((read(`${name}.provenance.json`) as Record<string, unknown>).taskReference).toContain(
-                'Reading polish',
-            )
         },
     )
 })

@@ -45,7 +45,7 @@ import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
 import { DocumentStore } from '../document-runtime/store'
 import recordedHomeProposal from '../documents/recorded/recorded-home.proposal.json'
-import recordedHomeProvenance from '../documents/recorded/recorded-home.provenance.json'
+import recordedHomeRuntime from '../documents/recorded/recorded-home.runtime.json'
 
 // A fixed matrix of checkpoints through the production routes, controller and screen store, with synthetic documents.
 // It counts the host elements of the react-test-renderer tree at each checkpoint, per origin. It is not a measurement
@@ -551,7 +551,7 @@ const checkpoints: readonly Checkpoint[] = [
                     evidence: 'synthetic-fixture',
                     model: null,
                     effort: null,
-                    authoring: recordedHomeProvenance.authoring,
+                    authoring: recordedHomeRuntime.authoring,
                 })
                 expect({ header: home.header, body: home.body, bar: home.bar, overlays: home.overlays }).toEqual({
                     header: authored.header,
@@ -786,7 +786,7 @@ afterAll(() => {
             })),
         }
     })
-    const directory = resolve(__dirname, '../../../../.local/ai-effort')
+    const directory = resolve(__dirname, '../../../../test-results')
     mkdirSync(directory, { recursive: true })
     writeFileSync(
         resolve(
