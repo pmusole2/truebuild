@@ -276,6 +276,8 @@ it('keeps the same refused photo, immutable question and independently cited ans
     expect(within(sheet).getByText('The reverse face is hidden.')).toBeTruthy()
     await fireEvent.press(within(sheet).getByRole('button', { name: 'Ask about this step' }))
     expect(screen.getAllByTestId('more-sheet')).toHaveLength(1)
+    // A held Question now earns its ready composer only after its own immutable photo has loaded.
+    await loadPhoto()
     await fireEvent(screen.getByTestId('frozen-photo-frame'), 'accessibilityTap')
     const submitted = 'Which way should this joint face?'
     await fireEvent.changeText(screen.getByLabelText('Your question'), `  ${submitted}  `)

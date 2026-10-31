@@ -307,7 +307,8 @@ export function allowedLiteralsV2(material: DocumentMaterialV2, variant: CopyVar
         const busy = material.inputs.uiState?.busy?.activity
         if (variant === 'busy' && busy !== undefined) list.push(BUSY_COPY_V2[busy].heading, BUSY_COPY_V2[busy].detail)
         if (variant === 'empty') {
-            const empty = EMPTY_COPY_V2[kind]
+            // A held Question's empty variant still owes its photo; do not allow wording that denies it exists.
+            const empty = kind === 'questions' && material.requirements.capture ? undefined : EMPTY_COPY_V2[kind]
             if (empty) list.push(empty.heading, empty.detail)
         }
         if (variant === 'error' || variant === 'recovery') {

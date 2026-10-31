@@ -707,8 +707,10 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
             return [...capturedImage(material), ...resultNodes(material, 'banner'), ...factNodes(material, true)]
         case 'questions':
             return [
-                text(lit('Ask anything about this step.'), { role: 'heading' }),
+                // The held photo leads, as it does on the result and the answer. Within this Question surface it keeps
+                // one native position across state variants; a separate Answer surface still earns its own image load.
                 ...capturedImage(material),
+                text(lit('Ask anything about this step.'), { role: 'heading' }),
                 ...partTargetChoice(material),
                 ...(ui?.capture
                     ? [
@@ -923,6 +925,9 @@ function stateVariant(state: VariantState, material: DocumentMaterialV2, ready: 
     const activity = state === 'busy' ? inputs.uiState?.busy?.activity : undefined
     const copy =
         (activity === undefined ? undefined : BUSY_COPY_V2[activity]) ??
+        (state === 'empty' && inputs.kind === 'questions' && material.requirements.capture
+            ? { heading: 'Ask anything about this step.', detail: 'Which part is your question about?' }
+            : undefined) ??
         (state === 'empty' ? EMPTY_COPY_V2[inputs.kind] : undefined) ??
         STATE_COPY_V2[state]
     const waiting = state === 'busy' || state === 'pending'

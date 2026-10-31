@@ -92,16 +92,17 @@ export function createDocumentFixtureGenerator(): DocumentFixtureGenerator {
             proposal = { ...proposal, ...rearrange(proposal) }
             // The camera stays mounted while its screen waits: its waiting variants take the same arrangement, so the
             // CameraView keeps one spine in the ready, busy and pending variants.
-            // A photo-first screen keeps its held photo at one spine in the ready, waiting and failure variants.
+            // A photo-first screen keeps its held photo at one spine in the ready, waiting and failure variants. The
+            // question sheet also carries an `empty` one; no other photo-first screen does, so there it stays null.
             const keepSpine =
                 kind === 'camera'
                     ? ['busy', 'pending']
                     : context.material.requirements.capture
-                      ? ['busy', 'pending', 'error', 'recovery']
+                      ? ['busy', 'pending', 'empty', 'error', 'recovery']
                       : []
             if (keepSpine.length > 0) {
                 const states = { ...proposal.states }
-                for (const name of keepSpine as ('busy' | 'pending' | 'error' | 'recovery')[]) {
+                for (const name of keepSpine as ('busy' | 'pending' | 'empty' | 'error' | 'recovery')[]) {
                     const variant = states[name]
                     states[name] = variant === null ? null : rearrange(variant)
                 }

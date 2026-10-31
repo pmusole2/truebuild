@@ -285,18 +285,36 @@ describe('state wording is stable', () => {
     it.each(SCREEN_KINDS_V2)(
         '%s: every state variant states its registry heading and detail, never other wording',
         (kind) => {
-            const inputs = inputsFor(kind)
-            const proposal = buildFallbackProposalV2(documentMaterialV2(inputs))
+            const material = documentMaterialV2(inputsFor(kind))
+            const proposal = buildFallbackProposalV2(material)
+            // The witnessed Question still has its photo in empty, so it uses question prompts, not no-photo wording.
+            const emptyCopy =
+                kind === 'questions' && material.requirements.capture
+                    ? { heading: 'Ask anything about this step.', detail: 'Which part is your question about?' }
+                    : (EMPTY_COPY_V2[kind] ?? STATE_COPY_V2.empty)
             for (const state of VARIANT_STATES) {
                 const variant = proposal.states[state]
                 if (variant === null) continue
-                const copy = state === 'empty' ? (EMPTY_COPY_V2[kind] ?? STATE_COPY_V2.empty) : STATE_COPY_V2[state]
+                const copy = state === 'empty' ? emptyCopy : STATE_COPY_V2[state]
                 expect(literals(variant), `${kind}/${state}`).toEqual(
                     expect.arrayContaining([copy.heading, copy.detail]),
                 )
             }
         },
     )
+
+    it('a Question with no held photo keeps the registry no-photo wording in its empty variant', () => {
+        const material = documentMaterialV2({
+            ...inputsFor('questions'),
+            captureId: null,
+            uiState: { ...ui, capture: null },
+        })
+        expect(material.requirements.capture).toBe(false)
+        const { heading, detail } = EMPTY_COPY_V2.questions!
+        expect(literals(buildFallbackProposalV2(material).states.empty!)).toEqual(
+            expect.arrayContaining([heading, detail]),
+        )
+    })
 
     it.each(BUSY_ACTIVITIES_V2)(
         'a busy screen names the %s activity in its header and body, in the registry words',

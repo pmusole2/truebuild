@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useEffect, useRef, type ReactElement } from 'react'
 import { View } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { router } from 'expo-router'
@@ -13,6 +13,7 @@ import { useContentFade } from '../../ui/motion'
 import { SettingRow } from '../../ui/fields'
 import { Stack } from '../../ui/surface'
 import { Caption, Heading } from '../../ui/text'
+import { useCompareNavigation } from './compare-flow'
 import { useJudge } from './judge-context'
 import { PROOF_EVIDENCE_LABEL } from '../ai-effort-proof/evidence'
 import { proofEvidenceLabel } from './proof-mode'
@@ -49,15 +50,29 @@ export function BuiltToggleRow(): ReactElement {
 /** Opens the judge-only comparison of two parsed manuals. A real screen, not a gallery case. */
 export function CompareManualsRow({ onOpen }: { readonly onOpen?: () => void }): ReactElement | null {
     const { showBuilt } = useJudge()
-    if (!showBuilt) return null
+    return showBuilt ? <CompareManualsButton onOpen={onOpen} /> : null
+}
+
+function CompareManualsButton({ onOpen }: { readonly onOpen?: () => void }): ReactElement {
+    const compare = useCompareNavigation()
+    const dismiss = useRef(onOpen)
+    dismiss.current = onOpen
+    const release = useRef<(() => void) | null>(null)
+    // Closing the sheet that holds this control ends the wait it started; a late Compare never opens behind the person.
+    useEffect(() => (): void => release.current?.(), [])
     return (
         <AppButton
             testID="judge-compare"
             label="Compare two manuals"
             variant="quiet"
+            busy={compare?.busy === true}
             onPress={(): void => {
-                onOpen?.()
-                router.push('/compare' as never)
+                if (compare === null) {
+                    onOpen?.()
+                    router.push('/compare' as never)
+                    return
+                }
+                release.current = compare.open((): void => dismiss.current?.())
             }}
         />
     )

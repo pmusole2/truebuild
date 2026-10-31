@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Linking, Platform } from 'react-native'
 import { MoreSheet, useSheetDismiss } from '../../ui/sheet'
 import { useIsFocused, usePathname } from 'expo-router'
@@ -20,6 +20,7 @@ import type { FrameBindings } from '../documents/types'
 import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
 import { useJudge } from '../screens/judge-context'
+import { CompareNavigationContext, type CompareNavigation } from '../screens/compare-flow'
 import { resolveIntent, type ResolvedIntent } from '../screens/intents'
 import { useNavigationPreparation, useWorkflowActions } from './native-routes'
 import { readingLanguage, setReadingLanguage } from './reading-language'
@@ -48,6 +49,8 @@ export function DocumentSurface({
     requestQuestionPhoto,
     operationNotice,
     contextualMore = false,
+    holdQuestion = false,
+    onQuestionDismiss,
     requestQuestionComposer,
     runContextAction,
     testID,
@@ -67,6 +70,9 @@ export function DocumentSurface({
     requestQuestionPhoto?: () => void
     operationNotice?: string
     contextualMore?: boolean
+    /** The parent Answer has arrived, but its native held-photo gate has not witnessed a ready page yet. */
+    holdQuestion?: boolean
+    onQuestionDismiss?: () => void
     requestQuestionComposer?: () => void
     runContextAction?: (run: () => void) => void
     testID?: string
@@ -77,7 +83,13 @@ export function DocumentSurface({
     const focused = routeFocused && visible
     const pathname = usePathname()
     const preparation = useNavigationPreparation()
-    const navigationPreparing = focused && onClose === undefined && preparation?.sourcePath === pathname
+    // Compare is prepared by its own control, which shows the busy state; the screen under it and its sheets stay as they are.
+    const navigationPreparing =
+        focused &&
+        onClose === undefined &&
+        preparation !== null &&
+        preparation.sourcePath === pathname &&
+        preparation.kind !== 'compare'
     const retained = useRef<{
         readonly workflow: WorkflowValue
         readonly quick: QuickProgress | undefined
@@ -87,6 +99,7 @@ export function DocumentSurface({
         readonly stableKey: string
         readonly path: string
     } | null>(null)
+    const shownQuestion = useRef<typeof retained.current>(null)
     // A storage write alone does not invalidate an already displayed fact set. Never apply this to checking/asking,
     // a changed capture/manual/step/result, or newly published saved facts: those must select their actual context.
     const previous = retained.current
@@ -106,11 +119,25 @@ export function DocumentSurface({
         !actualWorkflow.state.loading &&
         savingKey === previous.stableKey
     const preparing = navigationPreparing || savingPreparing
-    const held = preparing ? retained.current : null
+    const questionInputs =
+        holdQuestion && kind === 'questions' ? documentInputs(kind, actualWorkflow, quick, contextualMore) : null
+    const questionHeld =
+        questionInputs !== null &&
+        shownQuestion.current?.path === pathname &&
+        shownQuestion.current.stableKey ===
+            documentKey({ ...questionInputs, uiState: { ...questionInputs.uiState, busy: null } })
+            ? shownQuestion.current
+            : null
+    const held = preparing ? retained.current : questionHeld
     const workflow = held?.workflow ?? actualWorkflow
     const progress = held === null ? quick : held.quick
     const { state, entry } = workflow
-    const { controller, nav } = useWorkflowActions()
+    const { controller, nav, compare: compareLauncher } = useWorkflowActions()
+    const comparing = preparation?.kind === 'compare'
+    const compareNavigation = useMemo(
+        (): CompareNavigation => ({ busy: comparing, open: compareLauncher.open }),
+        [comparing, compareLauncher.open],
+    )
     const more = useMoreState()
     const coach = useCoach()
     const judge = useJudge()
@@ -125,13 +152,15 @@ export function DocumentSurface({
         dismissParents?.()
     }
     const questionCapture = useRef<{ before: string | null; manualId: string | null; entered: boolean } | null>(null)
-    // The question sheet closes in the render that delivers its answer, never through its own closing animation: an
-    // effect and a timer would let the finished answer draw the composer again first (ready form, empty photo, Ask).
-    // Back and Close keep the animation.
+    // A new answer can need its own native image load (there may be no Result below this sheet). Keep the complete
+    // question waiting presentation until that Answer actually witnesses ready; never show the ready composer again.
+    // The automatic handoff skips the sheet's closing animation. The person's own Back and Close retain it.
     const [seenAnswer, setSeenAnswer] = useState(state.answer)
-    if (seenAnswer !== state.answer) {
+    const questionClosing = useRef(false)
+    if (!more.open || more.mode !== 'ask') questionClosing.current = false
+    const awaitingAnswer = state.answer !== null && seenAnswer !== state.answer && more.open && more.mode === 'ask'
+    if (seenAnswer !== state.answer && !awaitingAnswer) {
         setSeenAnswer(state.answer)
-        if (state.answer !== null && more.open && more.mode === 'ask') more.hide()
     }
     const [dismissedAnswer, setDismissedAnswer] = useState<typeof state.answer>(null)
     const [presentedResult, setPresentedResult] = useState<{
@@ -197,7 +226,10 @@ export function DocumentSurface({
             : {
                   ...queried,
                   document: held.document,
-                  ...activeDocumentVariant(held.document, held.activeState),
+                  ...activeDocumentVariant(
+                      held.document,
+                      questionHeld !== null && held.activeState === 'ready' ? 'pending' : held.activeState,
+                  ),
                   status: 'ready' as const,
                   issue: null,
               }
@@ -328,8 +360,10 @@ export function DocumentSurface({
                     if (effectiveKind === 'camera') controller.cancel()
                     else if (effectiveKind === 'reading' && state.pending?.startsWith('Reading') === true)
                         readingConfirmation?.onChange(true)
-                    else if (closeSheet !== undefined) closeSheet()
-                    else nav.back()
+                    else if (closeSheet !== undefined) {
+                        onQuestionDismiss?.()
+                        closeSheet()
+                    } else nav.back()
                 },
             }
         }
@@ -550,6 +584,30 @@ export function DocumentSurface({
         workInProgress: busy || more.open || judgeOpen,
         preparingDocument: preparing,
         onVariantShown: (document, activeState): void => {
+            if (kind === 'questions' && !holdQuestion && document === queried.document)
+                shownQuestion.current = {
+                    workflow: actualWorkflow,
+                    quick,
+                    document,
+                    key: currentKey,
+                    activeState,
+                    path: pathname,
+                    stableKey: documentKey({ ...inputs, uiState: { ...inputs.uiState, busy: null } }),
+                }
+            if (
+                awaitingAnswer &&
+                !questionClosing.current &&
+                focused &&
+                ownsRoute &&
+                onClose === undefined &&
+                document.kind === 'answer' &&
+                activeState === 'ready' &&
+                document === queried.document &&
+                documentMatchesInputs(document, inputs)
+            ) {
+                setSeenAnswer(state.answer)
+                more.hide()
+            }
             if (
                 !preparing &&
                 focused &&
@@ -595,7 +653,7 @@ export function DocumentSurface({
             : null,
     }
     return (
-        <>
+        <CompareNavigationContext.Provider value={compareNavigation}>
             <DocumentRenderer
                 document={reading.document}
                 bindings={bindings}
@@ -636,6 +694,10 @@ export function DocumentSurface({
                             run()
                         }}
                         contextualMore={contextualParent || contextualMore}
+                        holdQuestion={awaitingAnswer}
+                        onQuestionDismiss={(): void => {
+                            questionClosing.current = true
+                        }}
                         resultEvidence={resultOnScreen}
                     />
                 </MoreSheet>
@@ -650,6 +712,6 @@ export function DocumentSurface({
                     />
                 </MoreSheet>
             ) : null}
-        </>
+        </CompareNavigationContext.Provider>
     )
 }

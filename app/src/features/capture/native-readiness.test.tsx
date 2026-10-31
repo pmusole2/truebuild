@@ -9,6 +9,9 @@ import { flush, loadPhoto, mount, press, type Mounted } from '../screens/test-su
 import { deferred, entry, runtime, source } from '../screens/test-support/route-harness'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { fixtureDocuments } from '../screens/test-support/fixture-server'
+import { renderedDocuments } from '../screens/test-support/rendered-documents'
+import { judgeStorage } from '../screens/judge-storage'
+import { JUDGE_STORAGE_KEY } from '../screens/judge-store'
 import { DOCUMENT_COLLECTION_DEADLINE_MS, DocumentStore } from '../document-runtime/store'
 import { documentInputs } from './document-inputs'
 const mockGetCameraPermissions = jest.fn(async () => ({ granted: true, canAskAgain: true }))
@@ -33,6 +36,18 @@ jest.mock('./controller-factory', () => ({
     createScreens: jest.fn(),
     createDocuments: jest.fn(),
 }))
+// Device key-value IO only: the real JudgeProvider/store still restores, gates and persists the preference.
+jest.mock('../screens/judge-storage', () => {
+    const values = new Map<string, string>()
+    return {
+        judgeStorage: {
+            getItem: async (key: string): Promise<string | null> => values.get(key) ?? null,
+            setItem: async (key: string, value: string): Promise<void> => {
+                values.set(key, value)
+            },
+        },
+    }
+})
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',
@@ -601,3 +616,213 @@ it.each([-3_600_000, 3_600_000])(
         expect(root('camera-screen')?.origin).toBe('generated')
     },
 )
+
+describe('a cold Compare', () => {
+    type Hold = ReturnType<typeof deferred<void>>
+    const needed = ['compare', 'manual-a', 'manual-b'] as const
+    const manuals = (): ReturnType<typeof entry>[] => [
+        entry('manual-a', 'reviewed', 2, 'Alpha'),
+        entry('manual-b', 'reviewed', 3, 'Beta'),
+    ]
+    const compareControl = (): ReturnType<typeof screen.getByTestId> => screen.getByTestId('judge-compare')
+    // The outer Compare, and the two panes it opens with: the only Guide requests that carry no live state.
+    const compareRequests = (): Mounted['server']['requests'] =>
+        mounted!.server.requests.filter((request) => request.op === 'generate' && request.kind === 'compare')
+    const paneRequests = (): Mounted['server']['requests'] =>
+        mounted!.server.requests.filter(
+            (request) => request.op === 'generate' && request.kind === 'guide' && request.uiState == null,
+        )
+    const requested = (): string[] =>
+        [...compareRequests(), ...paneRequests()].map((request) =>
+            request.kind === 'compare' ? 'compare' : request.session!.manualId,
+        )
+    const rendered = (kind: string): ReturnType<typeof renderedDocuments> =>
+        renderedDocuments(screen.container).filter((document) => document.kind === kind)
+    const openJudge = async (): Promise<void> => {
+        await press('More')
+        await fireEvent.press(await screen.findByTestId('judge-entry'))
+        await screen.findByTestId('judge-compare')
+    }
+    // A restored full-mode app whose Judge preference is already on. Home, More and Judge are composed; the transport
+    // answers nothing for the outer Compare or either opening pane until the test releases that exact document.
+    async function openColdJudge(
+        options: { failing?: readonly 'compare'[]; from?: 'guide' } = {},
+    ): Promise<Map<string, Hold>> {
+        const holds = new Map<string, Hold>(needed.map((id) => [id, deferred<void>()]))
+        let held: Promise<void> | undefined
+        mounted = await mount(manuals(), {
+            screens: {
+                generated: ['home', 'more', 'judge', 'compare', 'guide'],
+                failing: options.failing ?? [],
+                onRequest: (request): void => {
+                    const document =
+                        request.kind === 'compare'
+                            ? 'compare'
+                            : request.kind === 'guide' && request.uiState == null
+                              ? request.session?.manualId
+                              : undefined
+                    held =
+                        request.op === 'generate' && document !== undefined ? holds.get(document)?.promise : undefined
+                },
+                get gate() {
+                    return held
+                },
+            },
+        })
+        if (options.from === 'guide') {
+            await act(async () => mounted!.controller.open('manual-a', 'guide'))
+            await waitFor(() => expect(mounted!.view.getPathname()).toBe('/guide/manual-a'))
+        }
+        await openJudge()
+        return holds
+    }
+    // Press Compare and wait until exactly the cold documents have been asked for, still on the source screen. A manual that
+    // is already selected has its own Compare and pane warmed by precompute, so only the other manual's pane is cold.
+    const pressCompare = async (cold: readonly string[] = needed): Promise<void> => {
+        const origin = mounted!.view.getPathname()
+        await fireEvent.press(compareControl())
+        await waitFor(() => expect(requested().sort()).toEqual([...cold].sort()))
+        expect(mounted!.view.getPathname()).toBe(origin)
+        expect(rendered('compare')).toEqual([])
+    }
+    beforeEach(async () => {
+        await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: true }))
+    })
+    afterEach(async () => {
+        await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: false }))
+    })
+
+    it.each(needed)(
+        'keeps the generated Judge busy until the outer Compare and both opening panes are ready (%s last)',
+        async (last) => {
+            const holds = await openColdJudge()
+            const judge = rendered('judge')
+            expect(judge.map((document) => document.metadata.source)).toEqual(['generated'])
+            const wait = jest.spyOn(mounted!.store, 'waitForGenerated')
+            await pressCompare()
+            expect(rendered('judge')).toEqual(judge)
+            expect(compareControl().props.accessibilityState).toMatchObject({ busy: true, disabled: true })
+            // A repeat press is the same busy control; it neither restarts nor duplicates any request.
+            await fireEvent.press(compareControl())
+            for (const id of needed.filter((id) => id !== last)) await act(async () => holds.get(id)!.resolve())
+            await flush()
+            expect(mounted!.view.getPathname()).toBe('/')
+            expect(compareControl().props.accessibilityState).toMatchObject({ busy: true })
+            expect(rendered('compare')).toEqual([])
+            await act(async () => holds.get(last)!.resolve())
+            await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+            expect(rendered('compare').map((document) => document.metadata.source)).toEqual(['generated'])
+            expect(
+                rendered('guide')
+                    .map((document) => [document.bound.manualId, document.metadata.source])
+                    .sort(),
+            ).toEqual([
+                ['manual-a', 'generated'],
+                ['manual-b', 'generated'],
+            ])
+            expect(screen.getByTestId('compare-pane-manual-a')).toBeTruthy()
+            expect(screen.getByTestId('compare-pane-manual-b')).toBeTruthy()
+            expect(screen.queryByTestId('judge-compare')).toBeNull()
+            // The entered route reuses the prepared documents exactly, so it asks for nothing more.
+            expect(compareRequests()).toHaveLength(1)
+            expect(paneRequests()).toHaveLength(2)
+            expect(wait).toHaveBeenCalledTimes(3)
+            for (const [, options] of wait.mock.calls) {
+                expect(options?.signal).toBeDefined()
+                expect(Number.isSafeInteger(options?.timeoutMs)).toBe(true)
+                expect(options!.timeoutMs).toBeGreaterThan(0)
+                expect(options!.timeoutMs).toBeLessThanOrEqual(DOCUMENT_COLLECTION_DEADLINE_MS)
+            }
+            expect(mockGetCameraPermissions).not.toHaveBeenCalled()
+            expect(mockRequestCameraPermission).not.toHaveBeenCalled()
+        },
+    )
+
+    it.each([
+        ['Close', undefined, '/'],
+        ['a route change', 'guide', '/add'],
+        ['a library change', 'guide', '/guide/manual-a'],
+    ] as const)(
+        'never opens a Compare that finishes after %s, and releases its reservation',
+        async (stop, from, at) => {
+            const holds = await openColdJudge({ from })
+            const push = jest.spyOn(router, 'push')
+            await pressCompare(from === 'guide' ? ['manual-b'] : needed)
+            if (stop === 'Close') {
+                await fireEvent.press(screen.getByTestId('close-sheet'))
+                await waitFor(() => expect(screen.queryByTestId('judge-compare')).toBeNull())
+            } else if (stop === 'a route change') {
+                await act(async () => mounted!.controller.navigate('pages'))
+                await waitFor(() => expect(mounted!.view.getPathname()).toBe('/add'))
+            } else {
+                await act(async () => mounted!.controller.rename('Renamed while Compare waits'))
+                await waitFor(() => expect(mounted!.controller.getSnapshot().pending).toBeNull())
+            }
+            // Routing only proceeds while no preparation holds the owner, so reaching /add already shows its release.
+            if (stop === 'a library change')
+                expect(compareControl().props.accessibilityState).toMatchObject({ busy: false })
+            for (const hold of holds.values()) await act(async () => hold.resolve())
+            await flush()
+            expect(push).not.toHaveBeenCalledWith('/compare')
+            expect(mounted!.view.getPathname()).toBe(at)
+            expect(rendered('compare')).toEqual([])
+            if (stop === 'Close') {
+                // The reservation is gone and the documents are cached, so the next press opens at once.
+                await fireEvent.press(await screen.findByTestId('judge-entry'))
+                await fireEvent.press(await screen.findByTestId('judge-compare'))
+                await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+                expect(requested().sort()).toEqual([...needed].sort())
+            }
+        },
+    )
+
+    it('releases its reservation once it has opened, so the next press opens at once from the cached documents', async () => {
+        const holds = await openColdJudge()
+        await pressCompare()
+        for (const hold of holds.values()) await act(async () => hold.resolve())
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+        await testRouter.back('/')
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/'))
+        await openJudge()
+        await fireEvent.press(compareControl())
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+        expect(requested().sort()).toEqual([...needed].sort())
+    })
+
+    it('opens with its truthful provider failure only once Compare itself has failed, never for ordinary pending', async () => {
+        const holds = await openColdJudge({ failing: ['compare'] })
+        await pressCompare()
+        for (const id of ['manual-a', 'manual-b']) await act(async () => holds.get(id)!.resolve())
+        await flush()
+        expect(mounted!.view.getPathname()).toBe('/')
+        expect(compareControl().props.accessibilityState).toMatchObject({ busy: true })
+        await act(async () => holds.get('compare')!.resolve())
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+        expect(
+            rendered('compare').map((document) => [document.metadata.source, document.metadata.fallbackReason]),
+        ).toEqual([['fallback', 'provider_error']])
+        expect(rendered('guide').map((document) => document.metadata.source)).toEqual(['generated', 'generated'])
+        expect(compareRequests()).toHaveLength(1)
+    })
+
+    it.each(['off', 'steps'] as const)('opens at once in %s mode without waiting for any document', async (mode) => {
+        if (mode === 'off') mounted = await mount(manuals(), { screens: 'off' })
+        else {
+            const { controller, calls, storage } = await runtime(manuals())
+            const server = fixtureDocuments({ generated: ['compare', 'guide'] })
+            const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps', pollMs: 1 })
+            jest.mocked(createController).mockReturnValue(controller)
+            jest.mocked(createDocuments).mockReturnValue(store)
+            jest.mocked(createScreens).mockReturnValue(null)
+            const view = await renderRouter(resolve(__dirname, '../../../app'))
+            mounted = { view, controller, calls, store, server, storage }
+            await waitFor(() => expect(controller.getSnapshot().loading).toBe(false))
+        }
+        const wait = jest.spyOn(mounted.store, 'waitForGenerated')
+        await openJudge()
+        await fireEvent.press(compareControl())
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/compare'))
+        expect(wait).not.toHaveBeenCalled()
+        expect(compareRequests()).toHaveLength(0)
+    })
+})

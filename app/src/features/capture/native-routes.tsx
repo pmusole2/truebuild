@@ -12,10 +12,11 @@ import { documentInputs } from './document-inputs'
 import { DOCUMENT_COLLECTION_DEADLINE_MS, documentKey, type DocumentStore } from '../document-runtime/store'
 import { editableQuestions } from './quick-check-model'
 import type { QuickProgress } from '../screens/quick-progress'
+import { compareOpeningEntries, comparePaneInputs, type CompareNavigation } from '../screens/compare-flow'
 import { API_BASE_URL } from '../../config'
 import { nativeProofConfig } from '../ai-effort-proof/config'
 
-type PreparedKind = 'guide' | 'quick-check' | 'completion' | 'camera'
+type PreparedKind = 'guide' | 'quick-check' | 'completion' | 'camera' | 'compare'
 export type CameraPreparationState = {
     readonly permission: 'undetermined' | 'granted' | 'denied'
     readonly canAskAgain: boolean | null
@@ -72,7 +73,8 @@ async function queryCameraAccess(signal: AbortSignal, deadline: number): Promise
 type NavigationPreparation = {
     readonly sourcePath: string
     readonly source: () => string
-    readonly manualId: string
+    // Null for Compare, which belongs to no one manual.
+    readonly manualId: string | null
     readonly kind: PreparedKind
     readonly targetPath: string
     readonly deadline: number
@@ -93,7 +95,7 @@ class NavigationPreparations {
     private publish(): void {
         for (const listener of this.listeners) listener()
     }
-    begin(source: () => string, manualId: string, kind: PreparedKind): NavigationPreparation | null {
+    begin(source: () => string, manualId: string | null, kind: PreparedKind): NavigationPreparation | null {
         if (this.current !== null) return null
         this.current = {
             sourcePath: source(),
@@ -103,7 +105,9 @@ class NavigationPreparations {
             targetPath:
                 kind === 'camera'
                     ? '/camera'
-                    : `/${kind === 'completion' ? 'done' : kind === 'quick-check' ? 'check' : 'guide'}/${encodeURIComponent(manualId)}`,
+                    : kind === 'compare'
+                      ? '/compare'
+                      : `/${kind === 'completion' ? 'done' : kind === 'quick-check' ? 'check' : 'guide'}/${encodeURIComponent(manualId ?? '')}`,
             deadline: performance.now() + DOCUMENT_COLLECTION_DEADLINE_MS,
             abort: new AbortController(),
         }
@@ -211,6 +215,50 @@ async function awaitTarget(
         // Null is a genuine failure/disabled/deadline outcome: navigation may then show its truthful fallback.
         const timeoutMs = remainingPreparationMs(preparation.deadline)
         if (timeoutMs > 0) await documents.waitForGenerated(inputs, { signal: preparation.abort.signal, timeoutMs })
+        return owner.active(preparation)
+    } finally {
+        stop()
+    }
+}
+
+/**
+ * Everything Compare draws on arrival: its own screen, then each pane it opens with, from the screen's own selection
+ * and inputs.
+ */
+function compareTargets(controller: CaptureController): ScreenContextInputsV2[] {
+    const state = controller.getSnapshot()
+    const entry = state.entries.find((candidate) => candidate.session.manualId === state.selectedId)
+    return [
+        documentInputs('compare', { state, entry }),
+        ...compareOpeningEntries(state.entries).map((opening) => comparePaneInputs(opening.session)),
+    ]
+}
+/**
+ * Holds the source screen until Compare and both opening panes are all complete, so the route never draws one pending.
+ * They are awaited together under the one deadline; any change to what Compare would show cancels the wait.
+ */
+async function awaitCompare(
+    controller: CaptureController,
+    documents: DocumentStore,
+    owner: NavigationPreparations,
+    preparation: NavigationPreparation,
+): Promise<boolean> {
+    if (!owner.active(preparation)) return false
+    const targets = compareTargets(controller)
+    const bound = targets.map(documentKey).join('|')
+    for (const inputs of targets) if (inputs.session !== null) documents.observeSession(inputs.session)
+    const stop = controller.subscribe((): void => {
+        if (owner.active(preparation) && compareTargets(controller).map(documentKey).join('|') !== bound) owner.cancel()
+    })
+    try {
+        // Null is a genuine failure/disabled/deadline outcome: Compare may then show its truthful fallback.
+        const timeoutMs = remainingPreparationMs(preparation.deadline)
+        if (timeoutMs > 0)
+            await Promise.all(
+                targets.map((inputs) =>
+                    documents.waitForGenerated(inputs, { signal: preparation.abort.signal, timeoutMs }),
+                ),
+            )
         return owner.active(preparation)
     } finally {
         stop()
@@ -355,7 +403,14 @@ export function NativeRouteSync(): null {
         const before = previous.current
         previous.current = facts
         const pending = owner.getSnapshot()
-        if (pending !== null && facts.selectedId !== pending.manualId && facts.selectedId !== before.selectedId)
+        // Compare depends on no one manual, so any controller move makes it stale; it must never hold routing back.
+        const moved =
+            before.route !== facts.route || before.selectedId !== facts.selectedId || before.reading !== facts.reading
+        if (
+            pending !== null &&
+            ((facts.selectedId !== pending.manualId && facts.selectedId !== before.selectedId) ||
+                (pending.kind === 'compare' && moved))
+        )
             owner.cancel()
         const command = reconcile(before, facts, latestPath.current)
         if (command.action !== 'none' && command.href === issued.href) {
@@ -398,7 +453,11 @@ function go(href: string, action: NavAction, pathname: string): void {
  * controller operation the old single screen did and then asks the router for the matching screen. Nothing here calls
  * `home`, `navigate` or `open` just to mirror the router, so going Back never clears a photo, a result or a draft.
  */
-export function useWorkflowActions(): { controller: WorkflowController; nav: ScreenNav } {
+export function useWorkflowActions(): {
+    controller: WorkflowController
+    nav: ScreenNav
+    compare: Pick<CompareNavigation, 'open'>
+} {
     const { controller, documents } = useWorkflow()
     const owner = preparationsFor(controller)
     const pathname = usePathname()
@@ -508,6 +567,37 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
             }
             if (await awaitTarget(controller, documents, owner, preparation, 'camera')) {
                 if (owner.active(preparation)) go('/camera', 'push', here())
+            }
+        }
+        const idle = (): void => {}
+        const openCompare = (dismiss?: () => void): (() => void) => {
+            if (owner.getSnapshot() !== null) return idle
+            const launch = (): void => {
+                dismiss?.()
+                if (here() !== '/compare') router.push('/compare' as never)
+            }
+            // Off and steps compose nothing for Compare, so there is nothing to wait for.
+            if (!prepares(documents, 'compare')) {
+                launch()
+                return idle
+            }
+            const preparation = owner.begin(here, null, 'compare')
+            if (preparation === null) return idle
+            void (async (): Promise<void> => {
+                let opened = false
+                try {
+                    if (await awaitCompare(controller, documents, owner, preparation)) {
+                        launch()
+                        opened = true
+                    }
+                } finally {
+                    // A route change releases the reservation of an opened Compare; any other exit releases it here.
+                    if ((!opened || preparation.sourcePath === '/compare') && owner.getSnapshot() === preparation)
+                        owner.cancel()
+                }
+            })()
+            return (): void => {
+                if (owner.getSnapshot() === preparation) owner.cancel()
             }
         }
         const wrapped: WorkflowController = {
@@ -670,6 +760,6 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
                 }
             },
         }
-        return { controller: wrapped, nav }
+        return { controller: wrapped, nav, compare: { open: openCompare } }
     }, [controller, documents, owner])
 }

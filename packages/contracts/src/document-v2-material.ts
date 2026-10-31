@@ -267,13 +267,16 @@ function overviewStepsOf(
 
 /**
  * A result or answer screen holds the person's photo: its waiting variants show that photo, not the verdict. So does the
- * photo of a check that has not returned (it has no verdict to hold back yet, but it is the same photo-first screen).
+ * photo of a check that has not returned (it has no verdict to hold back yet, but it is the same photo-first screen), and
+ * the question sheet over the photo the app holds (it has no result at all, yet the Answer that follows shows the same
+ * photo). `inputs.captureId` is already the witnessed capture here (`usedInputs`), so a sheet with no witness owes none.
  */
 const heldPhotoRequired = (inputs: ScreenContextInputsV2): boolean =>
     ((inputs.kind === 'result' || inputs.kind === 'answer' || moreScopedV2(inputs)) &&
         inputs.result !== null &&
         inputs.captureId !== null) ||
-    pendingCheckV2(inputs)
+    pendingCheckV2(inputs) ||
+    (inputs.kind === 'questions' && inputs.captureId !== null)
 
 /**
  * The capture a document may show or name, or null. A live photo is part of a screen only when its identity is in the

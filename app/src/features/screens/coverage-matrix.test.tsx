@@ -689,7 +689,7 @@ describe('complete v2 catalog through the actual renderer and real controller fi
                         </FeedbackProvider>
                     </ThemeProvider>,
                 )
-                if (selected.name === 'ready' && (kind === 'result' || kind === 'answer' || kind === 'more')) {
+                if (selected.name === 'ready' && fixture.document.requirements.capture) {
                     for (const frame of screen.queryAllByTestId('frozen-photo-frame'))
                         await fireEvent(frame, 'layout', {
                             nativeEvent: { layout: { width: 390, height: 460, x: 0, y: 0 } },

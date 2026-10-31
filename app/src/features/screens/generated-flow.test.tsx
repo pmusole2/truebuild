@@ -1111,6 +1111,62 @@ describe('every other screen is composed from its own document', () => {
         expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
     })
 
+    it.each(['ready', 'close'] as const)(
+        'keeps the first Answer handoff photo until %s owns the transition',
+        async (transition) => {
+            if (transition === 'close') jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
+            const gate = deferred<void>()
+            const { controller, calls } = await mount([entry()], {
+                screens: { generated: ['questions', 'answer'] },
+                replies: { question_gate: gate.promise },
+            })
+            await press('Continue building')
+            await screen.findByText(/^Step 1 of \d+$/u)
+            // Ask directly from the Guide: there is no checked Result image for the new Answer page to inherit.
+            await press('Ask about this step')
+            await act(async () => controller.shutter(async () => source))
+            await screen.findByTestId('more-sheet')
+            await loadPhoto()
+            const questionImage = askSheet().getByTestId('frozen-photo-image')
+            const captureId = controller.getSnapshot().capture!.binding.captureId
+            expect(controller.getSnapshot().check).toBeNull()
+            await act(async () => {
+                controller.targetChanged({ kind: 'part', partId: 'side-panel' })
+                controller.questionChanged('Which way?')
+            })
+            await fireEvent.press(askSheet().getByRole('button', { name: 'Ask' }))
+            await act(async () => gate.resolve())
+            await waitFor(() => expect(controller.getSnapshot().answer?.answer).toBe('The groove faces inward.'))
+            expect(controller.getSnapshot().pending).toBeNull()
+            expect(screen.queryByRole('button', { name: 'Ask', includeHiddenElements: true })).toBeNull()
+            expect(screen.getByTestId('more-sheet')).toBeTruthy()
+            expect(askSheet().getByTestId('frozen-photo-image')).toBe(questionImage)
+            expect(StyleSheet.flatten(questionImage.props.style).width).toBeGreaterThan(0)
+
+            // The native Modal hides the page from accessibility queries, but its real image layout/load events still
+            // arrive underneath it. Include that hidden subtree only to deliver those native image events.
+            const answerPage = within(screen.getByTestId('guide-screen', { includeHiddenElements: true }))
+            expect(answerPage.queryByText('The groove faces inward.', { includeHiddenElements: true })).toBeNull()
+            if (transition === 'close') await fireEvent.press(askSheet().getByRole('button', { name: 'Close' }))
+            await fireEvent(answerPage.getByTestId('frozen-photo-frame', { includeHiddenElements: true }), 'layout', {
+                nativeEvent: { layout: { width: 390, height: 460, x: 0, y: 0 } },
+            })
+            await fireEvent(answerPage.getByTestId('frozen-photo-image', { includeHiddenElements: true }), 'load')
+            if (transition === 'close') {
+                expect(screen.getByTestId('more-sheet')).toBeTruthy()
+                expect(screen.queryByRole('button', { name: 'Ask', includeHiddenElements: true })).toBeNull()
+                await act(async () => jest.advanceTimersByTime(150))
+            }
+            await waitFor(() => expect(screen.queryByTestId('more-sheet')).toBeNull())
+            expect(screen.getByText('The groove faces inward.')).toBeTruthy()
+            expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeEnabled()
+            expect(calls.filter((path) => path === '/api/questions')).toHaveLength(1)
+            expect(calls.filter((path) => path === '/api/checks')).toHaveLength(0)
+            expect(controller.getSnapshot().capture?.binding.captureId).toBe(captureId)
+            expect(controller.getSnapshot().question).toBe('Which way?')
+        },
+    )
+
     it('composes the More sheet’s intro on Home', async () => {
         await mount([])
         await press('More')

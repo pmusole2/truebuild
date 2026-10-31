@@ -18,11 +18,10 @@ import type { FrameBindings } from '../documents/types'
 import { useJudge } from './judge-context'
 import { useOriginNativeId } from '../../ui/render-origin'
 import { useMeterReading } from './native-meter'
+import { comparable, compareChoices, compareEntries, comparePaneInputs } from './compare-flow'
 
+export { comparable }
 export const SIDE_BY_SIDE_WIDTH = 900
-export function comparable(entry: LibraryEntry): boolean {
-    return entry.session.reviewStatus === 'reviewed' && entry.session.reviewedSteps.length > 0
-}
 
 /** Each pane is a real v2 guide with its own facts, citation hero and full frame; actions remain read-only. */
 export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactElement {
@@ -31,18 +30,7 @@ export function ComparePane({ entry }: { readonly entry: LibraryEntry }): ReactE
     const { controller, nav } = useWorkflowActions()
     const more = useMoreState()
     const focused = useIsFocused()
-    const inputs = useMemo(
-        () =>
-            ({
-                kind: 'guide',
-                session: entry.session,
-                stepId: entry.session.reviewedSteps[0]?.stepId ?? null,
-                captureId: null,
-                result: null,
-                failure: null,
-            }) as const,
-        [entry.session],
-    )
+    const inputs = useMemo(() => comparePaneInputs(entry.session), [entry.session])
     const reading = useDocument(inputs, { focused: false })
     const key = documentKey(inputs)
     // Panes stay read-only and never become the shown guide for checking. Their bounded preparation is explicit.
@@ -122,13 +110,10 @@ function Columns(): ReactElement {
     const { state } = useWorkflow()
     const { width } = useWindowDimensions()
     const [chosen, setChosen] = useState<readonly string[] | null>(null)
-    const available = state.entries.filter(comparable).map((entry) => entry.session.manualId)
-    const defaults = available.slice(0, 2)
+    const { available, defaults } = compareChoices(state.entries)
     const selected = (chosen ?? defaults).filter((id) => available.includes(id))
     const wide = width >= SIDE_BY_SIDE_WIDTH
-    const panes = selected.flatMap((id) =>
-        state.entries.filter((entry) => entry.session.manualId === id && comparable(entry)),
-    )
+    const panes = compareEntries(state.entries, selected)
     return (
         <View style={styles.content}>
             <Caption>{wide ? 'Two manuals, side by side.' : 'Narrow layout: the two manuals are stacked.'}</Caption>
