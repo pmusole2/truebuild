@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
-import { Text } from 'react-native'
+import { StyleSheet, Text } from 'react-native'
 import type { ReactElement } from 'react'
 import { variantsOfV2, type ScreenContextInputsV2, type ScreenProposalV2 } from '@truebuild/contracts'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
@@ -22,8 +22,16 @@ jest.mock(
     () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
 )
 
-function Observed({ inputs, bindings }: { inputs: ScreenContextInputsV2; bindings?: FrameBindings }): ReactElement {
-    const reading = useDocument(inputs, { focused: true })
+function Observed({
+    inputs,
+    bindings,
+    focused = true,
+}: {
+    inputs: ScreenContextInputsV2
+    bindings?: FrameBindings
+    focused?: boolean
+}): ReactElement {
+    const reading = useDocument(inputs, { focused, state: inputs.uiState?.busy == null ? 'ready' : 'busy' })
     return (
         <>
             <Text testID="catalog-document">{`${reading.document.screenId}:${reading.issue ?? 'none'}:${reading.document.metadata.source}:${reading.document.metadata.authoring?.fixtureId ?? 'exact'}`}</Text>
@@ -33,17 +41,194 @@ function Observed({ inputs, bindings }: { inputs: ScreenContextInputsV2; binding
         </>
     )
 }
-function tree(value: WorkflowValue, inputs: ScreenContextInputsV2, bindings?: FrameBindings): ReactElement {
+function tree(
+    value: WorkflowValue,
+    inputs: ScreenContextInputsV2,
+    bindings?: FrameBindings,
+    focused = true,
+): ReactElement {
     return (
         <ThemeProvider>
             <FeedbackProvider reduceMotion>
                 <WorkflowContext.Provider value={value}>
-                    <Observed inputs={inputs} bindings={bindings} />
+                    <Observed inputs={inputs} bindings={bindings} focused={focused} />
                 </WorkflowContext.Provider>
             </FeedbackProvider>
         </ThemeProvider>
     )
 }
+
+/** Mirrors the native fixture's cards arrangement: its held photo has another valid container ancestry. */
+function cardResult(proposal: ScreenProposalV2, inputs: ScreenContextInputsV2): ScreenProposalV2 {
+    if (inputs.kind !== 'result') return proposal
+    for (const { variant } of variantsOfV2(proposal)) {
+        if (variant.body.type !== 'Scroll' || variant.body.children[0]?.type !== 'Stack')
+            throw new Error('Expected fixture body stack')
+        variant.body.children[0].children = variant.body.children[0].children.map((child) => ({
+            type: 'Card',
+            surface: 'plain',
+            padding: 'sm',
+            tone: 'neutral',
+            children: [child],
+        }))
+    }
+    return proposal
+}
+
+/** Android uses different native scroll/content components for this otherwise valid catalog layout. */
+function horizontalResult(proposal: ScreenProposalV2, inputs: ScreenContextInputsV2): ScreenProposalV2 {
+    if (inputs.kind === 'result')
+        for (const { variant } of variantsOfV2(proposal)) {
+            if (variant.body.type !== 'Scroll') throw new Error('Expected fixture scroll')
+            variant.body.axis = 'horizontal'
+        }
+    return proposal
+}
+
+it.each(
+    (['cards', 'horizontal scroll'] as const).flatMap((layout) =>
+        (['cached before mount', 'cached while the question covers the Result'] as const).map(
+            (timing) => [layout, timing] as const,
+        ),
+    ),
+)(
+    'keeps the loaded held image across Result activity keys and Answer when exact %s were %s',
+    async (layout, timing) => {
+        const { controller } = await runtime([entry()], {
+            check: { decision: 'refuse', reason: 'The current joint is not seated.' },
+        })
+        await controller.restore()
+        await controller.open(controller.getSnapshot().entries[0]!.session.manualId, 'guide')
+        controller.camera({ kind: 'check' })
+        await controller.shutter(async () => source)
+        const state = controller.getSnapshot()
+        const selected = controller.current!
+        let release!: () => void
+        const server = fixtureDocuments({
+            generated: ['result', 'answer'],
+            arrange: layout === 'cards' ? cardResult : horizontalResult,
+            ...(timing === 'cached before mount' ? {} : { gate: new Promise<void>((resolve) => (release = resolve)) }),
+        })
+        const store = new DocumentStore({ client: server, mode: 'full', id: (): string => 'cached-cards' })
+        const value: WorkflowValue = { controller, state, entry: selected, screens: null, documents: store }
+        const inputs = documentInputs('result', value)
+        const asking: ScreenContextInputsV2 = {
+            ...inputs,
+            uiState: { ...inputs.uiState, busy: { activity: 'asking' } },
+        }
+        const waiting: ScreenContextInputsV2 = {
+            ...inputs,
+            uiState: { ...inputs.uiState, busy: { activity: 'question-waiting' } },
+        }
+        const more = { open: false, mode: 'details' as const, show: (): void => undefined, hide: (): void => undefined }
+        const bindings: FrameBindings = {
+            resolve: () => ({ enabled: true, reason: null, run: (): void => undefined }),
+            live: { state, entry: selected, controller, nav: defaultNav(controller), more },
+            session: selected.session,
+            pageUris: state.pageUris,
+            capture: state.capture,
+            marks: [],
+            heroMode: 'inline',
+            inspect: false,
+        }
+        if (timing === 'cached before mount') await store.waitForGenerated(inputs)
+        const view = await render(tree(value, inputs, bindings))
+        try {
+            await loadPhoto()
+            const image = screen.getByTestId('frozen-photo-image')
+            const uri = image.props.source.uri as string
+            const bodyScroll = (): boolean =>
+                screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!.props
+                    .horizontal as boolean
+            expect(bodyScroll()).toBe(false)
+            if (timing !== 'cached before mount') {
+                await act(async () => release())
+                await waitFor(() => expect(store.peek(inputs)?.exactGeneration).toBeUndefined())
+            }
+            // Warmups can finish before a new activity key is rendered, even with the Result behind the Ask sheet.
+            await act(async () => {
+                await store.waitForGenerated(asking)
+                await store.waitForGenerated(waiting)
+            })
+            const cachedAsking = store.peek(asking)!.document
+            expect(cachedAsking.metadata.authoring).toBeUndefined()
+            for (const busyInputs of [asking, waiting]) {
+                await view.rerender(tree(value, busyInputs, { ...bindings, workInProgress: true }, false))
+                expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+                expect(StyleSheet.flatten(image.props.style).width).toBeGreaterThan(0)
+                expect(screen.getByTestId('frozen-photo-image').props.source.uri).toBe(uri)
+                expect(bodyScroll()).toBe(false)
+            }
+            await act(async () => {
+                controller.questionChanged('Which way should this face?')
+                controller.targetChanged({ kind: 'part', partId: 'side-panel' })
+                await controller.ask()
+            })
+            const answeredState = controller.getSnapshot()
+            const answeredValue = { ...value, state: answeredState, entry: controller.current }
+            const answer = documentInputs('answer', answeredValue)
+            await view.rerender(
+                tree(answeredValue, answer, {
+                    ...bindings,
+                    answeredQuestion: answeredState.answeredQuestion,
+                    live: { ...bindings.live!, state: answeredState, entry: controller.current },
+                }),
+            )
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(StyleSheet.flatten(image.props.style).width).toBeGreaterThan(0)
+            expect(screen.getByText(answeredState.answer!.answer)).toBeTruthy()
+            expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeEnabled()
+            // Selecting a continuous presentation does not rewrite the provider's cached document or its receipt.
+            expect(store.peek(asking)!.document).toBe(cachedAsking)
+        } finally {
+            await view.unmount()
+            release?.()
+            store.dispose()
+            controller.dispose()
+        }
+    },
+)
+
+it('can adopt a compatible exact response after retrying an incompatible cached Result', async () => {
+    const { controller } = await runtime([entry()])
+    await controller.restore()
+    await controller.open(controller.getSnapshot().entries[0]!.session.manualId, 'guide')
+    controller.camera({ kind: 'check' })
+    await controller.shutter(async () => source)
+    let cards = true
+    const server = fixtureDocuments({
+        generated: ['result'],
+        arrange: (proposal, inputs) => (cards ? cardResult(proposal, inputs) : proposal),
+    })
+    const store = new DocumentStore({ client: server, mode: 'full', id: (): string => 'retry-placement' })
+    const value: WorkflowValue = {
+        controller,
+        state: controller.getSnapshot(),
+        entry: controller.current,
+        screens: null,
+        documents: store,
+    }
+    const inputs = documentInputs('result', value)
+    await store.waitForGenerated(inputs)
+    const view = await render(tree(value, inputs))
+    try {
+        expect(screen.getByTestId('catalog-document').props.children).toContain('recorded-result-layout-sol-v1')
+        cards = false
+        // Retry may commit the authored pending receipt; a later compatible exact response must still replace it.
+        await act(async () => {
+            store.retry(inputs)
+            await store.waitForGenerated(inputs)
+        })
+        const exact = store.peek(inputs)!.document
+        expect(exact.metadata.authoring).toBeUndefined()
+        expect(screen.getByTestId('catalog-document').props.children).toBe(`${exact.screenId}:none:generated:exact`)
+        expect(server.requests).toHaveLength(2)
+    } finally {
+        await view.unmount()
+        store.dispose()
+        controller.dispose()
+    }
+})
 async function loadPhoto(): Promise<void> {
     await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
         nativeEvent: { layout: { width: 390, height: 520 } },

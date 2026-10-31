@@ -9,6 +9,7 @@ import {
 } from '@truebuild/contracts'
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { DocumentStore, documentKey, localDocument, type DocumentRuntimeEntry } from './store'
+import { isResultLayoutDocument } from './result-layout-runtime'
 
 export const DOCUMENT_FOCUS_GRACE_MS = 8_000
 
@@ -36,7 +37,13 @@ function capturePlacement(document: ScreenDocumentV2): string {
         variantsOfV2(document).map(({ name, variant }) => {
             const paths: string[][] = []
             const visit = (node: ScreenNodeV2, parents: string[]): void => {
-                const path = [...parents, node.type === 'Section' ? `${node.type}:${node.collapsible}` : node.type]
+                const component =
+                    node.type === 'Section'
+                        ? `${node.type}:${node.collapsible}`
+                        : node.type === 'Scroll'
+                          ? `${node.type}:${node.axis}`
+                          : node.type
+                const path = [...parents, component]
                 if (node.type === 'Image' && node.source.kind === 'capture') paths.push(path)
                 if ('children' in node) node.children.forEach((child, index) => visit(child, [...path, String(index)]))
             }
@@ -62,6 +69,16 @@ export function useDocument(
         (inputs.kind === 'result' || inputs.kind === 'answer') && inputs.captureId !== null && inputs.result !== null
     const entry = store.peek(inputs)
     const preview = useMemo(() => store.preview(inputs), [store, key])
+    // Every context of one held capture, including a prewarmed activity key or a fresh mount, must begin on the
+    // shared authored photo spine. A cached exact response is still eligible when its placement is compatible.
+    // Keep the original cache/receipt intact: only this mounted presentation chooses the current witnessed layout.
+    const presentation =
+        progressiveResult &&
+        entry !== undefined &&
+        isResultLayoutDocument(preview.document) &&
+        capturePlacement(entry.document) !== capturePlacement(preview.document)
+            ? { ...entry, document: preview.document }
+            : entry
     const cacheIssue = entry === undefined ? store.cacheIssue(inputs) : null
     const evicted = useMemo<DocumentRuntimeEntry | null>(
         () =>
@@ -79,16 +96,16 @@ export function useDocument(
                 : prior,
         [prior, entry, cacheIssue],
     )
-    // Keep an incompatible exact composition cached for the next mount. The retained entry is key-scoped above,
-    // so a changed result or capture still selects its fresh complete document immediately.
+    // Keep the shown generated document when a late response would remount its photo. Cached incompatible responses
+    // remain intact; the authored-spine selection above applies on later mounts too. Retention never crosses keys.
     const preserveGenerated =
         (options.focused === true || progressiveResult) &&
         prior?.document.metadata.source === 'generated' &&
         (entry?.status !== 'ready' || entry.document.screenId !== prior.document.screenId) &&
         (!progressiveResult ||
-            prior.exactGeneration === undefined ||
+            (prior.exactGeneration === undefined && !isResultLayoutDocument(prior.document)) ||
             (entry?.status === 'ready' && capturePlacement(prior.document) !== capturePlacement(entry.document)))
-    const current = preserveGenerated ? prior : (entry ?? availablePrior ?? evicted ?? preview)
+    const current = preserveGenerated ? prior : (presentation ?? availablePrior ?? evicted ?? preview)
     const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {
