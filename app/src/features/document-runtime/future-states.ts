@@ -5,7 +5,7 @@ export function futureDocumentStates(inputs: ScreenContextInputsV2): ScreenConte
     if (inputs.uiState?.busy != null) return []
     const activities: readonly BusyActivityV2[] =
         inputs.kind === 'guide'
-            ? ['checking', 'second-opinion']
+            ? ['checking', 'second-opinion', 'asking', 'question-waiting']
             : inputs.kind === 'questions' || inputs.kind === 'result'
               ? ['asking', 'question-waiting']
               : inputs.kind === 'camera'

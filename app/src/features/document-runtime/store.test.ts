@@ -633,9 +633,13 @@ describe('whole-document runtime store', () => {
                 'generate',
                 'generate',
                 'progress',
+                'generate',
+                'generate',
+                'generate',
+                'generate',
             ])
             store.precompute(session, 'guide:step-1')
-            expect(screensV2).toHaveBeenCalledTimes(7)
+            expect(screensV2).toHaveBeenCalledTimes(11)
             store.observeSession({ ...session, revision: session.revision + 1 })
             await vi.advanceTimersByTimeAsync(100)
             expect(screensV2.mock.calls.map(([metadata]) => metadata.op)).toEqual([
@@ -646,6 +650,10 @@ describe('whole-document runtime store', () => {
                 'generate',
                 'generate',
                 'progress',
+                'generate',
+                'generate',
+                'generate',
+                'generate',
                 'cancel',
             ])
             expect(store.peek(inputs)).toBeUndefined()
@@ -732,6 +740,10 @@ describe('whole-document runtime store', () => {
                         'generate',
                         'generate',
                         'generate',
+                        'generate',
+                        'generate',
+                        'generate',
+                        'generate',
                         'progress',
                         'progress',
                     ])
@@ -739,7 +751,9 @@ describe('whole-document runtime store', () => {
                         screensV2.mock.calls.every(([metadata]) =>
                             metadata.op === 'generate'
                                 ? metadata.kind === 'guide' &&
-                                  ['checking', 'second-opinion'].includes(metadata.uiState?.busy?.activity ?? '')
+                                  ['checking', 'second-opinion', 'asking', 'question-waiting'].includes(
+                                      metadata.uiState?.busy?.activity ?? '',
+                                  )
                                 : metadata.requestedKinds?.join() === 'guide',
                         ),
                     ).toBe(true)
@@ -758,7 +772,16 @@ describe('whole-document runtime store', () => {
                                     : [],
                             )
                             .sort(),
-                    ).toEqual(['step-1:checking', 'step-1:second-opinion', 'step-2:checking', 'step-2:second-opinion'])
+                    ).toEqual([
+                        'step-1:asking',
+                        'step-1:checking',
+                        'step-1:question-waiting',
+                        'step-1:second-opinion',
+                        'step-2:asking',
+                        'step-2:checking',
+                        'step-2:question-waiting',
+                        'step-2:second-opinion',
+                    ])
                 }
                 store.dispose()
             }

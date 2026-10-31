@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createDemoManual, type ScreenContextInputsV2 } from '@truebuild/contracts'
 import type { ModelApiClient } from '../../api/model-client'
 import { documentUnavailable } from '../../api/document-client'
-import { DocumentStore } from './store'
+import { DocumentStore, documentKey } from './store'
 import { futureDocumentStates } from './future-states'
 
 const inputs: ScreenContextInputsV2 = {
@@ -16,7 +16,12 @@ const inputs: ScreenContextInputsV2 = {
 describe('preparing generated busy states', () => {
     it('prepares known guide activities without inventing another manual, fact, result or photo', () => {
         const states = futureDocumentStates(inputs)
-        expect(states.map((item) => item.uiState?.busy?.activity)).toEqual(['checking', 'second-opinion'])
+        expect(states.map((item) => item.uiState?.busy?.activity)).toEqual([
+            'checking',
+            'second-opinion',
+            'asking',
+            'question-waiting',
+        ])
         for (const state of states) {
             expect(state.session).toBe(inputs.session)
             expect(state.stepId).toBe(inputs.stepId)
@@ -26,6 +31,27 @@ describe('preparing generated busy states', () => {
         expect(futureDocumentStates(states[0]!)).toEqual([])
         expect(futureDocumentStates({ ...inputs, kind: 'completion' })).toEqual([])
     })
+    it.each(['asking', 'question-waiting'] as const)(
+        'prepares the Guide key used beneath a held Question during %s',
+        (activity) => {
+            const prepared = futureDocumentStates(inputs).find((state) => state.uiState?.busy?.activity === activity)
+            expect(prepared).toBeDefined()
+            expect(documentKey(prepared!)).toBe(
+                documentKey({
+                    ...inputs,
+                    uiState: {
+                        busy: { activity },
+                        capture: {
+                            captureId: 'actual-question-photo',
+                            reusable: true,
+                            target: { kind: 'point' },
+                            questionDraftPresent: true,
+                        },
+                    },
+                }),
+            )
+        },
+    )
     it('starts every step activity at parse-time precompute, with off mode making no dispatch', async () => {
         const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) =>
             documentUnavailable(metadata.requestId, 'unconfigured'),
@@ -37,7 +63,7 @@ describe('preparing generated busy states', () => {
                 expect(
                     screensV2.mock.calls.filter(([metadata]) => metadata.op === 'generate' && metadata.kind === 'guide')
                         .length,
-                ).toBe(inputs.session!.reviewedSteps.length * 2),
+                ).toBe(inputs.session!.reviewedSteps.length * 4),
             )
             const requests = screensV2.mock.calls.flatMap(([metadata]) =>
                 metadata.op === 'generate' ? [metadata] : [],

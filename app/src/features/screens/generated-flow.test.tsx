@@ -233,11 +233,17 @@ describe('Guide composed by the document', () => {
                     .map((request) => `${request.stepId}:${request.uiState!.busy!.activity}`)
                     .sort(),
             ).toEqual([
+                'step-1:asking',
                 'step-1:checking',
+                'step-1:question-waiting',
                 'step-1:second-opinion',
+                'step-2:asking',
                 'step-2:checking',
+                'step-2:question-waiting',
                 'step-2:second-opinion',
+                'step-3:asking',
                 'step-3:checking',
+                'step-3:question-waiting',
                 'step-3:second-opinion',
             ]),
         )

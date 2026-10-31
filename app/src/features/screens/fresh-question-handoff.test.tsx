@@ -9,6 +9,7 @@ import { deferred, entry, source } from './test-support/route-harness'
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { JsonElement } from 'test-renderer'
+import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 
 jest.mock('expo-router/build/testing-library/mocks', () => ({}))
 jest.mock('react', () => {
@@ -105,6 +106,7 @@ interface Commit {
     sheetPhoto: number | null
     outerPhoto: number | null
     outerTitle: string
+    outerOrigin: string | null
     answerText: boolean
 }
 function all(root: JsonElement | null, predicate: (node: JsonElement) => boolean): JsonElement[] {
@@ -134,6 +136,7 @@ function commit(mounted: Mounted): Commit {
         sheetPhoto: photoWidth(sheet),
         outerPhoto: photoWidth(outer),
         outerTitle: strings(all(outer, (node) => node.props.testID === 'document-header-copy')[0] ?? null).join(' '),
+        outerOrigin: parseNativeMeterMarkers(outer?.props.nativeID).origin,
         answerText: strings(outer).includes('The groove faces inward.'),
     }
 }
@@ -195,6 +198,9 @@ it('keeps a fresh point-only Question through a real 202 and does not conceal it
                 [],
             )
             expect(beforeLoad.some((row) => row.answer && row.outerPhoto === 0)).toBe(true)
+            // The focused Guide still belongs to the visible-screen union beneath its sheet. Its known question
+            // activities need generated documents too; the Question's generated origin cannot credit that Guide.
+            expect(beforeLoad.filter((row) => row.outerOrigin !== 'generated')).toEqual([])
             expect(beforeLoad.filter((row) => row.answerText)).toEqual([])
 
             const page = within(screen.getByTestId('guide-screen', { includeHiddenElements: true }))
