@@ -537,6 +537,50 @@ describe('reduced motion', () => {
 })
 
 describe('live targets and placement', () => {
+    it.each(['documentId', 'documentState', 'documentPath'] as const)(
+        'refreshes the actual CoachMark witness when only %s changes',
+        async (field) => {
+            const { store } = await readyStore()
+            const first: CoachCandidate = {
+                ...HOME[0]!,
+                documentId: 'a'.repeat(64),
+                documentState: 'ready',
+                documentPath: 'overlays.0',
+            }
+            const next: CoachCandidate = {
+                ...first,
+                [field]: field === 'documentId' ? 'b'.repeat(64) : field === 'documentState' ? 'busy' : 'overlays.1',
+            }
+            function Witness(): ReactElement {
+                return (
+                    <Text testID="active-coach-witness">{JSON.stringify(useCoach()?.active?.candidate ?? null)}</Text>
+                )
+            }
+            const tree = (candidate: CoachCandidate): ReactElement => (
+                <CoachHarness store={store}>
+                    <Home candidates={[candidate]} presses={{}} />
+                    <Witness />
+                </CoachHarness>
+            )
+            const view = await render(tree(first))
+            await waitFor(() =>
+                expect(
+                    JSON.parse(
+                        screen.getByTestId('active-coach-witness', { includeHiddenElements: true }).props.children,
+                    ),
+                ).toEqual(first),
+            )
+            await view.rerender(tree(next))
+            await waitFor(() =>
+                expect(
+                    JSON.parse(
+                        screen.getByTestId('active-coach-witness', { includeHiddenElements: true }).props.children,
+                    ),
+                ).toEqual(next),
+            )
+        },
+    )
+
     it('refreshes copy and geometry for a changed candidate with the same target id', async () => {
         const { store } = await readyStore()
         const measure = fakeMeasure()

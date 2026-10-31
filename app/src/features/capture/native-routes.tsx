@@ -447,13 +447,16 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
             if (href !== null) go(href, 'push', here())
             if (preparation !== null && href === preparation.sourcePath) owner.cancel()
         }
-        const navigate = async (route: 'pages' | 'overview' | 'guide'): Promise<void> => {
+        const navigate = async (
+            route: 'pages' | 'overview' | 'guide',
+            options?: Parameters<CaptureController['navigate']>[1],
+        ): Promise<void> => {
             if (owner.getSnapshot() !== null) return
             const id = controller.getSnapshot().selectedId
             const kind = route === 'guide' ? 'guide' : route === 'overview' ? 'quick-check' : null
             const preparation =
                 id !== null && kind !== null && prepares(documents, kind) ? owner.begin(here, id, kind) : null
-            controller.navigate(route)
+            controller.navigate(route, options)
             if (preparation !== null && kind !== null && documents !== null && documents !== undefined) {
                 if (!(await awaitTarget(controller, documents, owner, preparation, kind))) return
             }
@@ -567,8 +570,8 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
                 controller.home()
                 go('/', 'dismissTo', here())
             },
-            navigate: (route): void => {
-                void navigate(route)
+            navigate: (route, options): void => {
+                void navigate(route, options)
             },
             open,
             parse: async (language) => {
@@ -654,7 +657,7 @@ export function useWorkflowActions(): { controller: WorkflowController; nav: Scr
                 owner.cancel()
                 go('/', 'dismissTo', here())
             },
-            editPages: (): void => wrapped.navigate('pages'),
+            editPages: (options): void => wrapped.navigate('pages', options),
             leave: (): void => wrapped.home(),
             back: (): void => {
                 const pending = owner.getSnapshot()

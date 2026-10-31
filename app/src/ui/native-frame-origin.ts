@@ -1,4 +1,10 @@
-import { screenDocumentV2Schema, type ScreenDocumentV2, type VariantState } from '@truebuild/contracts'
+import {
+    screenDocumentV2Schema,
+    variantsOfV2,
+    visitVariantNodesV2,
+    type ScreenDocumentV2,
+    type VariantState,
+} from '@truebuild/contracts'
 import { composeNativeMeterMarkers, parseNativeMeterMarkers, type NativeMeterOrigin } from './native-meter-markers'
 
 /** The bridge uses only the public native host API; no React or renderer internals are inspected. */
@@ -170,7 +176,15 @@ export class NativeFrameOriginRegistry {
         if (!isNode(anchor) || !screenDocumentV2Schema.safeParse(document).success) return (): void => {}
         const prefix = options.state === undefined || options.state === 'ready' ? '' : `states.${options.state}.`
         const path = options.originPath ?? `${prefix}body`
-        if (path !== `${prefix}body` && !path.startsWith(`${prefix}body.`)) return (): void => {}
+        let coachPath = false
+        if (options.role === 'modal') {
+            const selected = variantsOfV2(document).find((item) => item.prefix === prefix)
+            if (selected !== undefined)
+                visitVariantNodesV2(selected.variant, prefix, (entry) => {
+                    if (entry.path === path && entry.node.type === 'CoachMark') coachPath = true
+                })
+        }
+        if (path !== `${prefix}body` && !path.startsWith(`${prefix}body.`) && !coachPath) return (): void => {}
         const origin = document.metadata.origins[path]
         if (origin === undefined) return (): void => {}
         let planned: ReturnType<typeof framePath>

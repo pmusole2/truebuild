@@ -8,7 +8,7 @@ import { screenDocumentV2Schema } from '@truebuild/contracts'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
 import { DocumentRoot } from '../documents/document-renderer'
-import { DocumentNavigationRoot, DocumentOwnershipProvider, DocumentRouteBoundary } from '../documents/ownership'
+import { DocumentNavigationRoot, DocumentOwnershipProvider } from '../documents/ownership'
 import { hostsOutsideDocuments, type OwnershipTree } from '../documents/ownership-audit'
 import { AppUnavailableScreen } from './app-unavailable'
 
@@ -28,9 +28,7 @@ function wrap(ownership = false): ReactElement {
                 {ownership ? (
                     <DocumentOwnershipProvider>
                         <DocumentNavigationRoot>
-                            <DocumentRouteBoundary>
-                                <AppUnavailableScreen />
-                            </DocumentRouteBoundary>
+                            <AppUnavailableScreen />
                         </DocumentNavigationRoot>
                     </DocumentOwnershipProvider>
                 ) : (

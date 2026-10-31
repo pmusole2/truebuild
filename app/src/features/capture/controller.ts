@@ -455,9 +455,9 @@ export class CaptureController {
         this.invalidate()
         this.publish({ route: 'library', selectedId: null, notice: null, pageUris: {} })
     }
-    navigate = (route: 'pages' | 'overview' | 'guide'): void => {
+    navigate = (route: 'pages' | 'overview' | 'guide', options?: { readonly keepNotice?: true }): void => {
         this.invalidate()
-        this.publish({ route, notice: null, cameraIntent: null })
+        this.publish({ route, notice: options?.keepNotice === true ? this.state.notice : null, cameraIntent: null })
     }
     camera = (intent: CameraIntent): void => {
         if (this.state.pending !== null || this.saving || this.state.storageReadOnly) {
@@ -746,6 +746,7 @@ export class CaptureController {
             if ((await this.persist(this.replacement(next))) && token === this.epoch) {
                 this.publish({
                     route: 'overview',
+                    pending: null,
                     notice: 'Review every fact against the page diagrams before confirming.',
                 })
             }

@@ -74,6 +74,29 @@ function modalFixture(): { root: Node; modal: Node; wrapper: Node; safe: Node; a
 }
 
 describe('exclusive native modal frames', () => {
+    it('accepts a selected actual CoachMark path only for the modal bridge', () => {
+        const registry = new NativeFrameOriginRegistry()
+        expect(document.overlays[0]!.content.type).toBe('CoachMark')
+        const modal = modalFixture()
+        const release = registry.bindModal(modal.anchor, document, {
+            focused: true,
+            visible: true,
+            state: 'ready',
+            originPath: 'overlays.0',
+        })
+        expect(registry.markerFor(modal.modal)).toContain(`truebuild-document-content-boundary:${document.screenId}`)
+        release()
+        const route = fixture()
+        registry.bind(route.anchor, document, { focused: true, originPath: 'overlays.0' })
+        expect(route.screen.commands).toEqual([])
+        registry.bindModal(modal.anchor, document, {
+            focused: true,
+            visible: true,
+            state: 'busy',
+            originPath: 'overlays.0',
+        })
+        expect(registry.markerFor(modal.modal)).toBeUndefined()
+    })
     it('attributes only the published modal frame, never RootView or unrelated siblings, and restores on close', () => {
         const tree = modalFixture()
         const release = nativeFrameOrigins.bindModal(tree.anchor, document, { focused: true, visible: true })

@@ -228,7 +228,8 @@ export function DocumentSurface({
     useEffect(() => {
         if (futureKey !== null) workflow.documents?.warmup(futureDocumentStates(futureInputs.current))
     }, [workflow.documents, futureKey])
-    useDocumentOwner(reading.document, focused && !more.open && !judgeOpen, reading.activeState)
+    // A sheet obscures content without blurring the actual native route and its navigation frame.
+    useDocumentOwner(reading.document, focused && !more.open && !judgeOpen, reading.activeState, focused)
     useEffect(() => {
         if (presentedResult !== null && presentedResult.document.bound.captureId !== state.capture?.binding.captureId)
             setPresentedResult(null)
@@ -417,7 +418,7 @@ export function DocumentSurface({
                         if (entry !== undefined) workflow.documents?.cancelReading(entry.session.manualId)
                         controller.cancel()
                         readingConfirmation?.onChange(false)
-                        setTimeout(nav.back, 0)
+                        setTimeout((): void => nav.editPages({ keepNotice: true }), 0)
                     }
                 },
             }
@@ -491,6 +492,8 @@ export function DocumentSurface({
                 sentence: node.body,
                 textOrigin: origin,
                 documentId: reading.document.screenId,
+                documentState: reading.activeState,
+                documentPath: path,
             })
         }
     })

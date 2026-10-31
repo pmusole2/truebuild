@@ -139,33 +139,63 @@ it('keeps a witnessed Home ready composition while saving leaves its displayed f
     expect(root('pages-screen')?.origin).toBe('generated')
 })
 
-it('retains the generated Reading document until the exact first Quick check question is generated', async () => {
-    const gate = deferred<void>()
+it.each(['unparsed', 'unreviewed'] as const)(
+    'keeps the %s manual read running after Keep, then enters the exact generated Quick check',
+    async (stage) => {
+        const gate = deferred<void>()
+        const parse = deferred<void>()
+        mounted = await mount([entry('readiness', stage)], {
+            screens: { generated: ['quick-check'], gate: gate.promise },
+            replies: { parse: parse.promise },
+        })
+        await act(async () => mounted!.controller.open('readiness', 'pages'))
+        await fireEvent.press(await screen.findByTestId('read-manual'))
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/reading/readiness'))
+        const previous = root('reading-screen')
+        expect(previous?.origin).toBe('generated')
+        await press('Back')
+        await press('Keep reading')
+        expect(mounted.controller.getSnapshot().pending).toMatch(/^Reading/u)
+        expect(mounted.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1)
+        await act(async () => parse.resolve())
+        await flush()
+        expect(mounted.controller.getSnapshot().route).toBe('overview')
+        expect(mounted.view.getPathname()).toBe('/reading/readiness')
+        expect(root('reading-screen')?.documentRoot).toBe(previous?.documentRoot)
+        expect(primary('reading-screen')).toBeDisabled()
+        await act(async () => gate.resolve())
+        await waitFor(() => expect(mounted!.view.getPathname()).toBe('/check/readiness'))
+        expect(root('overview-screen')?.origin).toBe('generated')
+        const request = mounted.server.requests.find(
+            (request) => request.op === 'generate' && request.kind === 'quick-check',
+        )
+        expect(request?.uiState?.busy).toBeNull()
+        expect(request?.uiState?.review?.currentQuestion).toBeNull()
+        expect(screen.getByTestId('quick-check-start')).toBeEnabled()
+    },
+)
+
+it('stops a re-read at the actual Pages destination and keeps its cancel notice and previous extraction', async () => {
     const parse = deferred<void>()
-    mounted = await mount([entry('readiness', 'unparsed')], {
-        screens: { generated: ['quick-check'], gate: gate.promise },
-        replies: { parse: parse.promise },
-    })
-    await act(async () => mounted!.controller.open('readiness', 'pages'))
-    await fireEvent.press(await screen.findByTestId('read-manual'))
-    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/reading/readiness'))
-    const previous = root('reading-screen')
-    expect(previous?.origin).toBe('generated')
+    mounted = await mount([entry('reread-stop', 'unreviewed')], { replies: { parse: parse.promise } })
+    await act(async () => mounted!.controller.open('reread-stop', 'overview'))
+    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/check/reread-stop'))
+    const before = structuredClone(mounted.controller.current!.session)
+    await press('Read again')
+    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/reading/reread-stop'))
+    await waitFor(() => expect(mounted!.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1))
+    await press('Back')
+    await press('Stop reading')
+    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/add'))
+    expect(screen.getAllByText('Stopped, so nothing more will be shown.')).toHaveLength(1)
+    expect(mounted.controller.current!.session).toEqual(before)
+    expect(mounted.controller.getSnapshot().route).toBe('pages')
     await act(async () => parse.resolve())
     await flush()
-    expect(mounted.controller.getSnapshot().route).toBe('overview')
-    expect(mounted.view.getPathname()).toBe('/reading/readiness')
-    expect(root('reading-screen')?.documentRoot).toBe(previous?.documentRoot)
-    expect(primary('reading-screen')).toBeDisabled()
-    await act(async () => gate.resolve())
-    await waitFor(() => expect(mounted!.view.getPathname()).toBe('/check/readiness'))
-    expect(root('overview-screen')?.origin).toBe('generated')
-    const request = mounted.server.requests.find(
-        (request) => request.op === 'generate' && request.kind === 'quick-check',
-    )
-    expect(request?.uiState?.busy).toBeNull()
-    expect(request?.uiState?.review?.currentQuestion).toBeNull()
-    expect(screen.getByTestId('quick-check-start')).toBeEnabled()
+    expect(mounted.view.getPathname()).toBe('/add')
+    expect(mounted.controller.current!.session).toEqual(before)
+    expect((await mounted.storage.restore()).entries[0]!.session).toEqual(before)
+    expect(mounted.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1)
 })
 
 it('preserves the actual generated last result while saved completion prepares, then shows generated Done', async () => {

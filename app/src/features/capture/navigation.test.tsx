@@ -653,6 +653,7 @@ it.each([false, true])(
                 index: {
                     default: (): ReactModule.ReactElement => (
                         <DocumentRouteBoundary>
+                            <IndexRoute />
                             <BottomSheet visible title="" documentFrame onClose={(): void => undefined}>
                                 <DocumentSurface kind="more" />
                                 {stray ? <View testID="unowned-modal-leftover" /> : null}
@@ -675,6 +676,12 @@ it('the actual More and nested judge entry publish document owners while their M
     await runtime([entry()])
     await mount()
     await press('Keep building')
+    const routeDocument = parseNativeMeterMarkers(screen.getByTestId('guide-screen').props.nativeID).documentRoot
+    const checkNavigationOwner = (): void =>
+        expect(
+            parseNativeMeterMarkers(screen.getByTestId('document-navigation-root').props.nativeID).documentNavigation,
+        ).toBe(routeDocument)
+    checkNavigationOwner()
     await press('More')
     await screen.findByTestId('more-sheet')
     const check = (count: number): void => {
@@ -691,6 +698,7 @@ it('the actual More and nested judge entry publish document owners while their M
             expect(markers.origin).not.toBeNull()
         }
         expect(hostsOutsideDocuments(actualRoot(), ids)).toEqual([])
+        checkNavigationOwner()
     }
     await waitFor(() => check(1))
     await fireEvent.press(screen.getByTestId('judge-entry'))

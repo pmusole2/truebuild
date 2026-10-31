@@ -590,7 +590,10 @@ function sameReport(a: CoachReport, b: CoachReport): boolean {
                 candidate.kind === other.kind &&
                 candidate.heading === other.heading &&
                 candidate.sentence === other.sentence &&
-                candidate.textOrigin === other.textOrigin
+                candidate.textOrigin === other.textOrigin &&
+                candidate.documentId === other.documentId &&
+                candidate.documentState === other.documentState &&
+                candidate.documentPath === other.documentPath
             )
         })
     )

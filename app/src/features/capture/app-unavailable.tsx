@@ -3,7 +3,7 @@ import { reloadAppAsync } from 'expo'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { buildFallbackDocumentV2, screenDocumentV2Schema } from '@truebuild/contracts'
 import { DocumentRoot } from '../documents/document-renderer'
-import { useDocumentOwner } from '../documents/ownership'
+import { DocumentRouteBoundary, useDocumentOwner } from '../documents/ownership'
 import { sha256Hex } from '../documents/sha256'
 import type { FrameBindings } from '../documents/types'
 import { useJudge } from '../screens/judge-context'
@@ -14,6 +14,14 @@ const RELOAD_NOTICE = 'Close and reopen TrueBuild.'
 
 /** The initialization boundary has no controller yet; its only earned recovery capability is an explicit app reload. */
 export function AppUnavailableScreen(): ReactElement {
+    return (
+        <DocumentRouteBoundary>
+            <StartupRecoveryDocument />
+        </DocumentRouteBoundary>
+    )
+}
+
+function StartupRecoveryDocument(): ReactElement {
     const insets = useSafeAreaInsets()
     const { showBuilt } = useJudge()
     const [reloading, setReloading] = useState(false)
@@ -44,7 +52,7 @@ export function AppUnavailableScreen(): ReactElement {
             ),
         [],
     )
-    useDocumentOwner(document, true)
+    useDocumentOwner(document, true, reloading ? 'busy' : 'ready')
     const retry = (): void => {
         if (inFlight.current) return
         inFlight.current = true

@@ -17,7 +17,7 @@ export type ScreenNav = {
     // Back to the list of builds without touching any workflow state.
     readonly allBuilds: () => void
     // Back to the pages of the manual being read.
-    readonly editPages: () => void
+    readonly editPages: (options?: { readonly keepNotice?: true }) => void
     // Leave a finished build for Home.
     readonly leave: () => void
     // One screen back, keeping whatever the workflow holds.
@@ -38,7 +38,7 @@ export function defaultNav(controller: WorkflowController): ScreenNav {
             await controller.completeStep()
         },
         allBuilds: (): void => controller.home(),
-        editPages: (): void => controller.navigate('pages'),
+        editPages: (options): void => controller.navigate('pages', options),
         leave: (): void => controller.home(),
         back: (): void => controller.navigate('pages'),
     }

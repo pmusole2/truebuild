@@ -192,6 +192,26 @@ async function ready(responder?: ModelFetch): Promise<ReturnType<typeof setup>> 
     return runtime
 }
 
+it('publishes the successful parse destination and terminal pending state atomically to synchronous subscribers', async () => {
+    const { controller } = await ready()
+    controller.navigate('pages')
+    const before = controller.current!.session.revision
+    const overview: ReturnType<typeof controller.getSnapshot>[] = []
+    const stop = controller.subscribe(() => {
+        const state = controller.getSnapshot()
+        if (state.route === 'overview') overview.push(state)
+    })
+    try {
+        await controller.parse()
+        expect(overview.length).toBeGreaterThan(0)
+        expect(overview.every((state) => state.pending === null)).toBe(true)
+        expect(controller.current!.session.revision).toBe(before + 1)
+        expect(controller.current!.session.reviewStatus).toBe('unreviewed')
+    } finally {
+        stop()
+    }
+})
+
 describe('read-only manual page images', () => {
     it.each(['query', 'open'] as const)(
         'waits for a retiring save to publish before admitting %s during post-manifest GC',

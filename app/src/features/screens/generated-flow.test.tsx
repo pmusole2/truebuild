@@ -7,6 +7,7 @@ import { createController, createDocuments, createScreens } from '../capture/con
 import {
     documentMaterialV2,
     STATE_COPY_V2,
+    variantsOfV2,
     type ScreenContextInputsV2,
     type ScreenProposalV2,
     type ScreenNodeV2,
@@ -355,6 +356,154 @@ describe('Result composed after an immediate verdict', () => {
         await press('Next step')
         await waitFor(() => expect(controller.current?.completedStepIds).toEqual(['step-1']))
     })
+
+    it.each(['none', 'more'] as const)(
+        'keeps the loaded photo through late exact compositions with %s covering the result',
+        async (sheet) => {
+            await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: true }))
+            const primary = deferred<void>()
+            const closer = deferred<void>()
+            const busyComposition = deferred<void>()
+            const finalComposition = deferred<void>()
+            let compositionGate: Promise<void> | undefined
+            let checks = 0
+            const { controller, server, store } = await atGuide({
+                screens: {
+                    generated: ['result'],
+                    recordedMetadata: true,
+                    get gate() {
+                        return compositionGate
+                    },
+                    arrange: (proposal, inputs) => {
+                        if (inputs.kind !== 'result') return proposal
+                        for (const { variant } of variantsOfV2(proposal)) {
+                            if (variant.body.type !== 'Scroll' || variant.body.children[0]?.type !== 'Stack')
+                                throw new Error('expected_result_fixture_spine')
+                            variant.body.children[0].children = [
+                                {
+                                    type: 'Card',
+                                    surface: 'raised',
+                                    padding: 'md',
+                                    tone: 'neutral',
+                                    children: variant.body.children[0].children,
+                                },
+                            ]
+                        }
+                        return proposal
+                    },
+                },
+                replies: {
+                    check_gate: primary.promise,
+                    check: async () => {
+                        if (++checks === 1)
+                            return {
+                                decision: 'cannot_verify',
+                                reason: 'The near joint is hidden.',
+                                missingEvidence: ['Show the near joint.'],
+                                model: 'muse-spark-1.3',
+                                secondOpinion: { status: 'available', model: 'muse-wonder-1.0', token: 'one-use' },
+                            }
+                        await closer.promise
+                        return {
+                            decision: 'refuse',
+                            reason: 'The near joint is reversed.',
+                            missingEvidence: [],
+                            model: 'muse-wonder-1.0',
+                            secondOpinion: { status: 'completed', model: 'muse-wonder-1.0' },
+                        }
+                    },
+                },
+            })
+            compositionGate = busyComposition.promise
+            await press('Take photo')
+            let checking!: Promise<void>
+            await act(async () => {
+                checking = controller.shutter(async () => source)
+            })
+            await screen.findByTestId('frozen-photo-image')
+            await loadPhoto()
+            const heldImage = screen.getByTestId('frozen-photo-image')
+            const heldCapture = controller.getSnapshot().capture!
+            const heldUri = heldImage.props.source.uri as string
+            await act(async () => primary.resolve())
+            await waitFor(() => expect(controller.getSnapshot().check?.decision).toBe('cannot_verify'))
+            expect(screen.getByText('Taking a closer look…')).toBeTruthy()
+            expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
+            const busyRequest = server.requests.find(
+                (request) =>
+                    request.op === 'generate' &&
+                    request.kind === 'result' &&
+                    request.result?.kind === 'check' &&
+                    request.uiState?.busy?.activity === 'second-opinion',
+            )!
+            const busyInputs = inputsFromDocumentMetadata(busyRequest)
+            const busyDocument = store.peek(busyInputs)!.document
+            await act(async () => busyComposition.resolve())
+            await waitFor(() => expect(store.peek(busyInputs)?.exactGeneration).toBeUndefined())
+            expect(store.peek(busyInputs)?.issue).toBeNull()
+            expect(store.peek(busyInputs)?.document.screenId).not.toBe(busyDocument.screenId)
+            expect(screen.getByTestId('frozen-photo-image').props.style.width).toBeGreaterThan(0)
+            expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
+            expect(screen.getByText('Taking a closer look…')).toBeTruthy()
+            expect(screen.getByTestId('guide-screen').props.nativeID).toContain(busyDocument.screenId)
+
+            compositionGate = finalComposition.promise
+            await act(async () => {
+                closer.resolve()
+                await checking
+            })
+            await waitFor(() => expect(controller.getSnapshot().pending).toBeNull())
+            expect(controller.getSnapshot().check?.decision).toBe('refuse')
+            expect(screen.getByText('The near joint is reversed.')).toBeTruthy()
+            expect(screen.queryByText('The near joint is hidden.')).toBeNull()
+            expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
+            expect(screen.getByTestId('frozen-photo-image').props.source.uri).toBe(heldUri)
+            expect(controller.getSnapshot().capture).toBe(heldCapture)
+            const finalRequest = server.requests.find(
+                (request) =>
+                    request.op === 'generate' &&
+                    request.kind === 'result' &&
+                    request.result?.kind === 'check' &&
+                    request.result.value.decision === 'refuse' &&
+                    request.uiState?.busy == null,
+            )!
+            const finalInputs = inputsFromDocumentMetadata(finalRequest)
+            const finalDocument = store.peek(finalInputs)!.document
+            if (sheet !== 'none') {
+                await press('More')
+                await screen.findByTestId('more-sheet')
+            }
+            await act(async () => finalComposition.resolve())
+            await waitFor(() => expect(store.peek(finalInputs)?.exactGeneration).toBeUndefined())
+            expect(store.peek(finalInputs)?.issue).toBeNull()
+            expect(store.peek(finalInputs)?.document.screenId).not.toBe(finalDocument.screenId)
+            if (sheet !== 'none') {
+                await fireEvent.press(screen.getByTestId('close-sheet'))
+                await waitFor(() => expect(screen.queryByTestId('more-sheet')).toBeNull())
+            }
+            expect(screen.getByTestId('guide-screen').props.nativeID).toContain(finalDocument.screenId)
+            expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
+            expect(screen.getByText('The near joint is reversed.')).toBeTruthy()
+            expect(screen.getByRole('button', { name: 'Retake photo' })).toBeEnabled()
+            for (const request of [busyRequest, finalRequest])
+                expect(
+                    server.requests.filter(
+                        (candidate) => candidate.op === 'generate' && candidate.contextKey === request.contextKey,
+                    ),
+                ).toHaveLength(1)
+            // The cached exact response has an arrival time, but its metadata and receipt do not describe this display.
+            expect(store.readyAt(finalInputs)).not.toBeNull()
+            expect(store.peek(finalInputs)?.document.metadata.timing.totalMs).toBe(3_420)
+            await fireEvent.press(screen.getByTestId('judge-summary-details'))
+            const details = within(await screen.findByTestId('judge-details'))
+            expect(
+                details.getByText(
+                    /^2\. Result screen: Simulated fixture composition, model Not recorded, effort Not recorded, provider Not recorded$/u,
+                ),
+            ).toBeTruthy()
+            expect(details.queryByText(/Result screen:.*provider 3420 ms/u)).toBeNull()
+        },
+    )
 
     it('refuses a result document whose banner names another verdict and keeps the authored current result', async () => {
         const { controller, store, server, view } = await atGuide({

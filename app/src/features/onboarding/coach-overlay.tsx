@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentRef, type ReactElement } from 'react'
+import {
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type ComponentRef,
+    type ReactElement,
+    type RefObject,
+} from 'react'
 import {
     AccessibilityInfo,
     Modal,
@@ -33,6 +41,7 @@ import { bubbleMaxHeight, bubbleWidth, cutoutOf, placeBubble, type Placement } f
 import { useCoach } from './coach-provider'
 import type { ActiveStep, Rect } from './coach-types'
 import { mergeNativeIds, originId } from '../screens/render-origin'
+import { coachFrameOwner, useDocumentFrameOwner, useDocumentModalFrameBinding } from '../documents/ownership'
 
 type Controls = {
     readonly next: () => void
@@ -53,14 +62,22 @@ export function CoachRootOverlay({
     controls: Controls
     evidenceScene?: string
 }): ReactElement {
-    const view = <CoachOverlayView step={active} controls={controls} evidenceScene={evidenceScene} />
+    const owner = coachFrameOwner(useDocumentFrameOwner(), active.candidate)
+    const frame = useRef<ComponentRef<typeof View>>(null)
+    const android = Platform.OS === 'android'
+    useDocumentModalFrameBinding(frame, android ? owner : null, android && owner !== null)
+    const view = (
+        <CoachOverlayView
+            step={active}
+            controls={controls}
+            evidenceScene={evidenceScene}
+            frameRoot={android ? frame : undefined}
+        />
+    )
     const marker =
-        active.candidate.documentId === undefined
+        owner === null
             ? originId('shell')
-            : mergeNativeIds(
-                  `truebuild-document-root:${active.candidate.documentId}`,
-                  originId(active.candidate.textOrigin ?? 'shell'),
-              )
+            : mergeNativeIds(`truebuild-document-root:${owner.documentId}`, originId(owner.origin))
     return Platform.OS === 'ios' ? (
         // FullWindowOverlay does not forward nativeID. This frame contains only this CoachMark's portal.
         <View nativeID={marker} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}>
@@ -109,11 +126,15 @@ export function CoachOverlayView({
     step,
     controls,
     evidenceScene,
+    frameRoot,
 }: {
     step: ActiveStep
     controls: Controls
     evidenceScene?: string
+    frameRoot?: RefObject<ComponentRef<typeof View> | null>
 }): ReactElement {
+    const owner = coachFrameOwner(useDocumentFrameOwner(), step.candidate)
+    const origin = owner?.origin ?? 'shell'
     const { colors, scheme } = useTheme()
     const { reduceMotion } = useFeedback()
     const window = useCoachWindow()
@@ -260,13 +281,17 @@ export function CoachOverlayView({
     ]
     return (
         <View
+            ref={frameRoot}
             testID="coach-overlay"
             nativeID={
-                step.candidate.documentId === undefined
-                    ? undefined
+                owner === null
+                    ? originId('shell')
                     : mergeNativeIds(
-                          `truebuild-document-root:${step.candidate.documentId}`,
-                          originId(step.candidate.textOrigin ?? 'shell'),
+                          `truebuild-document-root:${owner.documentId}`,
+                          frameRoot === undefined
+                              ? undefined
+                              : `truebuild-document-content-boundary:${owner.documentId}`,
+                          originId(origin),
                       )
             }
             style={styles.root}
@@ -276,6 +301,7 @@ export function CoachOverlayView({
             onAccessibilityEscape={controls.skip}
         >
             <View
+                nativeID={originId(origin)}
                 testID={evidenceScene === undefined ? undefined : `inert-tour-scene-${evidenceScene}`}
                 collapsable={false}
                 style={styles.root}
@@ -356,7 +382,7 @@ export function CoachOverlayView({
                             testID="coach-heading"
                             accessible={true}
                             accessibilityRole="header"
-                            nativeID={originId(step.candidate.textOrigin ?? 'shell')}
+                            nativeID={originId(origin)}
                         >
                             <Heading>{heading}</Heading>
                         </View>
@@ -370,7 +396,7 @@ export function CoachOverlayView({
                         <View
                             ref={large ? attachMeterRoot : undefined}
                             testID={large ? 'coach-heading' : undefined}
-                            nativeID={originId(step.candidate.textOrigin ?? 'shell')}
+                            nativeID={originId(origin)}
                         >
                             <Body>{step.candidate.sentence}</Body>
                         </View>

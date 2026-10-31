@@ -3,6 +3,7 @@ import {
     variantsOfV2,
     type ScreenContextInputsV2,
     type ScreenDocumentV2,
+    type ScreenNodeV2,
     type ScreenVariantV2,
     type VariantState,
 } from '@truebuild/contracts'
@@ -29,6 +30,22 @@ export function activeDocumentVariant(
     return { variant: selected.variant, activeState: selected.name }
 }
 
+/** Child positions and container types own the native photo instance, independently of the document's content. */
+function capturePlacement(document: ScreenDocumentV2): string {
+    return JSON.stringify(
+        variantsOfV2(document).map(({ name, variant }) => {
+            const paths: string[][] = []
+            const visit = (node: ScreenNodeV2, parents: string[]): void => {
+                const path = [...parents, node.type === 'Section' ? `${node.type}:${node.collapsible}` : node.type]
+                if (node.type === 'Image' && node.source.kind === 'capture') paths.push(path)
+                if ('children' in node) node.children.forEach((child, index) => visit(child, [...path, String(index)]))
+            }
+            visit(variant.body, [])
+            return [name, paths]
+        }),
+    )
+}
+
 /** Always returns the actual complete v2 document and its active full variant. No v1 slot/frame conversion. */
 export function useDocument(
     inputs: ScreenContextInputsV2,
@@ -39,8 +56,8 @@ export function useDocument(
     const store = workflow?.documents ?? local
     const version = useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
     const key = documentKey(inputs)
-    // Verdict/answer truth and its photo are already visible in the local complete document. The deeper composition
-    // may arrive later for this exact keyed capture/result; it must not make the person leave and reopen that result.
+    // Verdict/answer truth and its photo are already visible in the local complete document. A compatible deeper
+    // composition may arrive later for this exact keyed capture/result without remounting the loaded native photo.
     const progressiveResult =
         (inputs.kind === 'result' || inputs.kind === 'answer') && inputs.captureId !== null && inputs.result !== null
     const entry = store.peek(inputs)
@@ -62,11 +79,15 @@ export function useDocument(
                 : prior,
         [prior, entry, cacheIssue],
     )
+    // Keep an incompatible exact composition cached for the next mount. The retained entry is key-scoped above,
+    // so a changed result or capture still selects its fresh complete document immediately.
     const preserveGenerated =
-        options.focused === true &&
+        (options.focused === true || progressiveResult) &&
         prior?.document.metadata.source === 'generated' &&
-        !(progressiveResult && prior.exactGeneration !== undefined) &&
-        (entry?.status !== 'ready' || entry.document.screenId !== prior.document.screenId)
+        (entry?.status !== 'ready' || entry.document.screenId !== prior.document.screenId) &&
+        (!progressiveResult ||
+            prior.exactGeneration === undefined ||
+            (entry?.status === 'ready' && capturePlacement(prior.document) !== capturePlacement(entry.document)))
     const current = preserveGenerated ? prior : (entry ?? availablePrior ?? evicted ?? preview)
     const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const grace = useRef({ key, elapsed: 0 })
