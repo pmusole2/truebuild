@@ -3,23 +3,17 @@
  * budgets, not measured provider bounds: the overall budget covers one first attempt plus at most one repair, and the
  * route allows a small margin on top of it before it answers.
  */
-export const PARSE_DEFAULT_OVERALL_MS = 100_000
-export const PARSE_FIRST_ATTEMPT_BASE_MS = 55_000
-export const PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS = 10_000
-export const PARSE_FIRST_ATTEMPT_MAX_MS = 95_000
-export const PARSE_BASE_PAGES = 4
+export const PARSE_DEFAULT_OVERALL_MS = 80_000 // User-paid parse baseline 31–35 s; user-selected overall headroom.
+export const PARSE_FIRST_ATTEMPT_BASE_MS = 55_000 // Paid medium parse baseline 31–35 s; requested first-attempt headroom.
 export const PARSE_REPAIR_MS = 40_000
+export const PARSE_MIN_REPAIR_MS = 20_000 // User-selected repair floor after the user-paid 31–35 s parse baseline.
 export const PARSE_RETURN_MARGIN_MS = 1_000
 /** Route allowance beyond the overall budget (admission, multipart, media, response); also the client's minimum margin. */
 export const PARSE_ROUTE_MARGIN_MS = 5_000
 
-/** 55 s through four pages, then 10 s per page, capped at 95 s and at what the overall budget leaves for a return. */
-export function parseFirstAttemptTimeoutMs(pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
-    return Math.min(
-        PARSE_FIRST_ATTEMPT_MAX_MS,
-        PARSE_FIRST_ATTEMPT_BASE_MS + Math.max(0, pageCount - PARSE_BASE_PAGES) * PARSE_FIRST_ATTEMPT_PER_EXTRA_PAGE_MS,
-        Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS),
-    )
+/** User-selected 55 s at every page count, bounded by the configured overall budget and return margin. */
+export function parseFirstAttemptTimeoutMs(_pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
+    return Math.min(PARSE_FIRST_ATTEMPT_BASE_MS, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
 }
 
 /** The layered parse budgets actually executed for a configured overall budget. */
@@ -30,6 +24,7 @@ export function describeParseBudget(overallMs: number): Record<string, number> {
         firstAttemptMinMs: parseFirstAttemptTimeoutMs(1, overallMs),
         firstAttemptMaxMs: parseFirstAttemptTimeoutMs(Number.MAX_SAFE_INTEGER, overallMs),
         repairMs: PARSE_REPAIR_MS,
+        minimumRepairMs: PARSE_MIN_REPAIR_MS,
         clientMinimumMs: overallMs + PARSE_ROUTE_MARGIN_MS,
     }
 }

@@ -39,8 +39,6 @@ const stackOf = (variant: Body): Extract<ScreenNodeV2, { type: 'Stack' }> => {
     if (stack?.type !== 'Stack') throw new Error('A body is a Scroll holding one Stack')
     return stack
 }
-const variantOf = (draft: ScreenProposalV2, name: 'ready' | (typeof STATES)[number]): Body =>
-    name === 'ready' ? draft : draft.states[name]!
 
 describe('the raw provider gate holds a Question to its photo', () => {
     const context = buildDocumentContext(documentInputs('questions'))
@@ -56,23 +54,23 @@ describe('the raw provider gate holds a Question to its photo', () => {
         expect(evaluate(() => undefined)).toMatchObject({ ok: true })
     })
 
-    it.each(['ready', ...STATES] as const)('rejects a %s variant without the held photo', (name) => {
+    it('rejects a ready screen without the held photo', () => {
         const result = evaluate((draft) => {
-            const stack = stackOf(variantOf(draft, name))
+            const stack = stackOf(draft)
             stack.children = stack.children.filter(
                 (child) => !(child.type === 'Image' && child.source.kind === 'capture'),
             )
         })
         expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.issues).toContain(`contract:the_held_photo_is_missing_from_the_${name}_variant`)
+        if (!result.ok) expect(result.issues).toContain('contract:the_held_photo_is_missing_from_the_ready_variant')
     })
 
-    it.each(STATES)('rejects a %s variant that moves the held photo', (name) => {
+    it("rejects a ready screen that moves the held photo off the shell states' spine", () => {
         const result = evaluate((draft) => {
-            stackOf(variantOf(draft, name)).children.unshift({ type: 'Spacer', size: 'sm' })
+            stackOf(draft).children.unshift({ type: 'Spacer', size: 'sm' })
         })
         expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.issues).toContain(`contract:the_${name}_variant_moves_the_held_photo`)
+        if (!result.ok) expect(result.issues).toContain('contract:the_busy_variant_moves_the_held_photo')
     })
 })
 

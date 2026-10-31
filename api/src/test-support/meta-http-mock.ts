@@ -11,14 +11,20 @@ export function defaultWire(
     operation: string,
     model: string,
     secondary: boolean,
+    screenKind?: string,
 ): { effort: (typeof AI_EFFORTS)[number]; maxOutputTokens: number } {
-    if (operation === 'parse') return { effort: 'max', maxOutputTokens: 48_000 }
-    if (operation === 'question' || operation === 'overlay') return { effort: 'max', maxOutputTokens: 32_000 }
-    if (operation === 'screen') return { effort: 'max', maxOutputTokens: model === 'muse-wonder-1.0' ? 48_000 : 32_000 }
+    if (operation === 'parse') return { effort: 'medium', maxOutputTokens: 48_000 }
+    if (operation === 'question') return { effort: 'max', maxOutputTokens: 32_000 }
+    if (operation === 'overlay') return { effort: 'medium', maxOutputTokens: 32_000 }
+    if (operation === 'screen')
+        return {
+            effort: model === 'muse-wonder-1.0' || screenKind === 'quick-check' ? 'medium' : 'low',
+            maxOutputTokens: model === 'muse-wonder-1.0' ? 48_000 : 32_000,
+        }
     // check: Spark verdict is low and provisional; the stronger second opinion is max.
     return secondary || model === 'muse-wonder-1.0'
         ? { effort: 'max', maxOutputTokens: 32_000 }
-        : { effort: 'low', maxOutputTokens: 1_500 }
+        : { effort: 'low', maxOutputTokens: 2_500 }
 }
 
 export type ScreenScenario =
@@ -58,6 +64,10 @@ const requestSchema = z.strictObject({
     store: z.boolean().optional(),
     stream: z.boolean().optional(),
     max_output_tokens: z.number().int().min(16).optional(),
+    prompt_cache_key: z
+        .string()
+        .regex(/^truebuild_(?:parse|check|question|overlay|screen|document)_[a-f0-9]{16}$/u)
+        .optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     instructions: z.string().optional(),
     reasoning: z.strictObject({ effort: z.enum(AI_EFFORTS) }).optional(),
@@ -294,7 +304,11 @@ export async function startMetaMock(
             assert(['parse', 'check', 'question', 'overlay', 'screen'].includes(operation))
             assert.equal(parts[0]?.type, 'input_text')
             if (operation === 'screen' || operation === 'overlay') {
-                const wire = defaultWire(operation, request.model, false)
+                const view =
+                    parts[1]?.type === 'input_text'
+                        ? (JSON.parse(parts[1].text) as { screen?: { kind?: string } })
+                        : undefined
+                const wire = defaultWire(operation, request.model, false, view?.screen?.kind)
                 assert.equal(request.reasoning?.effort, wire.effort)
                 assert.equal(request.max_output_tokens, wire.maxOutputTokens)
             }

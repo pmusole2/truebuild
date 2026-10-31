@@ -73,7 +73,7 @@ export function ReadingScreen({
             ? 'Stop reading? You can start again.'
             : 'Reading your manual. This can take a minute.'
         : state.notice !== null
-          ? 'We could not read those pages. Check your connection and try again.'
+          ? (plainNotice(state.notice) ?? 'We could not read those pages. Try again.')
           : 'Ready to read your manual.'
     const bar = reading
         ? confirming

@@ -2,7 +2,6 @@ import {
     buildFallbackProposalV2,
     createDemoManual,
     manualSessionSchema,
-    variantsOfV2,
     type ManualSession,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -83,25 +82,14 @@ describe('an unreadable safety note at the provider and cache gates (F1)', () =>
         expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThanOrEqual(13)
     })
 
-    it('accepts a raw proposal that states it and rejects one that omits or hides it in any variant', () => {
+    it('accepts a raw proposal that states it and rejects one that omits or hides it', () => {
         const complete = buildFallbackProposalV2(withNote.material)
         expect(evaluateWire(encodeWireProposal(complete), withNote)).toMatchObject({ ok: true })
-        for (const { name } of variantsOfV2(complete)) {
-            for (const edit of [closed, spacer]) {
-                const variant = name === 'ready' ? complete : complete.states[name]!
-                const changed = editFact({ ...complete, ...variant }, MARKER, edit)
-                const proposal =
-                    name === 'ready'
-                        ? { ...complete, body: changed.body }
-                        : { ...complete, states: { ...complete.states, [name]: { ...variant, body: changed.body } } }
-                const evaluated = evaluateWire(encodeWireProposal(proposal), withNote)
-                expect(evaluated.ok, name).toBe(false)
-                if (!evaluated.ok) {
-                    expect(evaluated.issues, name).toContain(
-                        `contract:a_required_fact_is_missing_from_the_${name}_variant`,
-                    )
-                }
-            }
+        for (const edit of [closed, spacer]) {
+            const evaluated = evaluateWire(encodeWireProposal(editFact(complete, MARKER, edit)), withNote)
+            expect(evaluated.ok).toBe(false)
+            if (!evaluated.ok)
+                expect(evaluated.issues).toContain('contract:a_required_fact_is_missing_from_the_ready_variant')
         }
     })
 

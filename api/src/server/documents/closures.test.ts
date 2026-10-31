@@ -99,13 +99,6 @@ describe('1 reading confirmation labels belong to the confirming variant only', 
         }
         expect(issuesOf(context, forged).join()).toContain('intent_not_allowed')
     })
-
-    it('shows the model the confirming variant as required', () => {
-        const dynamic = contextOf('reading', witness).view.dynamic as { document: { requiredStates: string[] } }
-        expect(dynamic.document.requiredStates).toContain('confirming')
-        const none = contextOf('reading').view.dynamic as { document: { requiredStates: string[] } }
-        expect(none.document.requiredStates).not.toContain('confirming')
-    })
 })
 
 describe('3 bound text is available only where the app can resolve it', () => {

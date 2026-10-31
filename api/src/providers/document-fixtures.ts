@@ -1,10 +1,4 @@
-import {
-    buildFallbackProposalV2,
-    nodeFactIdsV2,
-    type ScreenNodeV2,
-    type ScreenProposalV2,
-    type ScreenVariantV2,
-} from '@truebuild/contracts'
+import { buildFallbackProposalV2, nodeFactIdsV2, type ScreenNodeV2, type ScreenVariantV2 } from '@truebuild/contracts'
 
 import type { DocumentFixtureGenerator } from '../server/documents/service'
 import { encodeWireProposal } from './document-wire'
@@ -48,13 +42,14 @@ export const fixtureArrangement = (manualId: string | null): 'stacked' | 'cards'
         ? 'stacked'
         : 'cards'
 
-const card = (child: ScreenNodeV2): ScreenNodeV2 => ({
-    type: 'Card',
-    surface: 'plain',
-    tone: 'neutral',
-    padding: 'sm',
-    children: [child],
-})
+/** The camera and the held photo keep the spine the shell's own waiting and failure screens give them: never carded. */
+const holdsSpine = (node: ScreenNodeV2): boolean =>
+    node.type === 'CameraView' ||
+    (node.type === 'Image' && node.source.kind === 'capture') ||
+    ('children' in node && node.children.some(holdsSpine))
+
+const card = (child: ScreenNodeV2): ScreenNodeV2 =>
+    holdsSpine(child) ? child : { type: 'Card', surface: 'plain', tone: 'neutral', padding: 'sm', children: [child] }
 
 /**
  * Puts each child of the body's Stack on its own card. Whatever follows the Stack in the Scroll (the builder's
@@ -87,28 +82,8 @@ export function createDocumentFixtureGenerator(): DocumentFixtureGenerator {
             const index = context.material.stepIndex
             if (index > 0) await wait(DOCUMENT_STEP_DELAY_MS, signal)
         }
-        let proposal: ScreenProposalV2 = buildFallbackProposalV2(context.material)
-        if (fixtureArrangement(manualId) === 'cards') {
-            proposal = { ...proposal, ...rearrange(proposal) }
-            // The camera stays mounted while its screen waits: its waiting variants take the same arrangement, so the
-            // CameraView keeps one spine in the ready, busy and pending variants.
-            // A photo-first screen keeps its held photo at one spine in the ready, waiting and failure variants. The
-            // question sheet also carries an `empty` one; no other photo-first screen does, so there it stays null.
-            const keepSpine =
-                kind === 'camera'
-                    ? ['busy', 'pending']
-                    : context.material.requirements.capture
-                      ? ['busy', 'pending', 'empty', 'error', 'recovery']
-                      : []
-            if (keepSpine.length > 0) {
-                const states = { ...proposal.states }
-                for (const name of keepSpine as ('busy' | 'pending' | 'empty' | 'error' | 'recovery')[]) {
-                    const variant = states[name]
-                    states[name] = variant === null ? null : rearrange(variant)
-                }
-                proposal = { ...proposal, states }
-            }
-        }
+        let proposal: ScreenVariantV2 = buildFallbackProposalV2(context.material)
+        if (fixtureArrangement(manualId) === 'cards') proposal = rearrange(proposal)
         if (manualId === REPAIR_ONCE_MANUAL && kind === 'guide' && request.attempt === 1) {
             proposal = { ...proposal, body: withoutFacts(proposal.body, new Set(context.material.requirements.facts)) }
         }

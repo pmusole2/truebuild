@@ -1773,7 +1773,7 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect(controller.getSnapshot().answer?.answer).toBe('New answer')
     })
 
-    it('counts normalization inside the eight-second check budget and ignores its late completion', async () => {
+    it('counts normalization inside the twelve-second check budget and ignores its late completion', async () => {
         let count = 0
         let deliver: ((value: typeof image) => void) | undefined
         const { controller, calls } = setup(undefined, async (): Promise<typeof image> => {
@@ -1793,13 +1793,13 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         vi.useFakeTimers()
         controller.camera({ kind: 'check' })
         const pending = controller.shutter(async () => photo)
-        await vi.advanceTimersByTimeAsync(8_001)
+        await vi.advanceTimersByTimeAsync(12_001)
         await pending
         deliver?.(image)
         await Promise.resolve()
         expect(controller.getSnapshot().capture).toBeNull()
         expect(controller.getSnapshot().check).toBeNull()
-        expect(controller.getSnapshot().notice).toMatch(/8 seconds/)
+        expect(controller.getSnapshot().notice).toMatch(/12 seconds/)
         expect(calls.some((url) => url.endsWith('/api/checks'))).toBe(false)
     })
 
@@ -1822,7 +1822,7 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         controller.camera({ kind: 'check' })
         const pending = controller.shutter(async () => photo)
         await vi.waitFor(() => expect(finish).toBeDefined())
-        await vi.advanceTimersByTimeAsync(8_001)
+        await vi.advanceTimersByTimeAsync(12_001)
         await pending
         expect(controller.getSnapshot().pending).toBeNull()
         finish?.()

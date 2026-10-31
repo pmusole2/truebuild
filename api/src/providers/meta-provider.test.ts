@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { metaOutputSchemas } from './meta-schemas'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
 import { observed } from '../test-support/telemetry'
+import { aiPolicyFromEnvironment } from '../server/ai-policy'
 
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const signal = (): AbortSignal => new AbortController().signal
@@ -344,7 +345,7 @@ describe('inactive direct Meta transport', (): void => {
                 model: 'muse-spark-1.3',
                 store: false,
                 stream: false,
-                max_output_tokens: 1500,
+                max_output_tokens: 2500,
                 text: {
                     format: {
                         type: 'json_schema',
@@ -606,6 +607,9 @@ describe('inactive direct Meta transport', (): void => {
     })
 
     it('bounds response bytes, content type, partial JSON and HTTP failures without raw leakage', async (): Promise<void> => {
+        const beforeResponseReset: Responder = (response): void => {
+            response.destroy()
+        }
         const cases: Responder[] = [
             (response): void => {
                 response.setHeader('content-type', 'text/plain')
@@ -632,9 +636,7 @@ describe('inactive direct Meta transport', (): void => {
                 response.statusCode = 400
                 response.end('private provider detail')
             },
-            (response): void => {
-                response.destroy()
-            },
+            beforeResponseReset,
         ]
 
         for (const respond of cases) {
@@ -645,7 +647,7 @@ describe('inactive direct Meta transport', (): void => {
                 } catch (error: unknown) {
                     expect(error).toBeInstanceOf(MetaProviderError)
                     expect(error instanceof Error ? error.message : '').toMatch(/^(invalid_output|provider_error)$/)
-                    expect(transport.dispatches()).toBe(1)
+                    expect(transport.dispatches()).toBe(respond === beforeResponseReset ? 2 : 1)
                 }
             })
         }
@@ -683,6 +685,8 @@ describe('inactive direct Meta transport', (): void => {
                 })
                 expect(transport.dispatches()).toBe(1)
             },
+            undefined,
+            { checkTimeoutMs: 8_000 },
         )
     }, 12_000)
 
@@ -693,7 +697,7 @@ describe('inactive direct Meta transport', (): void => {
         try {
             await localServer(
                 (response): void => {
-                    monotonic += 8_001
+                    monotonic += 12_001
                     jsonResponder(responseBody(result))(response)
                 },
                 async (transport): Promise<void> => {
@@ -724,7 +728,7 @@ describe('inactive direct Meta transport', (): void => {
                     expect(cancelled).toBe(true)
                 },
                 (response): void => {
-                    monotonic += 8_001
+                    monotonic += 12_001
 
                     if (response.body) {
                         const original = response.body.cancel.bind(response.body)
@@ -826,7 +830,7 @@ describe('documented Meta conformance', () => {
                     { requestId: 'parse-many', binding: { kind: 'manual', manualId: 'many', revision: 1 }, pages },
                     signal(),
                 )
-                expect(bodies[0]).toMatchObject({ max_output_tokens: 48000, reasoning: { effort: 'max' } })
+                expect(bodies[0]).toMatchObject({ max_output_tokens: 48000, reasoning: { effort: 'medium' } })
             },
         )
     })
@@ -941,44 +945,80 @@ describe('documented Meta conformance', () => {
     })
 })
 
-describe('status-only bounded Meta retries', () => {
-    it.each([429, 500, 503])('retries a documented %i once and accepts a reasoning envelope', async (status) => {
-        let attempt = 0
-        await localServer(
-            (response) => {
-                attempt++
-                if (attempt === 1) {
-                    response.writeHead(status, { 'Retry-After': '0.001' })
-                    response.end('private provider error')
-                    return
-                }
-                jsonResponder(responseBody(result))(response)
-            },
-            async ({ provider, dispatches }) => {
-                expect(await provider.checkStep(await validInput(), signal())).toEqual(
-                    observed({
-                        ...result,
-                        model: 'muse-spark-1.3',
-                    }),
-                )
-                expect(dispatches()).toBe(2)
-            },
-        )
+describe('pre-response-only bounded Meta retries', () => {
+    it.each([400, 401, 402, 403, 404, 413, 429, 500, 503, 504])(
+        'does not retry or leak an HTTP %i body',
+        async (status) => {
+            await localServer(
+                (response) => {
+                    response.writeHead(status, { 'content-type': 'text/plain' })
+                    response.end(status === 404 ? '' : 'sensitive prompt')
+                },
+                async ({ provider, dispatches }) => {
+                    await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
+                        code: 'provider_error',
+                        message: 'provider_error',
+                    })
+                    expect(dispatches()).toBe(1)
+                },
+            )
+        },
+    )
+    it('retries eligible pre-response failures once with an unchanged body and short backoff', async () => {
+        const input = await validInput()
+        for (const failure of [
+            new TypeError('fetch failed'),
+            Object.assign(new Error('synthetic timeout'), { code: 'ETIMEDOUT' }),
+            new Error('synthetic failure', { cause: { code: 'ECONNRESET' } }),
+        ]) {
+            const bodies: unknown[] = []
+            const transport = vi.fn<typeof fetch>(async (_url, init) => {
+                bodies.push(init?.body)
+                if (bodies.length === 1) throw failure
+                return Response.json(responseBody(result))
+            })
+            const before = performance.now()
+            const value = await createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(
+                input,
+                signal(),
+            )
+            expect(value.decision).toBe('pass')
+            expect(bodies).toHaveLength(2)
+            expect(bodies[0]).toBe(bodies[1])
+            expect(performance.now() - before).toBeLessThan(300)
+        }
+        const transport = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+        await expect(
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(input, signal()),
+        ).rejects.toMatchObject({ code: 'provider_error' })
+        expect(transport).toHaveBeenCalledTimes(2)
     })
-    it.each([400, 401, 402, 403, 404, 413, 504])('does not retry or leak a permanent %i body', async (status) => {
-        await localServer(
-            (response) => {
-                response.writeHead(status, { 'content-type': 'text/plain' })
-                response.end(status === 404 ? '' : 'sensitive prompt')
-            },
-            async ({ provider, dispatches }) => {
-                await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                    code: 'provider_error',
-                    message: 'provider_error',
-                })
-                expect(dispatches()).toBe(1)
-            },
+    it('does not retry a response-body reset or a cancelled pre-response failure', async () => {
+        const input = await validInput()
+        const transport = vi.fn<typeof fetch>(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        start(controller): void {
+                            controller.error(Object.assign(new Error('synthetic body failure'), { code: 'ECONNRESET' }))
+                        },
+                    }),
+                    { headers: { 'content-type': 'application/json' } },
+                ),
         )
+        await expect(
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(input, signal()),
+        ).rejects.toMatchObject({ code: 'invalid_output' })
+        expect(transport).toHaveBeenCalledTimes(1)
+        const abort = new AbortController()
+        const cancelled = vi.fn<typeof fetch>(async () => {
+            abort.abort()
+            throw new TypeError('fetch failed')
+        })
+        await expect(
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl: cancelled }).checkStep(input, abort.signal),
+        ).rejects.toMatchObject({ code: 'provider_error' })
+        expect(cancelled).toHaveBeenCalledTimes(1)
     })
     it('does not repeat an ambiguous transport failure', async () => {
         const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error('sensitive upstream detail'))
@@ -1013,6 +1053,50 @@ it('refuses fabricated or foreign visible-check evidence even for a refusal', as
 })
 
 describe('server-only task routing and provenance', () => {
+    it('uses medium for quick-check documents, low for other screens, and honors an explicit effort', async () => {
+        const cacheKeys: unknown[] = []
+        for (const [kind, configured, expected] of [
+            ['quick-check', undefined, 'medium'],
+            ['camera', undefined, 'low'],
+            ['quick-check', 'low', 'low'],
+        ] as const) {
+            const policy = aiPolicyFromEnvironment(
+                { AI_EFFORT_SCREENS: configured },
+                {
+                    checkTimeoutMs: 12_000,
+                    parseModel: 'muse-spark-1.3',
+                    verdictModel: 'muse-spark-1.3',
+                    secondOpinionModel: 'muse-wonder-1.0',
+                },
+            )
+            let body: unknown
+            const provider = createMetaProvider({
+                apiKey: '<synthetic>',
+                policy,
+                fetchImpl: async (_url, init) => {
+                    body = JSON.parse(String(init?.body))
+                    cacheKeys.push((body as { prompt_cache_key?: unknown }).prompt_cache_key)
+                    return Response.json(responseBody({}))
+                },
+            })
+            const generated = await provider.generateDocument!(
+                {
+                    requestId: `selected-${kind}-${configured ?? 'default'}`,
+                    stage: 'screens',
+                    stable: {},
+                    dynamic: { document: { kind } },
+                },
+                signal(),
+            )
+            expect(body).toMatchObject({ reasoning: { effort: expected } })
+            const fields = Object.keys(body as Record<string, unknown>)
+            expect(fields.indexOf('instructions')).toBeLessThan(fields.indexOf('text'))
+            expect(fields.indexOf('text')).toBeLessThan(fields.indexOf('input'))
+            expect(generated.telemetry.effort).toBe(expected)
+        }
+        expect(cacheKeys[0]).toMatch(/^truebuild_document_[a-f0-9]{16}$/u)
+        expect(new Set(cacheKeys).size).toBe(1)
+    })
     it('excludes all server provenance from every strict provider DTO', () => {
         for (const schema of Object.values(metaOutputSchemas)) {
             const serialized = JSON.stringify(schema)
@@ -1021,7 +1105,7 @@ describe('server-only task routing and provenance', () => {
             expect(serialized).not.toContain('"model"')
         }
     })
-    it('uses explicit Wonder/high only for parse, Spark/low for live checks and asks', async () => {
+    it('uses the explicit Wonder parse model with the selected parse and live-stage efforts', async () => {
         const input = await validInput()
         const bodies: Array<Record<string, unknown>> = []
         const transport = vi.fn<typeof fetch>(async (_url, init) => {
@@ -1062,7 +1146,7 @@ describe('server-only task routing and provenance', () => {
             ),
         ).toMatchObject({ model: 'muse-spark-1.3' })
         expect(bodies.map((body) => [body.model, body.reasoning])).toEqual([
-            ['muse-wonder-1.0', { effort: 'max' }],
+            ['muse-wonder-1.0', { effort: 'medium' }],
             ['muse-spark-1.3', { effort: 'low' }],
             ['muse-spark-1.3', { effort: 'max' }],
         ])

@@ -9,8 +9,9 @@ import {
 
 /**
  * Per-stage model policy. This is a general quality/latency policy, independent of the UI mode (GENERATIVE_UI).
- * Efforts are the documented Responses values; `max` is the default everywhere except the latency-critical verdict,
- * whose `low` is PROVISIONAL: no paid measurement chose it. Output caps are application choices, not provider maxima.
+ * Efforts are documented Responses values: https://dev.meta.ai/docs/api-reference/responses/schemas and
+ * https://dev.meta.ai/docs/protocols/responses. Defaults follow the t5 latency samples where available;
+ * output caps and deadlines remain application choices, not provider maxima or guarantees.
  * `max_output_tokens` includes reasoning tokens, so a higher effort needs more headroom and a cap never guarantees
  * that output is complete: an incomplete response is reported as unavailable and falls back, never repaired as valid.
  */
@@ -27,6 +28,8 @@ export type PolicyStage = (typeof POLICY_STAGES)[number]
 
 export interface StagePolicy {
     effort: AiEffort
+    /** Screens-only quick-check default; an explicit AI_EFFORT_SCREENS overrides both screen efforts. */
+    quickCheckEffort?: AiEffort
     maxOutputTokens: number
     /**
      * Absolute deadline. For `parse` this is the overall budget (first attempt plus at most one repair; the route
@@ -112,22 +115,24 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
     const wonder: StandardModel = 'muse-wonder-1.0'
     const base: Record<PolicyStage, Omit<StagePolicy, 'provisional' | 'measurementId'>> = {
         parse: {
-            effort: 'max',
+            effort: 'medium', // User-paid parse baseline: 31–35 s; selected for the 55 s first-attempt budget.
             maxOutputTokens: 48_000,
             deadlineMs: PARSE_DEFAULT_OVERALL_MS,
             model: defaults.parseModel,
         },
-        // Full documents include all state variants. Fixture wire sizes are measured locally; live token usage and
-        // reasoning needs are not. These are quality headroom, not provider maxima or a guarantee of completeness.
-        screens: { effort: 'max', maxOutputTokens: 32_000, deadlineMs: 20_000, model: defaults.verdictModel },
-        'step-pages': { effort: 'max', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
+        // t5: Spark low quick-check 17.4 s / camera 23.0 s; quick-check medium 30.8 s. User-selected 30 s deadline.
+        screens: { effort: 'low', maxOutputTokens: 32_000, deadlineMs: 30_000, model: defaults.verdictModel },
+        // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; retain the 45 s attempt deadline.
+        'step-pages': { effort: 'medium', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
+        // t5: Spark low verdict 7.96 s; keep low and use the runtime's requested 12 s limit.
         verdict: {
             effort: 'low',
-            maxOutputTokens: 1_500,
+            maxOutputTokens: 2_500, // Live replay: 1,434 reasoning tokens exhausted 1,500 at 8.8 s; leave room for verdict JSON.
             deadlineMs: defaults.checkTimeoutMs,
             model: defaults.verdictModel,
         },
-        overlay: { effort: 'max', maxOutputTokens: 32_000, deadlineMs: 60_000, model: wonder },
+        // t5: Wonder medium overlay 8.8 s, versus max 12.7 s; retain the configured 60 s deadline.
+        overlay: { effort: 'medium', maxOutputTokens: 32_000, deadlineMs: 60_000, model: wonder },
         'second-opinion': {
             effort: 'max',
             maxOutputTokens: 32_000,
@@ -161,6 +166,10 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
         const measurementId = measurementValue === undefined || measurementValue === '' ? null : measurementValue
         stages[stage] = {
             effort,
+            // t5 quick-check medium 30.8 s; an operator's screens effort still wins for every screen kind.
+            ...(stage === 'screens'
+                ? { quickCheckEffort: enumValue(aiEffortSchema, effortValue, 'medium', 'invalid_ai_effort') }
+                : {}),
             model,
             maxOutputTokens: integer(
                 environment[`AI_MAX_OUTPUT_${key}`],
@@ -194,11 +203,13 @@ export function describeAiPolicy(policy: AiPolicy): Record<string, unknown> {
         efforts: AI_EFFORTS,
         stages: Object.fromEntries(
             POLICY_STAGES.map((stage) => {
-                const { effort, maxOutputTokens, deadlineMs, model, provisional, measurementId } = policy.stages[stage]
+                const { effort, quickCheckEffort, maxOutputTokens, deadlineMs, model, provisional, measurementId } =
+                    policy.stages[stage]
                 return [
                     stage,
                     {
                         effort,
+                        ...(quickCheckEffort === undefined ? {} : { quickCheckEffort }),
                         maxOutputTokens,
                         deadlineMs,
                         model,

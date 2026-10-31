@@ -1,5 +1,7 @@
 import {
     canonicalJson,
+    assembleDocumentV2,
+    documentMaterialV2,
     pendingCheckV2,
     buildFallbackDocumentV2,
     rebindGeneratedStatesV2,
@@ -8,6 +10,8 @@ import {
     screenManualJsonV2,
     screenUiForKindV2,
     screenUiStateV2Schema,
+    VARIANT_STATES,
+    withShellStatesV2,
     type FallbackReasonV2,
     type ManualSession,
     type ScreenContextInputsV2,
@@ -28,6 +32,7 @@ import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { futureDocumentStates } from './future-states'
 import { isResultLayoutDocument } from './result-layout-runtime'
+import { reviewedSession } from '../capture/reviewed-session'
 
 export type DocumentRuntimeEntry = {
     readonly status: 'pending' | 'ready'
@@ -130,6 +135,8 @@ export class DocumentStore {
     private readonly held = new Map<string, Held>()
     private readonly evicted = new Map<string, 'budget_exhausted'>()
     private readonly manuals = new Map<string, { revision: number; hash: string }>()
+    /** Future Confirm identity only. It never replaces the observed session or grants shown-Guide custody. */
+    private readonly preparedSessions = new Map<string, { sourceHash: string; hash: string; session: ManualSession }>()
     private readonly jobs = new Map<string, Job>()
     private readonly attemptedJobs = new Map<string, string>()
     private readonly guides = new Map<
@@ -140,6 +147,8 @@ export class DocumentStore {
     private readonly acceptedDocuments = new WeakSet<ScreenDocumentV2>()
     private readonly listeners = new Set<() => void>()
     private readonly warmQueue = new Map<string, ScreenContextInputsV2>()
+    /** A workflow render must not silently regenerate a completed background page after cache eviction. */
+    private readonly flowAttempts = new Set<string>()
     /** One current Guide family only; these priorities never override the hard cache limits. */
     private focusedGuide: { manualId: string; revision: number; hash: string; keys: Set<string> } | null = null
     private warming = 0
@@ -173,13 +182,16 @@ export class DocumentStore {
     private enabled(inputs: ScreenContextInputsV2): boolean {
         return this.mode === 'full' || (this.mode === 'steps' && inputs.kind === 'guide')
     }
-    private stale(session: ManualSession | null): boolean {
+    private stale(session: ManualSession | null, prepared = false): boolean {
         if (session === null) return false
         const known = this.manuals.get(session.manualId)
+        const hash = sha256Hex(screenManualJsonV2(session))
         return (
             known !== undefined &&
             (session.revision < known.revision ||
-                (session.revision === known.revision && sha256Hex(screenManualJsonV2(session)) !== known.hash))
+                (session.revision === known.revision &&
+                    hash !== known.hash &&
+                    !(prepared && this.preparedSessions.get(session.manualId)?.hash === hash)))
         )
     }
     observeSession(session: ManualSession): void {
@@ -189,18 +201,28 @@ export class DocumentStore {
         const hash = sha256Hex(screenManualJsonV2(session))
         if (known?.revision === session.revision && known.hash === hash) return
         this.manuals.set(session.manualId, { revision: session.revision, hash })
-        if (this.focusedGuide?.manualId === session.manualId && this.focusedGuide.hash !== hash)
+        const candidate = session.reviewStatus === 'reviewed' ? null : reviewedSession(session)
+        const preparedHash = candidate === null ? null : sha256Hex(screenManualJsonV2(candidate))
+        if (candidate !== null && preparedHash !== null)
+            this.preparedSessions.set(session.manualId, { sourceHash: hash, hash: preparedHash, session: candidate })
+        else this.preparedSessions.delete(session.manualId)
+        if (
+            this.focusedGuide?.manualId === session.manualId &&
+            this.focusedGuide.hash !== hash &&
+            this.focusedGuide.hash !== preparedHash
+        )
             this.focusedGuide = null
         for (const [key, held] of this.held)
             if (
                 held.inputs.session?.manualId === session.manualId &&
-                (held.inputs.session.revision !== session.revision || held.manualHash !== hash)
+                (held.inputs.session.revision !== session.revision ||
+                    (held.manualHash !== hash && held.manualHash !== preparedHash))
             ) {
                 held.abort.abort()
                 this.held.delete(key)
             }
         for (const [key, job] of this.jobs)
-            if (job.session.manualId === session.manualId && key !== hash) {
+            if (job.session.manualId === session.manualId && key !== hash && key !== preparedHash) {
                 job.abort.abort()
                 this.jobs.delete(key)
                 if (job.session.revision < session.revision) void this.cancelJob(job)
@@ -212,7 +234,10 @@ export class DocumentStore {
     invalidateManual(manualId: string, revision: number): void {
         if (this.disposed) return
         const known = this.manuals.get(manualId)
-        if (known === undefined || known.revision < revision) this.manuals.set(manualId, { revision, hash: '' })
+        if (known === undefined || known.revision < revision) {
+            this.manuals.set(manualId, { revision, hash: '' })
+            this.preparedSessions.delete(manualId)
+        }
         if (this.focusedGuide?.manualId === manualId && this.focusedGuide.revision < revision) this.focusedGuide = null
         for (const [key, held] of this.held)
             if (held.inputs.session?.manualId === manualId && held.inputs.session.revision < revision) {
@@ -254,6 +279,38 @@ export class DocumentStore {
     preview(inputs: ScreenContextInputsV2): DocumentRuntimeEntry {
         return this.previewEntry(inputs, true)
     }
+    /** Same authored Guide READY, exact current activity shell. This local view earns no server-issued shown custody. */
+    private previewGuideActivity(inputs: ScreenContextInputsV2): ScreenDocumentV2 | null {
+        if (inputs.kind !== 'guide' || inputs.uiState?.busy == null || this.stale(inputs.session)) return null
+        const idle = { ...inputs, uiState: { ...inputs.uiState, busy: null } }
+        const donor = this.held.get(documentKey(idle))?.entry
+        if (
+            donor?.status !== 'ready' ||
+            donor.document.metadata.source !== 'generated' ||
+            !documentMatchesInputs(donor.document, idle)
+        )
+            return null
+        const { document } = donor
+        const material = documentMaterialV2(inputs)
+        const proposal = withShellStatesV2(material, {
+            header: document.header,
+            body: document.body,
+            bar: document.bar,
+            overlays: document.overlays,
+        })
+        const candidate = screenDocumentV2Schema.safeParse(
+            assembleDocumentV2(
+                material,
+                proposal,
+                {
+                    ...document.metadata,
+                    shellStates: VARIANT_STATES.filter((state) => proposal.states[state] !== null),
+                },
+                { sha256Hex, now: (): Date => new Date(this.now()) },
+            ),
+        )
+        return candidate.success && documentMatchesInputs(candidate.data, inputs) ? candidate.data : null
+    }
     private previewEntry(inputs: ScreenContextInputsV2, carry: boolean): DocumentRuntimeEntry {
         const enabled = this.enabled(inputs) && this.options.client !== undefined && !this.disposed
         const recorded =
@@ -274,6 +331,12 @@ export class DocumentStore {
                     : {}),
             }
         }
+        const activity = enabled && carry ? this.previewGuideActivity(inputs) : null
+        if (
+            activity !== null &&
+            this.documentByteSize(activity) <= (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
+        )
+            return { status: 'ready', document: activity, issue: null }
         const reason = enabled ? 'busy' : this.enabled(inputs) && !this.disposed ? 'unconfigured' : 'disabled'
         const local = localDocument(inputs, reason, this.now)
         const donors =
@@ -338,7 +401,15 @@ export class DocumentStore {
         const revision = inputs.session === null ? undefined : this.manuals.get(inputs.session.manualId)?.revision
         if (this.disposed || (revision !== undefined && inputs.session !== null && inputs.session.revision < revision))
             return { status: 'ready', document: localDocument(inputs, 'stale', this.now), issue: 'stale' }
-        if (inputs.session !== null) this.observeSession(inputs.session)
+        if (
+            inputs.session !== null &&
+            !(
+                background &&
+                this.preparedSessions.get(inputs.session.manualId)?.hash ===
+                    sha256Hex(screenManualJsonV2(inputs.session))
+            )
+        )
+            this.observeSession(inputs.session)
         const key = documentKey(inputs)
         const existing = this.held.get(key)
         if (existing !== undefined) {
@@ -457,7 +528,7 @@ export class DocumentStore {
             !this.disposed &&
             !held.abort.signal.aborted &&
             this.held.get(key) === held &&
-            !this.stale(held.inputs.session)
+            !this.stale(held.inputs.session, held.background)
         )
     }
     private async generate(key: string, held: Held): Promise<void> {
@@ -521,12 +592,12 @@ export class DocumentStore {
         this.drainWarmup()
     }
     private drainWarmup(): void {
-        while (!this.disposed && this.warming < (this.options.warmupConcurrency ?? 2)) {
+        while (!this.disposed && this.warming < Math.min(this.options.warmupConcurrency ?? 2, 4)) {
             const next = this.warmQueue.entries().next().value
             if (next === undefined) return
             this.warmQueue.delete(next[0])
             const context = next[1]
-            if (this.stale(context.session)) continue
+            if (this.stale(context.session, true)) continue
             const entry = this.admit(context, true)
             if (!inFlight(entry) || this.held.get(next[0])?.entry !== entry) continue
             this.warming++
@@ -537,6 +608,77 @@ export class DocumentStore {
                 this.drainWarmup()
             })
         }
+    }
+    /**
+     * Prepare only reachable destinations through one bounded queue. A future Guide is composed for exactly the
+     * candidate Confirm will save; its original identity becomes usable only when that actual session is observed.
+     * Nonready states already belong to each complete document, so no speculative busy-state model calls are needed.
+     */
+    prepareFlow(
+        session: ManualSession,
+        focusKey: string | null,
+        quickCheck?: ScreenContextInputsV2,
+        uiState?: ScreenUiStateV2 | null,
+    ): void {
+        if (
+            this.disposed ||
+            this.mode === 'off' ||
+            this.options.client === undefined ||
+            (session.reviewStatus === 'reviewed' ? session.reviewedSteps : (session.rawExtraction?.steps ?? []))
+                .length === 0 ||
+            (this.manuals.get(session.manualId)?.revision ?? 0) > session.revision
+        )
+            return
+        this.observeSession(session)
+        const preparation = this.preparedSessions.get(session.manualId)
+        const target =
+            preparation?.sourceHash === sha256Hex(screenManualJsonV2(session)) ? preparation.session : session
+        const items = documentPrecomputeInputs({ session: target, uiState })
+        const guides = items.filter((item) => item.inputs.kind === 'guide')
+        const focused = guides.find((item) => item.key === focusKey) ?? guides[0]
+        const hash = sha256Hex(screenManualJsonV2(target))
+        this.focusedGuide =
+            focused === undefined
+                ? null
+                : {
+                      manualId: target.manualId,
+                      revision: target.revision,
+                      hash,
+                      keys: new Set([documentKey(focused.inputs)]),
+                  }
+        const camera: ScreenContextInputsV2[] =
+            this.mode === 'full' && focused !== undefined && target.reviewStatus === 'reviewed'
+                ? [
+                      {
+                          ...focused.inputs,
+                          kind: 'camera',
+                          uiState: {
+                              camera: {
+                                  mode: 'build-photo',
+                                  permission: 'granted',
+                                  failed: false,
+                                  canAskAgain: true,
+                              },
+                          },
+                      },
+                  ]
+                : []
+        const destinations = [
+            ...(this.mode === 'full' && session.reviewStatus !== 'reviewed' && quickCheck !== undefined
+                ? [quickCheck]
+                : []),
+            ...(focused === undefined ? [] : [focused.inputs]),
+            ...camera,
+            ...guides.filter((item) => item !== focused).map((item) => item.inputs),
+        ]
+        const pending = destinations.filter((inputs) => {
+            const key = documentKey(inputs)
+            if (this.flowAttempts.has(key)) return this.warmQueue.has(key)
+            this.flowAttempts.add(key)
+            return true
+        })
+        while (this.flowAttempts.size > MAX_ENTRIES) this.flowAttempts.delete(this.flowAttempts.values().next().value!)
+        this.queueWarmup(pending, true)
     }
     precompute(
         session: ManualSession,
@@ -762,8 +904,10 @@ export class DocumentStore {
         this.evicted.clear()
         this.jobs.clear()
         this.attemptedJobs.clear()
+        this.preparedSessions.clear()
         this.guides.clear()
         this.warmQueue.clear()
+        this.flowAttempts.clear()
         this.focusedGuide = null
         this.publish()
         this.listeners.clear()

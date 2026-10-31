@@ -258,7 +258,13 @@ it.each(['cached before mount', 'late while active'] as const)(
             })
             const asking = inputs(controller, store)
             expect(asking.uiState?.busy?.activity).toBe('asking')
-            await waitFor(() => expect(store.peek(asking)?.document.metadata.source).toBe('generated'))
+            // Explicit nonready states use the retained editable form; they must not launch or cache a layout request.
+            expect(store.peek(asking)).toBeUndefined()
+            expect(store.preview(asking).document.metadata).toMatchObject({
+                source: 'generated',
+                authoring: { fixtureId: 'recorded-question-layout-sol-v1' },
+            })
+            expect(screen.getByTestId('question-origin').props.children).toBe(firstOrigin)
             samePhoto()
             expect(screen.queryByRole('button', { name: 'Ask' })).toBeNull()
             await act(async () => ticket.resolve())
@@ -266,7 +272,11 @@ it.each(['cached before mount', 'late while active'] as const)(
             const waiting = inputs(controller, store)
             expect(waiting.uiState?.busy?.activity).toBe('question-waiting')
             expect(documentKey(waiting)).not.toBe(documentKey(asking))
-            await waitFor(() => expect(store.peek(waiting)?.document.metadata.source).toBe('generated'))
+            expect(store.peek(waiting)).toBeUndefined()
+            expect(store.preview(waiting).document.metadata).toMatchObject({
+                source: 'generated',
+                authoring: { fixtureId: 'recorded-question-layout-sol-v1' },
+            })
             samePhoto()
             expect(screen.getByTestId('question-origin').props.children).toBe(
                 'generated:recorded-question-layout-sol-v1',

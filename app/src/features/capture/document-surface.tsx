@@ -13,7 +13,6 @@ import {
 } from '@truebuild/contracts'
 import { activeDocumentVariant, useDocument } from '../document-runtime/use-document'
 import { documentKey } from '../document-runtime/store'
-import { futureDocumentStates } from '../document-runtime/future-states'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { useDocumentOwner, useDocumentVisibility } from '../documents/ownership'
 import type { FrameBindings } from '../documents/types'
@@ -253,20 +252,6 @@ export function DocumentSurface({
         )
             retained.current = null
     }, [preparing, ownsRoute, currentKey, queried.document, queried.activeState])
-    const futureInputs = useRef(inputs)
-    futureInputs.current = inputs
-    const futureKey =
-        focused &&
-        !busy &&
-        !more.open &&
-        !judgeOpen &&
-        reading.status === 'ready' &&
-        reading.document.metadata.source === 'generated'
-            ? documentKey(inputs)
-            : null
-    useEffect(() => {
-        if (futureKey !== null) workflow.documents?.warmup(futureDocumentStates(futureInputs.current))
-    }, [workflow.documents, futureKey])
     // A sheet obscures content without blurring the actual native route and its navigation frame.
     useDocumentOwner(reading.document, focused && !more.open && !judgeOpen, reading.activeState, focused)
     useEffect(() => {
@@ -430,6 +415,8 @@ export function DocumentSurface({
                 },
             }
         }
+        if (intent.intent === 'retry' && intent.target === 'screen')
+            return { enabled: !busy, reason: busy ? state.pending : null, run: reading.retry }
         if (retry !== undefined && intent.intent === 'retry')
             return { enabled: !busy, reason: busy ? state.pending : null, run: retry }
         if (intent.intent === 'retry' && state.storageReadOnly)

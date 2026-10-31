@@ -209,7 +209,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
             source: 'generated',
             evidence: 'live',
             model: 'muse-wonder-1.0',
-            effort: 'max',
+            effort: 'medium',
             stage: 'step-page',
             usage: { inputTokens: 321, cachedTokens: 21, outputTokens: 123, reasoningTokens: 23 },
         })
@@ -220,6 +220,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
             'instructions',
             'max_output_tokens',
             'model',
+            'prompt_cache_key',
             'reasoning',
             'store',
             'stream',
@@ -239,7 +240,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
                     secondOpinionModel: 'muse-wonder-1.0',
                 },
             ).stages['step-pages'].maxOutputTokens,
-            reasoning: { effort: 'max' },
+            reasoning: { effort: 'medium' },
             text: { format: { type: 'json_schema', name: 'truebuild_document', strict: true } },
         })
         const schema = (sent.text as { format: { schema: unknown } }).format.schema

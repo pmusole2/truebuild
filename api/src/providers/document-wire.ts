@@ -3,13 +3,11 @@ import {
     CONTAINER_TYPES_V2,
     DOCUMENT_V2_LIMITS,
     LEAF_SCHEMAS_V2,
-    VARIANT_STATES,
     barV2Schema,
     headerV2Schema,
     overlayV2Schema,
-    screenProposalV2Schema,
+    screenVariantV2Schema,
     type ScreenNodeV2,
-    type ScreenProposalV2,
     type ScreenVariantV2,
 } from '@truebuild/contracts'
 import { z } from 'zod'
@@ -18,7 +16,9 @@ import { z } from 'zod'
  * The provider wire format of a version 2 document. The strict provider schema is finite (no `$ref`, no recursion, a
  * bounded nesting depth), so the model returns a FLAT node table: every node has an `id` and containers list the ids
  * of their children. `decodeWireProposal` rebuilds exactly the recursive tree the model described and nothing more:
- * it never adds, drops, reorders or rewrites a node. The recursive `screenProposalV2Schema` then validates the tree.
+ * it never adds, drops, reorders or rewrites a node. The recursive `screenVariantV2Schema` then validates the tree.
+ * The model authors the ready screen only: the busy, pending, empty, error, recovery and confirming states are the
+ * shell's deterministic variants (`withShellStatesV2`), so the provider schema carries no state at all.
  */
 const wireId = z
     .string()
@@ -57,17 +57,10 @@ const wireVariantSchema = z.strictObject({
     bar: barV2Schema,
     overlays: z.array(wireOverlaySchema).max(DOCUMENT_V2_LIMITS.overlays),
 })
-type WireVariant = z.infer<typeof wireVariantSchema>
-/** A state variant is listed once with its state name (one shared item schema keeps the provider schema small). */
-const wireStateSchema = wireVariantSchema.extend({ state: z.enum(VARIANT_STATES) })
 
 export const wireProposalSchema = z.strictObject({
     nodes: z.array(wireNodeSchema).min(1).max(DOCUMENT_V2_LIMITS.documentNodes),
-    header: wireVariantSchema.shape.header,
-    body: wireId,
-    bar: wireVariantSchema.shape.bar,
-    overlays: wireVariantSchema.shape.overlays,
-    states: z.array(wireStateSchema).max(VARIANT_STATES.length),
+    ...wireVariantSchema.shape,
 })
 export type WireProposal = z.infer<typeof wireProposalSchema>
 
@@ -78,7 +71,7 @@ export function wireIssueCodes(error: z.ZodError, limit = 12): string[] {
 
 export function decodeWireProposal(
     value: unknown,
-): { ok: true; proposal: ScreenProposalV2 } | { ok: false; issues: string[] } {
+): { ok: true; ready: ScreenVariantV2 } | { ok: false; issues: string[] } {
     const wire = wireProposalSchema.safeParse(value)
     if (!wire.success) return { ok: false, issues: wireIssueCodes(wire.error) }
     const issues: string[] = []
@@ -110,38 +103,27 @@ export function decodeWireProposal(
         }
         return rest as unknown as ScreenNodeV2
     }
-    const variant = (wired: WireVariant, where: string): ScreenVariantV2 | null => {
-        const body = build(wired.body, `${where}body`, 1)
-        const overlays = wired.overlays.map((overlay, index) => {
-            const content = build(overlay.content, `${where}overlays.${index}`, 1)
-            return content === null ? null : { ...overlay, content }
-        })
-        if (body === null || overlays.some((overlay) => overlay === null)) return null
-        return {
-            header: wired.header,
-            body,
-            bar: wired.bar,
-            // Overlays must be coach marks: the recursive proposal schema validates the decoded tree right after.
-            overlays: overlays.flatMap((overlay) => (overlay === null ? [] : [overlay])) as ScreenVariantV2['overlays'],
-        }
-    }
-    const ready = variant(wire.data, '')
-    const states = Object.fromEntries(VARIANT_STATES.map((state) => [state, null])) as ScreenProposalV2['states']
-    const seen = new Set<string>()
-    wire.data.states.forEach((wired, index) => {
-        if (seen.has(wired.state)) issues.push(`states.${index}:duplicate_state`)
-        seen.add(wired.state)
-        const { state: _state, ...rest } = wired
-        states[wired.state] = variant(rest, `states.${wired.state}.`)
+    const body = build(wire.data.body, 'body', 1)
+    const overlays = wire.data.overlays.map((overlay, index) => {
+        const content = build(overlay.content, `overlays.${index}`, 1)
+        return content === null ? null : { ...overlay, content }
     })
     if (wire.data.nodes.length !== used.size) issues.push('nodes:orphan_node')
-    if (issues.length > 0 || ready === null) return { ok: false, issues: issues.slice(0, 12) }
-    const tree = screenProposalV2Schema.safeParse({ ...ready, states })
-    return tree.success ? { ok: true, proposal: tree.data } : { ok: false, issues: wireIssueCodes(tree.error) }
+    if (issues.length > 0 || body === null || overlays.some((overlay) => overlay === null)) {
+        return { ok: false, issues: issues.slice(0, 12) }
+    }
+    // Overlays must be coach marks: the recursive variant schema validates the decoded tree right after.
+    const tree = screenVariantV2Schema.safeParse({
+        header: wire.data.header,
+        body,
+        bar: wire.data.bar,
+        overlays: overlays.flatMap((overlay) => (overlay === null ? [] : [overlay])),
+    })
+    return tree.success ? { ok: true, ready: tree.data } : { ok: false, issues: wireIssueCodes(tree.error) }
 }
 
-/** The inverse of `decodeWireProposal`: assigns document-order ids. Used by the synthetic fixture and tests. */
-export function encodeWireProposal(proposal: ScreenProposalV2): WireProposal {
+/** The inverse of `decodeWireProposal` for a ready screen (any state variants are ignored): assigns document-order ids. */
+export function encodeWireProposal(proposal: ScreenVariantV2): WireProposal {
     const nodes: WireNode[] = []
     const add = (node: ScreenNodeV2): string => {
         const id = `n${nodes.length + 1}`
@@ -155,20 +137,15 @@ export function encodeWireProposal(proposal: ScreenProposalV2): WireProposal {
         }
         return id
     }
-    const variant = (source: ScreenVariantV2): WireVariant => ({
-        header: source.header,
-        body: add(source.body),
-        bar: source.bar,
-        overlays: source.overlays.map((overlay) => ({
+    return {
+        nodes,
+        header: proposal.header,
+        body: add(proposal.body),
+        bar: proposal.bar,
+        overlays: proposal.overlays.map((overlay) => ({
             kind: overlay.kind,
             anchor: overlay.anchor,
             content: add(overlay.content),
         })),
-    })
-    const ready = variant(proposal)
-    const states = VARIANT_STATES.flatMap((state) => {
-        const source = proposal.states[state]
-        return source === null ? [] : [{ state, ...variant(source) }]
-    })
-    return { nodes, ...ready, states }
+    }
 }

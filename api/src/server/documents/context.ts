@@ -1,6 +1,5 @@
 import {
     COACH_COPY_V2,
-    CONFIRM_LABELS_V2,
     INTENT_TARGETS,
     allowedLiteralsV2,
     availableBoundKeysV2 as availableBoundKeys,
@@ -8,7 +7,6 @@ import {
     documentMaterialV2,
     intentAllowedV2,
     manualDisplayTitleV2,
-    requiredStatesV2,
     resultOfKindV2,
     screenContentJsonV2,
     screenContextJsonV2,
@@ -107,7 +105,6 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
         dynamic: {
             document: {
                 kind: inputs.kind,
-                requiredStates: requiredStatesV2(inputs.kind, material.requirements),
                 requirements: material.requirements,
                 /** Every factId the ready screen must state: the requirements plus a quick check's overview steps. */
                 readyFacts: ready.facts,
@@ -154,18 +151,8 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                     allowed.map((candidate) => [`${candidate.intent}:${candidate.target}`, labelsFor(candidate)]),
                 ),
                 genericLabels: GENERIC_LABELS,
-                /** Only in the `confirming` variant: Keep = navigate/reading, Stop = navigate/pages (nothing else there). */
-                confirmation:
-                    material.requirements.confirm.length > 0
-                        ? { variant: 'confirming', keep: CONFIRM_LABELS_V2.keep, stop: CONFIRM_LABELS_V2.stop }
-                        : null,
-                /** The only literals each variant may write; any other prose is rejected (facts come from fact refs). */
-                literalCopy: Object.fromEntries(
-                    (['ready', ...requiredStatesV2(inputs.kind, material.requirements)] as const).map((name) => [
-                        name,
-                        allowedLiteralsV2(material, name),
-                    ]),
-                ),
+                /** The only literals the ready screen may write; any other prose is rejected (facts come from fact refs). */
+                literalCopy: { ready: allowedLiteralsV2(material, 'ready') },
                 coachCopy: Object.fromEntries(
                     coachTargetsForV2(material).map((target) => [target, COACH_COPY_V2[target]]),
                 ),

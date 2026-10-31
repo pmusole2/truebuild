@@ -75,7 +75,10 @@ describe('ReadingScreen', () => {
         expect(screenNav.back).toHaveBeenCalledTimes(1)
     })
 
-    it('offers one Try again with a plain sentence when reading failed, and a way back to the pages', async () => {
+    it.each([
+        ['Manual reading timed out. Try again.', 'Reading took too long. Try again.'],
+        ['Manual reading unavailable (provider_error). Try again.', 'We could not read those pages. Try again.'],
+    ])('offers Try again and the actual reading failure: %s', async (notice, sentence) => {
         const fixture = reading()
         const parse = jest.fn(async () => undefined)
         const screenNav = nav()
@@ -85,14 +88,15 @@ describe('ReadingScreen', () => {
                 state={{
                     ...fixture.state,
                     pending: null,
-                    notice: 'Manual reading unavailable. Check your connection and retry.',
+                    notice,
                 }}
                 entry={fixture.entry}
                 controller={controller}
                 nav={screenNav}
             />,
         )
-        expect(screen.getByText('We could not read those pages. Check your connection and try again.')).toBeTruthy()
+        expect(screen.getByText(sentence)).toBeTruthy()
+        expect(screen.queryByText(/Check your connection/u)).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
         expect(parse).toHaveBeenCalledWith('en')
         await fireEvent.press(screen.getByRole('button', { name: 'Back to pages' }))

@@ -11,17 +11,27 @@ const defaults = {
 }
 
 describe('AI policy', (): void => {
-    it('defaults every stage to max effort except the latency-critical verdict, which is low and marked provisional', (): void => {
+    it('defaults measured stages to their selected efforts and keeps the verdict provisional', (): void => {
         const { stages } = aiPolicyFromEnvironment({}, defaults)
         for (const stage of POLICY_STAGES) {
-            expect(stages[stage].effort).toBe(stage === 'verdict' ? 'low' : 'max')
+            expect(stages[stage].effort).toBe(
+                stage === 'verdict' || stage === 'screens'
+                    ? 'low'
+                    : ['parse', 'step-pages', 'overlay'].includes(stage)
+                      ? 'medium'
+                      : 'max',
+            )
         }
         expect(stages.verdict.provisional).toBe(true)
         expect(POLICY_STAGES.filter((stage) => stages[stage].provisional)).toEqual(['verdict'])
-        expect(stages.verdict).toMatchObject({ maxOutputTokens: 1_500, deadlineMs: 8_000 })
+        expect(stages.verdict).toMatchObject({ maxOutputTokens: 2_500, deadlineMs: 8_000 })
         expect(stages.questions.deadlineMs).toBe(60_000)
         expect(stages['step-pages'].model).toBe('muse-wonder-1.0')
-        expect(stages.screens.model).toBe('muse-spark-1.3')
+        expect(stages.screens).toMatchObject({
+            model: 'muse-spark-1.3',
+            deadlineMs: 30_000,
+            quickCheckEffort: 'medium',
+        })
         expect(stages.overlay.model).toBe('muse-wonder-1.0')
     })
 
@@ -39,6 +49,7 @@ describe('AI policy', (): void => {
             {
                 AI_EFFORT_VERDICT: 'medium',
                 AI_EFFORT_STEP_PAGES: 'xhigh',
+                AI_EFFORT_SCREENS: 'high',
                 AI_MAX_OUTPUT_PARSE: '64000',
                 AI_DEADLINE_QUESTIONS_MS: '90000',
                 AI_MODEL_SCREENS: 'muse-wonder-1.0',
@@ -50,7 +61,7 @@ describe('AI policy', (): void => {
         expect(stages['step-pages'].effort).toBe('xhigh')
         expect(stages.parse.maxOutputTokens).toBe(64_000)
         expect(stages.questions.deadlineMs).toBe(90_000)
-        expect(stages.screens.model).toBe('muse-wonder-1.0')
+        expect(stages.screens).toMatchObject({ model: 'muse-wonder-1.0', effort: 'high', quickCheckEffort: 'high' })
     })
 
     it('keeps an operator measurement reference separate from verified latency evidence', (): void => {
@@ -72,19 +83,20 @@ describe('AI policy', (): void => {
     })
 
     it('honors the documented parse deadline and reports the budgets that are actually executed', (): void => {
-        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(100_000)
+        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(80_000)
         const { stages } = aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)
         expect(stages.parse.deadlineMs).toBe(60_000)
         const described = describeAiPolicy(aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)) as {
             stages: { parse: { budget: Record<string, number> } }
         }
-        // 55 s first attempt (five-plus pages up to 95 s) capped by what the overall budget leaves; route adds 5 s.
+        // Every page count gets 55 s, capped by the overall budget; a repair needs at least 20 s plus return margin.
         expect(described.stages.parse.budget).toEqual({
             overallMs: 60_000,
             routeMs: 65_000,
             firstAttemptMinMs: 55_000,
-            firstAttemptMaxMs: 59_000,
+            firstAttemptMaxMs: 55_000,
             repairMs: 40_000,
+            minimumRepairMs: 20_000,
             clientMinimumMs: 65_000,
         })
         // The route allowance has to fit the trusted ceiling, so the budget itself stops 5 s below it.
@@ -141,6 +153,7 @@ describe('runtime policy wiring', (): void => {
     it('has no default call-count cap and accepts a verdict deadline beyond eight seconds', (): void => {
         const runtime = createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '20000' })
         expect(runtime.counter.limit).toBe(Number.POSITIVE_INFINITY)
+        expect(createRuntimeFromEnvironment({}).policy.stages.verdict.deadlineMs).toBe(12_000)
         expect(runtime.policy.stages.verdict.deadlineMs).toBe(20_000)
         expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT: '5' }).counter.limit).toBe(5)
     })

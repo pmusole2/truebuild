@@ -314,6 +314,8 @@ export function allowedLiteralsV2(material: DocumentMaterialV2, variant: CopyVar
         if (variant === 'error' || variant === 'recovery') {
             list.push(FAILURE_COPY_V2[failure ?? 'provider_error'] ?? FAILURE_COPY_V2.provider_error ?? '')
         }
+        // Timeout recovery is shell-owned; this does not expand the model's READY vocabulary.
+        if (variant === 'error') list.push('That took too long')
     }
     return [...new Set(list.filter((entry) => entry !== ''))]
 }

@@ -156,13 +156,14 @@ describe('the deterministic composition satisfies the server gate', () => {
         const view = contextFor('guide').view.dynamic.document as Record<string, unknown>
         expect(view).toMatchObject({
             kind: 'guide',
-            requiredStates: ['busy', 'pending', 'error', 'recovery'],
             requirements: { facts: expect.arrayContaining(['safety:n1']) },
         })
         expect(JSON.stringify(view)).toContain(SAFETY_NOTE)
         expect(Object.keys(view)).toEqual(
             expect.arrayContaining(['allowedIntents', 'allowedLabels', 'coachCopy', 'boundKeys']),
         )
+        // The model authors the ready screen only: it is never told about, and cannot write, a state.
+        expect(Object.keys(view)).not.toContain('requiredStates')
         expect(contextFor('guide').stage).toBe('step-pages')
         // The verdict itself is the Spark API's; composing its screen is noncritical (Wonder), questions stay latency-sensitive.
         expect(contextFor('result').stage).toBe('step-pages')
@@ -282,12 +283,13 @@ describe('mandatory omission and unsafe composition are rejected, never patched'
 describe('the wire table is rebuilt exactly, or rejected', () => {
     const wire = goodWire('guide')
 
-    it('round-trips every kind losslessly', () => {
+    it('round-trips the ready screen of every kind losslessly', () => {
         for (const kind of SCREEN_KINDS_V2) {
             const proposal = buildFallbackProposalV2(contextFor(kind).material)
             const decoded = decodeWireProposal(JSON.parse(JSON.stringify(encodeWireProposal(proposal))))
             expect(decoded.ok, kind).toBe(true)
-            if (decoded.ok) expect(decoded.proposal).toEqual(proposal)
+            const { states: _states, ...ready } = proposal
+            if (decoded.ok) expect(decoded.ready).toEqual(ready)
         }
     })
 
@@ -315,9 +317,14 @@ describe('the wire table is rebuilt exactly, or rejected', () => {
         expect(decodeWireProposal('not json').ok).toBe(false)
     })
 
+    it('refuses a model answer that writes a state: the model authors the ready screen only', () => {
+        const states = [{ state: 'busy', header: wire.header, body: wire.body, bar: wire.bar, overlays: [] }]
+        expect(decodeWireProposal({ ...wire, states })).toEqual({ ok: false, issues: ['root:unrecognized_keys'] })
+    })
+
     it('a self-referencing container cannot form a cycle', () => {
         const nodes = [{ type: 'Stack', id: 'a', gap: 'sm', align: 'start', children: ['a'] }]
-        const decoded = decodeWireProposal({ ...wire, nodes, body: 'a', overlays: [], states: [] })
+        const decoded = decodeWireProposal({ ...wire, nodes, body: 'a', overlays: [] })
         expect(decoded.ok).toBe(false)
     })
 
@@ -328,13 +335,13 @@ describe('the wire table is rebuilt exactly, or rejected', () => {
         expect(text).not.toContain('"oneOf"')
         expect(schema).toMatchObject({ type: 'object', additionalProperties: false })
         expect(Object.keys((schema as { properties: object }).properties).sort()).toEqual(
-            ['bar', 'body', 'header', 'nodes', 'overlays', 'states'].sort(),
+            ['bar', 'body', 'header', 'nodes', 'overlays'].sort(),
         )
     })
 })
 
 describe('service: synthetic fixture documents', () => {
-    it('are generated documents that claim no model, timing or usage, with every component generated', async () => {
+    it('are generated documents that claim no model, timing or usage, with a generated ready screen and shell states', async () => {
         const { service, calls } = fixtureService()
         const document = await service.generate(documentInputs('guide'))
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
@@ -349,7 +356,8 @@ describe('service: synthetic fixture documents', () => {
             timing: { providerMs: null, totalMs: null },
             usage: { inputTokens: null, outputTokens: null },
         })
-        expect(new Set(Object.values(document.metadata.origins))).toEqual(new Set(['generated']))
+        expect(new Set(Object.values(document.metadata.origins))).toEqual(new Set(['generated', 'shell']))
+        expect(document.metadata.shellStates).toEqual(['busy', 'pending', 'error', 'recovery'])
         expect(calls).toEqual([{ kind: 'guide', attempt: 1 }])
     })
 

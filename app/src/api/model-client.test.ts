@@ -238,7 +238,7 @@ describe('trusted outer action checkpoint', () => {
             const text = stringify(value)
 
             if (typeof value === 'object' && value !== null && 'sourcePageIds' in value) {
-                now += 8001
+                now += MODEL_CHECK_TIMEOUT_MS + 1
             }
 
             return text
@@ -420,6 +420,7 @@ describe('ModelApiClient multipart dispatch', () => {
 
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(MODEL_CHECK_TIMEOUT_MS).toBe(12_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBe(110_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
             // The server parse route expires at 105s; the client must outlast it so the server's timeout is reported.

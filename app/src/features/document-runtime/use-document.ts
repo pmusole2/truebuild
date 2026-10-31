@@ -12,7 +12,8 @@ import { DocumentStore, documentKey, localDocument, type DocumentRuntimeEntry } 
 import { isResultLayoutDocument } from './result-layout-runtime'
 import { isQuestionLayoutDocument } from './question-layout-runtime'
 
-export const DOCUMENT_FOCUS_GRACE_MS = 8_000
+// Paid baseline: Spark low screens 17s, quick-check medium 31s; allow the 45s Guide limit plus transport margin.
+export const DOCUMENT_FOCUS_GRACE_MS = 55_000
 
 export interface DocumentReading {
     readonly document: ScreenDocumentV2
@@ -47,7 +48,9 @@ export function useDocument(
     const progressiveResult =
         (inputs.kind === 'result' || inputs.kind === 'answer') && inputs.captureId !== null && inputs.result !== null
     const entry = store.peek(inputs)
-    const preview = useMemo(() => store.preview(inputs), [store, key])
+    // A hidden busy Guide can mount before its READY donor arrives; collect that donor without another model call.
+    const activityVersion = inputs.kind === 'guide' && inputs.uiState?.busy != null ? version : 0
+    const preview = useMemo(() => store.preview(inputs), [store, key, activityVersion])
     // The Question is an editable form. Its complete authored tree stays stable across current capture/activity keys;
     // a cached provider layout must not replace the loaded photo, editor or caret. The cache itself remains untouched.
     const questionPresentation: DocumentRuntimeEntry | undefined = isQuestionLayoutDocument(preview.document)
@@ -95,8 +98,10 @@ export function useDocument(
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {
         // Background preparation belongs to warmup/precompute. A hidden route must not restart cancelled work on blur.
-        if (options.focused === true) store.request(inputs)
-    }, [store, key, options.focused])
+        // Non-ready states are deterministic app composition, never a reason for another model request.
+        if (options.focused === true && (options.state === undefined || options.state === 'ready'))
+            store.request(inputs)
+    }, [store, key, options.focused, options.state])
     useEffect(() => (): void => local.dispose(), [local])
     useEffect(() => {
         if (grace.current.key !== key) {
@@ -149,7 +154,9 @@ export function useDocument(
             ? options.state
             : displayed.status === 'pending' && inputs.kind !== 'result' && inputs.kind !== 'answer'
               ? 'pending'
-              : 'ready'
+              : displayed.document.metadata.fallbackReason === 'timeout' && !progressiveResult
+                ? 'error'
+                : 'ready'
     const active = activeDocumentVariant(displayed.document, requested)
     // Fail closed without an explicit focus witness; covered/back-stack previews cannot mint check context.
     useEffect(() => {

@@ -37,6 +37,7 @@ import type { Observation } from '../assembly/observation'
 import type { OverlayResult, ScreenContext } from '@truebuild/contracts/model'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
 import { secondOpinionTarget } from './provenance-copy'
+import { reviewedSession } from './reviewed-session'
 
 const QUESTION_CAPTURE_TIMEOUT_MS = 30_000
 const LOCAL_LIBRARY_READ_FAILURE =
@@ -158,18 +159,7 @@ type FrozenCheckContext = {
     observation: ImageBytes
 }
 
-export function reviewedSession(session: ManualSession): ManualSession | null {
-    const candidate = {
-        ...session,
-        reviewStatus: 'reviewed',
-        reviewedSteps: session.reviewedSteps.map((step) => ({
-            ...step,
-            correction: step.correction === null ? null : { ...step.correction, reviewed: true },
-        })),
-    }
-    const valid = manualSessionSchema.safeParse(candidate)
-    return valid.success ? valid.data : null
-}
+export { reviewedSession } from './reviewed-session'
 
 export { unresolvedCriticalFacts } from '@truebuild/contracts/model'
 
@@ -718,8 +708,9 @@ export class CaptureController {
             if (result.status !== 'ok') {
                 this.publish({
                     notice:
-                        result.message ??
-                        `Manual reading unavailable (${result.code}). Check the connection and page/upload budgets, then retry as a new request.`,
+                        result.code === 'timeout'
+                            ? 'Manual reading timed out. Try again.'
+                            : (result.message ?? `Manual reading unavailable (${result.code}). Try again.`),
                 })
                 return
             }
@@ -757,7 +748,7 @@ export class CaptureController {
                         ? LOCAL_LIBRARY_READ_FAILURE
                         : guard.timedOut()
                           ? 'Manual reading timed out. Retry sends a new request.'
-                          : 'Manual reading unavailable. Check your connection and retry.',
+                          : 'Manual reading unavailable. Try again.',
                 })
             }
         } finally {
@@ -1090,7 +1081,7 @@ export class CaptureController {
                         ? LOCAL_LIBRARY_READ_FAILURE
                         : guard.timedOut()
                           ? intent.kind === 'check'
-                              ? 'Cannot verify: photo preparation or check exceeded 8 seconds. Take a new photo for another check.'
+                              ? `Cannot verify: photo preparation or check exceeded ${MODEL_CHECK_TIMEOUT_MS / 1000} seconds. Take a new photo for another check.`
                               : 'Camera photo preparation timed out. Take a new photo.'
                           : 'Cannot use this camera photo. Check camera access and connection, then take a new photo.',
                 })

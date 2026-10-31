@@ -307,7 +307,7 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
                     expect(sent.text.format.schema.required).not.toContain(key)
                 }
             }
-            expect(sent.max_output_tokens).toBe(1500)
+            expect(sent.max_output_tokens).toBe(2500)
             expect(runtime.counter.used).toBe(1)
         },
     )

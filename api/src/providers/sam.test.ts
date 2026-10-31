@@ -200,18 +200,22 @@ describe('inactive SAM transport over controlled local HTTP', (): void => {
     })
 
     it('maps a provider failure to a sanitized unavailable terminal', async (): Promise<void> => {
-        const transport = await local((response): void => {
-            response.end(
-                event({ type: 'response.failed', response: { error: { message: 'private provider detail' } } }),
+        for (const status of [200, 429, 500, 503]) {
+            const transport = await local((response): void => {
+                response.statusCode = status
+                response.end(
+                    event({ type: 'response.failed', response: { error: { message: 'private provider detail' } } }),
+                )
+            })
+            const result = await collect(
+                createSamProvider({ apiKey: 'synthetic-test-token', fetchImpl: transport.fetchImpl }).segment(
+                    await input(),
+                    new AbortController().signal,
+                ),
             )
-        })
-        const result = await collect(
-            createSamProvider({ apiKey: 'synthetic-test-token', fetchImpl: transport.fetchImpl }).segment(
-                await input(),
-                new AbortController().signal,
-            ),
-        )
-        expect(result).toEqual([{ type: 'unavailable', code: 'provider_error' }])
+            expect(result).toEqual([{ type: 'unavailable', code: 'provider_error' }])
+            expect(transport.dispatches()).toBe(1)
+        }
     })
 
     it('sends normalized inline video and preserves sparse out-of-order source frame IDs', async (): Promise<void> => {

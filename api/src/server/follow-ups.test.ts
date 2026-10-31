@@ -197,7 +197,7 @@ describe('asynchronous overlay', (): void => {
             binding: context.binding,
             value: {
                 model: 'muse-wonder-1.0',
-                effort: 'max',
+                effort: 'medium',
                 observedRegion: { x: 0.1, y: 0.1, width: 0.5, height: 0.6 },
                 nextPartRegion: { partId: context.partId, region: { x: 0.2, y: 0.2, width: 0.3, height: 0.3 } },
                 layout: { source: 'fallback' },
@@ -355,7 +355,7 @@ describe('verdict-only Spark call and observed telemetry', (): void => {
         expect(timing.totalMs!).toBeGreaterThanOrEqual(timing.timeToProviderMs! + timing.providerMs! - 1)
         const overlay = await send('/api/checks/overlay', form({ overlayToken: value.followUps.overlay.token }))
         const result = (await overlay.json()).value
-        expect(result.telemetry).toMatchObject({ stage: 'overlay', model: 'muse-wonder-1.0', effort: 'max' })
+        expect(result.telemetry).toMatchObject({ stage: 'overlay', model: 'muse-wonder-1.0', effort: 'medium' })
     })
 
     it('starts the clock at real admission, so a slow request body counts as time before the provider', async (): Promise<void> => {

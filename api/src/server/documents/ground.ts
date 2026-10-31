@@ -4,7 +4,9 @@ import {
     screenDocumentV2Schema,
     screenProposalV2Schema,
     semanticIssuesV2,
+    withShellStatesV2,
     type ScreenProposalV2,
+    type ScreenVariantV2,
 } from '@truebuild/contracts'
 
 import { decodeWireProposal, wireIssueCodes } from '../../providers/document-wire'
@@ -58,20 +60,28 @@ export function checkProposal(proposal: ScreenProposalV2, context: DocumentConte
     return [...structural, ...semantic].slice(0, 16)
 }
 
-/** A raw provider value (the flat wire table): decode, then the full gate. */
-export function evaluateWire(value: unknown, context: DocumentContext): Evaluation {
-    const decoded = decodeWireProposal(value)
-    if (!decoded.ok) return decoded
-    const issues = checkProposal(decoded.proposal, context)
-    return issues.length === 0 ? { ok: true, proposal: decoded.proposal } : { ok: false, issues }
+/**
+ * The model's ready screen with the shell's deterministic state variants, through the full gate. The model never
+ * authors a state, so every accepted proposal carries exactly the shell's states for this context.
+ */
+function evaluateReady(ready: ScreenVariantV2, context: DocumentContext): Evaluation {
+    const proposal = withShellStatesV2(context.material, ready)
+    const issues = checkProposal(proposal, context)
+    return issues.length === 0 ? { ok: true, proposal } : { ok: false, issues }
 }
 
-/** A cached, previously accepted proposal re-checked against the requesting context. */
+/** A raw provider value (the flat wire table of a ready screen): decode, then the full gate. */
+export function evaluateWire(value: unknown, context: DocumentContext): Evaluation {
+    const decoded = decodeWireProposal(value)
+    return decoded.ok ? evaluateReady(decoded.ready, context) : decoded
+}
+
+/** A cached, previously accepted proposal: its ready screen re-checked against the requesting context. */
 export function evaluateProposal(proposal: unknown, context: DocumentContext): Evaluation {
     const parsed = screenProposalV2Schema.safeParse(proposal)
     if (!parsed.success) return { ok: false, issues: wireIssueCodes(parsed.error) }
-    const issues = checkProposal(parsed.data, context)
-    return issues.length === 0 ? { ok: true, proposal: parsed.data } : { ok: false, issues }
+    const { states: _states, ...ready } = parsed.data
+    return evaluateReady(ready, context)
 }
 
 /** Paths of the documents' components, exposed for tests that assert the origin map. */

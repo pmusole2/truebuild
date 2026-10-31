@@ -4,9 +4,11 @@ import {
     canonicalJson,
     buildFallbackProposalV2,
     manualDirectionFacts,
+    screenContentJsonV2,
     screenDocumentV2Schema,
     visitVariantNodesV2,
     nodeFactIdsV2,
+    VARIANT_STATES,
     variantsOfV2,
     type DocumentMetadataV2,
     type FactV2,
@@ -241,12 +243,28 @@ export function createDocumentService(options: DocumentServiceOptions): Document
     /** Model-output cache key: the grounded content plus the model/effort/prompt that produced it. */
     function cacheKey(context: DocumentContext): string {
         const stagePolicy = policy.stages[context.stage]
+        // A Guide's model-authored READY composition does not change with shell activity. Cache only that content;
+        // fromCache rechecks READY and rebuilds the exact activity's shell, bound identity and issued screen id.
+        const contentKey =
+            context.inputs.kind === 'guide'
+                ? sha256(
+                      screenContentJsonV2({
+                          ...context.inputs,
+                          uiState: { ...context.inputs.uiState, busy: null },
+                      }),
+                  )
+                : context.contentKey
         return sha256(
             canonicalJson({
-                contentKey: context.contentKey,
+                contentKey,
                 reviewed: context.material.reviewed,
                 model: provider === null ? 'fixture' : stagePolicy.model,
-                effort: provider === null ? 'fixture' : stagePolicy.effort,
+                effort:
+                    provider === null
+                        ? 'fixture'
+                        : context.inputs.kind === 'quick-check'
+                          ? (stagePolicy.quickCheckEffort ?? stagePolicy.effort)
+                          : stagePolicy.effort,
                 prompt: DOCUMENT_PROMPT_VERSION,
                 catalog: SCREEN_CATALOG_V2_VERSION,
             }),
@@ -290,7 +308,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const document = publish(
             assembleDocumentV2(
                 context.material,
-                buildFallbackProposalV2(context.material),
+                buildFallbackProposalV2(context.material, reason),
                 {
                     ...extra,
                     source: 'fallback',
@@ -319,6 +337,8 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 {
                     ...observed,
                     source: 'generated',
+                    // The model authored the ready screen only; every state it carries is the shell's template.
+                    shellStates: VARIANT_STATES.filter((state) => proposal.states[state] !== null),
                     evidence,
                     fallbackReason: null,
                     cacheHit,

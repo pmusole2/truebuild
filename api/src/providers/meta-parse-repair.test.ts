@@ -516,9 +516,10 @@ describe('bounded parse repair', () => {
                 clock.mockRestore()
             }
         }
-        // 25 s used, then a 40 s repair plus the 1 s return margin: it fits in 70 s but not in 60 s.
+        // 25 s used: a bounded repair fits in 70 s and 60 s; 45 s leaves less than the required 20 s plus return margin.
         expect(await attempted(70_000)).toBe(2)
-        expect(await attempted(60_000)).toBe(1)
+        expect(await attempted(60_000)).toBe(2)
+        expect(await attempted(45_000)).toBe(1)
     })
 
     it('keeps the first result after an individual repair timeout while the overall budget remains', async () => {

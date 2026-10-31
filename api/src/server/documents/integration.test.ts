@@ -176,7 +176,7 @@ describe('what the gate refuses', () => {
     it('shows the model the new witnesses and a prompt version that keys the cache', () => {
         // 10: the generic waiting wording of the closed copy changed, and that copy is part of the supplied view.
         expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThanOrEqual(10)
-        for (const phrase of ['requirements.figure', 'requirements.notice', 'navigate / back', 'SAME CameraView']) {
+        for (const phrase of ['requirements.figure', 'requirements.notice', 'navigate / back', 'Fixed spine']) {
             expect(DOCUMENT_INSTRUCTIONS).toContain(phrase)
         }
         const quick = contextOf('quick-check')

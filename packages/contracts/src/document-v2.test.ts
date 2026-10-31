@@ -139,6 +139,29 @@ const issues = (document: unknown): string[] => {
 }
 
 describe('deterministic complete documents', () => {
+    it('keeps timeout recovery honest and retries the screen without changing its context', () => {
+        for (const kind of ['guide', 'quick-check', 'camera'] as const) {
+            const inputs = inputsFor(kind)
+            if (kind === 'camera') inputs.uiState = { camera: { mode: 'build-photo', permission: 'granted' } }
+            const document = buildFallbackDocumentV2(inputs, {
+                ...deps,
+                reason: 'timeout',
+                evidence: 'local-deterministic',
+            })
+            expect(issues(document)).toEqual([])
+            expect(document.bound.contextKey).toBe(sha256Hex(screenContextJsonV2(inputs)))
+            expect(JSON.stringify(document.states.error)).toContain('That took too long')
+            const retry = kind === 'camera' ? document.states.error?.bar.secondary : document.states.error?.bar.primary
+            expect(retry).toMatchObject({
+                label: 'Try again',
+                intent: { intent: 'retry', target: 'screen' },
+            })
+            if (kind === 'camera') {
+                expect(document.states.error?.bar.primary).toEqual(document.bar.primary)
+                expect(JSON.stringify(document.states.error)).toContain('CameraView')
+            }
+        }
+    })
     it.each(SCREEN_KINDS_V2)('%s composes one complete, valid fallback document', (kind) => {
         const document = fallbackFor(inputsFor(kind))
         expect(issues(document)).toEqual([])

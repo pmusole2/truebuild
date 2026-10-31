@@ -66,6 +66,7 @@ export function createDocuments(): DocumentStore {
             ? {}
             : { client: new ModelApiClient({ baseUrl: API_BASE_URL, secret: API_SECRET }) }),
         mode: GENERATIVE_UI,
+        warmupConcurrency: 4,
         id: (): string => Crypto.randomUUID(),
     })
 }

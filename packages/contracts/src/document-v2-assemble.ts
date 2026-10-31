@@ -10,6 +10,7 @@ import {
     type FallbackReasonV2,
     type ScreenDocumentV2,
     type ScreenProposalV2,
+    type VariantState,
 } from './document-v2'
 import { screenContextJsonV2, screenContextPartsV2 } from './document-v2-context'
 import type { DocumentMaterialV2 } from './document-v2-material'
@@ -37,6 +38,8 @@ export interface DocumentFacts {
      * provenance (see `rebindGeneratedStatesV2`). Those variants, and only those, are attributed `generated`.
      */
     carried?: CarriedStatesV2
+    /** Generated documents only: state variants the shell filled from its templates (origin `shell`). */
+    shellStates?: readonly VariantState[]
     effort?: DocumentMetadataV2['effort']
     repaired?: boolean
     rejectedIssues?: number | null
@@ -70,9 +73,11 @@ export function assembleDocumentV2(
     const tables = { facts: material.facts, sources: material.sources }
     const shell = { ...proposal, ...tables }
     const carried = about.carried !== undefined && Object.keys(about.carried).length > 0 ? about.carried : undefined
+    const shellStates =
+        about.shellStates !== undefined && about.shellStates.length > 0 ? [...about.shellStates] : undefined
     const origins = Object.fromEntries(
         variantComponentPathsV2(proposal).flatMap(({ name, paths }) =>
-            paths.map((path) => [path, variantOriginV2({ source: about.source, carried }, name)] as const),
+            paths.map((path) => [path, variantOriginV2({ source: about.source, carried, shellStates }, name)] as const),
         ),
     )
     const metadata: DocumentMetadataV2 = {
@@ -83,6 +88,7 @@ export function assembleDocumentV2(
         ...(about.fixtureId == null ? {} : { fixtureId: about.fixtureId }),
         ...(about.authoring === undefined ? {} : { authoring: about.authoring }),
         ...(carried === undefined ? {} : { carried }),
+        ...(shellStates === undefined ? {} : { shellStates }),
         stage: screenStageV2(inputs.kind),
         model: about.model ?? null,
         effort: about.effort ?? null,
@@ -109,6 +115,7 @@ export function assembleDocumentV2(
                 requirements: material.requirements,
                 // Present only on a document that carries states, so every other document keeps the identity it always had.
                 ...(carried === undefined ? {} : { carried }),
+                ...(shellStates === undefined ? {} : { shellStates }),
                 ...(about.authoring === undefined ? {} : { authoring: about.authoring }),
             }),
         ),

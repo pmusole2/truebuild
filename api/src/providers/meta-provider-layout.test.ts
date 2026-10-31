@@ -89,17 +89,22 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
     })
 
     describe('flag off (default)', (): void => {
-        it('sends the byte-identical cf2260d check request, same cap and one dispatch', async (): Promise<void> => {
+        it('preserves cf2260d check instructions and schema with a shared cache key and one dispatch', async (): Promise<void> => {
             const { provider, bodies, fetchImpl } = mocked(verdict)
             await provider.checkStep(await checkInputFor(fixture), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(1)
             const body = bodies[0]!
-            expect(Object.keys(body)).toEqual(CF2260D.keys)
+            expect(
+                Object.keys(body)
+                    .filter((key) => key !== 'prompt_cache_key')
+                    .sort(),
+            ).toEqual([...CF2260D.keys].sort())
+            expect(body.prompt_cache_key).toMatch(/^truebuild_check_[a-f0-9]{16}$/u)
             expect(sha(body.instructions)).toBe(CF2260D.instructionsSha)
             expect(sha(JSON.stringify(body.text.format.schema))).toBe(CF2260D.checkSchemaSha)
             expect(body.text.format).toMatchObject({ name: 'truebuild_check', strict: true })
             expect(body.text.format.schema).toEqual(metaOutputSchemas.check)
-            expect(body.max_output_tokens).toBe(1500)
+            expect(body.max_output_tokens).toBe(2500)
             expect(body.reasoning).toEqual({ effort: 'low' })
         })
 
@@ -108,7 +113,12 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             await provider.answerQuestion(await askInput(), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(1)
             const body = bodies[0]!
-            expect(Object.keys(body)).toEqual(CF2260D.keys)
+            expect(
+                Object.keys(body)
+                    .filter((key) => key !== 'prompt_cache_key')
+                    .sort(),
+            ).toEqual([...CF2260D.keys].sort())
+            expect(body.prompt_cache_key).toMatch(/^truebuild_question_[a-f0-9]{16}$/u)
             expect(sha(body.instructions)).toBe(CF2260D.instructionsSha)
             expect(sha(JSON.stringify(body.text.format.schema))).toBe(CF2260D.questionSchemaSha)
             expect(body.max_output_tokens).toBe(32000)
@@ -145,9 +155,14 @@ describe.each(stepFixtures())('MOCKED check/ask request shape on the $name manua
             expect(after.instructions).toContain('layout')
             // The stable cached prefix (manual context, pages, step, observation) is untouched.
             expect(after.input).toEqual(before.input)
-            expect(after.max_output_tokens).toBe(1500)
+            expect(after.max_output_tokens).toBe(2500)
             expect(after.reasoning).toEqual({ effort: 'low' })
-            expect(Object.keys(after)).toEqual(CF2260D.keys)
+            expect(
+                Object.keys(after)
+                    .filter((key) => key !== 'prompt_cache_key')
+                    .sort(),
+            ).toEqual([...CF2260D.keys].sort())
+            expect(after.prompt_cache_key).not.toBe(before.prompt_cache_key)
         })
 
         it('extends the same single ask request without extra dispatch', async (): Promise<void> => {

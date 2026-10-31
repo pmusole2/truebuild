@@ -125,7 +125,11 @@ it('retains the actual generated Home while a cold Guide prepares, then navigate
     expect(root('guide-screen')?.origin).toBe('generated')
     expect(screen.getByRole('button', { name: 'Take photo' })).toBeEnabled()
     const idle = mounted.server.requests.filter(
-        (request) => request.op === 'generate' && request.kind === 'guide' && request.uiState?.busy == null,
+        (request) =>
+            request.op === 'generate' &&
+            request.kind === 'guide' &&
+            request.stepId === 'step-1' &&
+            request.uiState?.busy == null,
     )
     expect(idle).toHaveLength(1)
 })
@@ -305,11 +309,15 @@ it('shows the actual held photo while Spark is pending, then reveals its result 
         expect(state.check).toBeNull()
         expect(inputs.result).toBeNull()
         expect(state.capture?.reusable).toBe(true)
-        expect(mounted.store.peek(inputs)?.document.metadata.source).toBe('generated')
-        expect(mounted.store.peek(inputs)?.exactGeneration).toBeUndefined()
+        expect(mounted.store.peek(inputs)).toBeUndefined()
+        const preview = mounted.store.preview(inputs)
+        expect(preview.document.metadata.source).toBe('generated')
+        expect(preview.exactGeneration).toBeUndefined()
+        expect(preview.document.bound.captureId).toBe(state.capture?.binding.captureId)
         expect(mounted.store.readyAt(inputs)).toBeNull()
         expect(mounted.server.requests.filter((request) => request.kind === 'result')).toHaveLength(0)
         const photo = await screen.findByTestId('frozen-photo-image')
+        expect(root('guide-screen')?.documentRoot).toBe(preview.document.screenId)
         const uri = photo.props.source.uri as string
         expect(uri).toMatch(/^data:image\/jpeg;base64,/u)
         await loadPhoto()
@@ -468,7 +476,11 @@ it('enters a truthful complete fallback after a genuine target failure without r
     expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy()
     expect(
         mounted.server.requests.filter(
-            (request) => request.op === 'generate' && request.kind === 'guide' && request.uiState?.busy == null,
+            (request) =>
+                request.op === 'generate' &&
+                request.kind === 'guide' &&
+                request.stepId === 'step-1' &&
+                request.uiState?.busy == null,
         ),
     ).toHaveLength(1)
 })
@@ -548,7 +560,10 @@ it.each(['denied', 'query-failed'] as const)(
         expect(mockGetCameraPermissions).toHaveBeenCalledTimes(1)
         expect(mockRequestCameraPermission).not.toHaveBeenCalled()
         expect(screen.queryByTestId('hardware-preview')).toBeNull()
-        expect(mounted.server.requests.find((request) => request.kind === 'camera')?.uiState?.camera).toMatchObject({
+        // Earlier model-only preparation cannot determine permission. The actual route uses the measured access.
+        expect(
+            mounted.server.requests.filter((request) => request.kind === 'camera').at(-1)?.uiState?.camera,
+        ).toMatchObject({
             permission: outcome === 'denied' ? 'denied' : 'undetermined',
             canAskAgain: outcome === 'denied' ? false : null,
             failed: false,
@@ -562,6 +577,7 @@ it('cancels camera preparation on Back before a permission query completes and r
     mounted = await mount([entry()], { screens: { generated: ['guide', 'camera'] } })
     await press('Continue building')
     await waitFor(() => expect(mounted!.view.getPathname()).toBe('/guide/flow-manual'))
+    const preparedCameras = mounted.server.requests.filter((request) => request.kind === 'camera')
     await press('Take photo')
     await flush()
     expect(mockGetCameraPermissions).toHaveBeenCalledTimes(1)
@@ -571,7 +587,7 @@ it('cancels camera preparation on Back before a permission query completes and r
     await act(async () => permission.resolve({ granted: true, canAskAgain: true }))
     await flush()
     expect(mounted.view.getPathname()).toBe('/')
-    expect(mounted.server.requests.some((request) => request.kind === 'camera')).toBe(false)
+    expect(mounted.server.requests.filter((request) => request.kind === 'camera')).toEqual(preparedCameras)
     expect(mockRequestCameraPermission).not.toHaveBeenCalled()
 })
 
@@ -676,8 +692,8 @@ describe('a cold Compare', () => {
         await openJudge()
         return holds
     }
-    // Press Compare and wait until exactly the cold documents have been asked for, still on the source screen. A manual that
-    // is already selected has its own Compare and pane warmed by precompute, so only the other manual's pane is cold.
+    // Press Compare and wait until exactly the cold documents have been asked for, still on the source screen.
+    // A selected manual's Guide is prepared already; Compare and the other manual's pane remain cold.
     const pressCompare = async (cold: readonly string[] = needed): Promise<void> => {
         const origin = mounted!.view.getPathname()
         await fireEvent.press(compareControl())
@@ -747,7 +763,7 @@ describe('a cold Compare', () => {
         async (stop, from, at) => {
             const holds = await openColdJudge({ from })
             const push = jest.spyOn(router, 'push')
-            await pressCompare(from === 'guide' ? ['manual-b'] : needed)
+            await pressCompare(from === 'guide' ? ['compare', 'manual-b'] : needed)
             if (stop === 'Close') {
                 await fireEvent.press(screen.getByTestId('close-sheet'))
                 await waitFor(() => expect(screen.queryByTestId('judge-compare')).toBeNull())

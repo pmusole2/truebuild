@@ -32,7 +32,7 @@ import { createDocumentService } from './service'
 /**
  * The documents the native app asks for while a person works through a manual, composed by the isolated fixture runtime
  * for BOTH of its arrangements. Each must be published as `generated` (never the deterministic fallback), carry the
- * origin of a generated document on every component, and keep every mandatory witness in every variant.
+ * origin of a generated document on every ready component and the shell origin on every state, and keep every mandatory witness in every variant.
  */
 
 const work: BackgroundWork = {
@@ -166,7 +166,11 @@ function heldInputs(session: ManualSession, stepIndex: number): [string, ScreenC
 function expectGenerated(document: ScreenDocumentV2): void {
     expect(document.metadata.source).toBe('generated')
     expect(document.metadata.fallbackReason).toBeNull()
-    expect(Object.values(document.metadata.origins ?? {}).every((origin) => origin === 'generated')).toBe(true)
+    // The model authors the ready screen only: every state variant is the shell's template and says so.
+    for (const [path, origin] of Object.entries(document.metadata.origins)) {
+        expect(origin, path).toBe(path.startsWith('states.') ? 'shell' : 'generated')
+    }
+    expect(document.metadata.shellStates?.length ?? 0).toBeGreaterThan(0)
     // A waiting screen says one calm thing and offers exactly one action.
     for (const name of ['busy', 'pending'] as const) {
         expect(document.states[name]?.bar.secondary ?? null, name).toBeNull()

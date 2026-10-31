@@ -459,25 +459,8 @@ describe('the prompt names the closed copy (finding 1)', () => {
         const context = buildDocumentContext(documentInputs('guide'))
         const view = context.view.dynamic.document as { literalCopy: Record<string, string[]> }
         expect(view.literalCopy.ready).toContain('Safety')
-        expect(view.literalCopy.busy).toContain('Working on it')
+        expect(Object.keys(view.literalCopy)).toEqual(['ready'])
         expect(JSON.stringify(view.literalCopy)).not.toContain('Looks right')
-    })
-
-    it('lists one stable calm wording for a generic wait, never a placeholder', () => {
-        const context = buildDocumentContext(documentInputs('guide'))
-        const view = context.view.dynamic.document as { literalCopy: Record<string, string[]> }
-        for (const state of ['busy', 'pending'] as const) {
-            expect(view.literalCopy[state], state).toEqual(
-                expect.arrayContaining(['Working on it', 'One moment, please.']),
-            )
-            for (const retired of [
-                'Getting this ready',
-                'Your screen will appear here.',
-                'This only takes a moment.',
-            ]) {
-                expect(view.literalCopy[state], `${state}: ${retired}`).not.toContain(retired)
-            }
-        }
     })
 })
 

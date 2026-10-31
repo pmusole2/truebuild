@@ -109,6 +109,8 @@ export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentM
         if (ref.kind === 'fact' && !factIds.has(ref.factId)) add(path, 'fact_unknown')
     }
     const checkIntent = (intent: AppIntent, path: string): void => {
+        // The shell may retry screen composition from its error state; READY keeps its original intent policy.
+        if (path.startsWith('states.error.') && intent.intent === 'retry' && intent.target === 'screen') return
         if (!intentAllowedV2(intent, material)) add(path, 'intent_not_allowed')
     }
     const checkHeader = (header: HeaderV2, prefix: string, name: string): void => {

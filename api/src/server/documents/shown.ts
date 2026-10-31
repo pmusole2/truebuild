@@ -64,6 +64,8 @@ export function issueShownV2(document: ScreenDocumentV2): IssuedShownV2 {
     const originOf = (path: string): ShownBlock['origin'] => {
         const origin = origins[path]
         if (origin === undefined) throw new Error(`missing_origin:${path}`)
+        // Only the ready variant is projected, and its origin is always the document's own source.
+        if (origin === 'shell') throw new Error(`unexpected_shell_origin:${path}`)
         return origin
     }
     const cites = (indexes: readonly number[]): DocumentSourceV2[] =>

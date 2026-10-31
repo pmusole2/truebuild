@@ -471,7 +471,7 @@ it('shows controller notices through PlainNotice in plain words, as errors or in
     )
     const { rerender } = await render(view('Unavailable (provider_error). Check connection/configuration.'))
     expect(screen.getByRole('alert')).toBeTruthy()
-    expect(screen.getByText('We could not reach the checker. Check your connection and try again.')).toBeTruthy()
+    expect(screen.getByText('We could not reach the checker. Try again.')).toBeTruthy()
     await rerender(view('Cancelled. No late reply will be shown. Retry is a new request.'))
     expect(screen.queryByRole('alert')).toBeNull()
 })

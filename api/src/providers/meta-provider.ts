@@ -35,7 +35,12 @@ import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, type AiPolicy, type PolicySta
 import { BudgetError } from '../server/budget'
 import { MetaTransport, usageMetrics, type ProviderMetrics, type TransportObservation } from './meta-transport'
 import { admission as requestClock } from '../server/request-clock'
-import { PARSE_REPAIR_MS, PARSE_RETURN_MARGIN_MS, parseFirstAttemptTimeoutMs } from '../server/parse-budget'
+import {
+    PARSE_REPAIR_MS,
+    PARSE_MIN_REPAIR_MS,
+    PARSE_RETURN_MARGIN_MS,
+    parseFirstAttemptTimeoutMs,
+} from '../server/parse-budget'
 import { createDeadline, RequestStoppedError, type Deadline } from '../server/deadline'
 import {
     MediaValidationError,
@@ -258,7 +263,7 @@ export interface MetaProviderOptions {
     onMetrics?: (metrics: ProviderMetrics) => void
     /** Trusted admission grants and accounts for at most one parse repair; never supplied by a request. */
     runParseRepair?: <T>(work: () => Promise<T>) => Promise<T>
-    /** Trusted server configuration only; defaults to the eight-second verdict budget (any value up to 105 s). */
+    /** Trusted server configuration only; defaults to the twelve-second verdict budget (any value up to 105 s). */
     checkTimeoutMs?: number
     /** Per-stage effort, output headroom, deadline and model. Defaults come from `aiPolicyFromEnvironment({})`. */
     policy?: AiPolicy
@@ -639,13 +644,15 @@ const CARRIED_OVER_REQUIRED =
 /** Parse only: typed safety notes. Check/ask text is deliberately not touched (its request bytes are pinned). */
 const PARSE_SAFETY =
     'Parse safety: For every step set safetyNotes to an array. Copy each safety statement the manual prints for that step (a warning, caution, danger, prohibition, or any instruction about people, children, pets, hands, power, weight, stability, heat or sharp edges) as one entry {noteId, note}: note.value is the printed words, complete and unaltered, in the selected language, and note.sourceRefs cite the supplied page IDs that print it. Use a unique noteId per step. If a printed safety statement exists but cannot be read, emit it with note.state unknown and a specific reason; never drop it and never invent one. Use an empty array only when you read the step and its page and the manual prints no safety statement for it; use null when you could not assess the step.'
-const PARSE_INSTRUCTIONS = INSTRUCTION_LINES.flatMap((line): string[] =>
-    line.startsWith('Parse carried quantities')
-        ? [line, CARRIED_OVER_REQUIRED]
-        : line.startsWith('Parse corrections')
-          ? [PARSE_SAFETY, line]
-          : [line],
-).join(' ')
+const PARSE_INSTRUCTIONS =
+    INSTRUCTION_LINES.flatMap((line): string[] =>
+        line.startsWith('Parse carried quantities')
+            ? [line, CARRIED_OVER_REQUIRED]
+            : line.startsWith('Parse corrections')
+              ? [PARSE_SAFETY, line]
+              : [line],
+    ).join(' ') +
+    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -653,7 +660,7 @@ const LAYOUT_INSTRUCTIONS =
 
 /** Appended only to the Spark primary check when a later overlay stage supplies geometry (verdict-only call). */
 const VERDICT_ONLY_INSTRUCTIONS =
-    'Verdict only: return the decision with its grounded evidence only. The output has no region, highlight or layout property and none is requested: a later stage locates regions. A refuse still requires a visible mismatch, a reason and an expected diagram citation. All other evidence rules above are unchanged.'
+    'Verdict only: return the decision with its grounded evidence only. The output has no region, highlight or layout property and none is requested: a later stage locates regions. A refuse still requires a visible mismatch, a reason and an expected diagram citation. An uncertain orientation always requires cannot_verify, even when parts, connection or visible checks mismatch; name the unobservable evidence in missingEvidence. All other evidence rules above are unchanged.'
 
 /** Language is validated against parseLanguageSchema before it reaches this per-request instruction. */
 function parseLanguageInstructions(language: string): string {
@@ -705,7 +712,7 @@ function guidance(proposed: Guidance, requested: boolean): Guidance {
 
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
 export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
-    const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
+    const checkTimeoutMs = options.checkTimeoutMs ?? 12_000 // t5 Spark low verdict 7.96 s; user-selected headroom.
     if (!Number.isFinite(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > MAX_DEADLINE_MS) {
         throw new MetaProviderError('invalid_input')
     }
@@ -731,6 +738,18 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     /** Primary Spark follows MODEL_LAYOUT; a Wonder second opinion needs the separate Wonder flag as well. */
     function layoutFor(model: StandardModel, secondary: boolean): boolean {
         return layoutEnabled && (!secondary || (options.layoutWonder === true && model === 'muse-wonder-1.0'))
+    }
+
+    function generationEffort(input: ScreenGenerationInput): AiEffort {
+        const stagePolicy = policy.stages[input.stage]
+        const screen = input.dynamic.document ?? input.dynamic.screen
+        return input.stage === 'screens' &&
+            typeof screen === 'object' &&
+            screen !== null &&
+            'kind' in screen &&
+            screen.kind === 'quick-check'
+            ? (stagePolicy.quickCheckEffort ?? stagePolicy.effort)
+            : stagePolicy.effort
     }
 
     async function execute<T>(
@@ -808,6 +827,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         withLayout = false,
         stage: PolicyStage = stageFor(operation, secondary),
         verdictOnly = false,
+        effort: AiEffort = policy.stages[stage].effort,
     ): Promise<{ value: T; telemetry: VerifiedCallTelemetry }> {
         deadline.checkpoint()
         const clockStart = requestClock.getStore()?.start ?? performance.now()
@@ -856,6 +876,23 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             },
             ...observation.map(imagePart),
         ]
+        const format = {
+            type: 'json_schema',
+            name: `truebuild_${operation}`,
+            schema:
+                verdictOnly && operation === 'check'
+                    ? metaVerdictOutputSchema
+                    : withLayout && (operation === 'check' || operation === 'question')
+                      ? metaLayoutOutputSchemas[operation]
+                      : metaOutputSchemas[operation],
+            strict: true,
+        }
+        // https://dev.meta.ai/docs/prompt-caching: share the stable prompt/schema version, never a person or request key.
+        const promptVersion = createHash('sha256')
+            .update(baseInstructions)
+            .update(JSON.stringify(format))
+            .digest('hex')
+            .slice(0, 16)
         const body = JSON.stringify({
             model,
             store: false,
@@ -863,25 +900,15 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
             max_output_tokens: stagePolicy.maxOutputTokens,
-            reasoning: { effort: stagePolicy.effort },
+            reasoning: { effort },
+            prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
             instructions:
                 repair === undefined
                     ? baseInstructions
                     : `${baseInstructions} ${repair.instructions}${JSON.stringify(repair.data)}`,
+            // Stable instructions/schema precede the stable manual prefix; per-request text/images remain last.
+            text: { format },
             input: [{ type: 'message', role: 'user', content }],
-            text: {
-                format: {
-                    type: 'json_schema',
-                    name: `truebuild_${operation}`,
-                    schema:
-                        verdictOnly && operation === 'check'
-                            ? metaVerdictOutputSchema
-                            : withLayout && (operation === 'check' || operation === 'question')
-                              ? metaLayoutOutputSchemas[operation]
-                              : metaOutputSchemas[operation],
-                    strict: true,
-                },
-            },
         })
         deadline.checkpoint()
         const sendStart = performance.now()
@@ -904,9 +931,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             (status, latencyMs) => {
                 options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
             },
-            // A parse or screen has at most two semantic attempts, each with exactly one HTTP dispatch.
-            secondary || operation === 'parse' || textOnly ? 1 : 3,
+            // HTTP responses are final; only the separate bounded pre-response network retry is allowed.
+            1,
             transportObservation,
+            2,
         )
 
         // Even a response that settles beyond the absolute deadline retains explicit body custody.
@@ -944,7 +972,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 const telemetry: CallTelemetry = {
                     stage,
                     ...(identified === undefined ? {} : { model: identified }),
-                    effort: stagePolicy.effort,
+                    effort,
                     timeToProviderMs: Math.max(0, sendStart - clockStart),
                     providerMs: Math.max(0, received - sendStart),
                     parseValidateMs,
@@ -962,7 +990,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     modelIdentity: identified === undefined ? 'unverified' : 'verified',
                     status: response.status,
                     latencyMs: Math.max(0, received - sendStart),
-                    effort: stagePolicy.effort,
+                    effort,
                     stage,
                     timeToProviderMs: telemetry.timeToProviderMs,
                     providerMs: telemetry.providerMs,
@@ -1182,7 +1210,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     return {
         async parseManual(input, signal): Promise<ParsedManual> {
             const startedAt = performance.now()
-            // The overall budget is the configured parse deadline (default 100 s); the route adds its own margin.
+            // The overall budget is the configured parse deadline (default 80 s); the route adds its own margin.
             const overallMs = policy.stages.parse.deadlineMs
             return execute(overallMs, signal, async (deadline): Promise<ParsedManual> => {
                 const parsed = inputValue(parseInputSchema, input)
@@ -1199,9 +1227,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 }
                 const firstAttemptMs = parseFirstAttemptTimeoutMs(parsed.pages.length, overallMs)
                 let lastTelemetry: VerifiedCallTelemetry | undefined
+                const remainingRepairMs = (): number =>
+                    overallMs - (performance.now() - startedAt) - PARSE_RETURN_MARGIN_MS
                 const attempt = (repair?: ParseRepair): Promise<ParsedManual> =>
                     execute(
-                        repair ? PARSE_REPAIR_MS : firstAttemptMs,
+                        repair ? Math.min(PARSE_REPAIR_MS, remainingRepairMs()) : firstAttemptMs,
                         deadline.signal,
                         async (attemptDeadline): Promise<ParsedManual> => {
                             const sent = await dispatchDetailed(
@@ -1235,8 +1265,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 const first = await attempt()
                 const firstTelemetry = lastTelemetry
                 const issues = unresolvedCriticalFacts({ parts: first.parts, reviewedSteps: first.steps })
-                // A larger first-attempt budget must not spend a valid first result on a repair that cannot fit.
-                const repairFits = performance.now() - startedAt + PARSE_REPAIR_MS + PARSE_RETURN_MARGIN_MS < overallMs
+                // Keep the valid first result unless at least 20 s of repair work plus return margin remains.
+                const repairFits = remainingRepairMs() >= PARSE_MIN_REPAIR_MS
                 if (issues.length > 0 && repairFits) {
                     try {
                         const repair = (): Promise<ParsedManual> =>
@@ -1305,6 +1335,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
                     false,
                     input.stage,
+                    false,
+                    generationEffort(input),
                 )
                 return { value, telemetry }
             })
@@ -1326,6 +1358,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         : { instructions: DOCUMENT_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
                     false,
                     input.stage,
+                    false,
+                    generationEffort(input),
                 )
                 return { value, telemetry }
             })

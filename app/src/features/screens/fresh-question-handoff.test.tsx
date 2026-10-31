@@ -10,6 +10,7 @@ import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { JsonElement } from 'test-renderer'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
+import { inputsFromDocumentMetadata } from '../../api/document-client'
 
 jest.mock('expo-router/build/testing-library/mocks', () => ({}))
 jest.mock('react', () => {
@@ -198,9 +199,22 @@ it('keeps a fresh point-only Question through a real 202 and does not conceal it
                 [],
             )
             expect(beforeLoad.some((row) => row.answer && row.outerPhoto === 0)).toBe(true)
-            // The focused Guide still belongs to the visible-screen union beneath its sheet. Its known question
-            // activities need generated documents too; the Question's generated origin cannot credit that Guide.
-            expect(beforeLoad.filter((row) => row.outerOrigin !== 'generated')).toEqual([])
+            // The Guide keeps its own authored READY; current activity states belong to the deterministic shell.
+            // Neither the Question's generated origin nor another model call may credit those shell components.
+            expect(
+                beforeLoad.filter((row) => row.outerOrigin !== (row.pending === null ? 'generated' : 'shell')),
+            ).toEqual([])
+            const originalGuide = mounted.server.requests.find(
+                (request) => request.op === 'generate' && request.kind === 'guide' && request.stepId === 'step-1',
+            )!
+            expect(mounted.store.peek(inputsFromDocumentMetadata(originalGuide))?.document.metadata.origins.body).toBe(
+                'generated',
+            )
+            expect(
+                mounted.server.requests.filter(
+                    (request) => request.op === 'generate' && request.kind === 'guide' && request.uiState?.busy != null,
+                ),
+            ).toEqual([])
             expect(beforeLoad.filter((row) => row.answerText)).toEqual([])
 
             const page = within(screen.getByTestId('guide-screen', { includeHiddenElements: true }))

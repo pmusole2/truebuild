@@ -5,6 +5,7 @@ import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, parseFirstAttemptTimeoutMs, stepRefs, type ParseManualInput } from './meta-provider'
+import { aiPolicyFromEnvironment } from '../server/ai-policy'
 
 // Everything here is synthetic and mocked: no recorded provider output, no live request.
 const CITED = [{ pageId: 'demo-page-1', region: null }]
@@ -569,31 +570,39 @@ describe('parse language', () => {
     )
 })
 
-describe('page-scaled first parse attempt and page limit', () => {
+describe('fixed first parse attempt and page limit', () => {
     it.each([
-        [7, 59_500],
-        [8, 90_000],
-    ])(
-        'retains a slow unresolved first parse at %i pages instead of overrunning overall time in repair',
-        async (pages, firstMs) => {
-            const { input, clean } = await fixture(pages)
-            clean.steps[0]!.orientation = UNKNOWN
-            let monotonic = 100
-            const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
-            const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-                monotonic += fetchImpl.mock.calls.length === 1 ? firstMs : 40_001
-                return Response.json(envelope(clean))
-            })
-            try {
-                const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
-                const result = await provider.parseManual(input, new AbortController().signal)
-                expect(result.steps[0]!.orientation).toEqual(UNKNOWN)
-                expect(fetchImpl).toHaveBeenCalledTimes(1)
-            } finally {
-                clock.mockRestore()
-            }
-        },
-    )
+        [49_000, 2],
+        [49_001, 1],
+    ])('repairs only with at least twenty usable seconds after a %i ms first response', async (firstMs, calls) => {
+        const { input, clean } = await fixture(8)
+        const unresolved = withStep(clean, { orientation: UNKNOWN })
+        let monotonic = 100
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
+        const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
+            monotonic += fetchImpl.mock.calls.length === 1 ? firstMs : 19_999
+            return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? unresolved : clean))
+        })
+        try {
+            const policy = aiPolicyFromEnvironment(
+                { AI_DEADLINE_PARSE_MS: '70000' },
+                {
+                    checkTimeoutMs: 12_000,
+                    parseModel: 'muse-spark-1.3',
+                    verdictModel: 'muse-spark-1.3',
+                    secondOpinionModel: 'muse-wonder-1.0',
+                },
+            )
+            const result = await createMetaProvider({ apiKey: '<synthetic>', fetchImpl, policy }).parseManual(
+                input,
+                new AbortController().signal,
+            )
+            expect(result.steps[0]!.orientation).toEqual(calls === 2 ? clean.steps[0]!.orientation : UNKNOWN)
+            expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        } finally {
+            clock.mockRestore()
+        }
+    })
 
     async function timed(pageCount: number, elapsedMs: number): Promise<{ calls: number; outcome: unknown }> {
         const { input, clean } = await fixture(pageCount)
@@ -615,16 +624,16 @@ describe('page-scaled first parse attempt and page limit', () => {
         }
     }
 
-    it('accepts an 80 second first response for a seven-page manual that the retired 60 second budget would time out', async () => {
-        expect(await timed(7, 80_000)).toEqual({ calls: 1, outcome: 'accepted' })
+    it('times out a first response beyond the selected fifty-five seconds even for seven pages', async () => {
+        expect(await timed(7, 80_000)).toEqual({ calls: 1, outcome: 'timeout' })
     })
 
     it.each([
         [1, 55_000],
         [4, 55_000],
-        [5, 65_000],
-        [7, 85_000],
-        [8, 95_000],
+        [5, 55_000],
+        [7, 55_000],
+        [8, 55_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
@@ -633,13 +642,13 @@ describe('page-scaled first parse attempt and page limit', () => {
     it.each([
         [1, 55_000],
         [4, 55_000],
-        [5, 65_000],
-        [6, 75_000],
-        [7, 85_000],
-        [8, 95_000],
-        [9, 95_000],
-        [20, 95_000],
-    ])('computes %i pages as a %i ms first attempt and never exceeds 95 seconds', (pages, expected) => {
+        [5, 55_000],
+        [6, 55_000],
+        [7, 55_000],
+        [8, 55_000],
+        [9, 55_000],
+        [20, 55_000],
+    ])('computes %i pages as a %i ms first attempt and never exceeds 55 seconds', (pages, expected) => {
         expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
     })
 

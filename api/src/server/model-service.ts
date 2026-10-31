@@ -1,7 +1,7 @@
 import { SecondOpinionTickets, reconcileSecondOpinion, unavailableSecondOpinion } from './second-opinion'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { RETRY_STATUSES } from '../providers/meta-transport'
+import { retryableNetworkFailure } from '../providers/meta-transport'
 import { admission } from './request-clock'
 
 import {
@@ -106,7 +106,6 @@ type EffectContext = {
     retry: boolean
     fingerprint?: string
     attempts: number
-    maxAttempts?: number
     /** Present only on an admitted parse route; the one-use repair child never carries it. */
     repair?: { used: boolean }
     /** Status of the first upstream response; only a first 200 can authorize the repair. */
@@ -153,14 +152,19 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
             if (url !== 'https://api.meta.ai/v1/responses' || method !== 'POST') {
                 throw new AdmissionError('unauthorized', 401)
             }
+            // The provider ports serialize JSON strings. An opaque Request/byte/blob body cannot prove retry identity.
+            if (
+                (init?.body != null && typeof init.body !== 'string') ||
+                (input instanceof Request && input.body !== null && typeof init?.body !== 'string')
+            ) {
+                throw new AdmissionError('invalid_input', 400)
+            }
             const fingerprint = createHash('sha256')
                 .update(typeof init?.body === 'string' ? init.body : '')
                 .digest('hex')
             if (
                 context.dispatched &&
-                (!context.retry ||
-                    fingerprint !== context.fingerprint ||
-                    context.attempts >= (context.maxAttempts ?? 3))
+                (!context.retry || fingerprint !== context.fingerprint || context.attempts >= 2)
             ) {
                 throw new AdmissionError('duplicate_request', 409)
             }
@@ -171,18 +175,25 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
             context.attempts += 1
             const inherited = init?.signal ?? (input instanceof Request ? input.signal : undefined)
             const signal = inherited ? AbortSignal.any([inherited, context.deadline.signal]) : context.deadline.signal
-            const attempt = context.attempts
-            return transport(input, { ...init, signal, redirect: 'error' }).then((response): Response => {
-                try {
+            return transport(input, { ...init, signal, redirect: 'error' }).then(
+                (response): Response => {
+                    try {
+                        context.check()
+                    } catch (error) {
+                        void response.body?.cancel().catch((): void => {})
+                        throw error
+                    }
+                    // Receiving any response ends transport retry authority; semantic repair needs its separate grant.
+                    context.retry = false
+                    context.firstStatus ??= response.status
+                    return response
+                },
+                (error: unknown): never => {
                     context.check()
-                } catch (error) {
-                    void response.body?.cancel().catch((): void => {})
+                    context.retry = context.attempts === 1 && retryableNetworkFailure(error)
                     throw error
-                }
-                context.retry = RETRY_STATUSES.has(response.status)
-                if (attempt === 1) context.firstStatus = response.status
-                return response
-            })
+                },
+            )
         } catch (error) {
             return Promise.reject(error)
         }
@@ -210,7 +221,6 @@ export async function runModelParseRepair<T>(work: () => Promise<T>): Promise<T>
             dispatched: false,
             retry: false,
             attempts: 0,
-            maxAttempts: 1,
         },
         work,
     )
@@ -234,7 +244,6 @@ export function createBackgroundWork(counter: ModelCallCounter, gate: Concurrenc
                 dispatched: false,
                 retry: false,
                 attempts: 0,
-                maxAttempts: 1,
                 repair: { used: false },
                 counter,
             }
@@ -526,7 +535,7 @@ export function createModelHandlers(options: {
     options: typeof modelOptions
 } {
     const { provider, samProvider, auth, counter, allowedOrigins } = options
-    const checkTimeoutMs = options.checkTimeoutMs ?? 8_000
+    const checkTimeoutMs = options.checkTimeoutMs ?? 12_000 // t5 Spark low verdict 7.96 s; match runtime/provider headroom.
     if (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > MAX_DEADLINE_MS) {
         throw new Error('invalid_timeout')
     }
@@ -623,7 +632,6 @@ export function createModelHandlers(options: {
         scopeHeaders?: (metadata: M) => Record<string, string>,
         publish?: (value: T, input: I) => { value: T; rollback?: () => void },
         policy: {
-            maxAttempts?: number
             repairable?: boolean
             /** Called once the request identity is parsed and authorized, before any provider work. */
             onMetadata?: (metadata: M) => void
@@ -641,7 +649,6 @@ export function createModelHandlers(options: {
             let releaseSlot: (() => void) | undefined
             try {
                 execution = admit(request, auth, duration, allowedOrigins)
-                if (policy.maxAttempts !== undefined) execution.context.maxAttempts = policy.maxAttempts
                 if (policy.repairable) execution.context.repair = { used: false }
                 if (!dispatch) {
                     throw new AdmissionError('unconfigured', 503)
@@ -751,7 +758,7 @@ export function createModelHandlers(options: {
             }).success,
         undefined,
         undefined,
-        { maxAttempts: 1, repairable: true, route: 'parse', present: (value) => asPublic(value) },
+        { repairable: true, route: 'parse', present: (value) => asPublic(value) },
     )
     const scopeHeaders = (metadata: ModelCheckMetadata): Record<string, string> => {
         const mode = options.checkContext ?? 'full'
@@ -920,7 +927,6 @@ export function createModelHandlers(options: {
         undefined,
         undefined,
         {
-            maxAttempts: 1,
             route: 'overlay',
             path: 'overlay',
             onMetadata: (metadata): void => {
@@ -1468,7 +1474,6 @@ export function createModelHandlers(options: {
             execution.check()
             counter.claim()
             execution.context.counter = counter
-            execution.context.maxAttempts = 1
             const active = execution
             const raw = await withinModelDeadline(
                 admission.run({ start: active.startedAt }, () =>

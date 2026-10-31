@@ -734,10 +734,16 @@ export function componentPathsV2(document: Parameters<typeof variantsOfV2>[0]): 
  * authored it. Nothing else can make a component `generated`.
  */
 export function variantOriginV2(
-    metadata: { source: 'generated' | 'fallback'; carried?: CarriedStatesV2 | undefined },
+    metadata: {
+        source: 'generated' | 'fallback'
+        carried?: CarriedStatesV2 | undefined
+        shellStates?: readonly VariantState[] | undefined
+    },
     name: 'ready' | VariantState,
-): 'generated' | 'fallback' {
-    return name !== 'ready' && metadata.carried?.[name] !== undefined ? 'generated' : metadata.source
+): 'generated' | 'fallback' | 'shell' {
+    if (name === 'ready') return metadata.source
+    if (metadata.shellStates?.includes(name)) return 'shell'
+    return metadata.carried?.[name] !== undefined ? 'generated' : metadata.source
 }
 
 /** Every TextRef a node carries (its words), in document order. */
@@ -991,7 +997,7 @@ export const documentMetadataV2Schema = z.strictObject({
     /** `generated`: the model's document, accepted unchanged. `fallback`: the complete deterministic document. */
     source: screenSourceSchema.exclude(['shell']),
     /** Server-owned origin of each component path (see `componentPathsV2`). Uniform with `source`. */
-    origins: z.record(z.string().regex(COMPONENT_PATH_V2), screenSourceSchema.exclude(['shell'])),
+    origins: z.record(z.string().regex(COMPONENT_PATH_V2), screenSourceSchema),
     /** Indexes of `sources` each node cites or states (via facts), keyed by path. Server-computed. */
     sourceMap: z.record(
         z.string().regex(COMPONENT_PATH_V2),
@@ -1020,6 +1026,11 @@ export const documentMetadataV2Schema = z.strictObject({
      * document that authored it. Only a `fallback` document carries any; its other variants stay `fallback`.
      */
     carried: carriedStatesV2Schema.optional(),
+    /**
+     * State variants of a `generated` document that the shell filled from its deterministic templates (the model
+     * authors only the ready screen). Their components carry the `shell` origin, never `generated`.
+     */
+    shellStates: z.array(z.enum(VARIANT_STATES)).optional(),
     authoring: syntheticAuthorV2Schema.optional(),
     stage: z.enum(['screen', 'step-page']),
     model: z.enum(['muse-spark-1.3', 'muse-wonder-1.0']).nullable(),
@@ -1272,20 +1283,27 @@ export function variantPolicyV2(
     kind: ScreenKindV2,
     name: 'ready' | VariantState,
     requirements: RequirementsV2,
-    document?: { facts: readonly FactV2[]; sources: readonly DocumentSourceV2[] },
+    document?: {
+        facts: readonly FactV2[]
+        sources: readonly DocumentSourceV2[]
+        metadata?: Pick<DocumentMetadataV2, 'source' | 'fallbackReason'>
+    },
 ): VariantPolicyV2 {
     const failing = name === 'error' || name === 'recovery'
     const confirming = name === 'confirming'
     const ready = name === 'ready'
+    // Layout generation can time out while the real camera still works. Only that stamped fallback keeps its controls.
+    const screenTimeout =
+        name === 'error' && document?.metadata?.source === 'fallback' && document.metadata.fallbackReason === 'timeout'
     const needs = variantRequirementsV2(name, requirements, document)
     // The overview of a quick check is earned by its ready screen alone; any other variant claims none of it.
     const overviewFacts = (document?.facts ?? []).filter(isOverviewFactV2)
     const overview = overviewFacts.length > 0 || requirements.parts.length > 0
     // A camera that runs stays mounted while its screen waits, and a pending screen never blocks the shutter.
     const cameraReady = kind === 'camera' && requirements.nodes.includes('CameraView')
-    const keepCamera = cameraReady && (name === 'busy' || name === 'pending')
+    const keepCamera = cameraReady && (name === 'busy' || name === 'pending' || screenTimeout)
     const actions: AppIntent[] =
-        name === 'ready' || name === 'empty'
+        name === 'ready' || name === 'empty' || (screenTimeout && kind === 'camera')
             ? [...requirements.actions]
             : confirming
               ? [...requirements.confirm]
@@ -1299,10 +1317,10 @@ export function variantPolicyV2(
         recover: failing,
         nodes: name === 'ready' ? [...requirements.nodes] : keepCamera ? ['CameraView'] : [],
         forbiddenNodes: [
-            ...(failing ? (['CameraView'] as const) : []),
+            ...(failing && !screenTimeout ? (['CameraView'] as const) : []),
             ...(needs.hiddenFacts.length > 0 ? (['VerdictCard'] as const) : []),
         ],
-        forbiddenIntents: failing && kind === 'camera' ? ['capture'] : [],
+        forbiddenIntents: failing && kind === 'camera' && !screenTimeout ? ['capture'] : [],
         forbiddenPairs: kind === 'reading' && !confirming ? [{ intent: 'navigate', target: 'reading' }] : [],
         forbiddenFacts: needs.hiddenFacts,
         forbiddenOverview: overview && !ready ? overviewFacts.map((fact) => fact.factId) : [],
@@ -1355,7 +1373,14 @@ export function validateStructureV2(
         if (variant.overlays.some((overlay) => overlay.content.targetId !== overlay.anchor)) {
             add('A tooltip anchors its own coach mark')
         }
-        if (intents.some((intent) => !allowed.includes(intent.intent))) add('Intent is not allowed on this screen')
+        if (
+            intents.some(
+                (intent) =>
+                    !allowed.includes(intent.intent) &&
+                    !(prefix === 'states.error.' && intent.intent === 'retry' && intent.target === 'screen'),
+            )
+        )
+            add('Intent is not allowed on this screen')
         if (variant.header.back && variant.header.back.intent.intent !== 'navigate') add('Back must navigate')
     }
     if (primaries > 0) add('A primary action lives only in the bar')
@@ -1405,6 +1430,11 @@ export const screenDocumentV2Schema = z
                         : 'Every component origin matches the document source',
                 )
             }
+        }
+        for (const state of metadata.shellStates ?? []) {
+            if (metadata.source !== 'generated') add('Only a generated document carries shell-filled states')
+            if (document.states[state] === null) add(`A shell ${state} state must exist`)
+            if (metadata.carried?.[state] !== undefined) add(`The ${state} state is either carried or shell-filled`)
         }
         const carried = metadata.carried ?? {}
         for (const state of VARIANT_STATES) {

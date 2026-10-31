@@ -65,9 +65,10 @@ import {
 
 export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
-// Five-second transport margin over the 105s server route; the controller also budgets local page reads.
+// Outlast the default 85s parse route and its supported 105s override ceiling; local page reads share this budget.
 export const MODEL_PARSE_TIMEOUT_MS = 110_000
-export const MODEL_CHECK_TIMEOUT_MS = 8_000
+// Paid baseline: Spark low verdict 7.9s; leave room for transport before offering a retry.
+export const MODEL_CHECK_TIMEOUT_MS = 12_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
 // The server answers a question within QUESTION_SYNC_WAIT_MS (8 s by default) or hands back a 202 ticket. The first
@@ -76,8 +77,8 @@ export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
 export const MODEL_QUESTION_FIRST_TIMEOUT_MS = 12_000
 export const MODEL_QUESTION_COLLECT_TIMEOUT_MS = 10_000
 export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
-// Latency screens use the server's 20 s screens policy, step pages 45 s, the overlay 60 s; each plus a transport margin.
-export const MODEL_SCREEN_TIMEOUT_MS = 30_000
+// Paid baseline: Spark low screens 17s, quick-check medium 31s; outlast the server's 30s limit.
+export const MODEL_SCREEN_TIMEOUT_MS = 35_000
 export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
 export const MODEL_SCREEN_CONTROL_TIMEOUT_MS = 10_000
 export const MODEL_OVERLAY_TIMEOUT_MS = 75_000

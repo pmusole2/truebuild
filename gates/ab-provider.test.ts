@@ -102,7 +102,7 @@ describe('default production factory with the real provider and the documented l
             conclusion: 'unverified',
             automaticFallback: 'none',
             defaultChange: 'none',
-            providerRetryPolicy: 'provider_documented_429_500_503_max_3_attempts',
+            providerRetryPolicy: 'one_pre_response_network_retry_100ms_no_http_retry',
             gateRetryPolicy: 'none',
             requests: 2,
             requestsStatus: 'exact',
@@ -124,8 +124,8 @@ describe('default production factory with the real provider and the documented l
         expect(report.models.wonder?.costUsd).toBe(0.00061)
         expect(mock.failures).toEqual([])
         expect(mock.wireRequests.map((request) => [request.model, request.reasoning?.effort]).sort()).toEqual([
-            [SPARK, 'max'],
-            [WONDER, 'max'],
+            [SPARK, 'medium'],
+            [WONDER, 'medium'],
         ])
         expect(await readFile(join(cwd, 'docs/gate-results.md'), 'utf8')).not.toContain(MOCK_PROVIDER_KEY)
     }, 30_000)
@@ -198,7 +198,7 @@ describe('default production factory with the real provider and the documented l
             attemptsStatus: 'lower_bound',
         })
         expect(report.models.spark?.status).toBe('completed')
-        expect(report.providerRetryPolicy).toBe('provider_documented_429_500_503_max_3_attempts')
+        expect(report.providerRetryPolicy).toBe('one_pre_response_network_retry_100ms_no_http_retry')
         expect(report.gateRetryPolicy).toBe('none')
         expect(mock.wireRequests.map((request) => request.model)).toEqual([SPARK])
     }, 60_000)

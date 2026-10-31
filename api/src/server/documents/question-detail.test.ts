@@ -2,7 +2,6 @@ import {
     assembleDocumentV2,
     buildFallbackProposalV2,
     screenDocumentV2Schema,
-    variantsOfV2,
     verifyDocumentAgainstInputsV2,
     visitVariantNodesV2,
     type ScreenNodeV2,
@@ -70,71 +69,43 @@ describe('question and answer detail at the raw provider and client gates', () =
         },
     )
 
-    it.each(['questions', 'answer'] as const)(
-        '%s rejects hiding or omitting a legacy unclassified warning in every required variant',
-        (kind) => {
-            const manual = demoSession({ safety: false })
-            delete manual.reviewedSteps[0]!.safetyNotes
-            const orientation = manual.reviewedSteps[0]!.orientation
-            if (orientation.state !== 'known') throw new Error('The demo orientation must be known')
-            orientation.value.description = 'Do not release the panel. It can fall and cause injury.'
-            const context = buildDocumentContext(documentInputs(kind, manual))
-            const original = buildFallbackProposalV2(context.material)
-            for (const { name } of variantsOfV2(original)) {
-                for (const edit of [hidden, (): ScreenNodeV2 => ({ type: 'Spacer', size: 'sm' })]) {
-                    const variant = name === 'ready' ? original : original.states[name]!
-                    const changed = editFact({ ...original, ...variant }, 'orientation', edit)
-                    const proposal =
-                        name === 'ready'
-                            ? { ...original, body: changed.body }
-                            : {
-                                  ...original,
-                                  states: { ...original.states, [name]: { ...variant, body: changed.body } },
-                              }
-                    const evaluated = evaluateWire(encodeWireProposal(proposal), context)
-                    expect(evaluated.ok, name).toBe(false)
-                    if (!evaluated.ok) expect(evaluated.issues.join(), name).toMatch(/required_fact_is_missing/u)
-                }
-            }
-        },
-    )
+    it.each(['questions', 'answer'] as const)('%s rejects hiding or omitting a legacy unclassified warning', (kind) => {
+        const manual = demoSession({ safety: false })
+        delete manual.reviewedSteps[0]!.safetyNotes
+        const orientation = manual.reviewedSteps[0]!.orientation
+        if (orientation.state !== 'known') throw new Error('The demo orientation must be known')
+        orientation.value.description = 'Do not release the panel. It can fall and cause injury.'
+        const context = buildDocumentContext(documentInputs(kind, manual))
+        const original = buildFallbackProposalV2(context.material)
+        for (const edit of [hidden, (): ScreenNodeV2 => ({ type: 'Spacer', size: 'sm' })]) {
+            const changed = editFact(original, 'orientation', edit)
+            const evaluated = evaluateWire(encodeWireProposal(changed), context)
+            expect(evaluated.ok).toBe(false)
+            if (!evaluated.ok) expect(evaluated.issues.join()).toMatch(/required_fact_is_missing/u)
+        }
+    })
 
-    it.each(['questions', 'answer'] as const)(
-        '%s rejects hidden or omitted safety in every required variant',
-        (kind) => {
-            const context = buildDocumentContext(documentInputs(kind))
-            const original = buildFallbackProposalV2(context.material)
-            for (const { name } of variantsOfV2(original)) {
-                for (const edit of [hidden, (): ScreenNodeV2 => ({ type: 'Spacer', size: 'sm' })]) {
-                    const variant = name === 'ready' ? original : original.states[name]!
-                    const changed = editFact({ ...original, ...variant }, 'safety:n1', edit)
-                    const proposal =
-                        name === 'ready'
-                            ? { ...original, body: changed.body }
-                            : {
-                                  ...original,
-                                  states: { ...original.states, [name]: { ...variant, body: changed.body } },
-                              }
-                    const evaluated = evaluateWire(encodeWireProposal(proposal), context)
-                    expect(evaluated.ok, name).toBe(false)
-                    if (!evaluated.ok) expect(evaluated.issues.join(), name).toMatch(/required_fact_is_missing/u)
-                }
-            }
-        },
-    )
+    it.each(['questions', 'answer'] as const)('%s rejects hidden or omitted safety', (kind) => {
+        const context = buildDocumentContext(documentInputs(kind))
+        const original = buildFallbackProposalV2(context.material)
+        for (const edit of [hidden, (): ScreenNodeV2 => ({ type: 'Spacer', size: 'sm' })]) {
+            const changed = editFact(original, 'safety:n1', edit)
+            const evaluated = evaluateWire(encodeWireProposal(changed), context)
+            expect(evaluated.ok).toBe(false)
+            if (!evaluated.ok) expect(evaluated.issues.join()).toMatch(/required_fact_is_missing/u)
+        }
+    })
 
-    it('keeps an answer card visible only where the held answer is earned', () => {
+    it('keeps an answer card in the ready screen and requires it there', () => {
         const context = buildDocumentContext(documentInputs('answer'))
         const proposal = buildFallbackProposalV2(context.material)
         const result = evaluateWire(encodeWireProposal(proposal), context)
         expect(result).toMatchObject({ ok: true })
-        for (const { name, variant, prefix } of variantsOfV2(proposal)) {
-            const answers: ScreenNodeV2[] = []
-            visitVariantNodesV2(variant, prefix, ({ node }) => {
-                if (node.type === 'VerdictCard') answers.push(node)
-            })
-            expect(answers, name).toHaveLength(name === 'ready' ? 1 : 0)
-        }
+        const answers: ScreenNodeV2[] = []
+        visitVariantNodesV2(proposal, '', ({ node }) => {
+            if (node.type === 'VerdictCard') answers.push(node)
+        })
+        expect(answers).toHaveLength(1)
         const withoutAnswer = structuredClone(proposal)
         const walk = (node: ScreenNodeV2): ScreenNodeV2 => {
             if (node.type === 'VerdictCard') return { type: 'Spacer', size: 'sm' }
@@ -144,19 +115,5 @@ describe('question and answer detail at the raw provider and client gates', () =
         const missing = evaluateWire(encodeWireProposal(withoutAnswer), context)
         expect(missing.ok).toBe(false)
         if (!missing.ok) expect(missing.issues.join()).toMatch(/required_fact_is_missing|required_node_is_missing/u)
-        const pending = structuredClone(proposal)
-        const body = pending.states.pending!.body
-        if (!('children' in body)) throw new Error('The fixture must have a container body')
-        body.children.push({
-            type: 'Text',
-            content: { kind: 'fact', factId: 'result:answer' },
-            role: 'body',
-            emphasis: 'normal',
-            tone: 'neutral',
-            align: 'start',
-        })
-        const early = evaluateWire(encodeWireProposal(pending), context)
-        expect(early.ok).toBe(false)
-        if (!early.ok) expect(early.issues.join()).toMatch(/result|verdict/u)
     })
 })

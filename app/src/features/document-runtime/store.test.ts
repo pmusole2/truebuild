@@ -318,11 +318,17 @@ describe('whole-document runtime store', () => {
             await land(contexts[1]!)
             store.peek(inputs) // This actual cache read makes guide1 the most recently used payload.
             await land(contexts[2]!)
+            const activity = store.peek(contexts[2]!)!.document
+            const activityBytes = new TextEncoder().encode(JSON.stringify(activity)).byteLength
+            // The READY tree is already held; only the exact activity shell is assembled locally.
+            expect(screensV2).toHaveBeenCalledTimes(2)
+            expect(activity.metadata.shellStates).toContain('busy')
+            store.noteShown(activity, true)
             expect(store.peek(contexts[1]!)).toBeUndefined()
             expect(store.getCacheUsage()).toEqual({
                 entries: 2,
                 documents: 2,
-                documentBytes: sizes[0]! + sizes[2]!,
+                documentBytes: sizes[0]! + activityBytes,
                 limitBytes: budget,
             })
             await land(contexts[1]!)

@@ -50,7 +50,7 @@ export function pagesUiState(entry: LibraryEntry): ScreenUiState {
     }
 }
 
-export function reviewUiState(entry: LibraryEntry, quick: QuickProgress | undefined): ScreenUiState {
+export function reviewUiState(entry: LibraryEntry, quick: Pick<QuickProgress, 'current'> | undefined): ScreenUiState {
     const { session } = entry
     const current = quick?.current
     const asking = current !== undefined && current.step.sourceRefs.length > 0

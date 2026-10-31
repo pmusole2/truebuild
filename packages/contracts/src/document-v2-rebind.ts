@@ -173,7 +173,8 @@ export function rebindGeneratedStatesV2(
         for (const donor of usable) {
             const variant = donor.states[state]
             const provenance = provenanceOf(donor)
-            if (!variant || provenance === null) continue
+            // A shell-filled state of a generated document is a template, never the model's authorship.
+            if (!variant || provenance === null || donor.metadata.shellStates?.includes(state)) continue
             if (!isNonfactualVariantV2(variant) || !intentsAllowed(variant, material)) continue
             const nextCarried: CarriedStatesV2 = { ...carriedStates, [state]: provenance }
             const proposal = proposalOf(current)
@@ -206,7 +207,10 @@ export function carriedStateIssuesV2(document: ScreenDocumentV2, donors: readonl
         const claim = document.metadata.carried?.[state]
         if (claim === undefined) continue
         const donor = donors.find(
-            (candidate) => candidate.screenId === claim.fromScreenId && candidate.metadata.source === 'generated',
+            (candidate) =>
+                candidate.screenId === claim.fromScreenId &&
+                candidate.metadata.source === 'generated' &&
+                !candidate.metadata.shellStates?.includes(state),
         )
         if (donor === undefined) {
             issues.push(`carried:${state}:donor_missing`)

@@ -8,7 +8,8 @@ import type { ScreenStore } from '../screens/screen-store'
 import { sessionForPrecompute, sessionForScreens } from '../screens/screen-spec'
 import { testRestoreDelayMs } from './test-controls'
 import type { DocumentStore } from '../document-runtime/store'
-import { homeUiState, pagesUiState } from '../screens/ui-state'
+import { homeUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
+import { editableQuestions } from './quick-check-model'
 
 /**
  * The one owner of the capture controller. It is created and restored once above the native Stack and is disposed only
@@ -100,17 +101,25 @@ function ControllerHost({
     useEffect(() => {
         if (documents === null || session === undefined || state.loading) return
         documents.observeSession(session)
-        documents.precompute(
+        documents.prepareFlow(
             session,
-            session.reviewStatus === 'reviewed'
-                ? `guide:${session.reviewedSteps[entry?.stepIndex ?? 0]?.stepId ?? ''}`
-                : null,
+            `guide:${session.reviewedSteps[entry?.stepIndex ?? 0]?.stepId ?? session.rawExtraction?.steps[0]?.stepId ?? ''}`,
+            entry === undefined
+                ? undefined
+                : {
+                      kind: 'quick-check',
+                      session,
+                      stepId: null,
+                      captureId: null,
+                      result: null,
+                      failure: null,
+                      uiState: { ...reviewUiState(entry, { current: editableQuestions(session)[0] }), busy: null },
+                  },
             {
                 ...homeUiState(state.entries),
                 ...(entry === undefined ? {} : pagesUiState(entry)),
                 reading: { cancellation: READING_CANCELLATION_V2 },
             },
-            entry?.completedStepIds,
         )
     }, [documents, session, state.loading, state.entries])
     useEffect(() => (): void => screens?.dispose(), [screens])

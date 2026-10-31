@@ -1,6 +1,6 @@
 import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ModelApiClient, type ModelFetch } from '../../api/model-client'
+import { MODEL_CHECK_TIMEOUT_MS, ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { askModelQuestion, citedPageIds, runModelCheck, type ModelCheckRequest } from './model-check'
 import type { ApiResult, CheckResult, QuestionResult } from '@truebuild/contracts'
 import type { SourcePageAsset } from './model-check'
@@ -106,7 +106,7 @@ describe('complete model action deadline', () => {
     })
 
     it.each(['check'] as const)(
-        'includes seven seconds of source loading in the eight-second %s budget',
+        'includes seven seconds of source loading in the twelve-second %s budget',
         async (action) => {
             vi.useFakeTimers()
             let releaseSource: (asset: SourcePageAsset) => void = (): void => undefined
@@ -142,7 +142,7 @@ describe('complete model action deadline', () => {
             releaseSource({ assetId: 'demo-asset-1', mimeType: 'image/png', bytes: new Uint8Array([4, 5, 6]) })
             await vi.advanceTimersByTimeAsync(0)
             expect(fetch).toHaveBeenCalledTimes(1)
-            await vi.advanceTimersByTimeAsync(1001)
+            await vi.advanceTimersByTimeAsync(MODEL_CHECK_TIMEOUT_MS - 7000 + 1)
 
             expect(settled).toMatchObject([{ status: 'unavailable', code: 'timeout', retryable: true }])
             let cancelled = false
@@ -168,7 +168,7 @@ describe('complete model action deadline', () => {
         const session = createDemoManual()
         const result = await runModelCheck(
             request(session, clientWith(fetch), async (): Promise<SourcePageAsset> => {
-                now += 8001
+                now += MODEL_CHECK_TIMEOUT_MS + 1
                 return { assetId: 'demo-asset-1', mimeType: 'image/png', bytes: new Uint8Array([4, 5, 6]) }
             }),
         )

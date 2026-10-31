@@ -119,13 +119,13 @@ export function createRuntimeFromEnvironment(
     const wonderFlag = flag(environment.MODEL_LAYOUT_WONDER, true, 'invalid_model_layout_wonder')
     const layoutWonder = wonderFlag && layout && environment.MODEL_LAYOUT_WONDER === '1'
     if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
-    // The verdict deadline is configurable up to the trusted 105 s ceiling; the default stays 8 s (provisional).
+    // t5 Spark low verdict took 7.96 s; the user-selected 12 s default leaves latency headroom (105 s ceiling).
     // CHECK_TIMEOUT_MS and its documented alias AI_DEADLINE_VERDICT_MS name the same value; both set must agree.
     const verdictDeadlines = [environment.CHECK_TIMEOUT_MS, environment.AI_DEADLINE_VERDICT_MS]
         .filter((value) => value !== undefined && value !== '')
-        .map((value) => positiveInteger(value, 8_000, MAX_DEADLINE_MS))
+        .map((value) => positiveInteger(value, 12_000, MAX_DEADLINE_MS))
     if (new Set(verdictDeadlines).size > 1) throw new Error('conflicting_verdict_deadline')
-    const checkTimeoutMs = verdictDeadlines[0] ?? 8_000
+    const checkTimeoutMs = verdictDeadlines[0] ?? 12_000
     // No call-count cap unless an operator sets MODEL_CALL_LIMIT explicitly.
     const counter = new ModelCallCounter(
         environment.MODEL_CALL_LIMIT === undefined || environment.MODEL_CALL_LIMIT === ''

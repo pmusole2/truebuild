@@ -81,6 +81,21 @@ const originsOf = (document: ScreenDocumentV2, name: 'ready' | VariantState): Se
             .map(([, origin]) => origin),
     )
 
+describe('a shell-filled state is a template, never a generated donor variant', () => {
+    const inputs = inputsOf('home')
+    const donor = authored(inputs, reorderPending, {
+        ...LIVE,
+        shellStates: ['busy', 'pending', 'empty', 'error', 'recovery'],
+    })
+
+    it('attributes the shell states to the shell and offers none of them to a fallback document', () => {
+        expect(parsed(donor)).toBe(true)
+        expect(originsOf(donor, 'ready')).toEqual(new Set(['generated']))
+        expect(originsOf(donor, 'pending')).toEqual(new Set(['shell']))
+        expect(rebindGeneratedStatesV2(inputs, fallbackFor(inputs), [donor], deps).carried).toEqual([])
+    })
+})
+
 describe('an authored state variant is carried onto a deterministic document with its original provenance', () => {
     const inputs = inputsOf('home')
     const donor = authored(inputs, reorderPending)
@@ -310,6 +325,10 @@ describe('carried states are auditable against the documents that authored them'
     it('reports a donor that is missing, not generated, or whose variant or provenance differs', () => {
         expect(carriedStateIssuesV2(hybrid, [])).toContain('carried:pending:donor_missing')
         expect(carriedStateIssuesV2(hybrid, [fallbackFor(inputs)])).toContain('carried:pending:donor_missing')
+        const shellDonor = authored(inputs, reorderPending, { ...LIVE, shellStates: ['pending'] })
+        const claimedShell = structuredClone(hybrid)
+        claimedShell.metadata.carried!.pending!.fromScreenId = shellDonor.screenId
+        expect(carriedStateIssuesV2(claimedShell, [shellDonor])).toContain('carried:pending:donor_missing')
         const tampered = structuredClone(hybrid)
         tampered.states.pending = structuredClone(fallbackFor(inputs).states.pending)
         expect(carriedStateIssuesV2(tampered, [donor])).toContain('carried:pending:variant_differs')

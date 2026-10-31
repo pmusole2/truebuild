@@ -174,7 +174,7 @@ describe.each(stepFixtures())('MOCKED public check/ask regions on the $name manu
         )
         const sent = JSON.parse(String(outbound.mock.calls[0]?.[1]?.body))
         expect(sent.text.format.schema.properties).not.toHaveProperty('nextPartRegion')
-        expect(sent.max_output_tokens).toBe(1500)
+        expect(sent.max_output_tokens).toBe(2500)
     })
 
     it('resolves the ask response with the same flag, real part identity and one dispatch', async (): Promise<void> => {

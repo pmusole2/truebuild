@@ -211,7 +211,7 @@ describe('generation, validation, repair and fallback', (): void => {
             evidence: 'live',
             stage: 'screen',
             model: 'muse-spark-1.3',
-            effort: 'max',
+            effort: 'low',
             repaired: false,
             cacheHit: false,
             fallbackReason: null,
@@ -225,7 +225,7 @@ describe('generation, validation, repair and fallback', (): void => {
             store: false,
             stream: false,
             max_output_tokens: 32000,
-            reasoning: { effort: 'max' },
+            reasoning: { effort: 'low' },
             text: { format: { type: 'json_schema', name: 'truebuild_screen', strict: true } },
         })
         expect(wire.input[0].content.map((part) => part.type)).toEqual(['input_text', 'input_text'])
@@ -235,7 +235,7 @@ describe('generation, validation, repair and fallback', (): void => {
         expect(logged).toContain('"providerMs"')
         expect(logged).toContain('"parseValidateMs"')
         expect(logged).toContain('"totalMs"')
-        expect(logged).toContain('"effort":"max"')
+        expect(logged).toContain('"effort":"low"')
         expect(logged).not.toContain('Follow the diagram')
         expect(logged).not.toContain(MOCK_PROVIDER_KEY)
     })
@@ -247,9 +247,9 @@ describe('generation, validation, repair and fallback', (): void => {
             source: 'generated',
             stage: 'step-page',
             model: 'muse-wonder-1.0',
-            effort: 'max',
+            effort: 'medium',
         })
-        expect(mock.wireRequests[0]).toMatchObject({ model: 'muse-wonder-1.0', reasoning: { effort: 'max' } })
+        expect(mock.wireRequests[0]).toMatchObject({ model: 'muse-wonder-1.0', reasoning: { effort: 'medium' } })
         expect(page.bound).toMatchObject({ manualId: session.manualId, revision: session.revision, stepId: 'step-1' })
     })
 
@@ -289,7 +289,7 @@ describe('generation, validation, repair and fallback', (): void => {
         expect(page.metadata).toMatchObject({
             source: 'shell',
             model: 'muse-wonder-1.0',
-            effort: 'max',
+            effort: 'medium',
             usage: { outputTokens: 90, reasoningTokens: 30 },
         })
         expect(page.metadata.timing.providerMs).toEqual(expect.any(Number))

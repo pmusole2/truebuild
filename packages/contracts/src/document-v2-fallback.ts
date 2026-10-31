@@ -920,10 +920,17 @@ function stateHeader(
 }
 
 /** One state variant: same catalog, its own header, body, bar and coach state; mandatory facts stay stated. */
-function stateVariant(state: VariantState, material: DocumentMaterialV2, ready: ScreenVariantV2): ScreenVariantV2 {
+function stateVariant(
+    state: VariantState,
+    material: DocumentMaterialV2,
+    ready: ScreenVariantV2,
+    reason?: FallbackReasonV2,
+): ScreenVariantV2 {
     const { inputs } = material
     const activity = state === 'busy' ? inputs.uiState?.busy?.activity : undefined
+    const screenTimeout = state === 'error' && reason === 'timeout'
     const copy =
+        (screenTimeout ? { heading: 'That took too long', detail: 'Try again in a moment.' } : undefined) ??
         (activity === undefined ? undefined : BUSY_COPY_V2[activity]) ??
         (state === 'empty' && inputs.kind === 'questions' && material.requirements.capture
             ? { heading: 'Ask anything about this step.', detail: 'Which part is your question about?' }
@@ -940,7 +947,7 @@ function stateVariant(state: VariantState, material: DocumentMaterialV2, ready: 
     // A camera that runs stays mounted while its document is prepared or a request is in flight (see `cameraSpineV2`);
     // while the document is only pending, guidance never blocks the shutter: the authored Take photo stays usable.
     const cameraRuns = inputs.kind === 'camera' && material.requirements.nodes.includes('CameraView')
-    const holdCamera = waiting && cameraRuns
+    const holdCamera = (waiting || screenTimeout) && cameraRuns
     const waitLabel = inputs.uiState?.busy?.activity === 'saving' ? 'Saving…' : 'Working…'
     const bar: BarV2 = waiting
         ? holdCamera && state === 'pending'
@@ -955,13 +962,17 @@ function stateVariant(state: VariantState, material: DocumentMaterialV2, ready: 
               }
         : state === 'empty'
           ? ready.bar
-          : cameraRetry && (state === 'error' || state === 'recovery')
-            ? { primary: primary('Try camera again', intent('retry', 'camera'), 'refresh'), secondary: home }
-            : inputs.kind === 'more'
-              ? { primary: primary('Close', intent('navigate', 'back'), 'close'), secondary: null }
-              : retryAllowed
-                ? { primary: primary('Try again', intent('retry', 'last-action'), 'refresh'), secondary: home }
-                : { primary: primary('Home', intent('navigate', 'home'), 'chevronLeft'), secondary: null }
+          : screenTimeout && inputs.kind === 'camera'
+            ? { primary: ready.bar.primary, secondary: secondary('Try again', intent('retry', 'screen'), 'refresh') }
+            : screenTimeout
+              ? { primary: primary('Try again', intent('retry', 'screen'), 'refresh'), secondary: home }
+              : cameraRetry && (state === 'error' || state === 'recovery')
+                ? { primary: primary('Try camera again', intent('retry', 'camera'), 'refresh'), secondary: home }
+                : inputs.kind === 'more'
+                  ? { primary: primary('Close', intent('navigate', 'back'), 'close'), secondary: null }
+                  : retryAllowed
+                    ? { primary: primary('Try again', intent('retry', 'last-action'), 'refresh'), secondary: home }
+                    : { primary: primary('Home', intent('navigate', 'home'), 'chevronLeft'), secondary: null }
     const resolve = sourceResolverV2(material.sources)
     const hidden = new Set(variantRequirementsV2(state, material.requirements, material).hiddenFacts)
     const requiredManual = material.facts.filter(
@@ -1059,7 +1070,7 @@ function withCoverage(
 }
 
 /** The complete deterministic proposal for this material: ready variant plus every required state variant. */
-export function buildFallbackProposalV2(material: DocumentMaterialV2): ScreenProposalV2 {
+export function buildFallbackProposalV2(material: DocumentMaterialV2, reason?: FallbackReasonV2): ScreenProposalV2 {
     const ready: ScreenVariantV2 = {
         header: headerOf(material, true),
         body: scroll([stack(bodyOf(material))]),
@@ -1074,10 +1085,19 @@ export function buildFallbackProposalV2(material: DocumentMaterialV2): ScreenPro
                 ? null
                 : state === 'confirming'
                   ? confirmingVariant()
-                  : withCoverage(stateVariant(state, material, ready), material, state),
+                  : withCoverage(stateVariant(state, material, ready, reason), material, state),
         ]),
     ) as ScreenProposalV2['states']
     return { ...withCoverage(ready, material, 'ready'), states }
+}
+
+/**
+ * A model-authored ready screen with the deterministic state variants (busy, pending, empty, error, recovery,
+ * confirming) of the shell: the model never writes those. They are the fallback builder's own variants, so they keep
+ * the camera and held-photo spines of the fallback's ready screen, which the ready screen must therefore share.
+ */
+export function withShellStatesV2(material: DocumentMaterialV2, ready: ScreenVariantV2): ScreenProposalV2 {
+    return { ...ready, states: buildFallbackProposalV2(material).states }
 }
 
 /** The only facts about a failed model call that a fallback document may record: what the call really observed. */
@@ -1121,7 +1141,7 @@ export function buildFallbackDocumentV2(
     const material = documentMaterialV2(inputs)
     return assembleDocumentV2(
         material,
-        buildFallbackProposalV2(material),
+        buildFallbackProposalV2(material, deps.reason),
         { ...observationsOf(observed), source: 'fallback', evidence: deps.evidence, fallbackReason: deps.reason },
         deps,
     )

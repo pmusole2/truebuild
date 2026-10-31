@@ -8,6 +8,7 @@ import { createController, createDocuments, createScreens } from '../capture/con
 import {
     documentMaterialV2,
     STATE_COPY_V2,
+    screenStageV2,
     variantsOfV2,
     type ScreenContextInputsV2,
     type ScreenProposalV2,
@@ -21,11 +22,13 @@ import type {
     DocumentFixtureServerOptions as FixtureServerOptions,
 } from './test-support/fixture-server'
 import { documentPrecomputeInputs, inputsFromDocumentMetadata } from '../../api/document-client'
+import { MODEL_SCREEN_TIMEOUT_MS, MODEL_STEP_PAGE_TIMEOUT_MS } from '../../api/model-client'
 import { measureRenderOriginTree } from '../../ui/test-support/render-origin-coverage'
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { LibraryEntry } from '../capture/library'
 import type { JsonElement, TestInstance } from 'test-renderer'
+import { DOCUMENT_FOCUS_GRACE_MS } from '../document-runtime/use-document'
 
 // The production root layout, routes, screens, controller and screen store run unchanged. Only the device/transport
 // boundary is injected: the model transport, storage and image normalization, and the /api/screens server.
@@ -184,7 +187,7 @@ describe('Home composed by the document', () => {
         expect(generateCalls(server)).toContain('home')
     })
 
-    it('keeps the native Home usable after the grace period and does not swap a late document under the person', async () => {
+    it('keeps Home timeout recovery visible, rejects the expired response, and generates only after Try again', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
         const { store, view, server } = await mount([], {
@@ -192,18 +195,25 @@ describe('Home composed by the document', () => {
             recordings: 'off',
         })
         expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
-        await act(async () => jest.advanceTimersByTime(8_001))
+        await act(async () => jest.advanceTimersByTime(DOCUMENT_FOCUS_GRACE_MS + 1))
         expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
-        expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
         await act(async () => gate.resolve())
-        expect(screen.getByText('Add a manual to start building.')).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
+        expect(screen.getByText('That took too long')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'home')!
         await waitFor(() =>
-            expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.source).toBe('generated'),
+            expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.fallbackReason).toBe('timeout'),
         )
         expect(hostCounts(view).generated).toBe(0)
         expect(hostCounts(view).fallback).toBeGreaterThan(0)
+        expect(server.requests.filter((item) => item.op === 'generate' && item.kind === 'home')).toHaveLength(1)
+        await press('Try again')
+        await screen.findByRole('button', { name: 'Add a manual' })
+        const attempts = server.requests.filter((item) => item.op === 'generate' && item.kind === 'home')
+        expect(attempts).toHaveLength(2)
+        expect(attempts[1]!.requestId).not.toBe(request.requestId)
+        expect(hostCounts(view).generated).toBeGreaterThan(0)
     })
 })
 
@@ -213,47 +223,24 @@ describe('Guide composed by the document', () => {
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         expect(await screen.findByText(/^Step 1 of \d+$/u)).toBeTruthy()
-        await waitFor(() => expect(server.requests.some((request) => request.op === 'progress')).toBe(true))
-        const precomputes = server.requests.filter((request) => request.op === 'precompute')
-        expect(precomputes).toHaveLength(1)
-        const precompute = precomputes[0]!
         const guides = documentPrecomputeInputs({
             session: controller.current!.session,
-            uiState: precompute.uiState,
-            completedStepIds: precompute.completedStepIds,
-            requestedKinds: precompute.requestedKinds,
         }).filter((item) => item.inputs.kind === 'guide')
         await waitFor(() => expect(guides.every((item) => store.peek(item.inputs)?.status === 'ready')).toBe(true))
         const guideRequests = (): typeof server.requests =>
             server.requests.filter((request) => request.op === 'generate' && request.kind === 'guide')
-        await waitFor(() =>
-            expect(
-                guideRequests()
-                    .filter((request) => request.uiState?.busy != null)
-                    .map((request) => `${request.stepId}:${request.uiState!.busy!.activity}`)
-                    .sort(),
-            ).toEqual([
-                'step-1:asking',
-                'step-1:checking',
-                'step-1:question-waiting',
-                'step-1:second-opinion',
-                'step-2:asking',
-                'step-2:checking',
-                'step-2:question-waiting',
-                'step-2:second-opinion',
-                'step-3:asking',
-                'step-3:checking',
-                'step-3:question-waiting',
-                'step-3:second-opinion',
-            ]),
-        )
         const preparedRequests = guideRequests()
-        expect(preparedRequests.filter((request) => request.uiState?.busy == null).length).toBeLessThanOrEqual(1)
+        expect(preparedRequests.map((request) => request.stepId).sort()).toEqual(['step-1', 'step-2', 'step-3'])
+        expect(preparedRequests.every((request) => request.uiState?.busy == null)).toBe(true)
+        expect(new Set(preparedRequests.map((request) => request.contextKey)).size).toBe(3)
+        expect(server.requests.filter((request) => request.op === 'precompute' || request.op === 'progress')).toEqual(
+            [],
+        )
         await act(async () => controller.step(1))
         expect(await screen.findByText(/^Step 2 of \d+$/u)).toBeTruthy()
         await act(async () => controller.step(2))
         expect(await screen.findByText(/^Step 3 of \d+$/u)).toBeTruthy()
-        // Steps 2 and 3 came from the background job, not from one request per step.
+        // Every prepared step keeps its exact cached identity when it becomes visible.
         expect(guideRequests()).toEqual(preparedRequests)
     })
 
@@ -335,20 +322,20 @@ describe('Result composed after an immediate verdict', () => {
         ).toHaveLength(1)
         const resultRequests = (): typeof server.requests =>
             server.requests.filter((request) => request.op === 'generate' && request.kind === 'result')
-        await waitFor(() => expect(resultRequests()).toHaveLength(3))
+        await waitFor(() => expect(resultRequests()).toHaveLength(1))
         for (const request of resultRequests())
             await waitFor(() =>
                 expect(store.peek(inputsFromDocumentMetadata(request))?.exactGeneration).toBeUndefined(),
             )
         await act(async () => jest.runOnlyPendingTimersAsync())
         await flush()
-        expect(resultRequests()).toHaveLength(3)
-        expect(new Set(resultRequests().map((request) => request.contextKey)).size).toBe(3)
+        expect(resultRequests()).toHaveLength(1)
+        expect(new Set(resultRequests().map((request) => request.contextKey)).size).toBe(1)
         expect(
             resultRequests()
                 .map((request) => request.uiState?.busy?.activity ?? 'ready')
                 .sort(),
-        ).toEqual(['asking', 'question-waiting', 'ready'])
+        ).toEqual(['ready'])
         for (const request of resultRequests()) {
             expect(request.captureId).toBe(heldCapture)
             expect(request.result).toEqual(resultRequest.result)
@@ -365,21 +352,20 @@ describe('Result composed after an immediate verdict', () => {
     })
 
     it.each(['none', 'more'] as const)(
-        'keeps the loaded photo through late exact compositions with %s covering the result',
+        'keeps the loaded photo through app busy states and late READY composition with %s covering the result',
         async (sheet) => {
             await judgeStorage.setItem(JUDGE_STORAGE_KEY, JSON.stringify({ version: 1, showBuilt: true }))
             const primary = deferred<void>()
             const closer = deferred<void>()
-            const busyComposition = deferred<void>()
             const finalComposition = deferred<void>()
-            let compositionGate: Promise<void> | undefined
+            const compositionGate: { current?: Promise<void> } = {}
             let checks = 0
             const { controller, server, store } = await atGuide({
                 screens: {
                     generated: ['result'],
                     recordedMetadata: true,
                     get gate() {
-                        return compositionGate
+                        return compositionGate.current
                     },
                     arrange: (proposal, inputs) => {
                         if (inputs.kind !== 'result') return proposal
@@ -421,7 +407,7 @@ describe('Result composed after an immediate verdict', () => {
                     },
                 },
             })
-            compositionGate = busyComposition.promise
+            compositionGate.current = finalComposition.promise
             await press('Take photo')
             let checking!: Promise<void>
             await act(async () => {
@@ -436,25 +422,19 @@ describe('Result composed after an immediate verdict', () => {
             await waitFor(() => expect(controller.getSnapshot().check?.decision).toBe('cannot_verify'))
             expect(screen.getByText('Taking a closer look…')).toBeTruthy()
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
-            const busyRequest = server.requests.find(
+            const busyRequests = server.requests.filter(
                 (request) =>
                     request.op === 'generate' &&
                     request.kind === 'result' &&
                     request.result?.kind === 'check' &&
                     request.uiState?.busy?.activity === 'second-opinion',
-            )!
-            const busyInputs = inputsFromDocumentMetadata(busyRequest)
-            const busyDocument = store.peek(busyInputs)!.document
-            await act(async () => busyComposition.resolve())
-            await waitFor(() => expect(store.peek(busyInputs)?.exactGeneration).toBeUndefined())
-            expect(store.peek(busyInputs)?.issue).toBeNull()
-            expect(store.peek(busyInputs)?.document.screenId).not.toBe(busyDocument.screenId)
+            )
+            // The app owns this state; only the final READY result asks for a layout.
+            expect(busyRequests).toHaveLength(0)
             expect(screen.getByTestId('frozen-photo-image').props.style.width).toBeGreaterThan(0)
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
             expect(screen.getByText('Taking a closer look…')).toBeTruthy()
-            expect(screen.getByTestId('guide-screen').props.nativeID).toContain(busyDocument.screenId)
 
-            compositionGate = finalComposition.promise
             await act(async () => {
                 closer.resolve()
                 await checking
@@ -492,7 +472,7 @@ describe('Result composed after an immediate verdict', () => {
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
             expect(screen.getByText('The near joint is reversed.')).toBeTruthy()
             expect(screen.getByRole('button', { name: 'Retake photo' })).toBeEnabled()
-            for (const request of [busyRequest, finalRequest])
+            for (const request of [finalRequest])
                 expect(
                     server.requests.filter(
                         (candidate) => candidate.op === 'generate' && candidate.contextKey === request.contextKey,
@@ -974,9 +954,7 @@ describe('every other screen is composed from its own document', () => {
         await screen.findByText(/^Step 1 of \d+$/u)
         await press('Take photo')
         await act(async () => controller.shutter(async () => source))
-        expect(
-            await screen.findByText('We could not reach the checker. Check your connection and try again.'),
-        ).toBeTruthy()
+        expect(await screen.findByText('We could not reach the checker. Try again.')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
         expect(controller.getSnapshot().check).toBeNull()
     })
@@ -1269,11 +1247,11 @@ describe('mandatory manual facts stay visible whatever happened to the document'
     })
 })
 
-describe('a late document is used on the next visit, never swapped in under the person', () => {
-    it('keeps the native Home while it is in front, and shows the document when Home is next focused', async () => {
+describe('an expired composition stays unavailable until explicitly retried', () => {
+    it('keeps the HTTP deadline through blur and refocus, rejects the late response, and recovers after Try again', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
-        const { view } = await mount([entry()], {
+        const { view, server, store } = await mount([entry()], {
             screens: { generated: ['home', 'guide'], gate: gate.promise },
             recordings: 'off',
         })
@@ -1288,17 +1266,31 @@ describe('a late document is used on the next visit, never swapped in under the 
         ).toBeTruthy()
         await testRouter.back('/')
         await waitFor(() => expect(view.getPathname()).toBe('/'))
-        await act(async () => jest.advanceTimersByTime(3_999))
+        const timeoutMs = screenStageV2('home') === 'step-page' ? MODEL_STEP_PAGE_TIMEOUT_MS : MODEL_SCREEN_TIMEOUT_MS
+        const expired = server.requests
+            .filter((request) => request.op === 'generate' && request.kind === 'home')
+            .at(-1)!
+        const attempts = (): typeof server.requests =>
+            server.requests.filter((request) => request.op === 'generate' && request.contextKey === expired.contextKey)
+        await act(async () => jest.advanceTimersByTime(timeoutMs - 24_001))
         expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(2))
+        await flush()
+        expect(screen.getByText('That took too long')).toBeTruthy()
         await act(async () => gate.resolve())
         await flush()
-        expect(hostCounts(view).generated).toBe(0)
-        await press('Continue building')
+        expect(hostCounts(view, 'library-screen').generated).toBe(0)
+        expect(store.peek(inputsFromDocumentMetadata(expired))?.document.metadata.fallbackReason).toBe('timeout')
+        await testRouter.push('/guide/flow-manual')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
-        jest.useRealTimers()
         await testRouter.back('/')
+        await waitFor(() => expect(view.getPathname()).toBe('/'))
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+        expect(attempts()).toHaveLength(1)
+        await press('Try again')
         expect(await screen.findByRole('button', { name: 'Continue building' })).toBeTruthy()
-        await waitFor(() => expect(hostCounts(view).generated).toBeGreaterThan(0))
+        expect(attempts()).toHaveLength(2)
+        expect(attempts()[1]!.requestId).not.toBe(expired.requestId)
+        await waitFor(() => expect(hostCounts(view, 'library-screen').generated).toBeGreaterThan(0))
     })
 })

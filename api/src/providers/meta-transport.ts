@@ -1,6 +1,16 @@
 import type { Deadline } from '../server/deadline'
 
 export const RETRY_STATUSES = new Set([429, 500, 503])
+
+/** Only the explicitly requested pre-response connection failures qualify; never HTTP or body-read errors. */
+export function retryableNetworkFailure(error: unknown): boolean {
+    if (error instanceof TypeError && error.message === 'fetch failed') return true
+    for (let depth = 0; depth < 3 && typeof error === 'object' && error !== null; depth++) {
+        if ('code' in error && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET')) return true
+        error = 'cause' in error ? error.cause : undefined
+    }
+    return false
+}
 export interface ProviderMetrics {
     operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'document' | 'overlay'
     /** The configured request target, never a claim about what answered; see `modelIdentity`. */
@@ -141,20 +151,36 @@ export class MetaTransport {
         onAttempt?: (status: number, elapsed: number) => void,
         maxAttempts: 1 | 3 = 3,
         observed?: TransportObservation,
+        networkAttempts: 1 | 2 = 1,
     ): Promise<Response> {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             const waitStart = performance.now()
             await pause((this.#next.get(model) ?? 0) - performance.now(), deadline)
             deadline.checkpoint()
             if (observed) observed.paceWaitMs += Math.max(0, performance.now() - waitStart)
-            const started = performance.now()
-            // A rejected/ambiguous dispatch is deliberately never retried.
-            const response = await settleMetaResponse(
-                this.fetchImpl('https://api.meta.ai/v1/responses', init),
-                deadline,
-            )
-            if (observed) observed.networkMs += Math.max(0, performance.now() - started)
-            onAttempt?.(response.status, Math.max(0, performance.now() - started))
+            let response: Response | undefined
+            for (let networkAttempt = 0; networkAttempt < networkAttempts; networkAttempt++) {
+                const started = performance.now()
+                try {
+                    response = await settleMetaResponse(
+                        this.fetchImpl('https://api.meta.ai/v1/responses', init),
+                        deadline,
+                    )
+                } catch (error) {
+                    deadline.checkpoint()
+                    if (networkAttempt + 1 === networkAttempts || !retryableNetworkFailure(error)) throw error
+                } finally {
+                    if (observed) observed.networkMs += Math.max(0, performance.now() - started)
+                }
+                if (response) {
+                    onAttempt?.(response.status, Math.max(0, performance.now() - started))
+                    break
+                }
+                const backoffStart = performance.now()
+                await pause(100, deadline) // User-selected <=300 ms pre-response retry delay; no t5 failure sample.
+                if (observed) observed.paceWaitMs += Math.max(0, performance.now() - backoffStart)
+            }
+            if (!response) throw new Error('provider_error')
             const number = (name: string): number | undefined => {
                 const value = response.headers.get(name)
                 return value !== null && /^\d+$/u.test(value) && Number.isSafeInteger(Number(value))
