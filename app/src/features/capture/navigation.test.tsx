@@ -2,8 +2,8 @@
 
 import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
-import { AppState, DeviceEventEmitter, Linking } from 'react-native'
-import { router } from 'expo-router'
+import { AccessibilityInfo, AppState, DeviceEventEmitter, Linking } from 'react-native'
+import { router, Stack } from 'expo-router'
 import { act, cleanup, fireEvent, screen, waitFor, type RenderResult } from '@testing-library/react-native'
 import { createDemoManual, screenDocumentV2Schema, type CheckResult, type ParsedManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
@@ -277,6 +277,63 @@ afterEach(async () => {
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
     jest.useRealTimers()
+})
+
+function stackMotion(): { route: unknown; camera: unknown; cameraGesture: unknown } {
+    let stackProps: Record<string, unknown> | undefined
+    for (const host of screen.container.queryAll(() => true)) {
+        let fiber = host.unstable_fiber as unknown as TestFiber | null
+        while (fiber !== null) {
+            if (fiber.type === Stack) stackProps = fiber.memoizedProps
+            fiber = fiber.return
+        }
+    }
+    expect(stackProps).toBeDefined()
+    const options = stackProps as unknown as {
+        screenOptions: { animation?: unknown }
+        children: readonly ReactModule.ReactElement<{ name: string; options?: Record<string, unknown> }>[]
+    }
+    const camera = options.children.find((child) => child.props.name === 'camera')
+    expect(camera).toBeDefined()
+    return {
+        route: options.screenOptions.animation,
+        camera: camera!.props.options?.animation,
+        cameraGesture: camera!.props.options?.gestureEnabled,
+    }
+}
+
+it('updates the real native route and camera animation options when system Reduce Motion changes without reopening the route', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false)
+    const events = jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({ remove: (): void => undefined })
+    const { controller } = await runtime([entry()])
+    const view = await mount()
+    expect(stackMotion()).toEqual({ route: undefined, camera: 'slide_from_bottom', cameraGesture: false })
+    await press('Keep building')
+    expect(view.getPathname()).toBe('/guide/navigation-manual')
+    const heldEntry = controller.current
+    const listener = events.mock.calls.filter(([name]) => name === 'reduceMotionChanged').at(-1)?.[1] as
+        ((value: boolean) => void) | undefined
+    expect(listener).toBeDefined()
+    await act(() => listener!(true))
+    expect(stackMotion()).toEqual({ route: 'none', camera: 'none', cameraGesture: false })
+    expect(view.getPathname()).toBe('/guide/navigation-manual')
+    expect(controller.current).toBe(heldEntry)
+    await press('Take photo')
+    expect(view.getPathname()).toBe('/camera')
+    await act(() => listener!(false))
+    expect(stackMotion()).toEqual({ route: undefined, camera: 'slide_from_bottom', cameraGesture: false })
+    expect(view.getPathname()).toBe('/camera')
+})
+
+it('keeps native route and camera motion off until the system preference is known', async () => {
+    const preference = deferred<boolean>()
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockReturnValue(preference.promise)
+    jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({ remove: (): void => undefined })
+    await runtime()
+    await mount()
+    expect(stackMotion()).toEqual({ route: 'none', camera: 'none', cameraGesture: false })
+    await act(async () => preference.resolve(false))
+    expect(stackMotion()).toEqual({ route: undefined, camera: 'slide_from_bottom', cameraGesture: false })
 })
 
 it('offers one authored Home restore action after a real storage read failure, with no writes or model dispatch', async () => {
