@@ -64,6 +64,7 @@ import pageCameraRetrySaving from '../documents/recorded/recorded-camera-page-re
 import pageCameraRetrySavingProvenance from '../documents/recorded/recorded-camera-page-retry-saving.runtime.json'
 import { sha256Hex } from '../documents/sha256'
 import { resultLayoutDocument } from './result-layout-runtime'
+import { questionLayoutDocument } from './question-layout-runtime'
 
 interface Recording {
     readonly proposal: unknown
@@ -166,7 +167,7 @@ function recordingFor(inputs: ScreenContextInputsV2): Recording | null {
  * Author model/effort/date come from the retained record; provider latency/tokens remain unknown.
  */
 export function recordedDocument(inputs: ScreenContextInputsV2): ScreenDocumentV2 | null {
-    const layout = resultLayoutDocument(inputs)
+    const layout = questionLayoutDocument(inputs) ?? resultLayoutDocument(inputs)
     if (layout !== null) return layout
     const record = recordingFor(inputs)
     if (record === null) return null

@@ -10,6 +10,7 @@ import {
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { DocumentStore, documentKey, localDocument, type DocumentRuntimeEntry } from './store'
 import { isResultLayoutDocument } from './result-layout-runtime'
+import { isQuestionLayoutDocument } from './question-layout-runtime'
 
 export const DOCUMENT_FOCUS_GRACE_MS = 8_000
 
@@ -69,6 +70,11 @@ export function useDocument(
         (inputs.kind === 'result' || inputs.kind === 'answer') && inputs.captureId !== null && inputs.result !== null
     const entry = store.peek(inputs)
     const preview = useMemo(() => store.preview(inputs), [store, key])
+    // The Question is an editable form. Its complete authored tree stays stable across current capture/activity keys;
+    // a cached provider layout must not replace the loaded photo, editor or caret. The cache itself remains untouched.
+    const questionPresentation: DocumentRuntimeEntry | undefined = isQuestionLayoutDocument(preview.document)
+        ? { ...preview, issue: entry?.issue ?? preview.issue }
+        : undefined
     // Every context of one held capture, including a prewarmed activity key or a fresh mount, must begin on the
     // shared authored photo spine. A cached exact response is still eligible when its placement is compatible.
     // Keep the original cache/receipt intact: only this mounted presentation chooses the current witnessed layout.
@@ -105,7 +111,8 @@ export function useDocument(
         (!progressiveResult ||
             (prior.exactGeneration === undefined && !isResultLayoutDocument(prior.document)) ||
             (entry?.status === 'ready' && capturePlacement(prior.document) !== capturePlacement(entry.document)))
-    const current = preserveGenerated ? prior : (presentation ?? availablePrior ?? evicted ?? preview)
+    const current =
+        questionPresentation ?? (preserveGenerated ? prior : (presentation ?? availablePrior ?? evicted ?? preview))
     const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {

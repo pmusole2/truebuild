@@ -1098,7 +1098,7 @@ describe('every other screen is composed from its own document', () => {
         const { controller } = await atAskSheet({ question_gate: gate.promise })
         await fireEvent.press(askSheet().getByRole('button', { name: 'Ask' }))
         await flush()
-        await fireEvent.press(askSheet().getByRole('button', { name: 'Close' }))
+        await fireEvent.press(askSheet().getByTestId('close-sheet'))
         expect(screen.getByTestId('more-sheet')).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(150))
         expect(screen.queryByTestId('more-sheet')).toBeNull()
@@ -1147,7 +1147,7 @@ describe('every other screen is composed from its own document', () => {
             // arrive underneath it. Include that hidden subtree only to deliver those native image events.
             const answerPage = within(screen.getByTestId('guide-screen', { includeHiddenElements: true }))
             expect(answerPage.queryByText('The groove faces inward.', { includeHiddenElements: true })).toBeNull()
-            if (transition === 'close') await fireEvent.press(askSheet().getByRole('button', { name: 'Close' }))
+            if (transition === 'close') await fireEvent.press(askSheet().getByTestId('close-sheet'))
             await fireEvent(answerPage.getByTestId('frozen-photo-frame', { includeHiddenElements: true }), 'layout', {
                 nativeEvent: { layout: { width: 390, height: 460, x: 0, y: 0 } },
             })
