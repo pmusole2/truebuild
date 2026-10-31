@@ -34,7 +34,7 @@ interface Booted {
     calls: string[]
 }
 
-async function boot(delayMs: number, env: Record<string, string> = {}, mockDelayMs = 0): Promise<Booted> {
+async function boot(delayMs: number | 'held', env: Record<string, string> = {}, mockDelayMs = 0): Promise<Booted> {
     vi.spyOn(console, 'info').mockImplementation((): void => {})
     const mock = await startMetaMock({
         scenario: 'uncertain',
@@ -46,11 +46,11 @@ async function boot(delayMs: number, env: Record<string, string> = {}, mockDelay
     const slow: typeof fetch = async (url, init) => {
         calls.push(String(url))
         await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, delayMs)
+            const timer = delayMs === 'held' ? null : setTimeout(resolve, delayMs)
             init?.signal?.addEventListener(
                 'abort',
                 () => {
-                    clearTimeout(timer)
+                    if (timer !== null) clearTimeout(timer)
                     aborted.push(true)
                     reject(new Error('aborted'))
                 },
@@ -188,11 +188,12 @@ describe('slow questions', (): void => {
     })
 
     it('cancels the provider call on request and never reports a mid-flight 504', async (): Promise<void> => {
-        const { ask, job, aborted, mock } = await boot(2_000)
+        // Keep this scenario in flight until cancellation instead of relying on an elapsed provider delay.
+        const { ask, job, aborted, mock, calls } = await boot('held')
         const pending = pendingResultSchema.parse(await (await ask()).json())
+        await vi.waitFor(() => expect(calls).toHaveLength(1))
         expect((await job('cancel', pending.ticket)).status).toBe(204)
-        await new Promise((resolve) => setTimeout(resolve, 50))
-        expect(aborted.length).toBeGreaterThan(0)
+        await vi.waitFor(() => expect(aborted).toEqual([true]))
         const after = await job('result', pending.ticket)
         expect(after.status).not.toBe(504)
         expect(await after.json()).toMatchObject({ status: 'unavailable' })

@@ -9,7 +9,7 @@ if (mode !== 'full' && mode !== 'steps' && mode !== 'off') {
 
 export default defineConfig({
     testDir: './tests/generative-e2e',
-    outputDir: `.local/ai-effort/e2e-${mode}`,
+    outputDir: `test-results/e2e-${mode}`,
     fullyParallel: false,
     workers: 1,
     retries: 0,
