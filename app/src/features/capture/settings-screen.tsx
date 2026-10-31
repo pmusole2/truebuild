@@ -22,14 +22,14 @@ export function SettingsSections({
     return (
         <Stack gap="md">
             <Stack gap="xs">
-                <Heading>Your builds on this phone</Heading>
+                <Heading>Your builds on this device</Heading>
                 <Body>
-                    {count === 1 ? '1 build is saved on this phone.' : `${count} builds are saved on this phone.`}
+                    {count === 1 ? '1 build is saved on this device.' : `${count} builds are saved on this device.`}
                 </Body>
                 <Caption>Nothing is removed unless you remove it.</Caption>
             </Stack>
             <Stack gap="xs">
-                <Heading>What leaves this phone</Heading>
+                <Heading>What leaves this device</Heading>
                 <Body>{PRIVACY_COPY.read}</Body>
                 <Body>{PRIVACY_COPY.check}</Body>
                 <Body>{PRIVACY_COPY.ask}</Body>

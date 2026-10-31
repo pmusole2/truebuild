@@ -839,7 +839,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
         expect(await screen.findByTestId('segment-mask', { hidden: true })).toBeTruthy()
         await openJudge()
         const details = within(screen.getByTestId('judge-details', { hidden: true }))
-        expect(details.getByText(/1\. Verdict: muse-spark-1\.3, \d+ ms \(measured on this phone\)/u)).toBeTruthy()
+        expect(details.getByText(/1\. Verdict: muse-spark-1\.3, \d+ ms \(measured on this device\)/u)).toBeTruthy()
         // The three later stages are numbered by when they really arrived, so each is found by its own words.
         expect(
             details.getByText(
@@ -848,7 +848,7 @@ describe('J3: the same photo, in the order each part arrived', () => {
         ).toBeTruthy()
         expect(
             details.getByText(
-                /^\d\. Precise mask: Landed after \d+ ms \(measured on this phone\), server 412 ms, 1 outlined, model sam-3\.1$/u,
+                /^\d\. Precise mask: Landed after \d+ ms \(measured on this device\), server 412 ms, 1 outlined, model sam-3\.1$/u,
             ),
         ).toBeTruthy()
         // The same held photo, with the mask drawn from that photo's own stage.

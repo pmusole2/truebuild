@@ -134,7 +134,7 @@ export function documentText(document: ScreenDocumentV2, bindings: FrameBindings
             return PRIVACY_COPY.once
         case 'storage-summary': {
             const count = bindings.live?.state.entries.length ?? 0
-            return count === 1 ? '1 build is saved on this phone.' : `${count} builds are saved on this phone.`
+            return count === 1 ? '1 build is saved on this device.' : `${count} builds are saved on this device.`
         }
         case 'storage-note':
             return 'Nothing is removed unless you remove it.'

@@ -39,7 +39,7 @@ export function BuiltToggleRow(): ReactElement {
         <SettingRow
             testID="judge-built-toggle"
             label={BUILT_TOGGLE_LABEL}
-            description="Stays on this phone."
+            description="Stays on this device."
             value={showBuilt}
             onValueChange={setShowBuilt}
         />
@@ -103,7 +103,7 @@ function sessionLine(summary: NativeHostSessionSummary | null): string {
 }
 
 /**
- * The elements actually on this phone, counted from the running screen through the public host view API: the root, this
+ * The elements actually on this device, counted from the running screen through the public host view API: the root, this
  * screen and the whole session, each with when it was counted, whether it is out of date, and what the count covers. A
  * count that could not be taken says why and shows no number. Nothing is estimated or taken from a document.
  */
@@ -157,7 +157,7 @@ export function HostCounts(): ReactElement {
     )
 }
 
-function stageWord(status: StageStatus, waited = 'measured on this phone'): string {
+function stageWord(status: StageStatus, waited = 'measured on this device'): string {
     switch (status.status) {
         case 'pending':
             return 'Working'
@@ -193,19 +193,19 @@ function StageRow({
     )
 }
 
-/** When a stage arrived, in this phone's own time after the verdict was published; null when it has not arrived. */
+/** When a stage arrived, in this device's own time after the verdict was published; null when it has not arrived. */
 function arrival(status: StageStatus): number | null {
     return status.status === 'landed' || status.status === 'failed' ? (status.elapsedMs ?? null) : null
 }
 
 const phoneScope = (at: number | null): string | null =>
-    at === null ? null : `Arrived ${Math.round(at)} ms after the verdict, by this phone's clock.`
+    at === null ? null : `Arrived ${Math.round(at)} ms after the verdict, by this device's clock.`
 
 /**
- * The same held photo with the stages that followed its verdict, in the order they arrived on this phone: the verdict,
+ * The same held photo with the stages that followed its verdict, in the order they arrived on this device: the verdict,
  * the composed result screen, the precise mask and the extra regions. The photo is the one the verdict is about, and
  * its mask is drawn on it only from that photo's own stage. Each line says what happened, and which clock any time
- * comes from (the server's own record, or this phone's wait), so a stage that never landed reads as that and never as a
+ * comes from (the server's own record, or this device's wait), so a stage that never landed reads as that and never as a
  * success. The verdict and everything the person can do never wait for a later stage.
  */
 export function StagesPanel({
@@ -227,8 +227,8 @@ export function StagesPanel({
     const capture = workflow?.state.capture ?? null
     // The run's own guard, or the server's stamp on this very result: either way no model ran and none is credited.
     const proof = proofEvidenceLabel() ?? (check.evidence === 'synthetic-fixture' ? PROOF_EVIDENCE_LABEL : null)
-    // On simulated IO the wait is this phone's own, not a provider's, and a model named by an offer is only a target.
-    const waited = proof === null ? 'measured on this phone' : 'phone wait on simulated IO, not provider time'
+    // On simulated IO the wait is this device's own, not a provider's, and a model named by an offer is only a target.
+    const waited = proof === null ? 'measured on this device' : 'device wait on simulated IO, not provider time'
     const sameHeldPhoto = capture !== null && primary?.captureId === capture.binding.captureId
     const masks =
         sameHeldPhoto && stages != null && stages.captureId === capture.binding.captureId

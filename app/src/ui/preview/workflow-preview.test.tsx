@@ -74,7 +74,7 @@ it('keeps settings inspection inert, including the device settings action', asyn
     const settings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined)
     try {
         await render(<WorkflowPreview initialCase="settings" />)
-        expect(screen.getByText('What leaves this phone')).toBeTruthy()
+        expect(screen.getByText('What leaves this device')).toBeTruthy()
         await fireEvent.press(screen.getByRole('button', { name: 'Open device settings' }))
         expect(settings).not.toHaveBeenCalled()
     } finally {

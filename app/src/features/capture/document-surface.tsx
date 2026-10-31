@@ -387,7 +387,7 @@ export function DocumentSurface({
                 (effectiveKind === 'more' || (effectiveKind === 'camera' && camera?.canAskAgain === false))
             return {
                 enabled,
-                reason: enabled ? null : 'Open device settings on your phone.',
+                reason: enabled ? null : 'Open settings on your device.',
                 run: (): void => {
                     if (enabled) {
                         if (effectiveKind === 'camera' && camera?.openSettings !== undefined) camera.openSettings()

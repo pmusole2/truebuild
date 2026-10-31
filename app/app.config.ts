@@ -7,6 +7,9 @@ const config: ExpoConfig = {
     version: '0.1.0',
     orientation: 'portrait',
     userInterfaceStyle: 'automatic',
+    ios: {
+        supportsTablet: true,
+    },
     web: {
         bundler: 'metro',
         output: 'single',

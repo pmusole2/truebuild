@@ -303,10 +303,10 @@ test('a local library that cannot be read keeps its data, says so, and offers an
     expect(await writeCount()).toBe(0)
 })
 
-test('More on Home describes storage, what leaves the phone and camera access', async ({ page }) => {
+test('More on Home describes storage, what leaves the device and camera access', async ({ page }) => {
     await openFreshLibrary(page)
     await page.getByRole('button', { name: 'More', exact: true }).click()
-    await expect(page.getByText('What leaves this phone', { exact: true })).toBeVisible()
+    await expect(page.getByText('What leaves this device', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open device settings', exact: true })).toBeVisible()
     await page.getByTestId('close-sheet').click()
     await expect(page.getByRole('heading', { name: 'Your manuals', exact: true })).toBeVisible()

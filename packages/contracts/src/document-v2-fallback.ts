@@ -512,7 +512,7 @@ function moreAppSections(material: DocumentMaterialV2, collapsed: boolean): Node
     const settings: Node[] = [
         ...(ui?.settings
             ? [
-                  labelText('Your builds on this phone'),
+                  labelText('Your builds on this device'),
                   boundText('storage-summary'),
                   boundText('storage-note', true),
                   secondary('Open device settings', intent('open-details', 'device-settings'), 'settings'),
@@ -533,7 +533,7 @@ function moreAppSections(material: DocumentMaterialV2, collapsed: boolean): Node
             'Privacy',
             [
                 boundText('privacy-stay'),
-                labelText('What leaves this phone'),
+                labelText('What leaves this device'),
                 boundText('privacy-read'),
                 boundText('privacy-check'),
                 boundText('privacy-ask'),

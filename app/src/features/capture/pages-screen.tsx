@@ -320,7 +320,7 @@ export function PagesScreen({
                             />
                         )}
                         <Body>{PRIVACY_COPY.stayOnDevice}</Body>
-                        <Caption>Phone photos are made smaller on this phone before they are sent.</Caption>
+                        <Caption>Photos are prepared on this device before they are sent.</Caption>
                     </Stack>
                 )}
             </MoreSheet>

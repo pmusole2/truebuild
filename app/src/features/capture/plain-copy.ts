@@ -125,9 +125,9 @@ const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
     [/^Finishing the local save/u, 'Still saving. Please wait a moment.'],
     [
         /^Local library images could not be read|^Local images could not be read/u,
-        'We could not open your saved photos. They are still on this phone. Try again.',
+        'We could not open your saved photos. They are still on this device. Try again.',
     ],
-    [/^Could not save on this device/u, 'We could not save on this phone. Your earlier work is safe. Try again.'],
+    [/^Could not save on this device/u, 'We could not save on this device. Your earlier work is safe. Try again.'],
     [/^Local library is read-only/u, 'Saving is paused until your saved builds open again.'],
     [/^Saved photo restored/u, 'Your last photo is shown for reference. Take a new one to check again.'],
     [/^Saved photo is view-only/u, 'Take a new photo before asking.'],

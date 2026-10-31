@@ -100,7 +100,7 @@
                     },
                     {
                         "type": "Section",
-                        "title": { "kind": "literal", "text": "Your builds on this phone" },
+                        "title": { "kind": "literal", "text": "Your builds on this device" },
                         "collapsible": true,
                         "initiallyOpen": false,
                         "children": [
@@ -132,7 +132,7 @@
                     },
                     {
                         "type": "Section",
-                        "title": { "kind": "literal", "text": "What leaves this phone" },
+                        "title": { "kind": "literal", "text": "What leaves this device" },
                         "collapsible": true,
                         "initiallyOpen": false,
                         "children": [

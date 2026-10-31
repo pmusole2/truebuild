@@ -43,7 +43,7 @@ describe('the judge layer in a native proof run', () => {
         mockProof.label = null
         await panel()
         expect(screen.queryByText(/^Evidence:/u)).toBeNull()
-        expect(screen.getByText('1. Verdict: muse-spark-1.3, 240 ms (measured on this phone)')).toBeTruthy()
+        expect(screen.getByText('1. Verdict: muse-spark-1.3, 240 ms (measured on this device)')).toBeTruthy()
         expect(screen.getByText(/server 5000 ms/u)).toBeTruthy()
         expect(screen.getByText(/Precise mask:.*model sam-3.1/u)).toBeTruthy()
         expect(screen.getByText(/Extra regions:.*model muse-wonder-1.0, effort max/u)).toBeTruthy()
@@ -54,13 +54,13 @@ describe('the judge layer in a native proof run', () => {
         await panel()
         expect(screen.getByText('Evidence: Simulated fixture · no model call')).toBeTruthy()
         expect(
-            screen.getByText('1. Verdict: Not recorded, 240 ms (phone wait on simulated IO, not provider time)'),
+            screen.getByText('1. Verdict: Not recorded, 240 ms (device wait on simulated IO, not provider time)'),
         ).toBeTruthy()
         expect(screen.queryByText(/muse-/u)).toBeNull()
         const mask = screen.getByText(/^\d\. Precise mask: /u)
-        expect(mask.props.children).toContain('phone wait on simulated IO, not provider time')
+        expect(mask.props.children).toContain('device wait on simulated IO, not provider time')
         expect(mask.props.children).toContain('server Not recorded')
         expect(mask.props.children).not.toContain('5000')
-        expect(screen.getByText(/^\d\. Extra regions: Landed after 410 ms \(phone wait on simulated IO/u)).toBeTruthy()
+        expect(screen.getByText(/^\d\. Extra regions: Landed after 410 ms \(device wait on simulated IO/u)).toBeTruthy()
     })
 })

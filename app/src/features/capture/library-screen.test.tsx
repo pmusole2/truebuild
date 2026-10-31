@@ -282,7 +282,7 @@ describe('unavailable states', () => {
 
     it('explains an unreadable library plainly, with one explicit Try again that is not pressed for the person', async () => {
         const { restore, createManual } = await setup('home-error')
-        expect(screen.getByText('We could not open your saved photos. They are still on this phone.')).toBeTruthy()
+        expect(screen.getByText('We could not open your saved photos. They are still on this device.')).toBeTruthy()
         expect(restore).not.toHaveBeenCalled()
         expect(screen.queryByRole('button', { name: 'Add manual' })).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
@@ -295,7 +295,7 @@ describe('unavailable states', () => {
             storageReadOnly: true,
             notice: 'Could not save on this device. Your earlier work is safe.',
         })
-        expect(screen.getByText('We could not save on this phone. Your earlier work is safe.')).toBeTruthy()
+        expect(screen.getByText('We could not save on this device. Your earlier work is safe.')).toBeTruthy()
         expect(screen.queryByText(/could not open/u)).toBeNull()
         expect(screen.queryByText('Pick up where you left off.')).toBeNull()
         const retry = screen.getByRole('button', { name: 'Try again' })
@@ -313,7 +313,7 @@ describe('unavailable states', () => {
         })
         const retry = screen.getByRole('button', { name: 'Try again' })
         expect(retry.props.accessibilityState.disabled).toBe(true)
-        expect(screen.getByText('We could not open your saved photos. They are still on this phone.')).toBeTruthy()
+        expect(screen.getByText('We could not open your saved photos. They are still on this device.')).toBeTruthy()
         expect(screen.getByText('Please wait')).toBeTruthy()
         await fireEvent.press(retry)
         expect(restore).not.toHaveBeenCalled()
@@ -402,10 +402,10 @@ describe('saved manuals', () => {
 
     it('puts settings and the discreet judge entry in More, one tap away', async () => {
         await setup('home-populated')
-        expect(screen.queryByText('What leaves this phone')).toBeNull()
+        expect(screen.queryByText('What leaves this device')).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'More' }))
         const more = within(screen.getByTestId('more-sheet'))
-        expect(more.getByText('What leaves this phone')).toBeTruthy()
+        expect(more.getByText('What leaves this device')).toBeTruthy()
         expect(more.getByTestId('judge-entry')).toBeTruthy()
     })
 })

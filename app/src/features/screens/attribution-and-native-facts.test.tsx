@@ -131,7 +131,7 @@ it('pairs the retained primary model with its own timing after the shown verdict
             </WorkflowContext.Provider>,
         ),
     )
-    expect(screen.getByText('1. Verdict: muse-spark-1.3, 240 ms (measured on this phone)')).toBeTruthy()
+    expect(screen.getByText('1. Verdict: muse-spark-1.3, 240 ms (measured on this device)')).toBeTruthy()
     expect(screen.queryByText(/1\. Verdict: muse-wonder/u)).toBeNull()
 })
 

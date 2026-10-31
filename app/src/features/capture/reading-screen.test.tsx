@@ -39,7 +39,7 @@ describe('Reading', () => {
         expect(screen.getByText('You can stop and try again later.')).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(3500))
         expect(screen.getByText('Keep this screen open.')).toBeTruthy()
-        expect(screen.queryByText(/privacy|stay on this phone|page in order|percent|%/iu)).toBeNull()
+        expect(screen.queryByText(/privacy|stay on this device|page in order|percent|%/iu)).toBeNull()
     })
 
     it('runs one calm indicator loop and no sliding progress bar or percentage', async () => {
