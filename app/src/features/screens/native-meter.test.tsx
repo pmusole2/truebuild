@@ -1,7 +1,7 @@
 import type * as ReactModule from 'react'
 import { act, render } from '@testing-library/react-native'
 import { type ComponentRef, type ReactElement, type RefObject } from 'react'
-import type { View } from 'react-native'
+import { AppState, DeviceEventEmitter, Dimensions, type AppStateStatus, type View } from 'react-native'
 import { usePathname } from 'expo-router'
 import { MeterRootsContext, useMeterRoot, type MeterRootKind, type MeterRootSelection } from '../../ui/meter-roots'
 import { MeterTriggers, NativeMeterProvider, screenOfPath, useMeterReading, type MeterReading } from './native-meter'
@@ -9,6 +9,19 @@ import type { NativeHostNode, NativeHostRoot } from './native-host-meter'
 import { decodeNativeCheckpointLines } from './native-meter-log'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
 import { entry, runtime } from './test-support/route-harness'
+import { DocumentStore } from '../document-runtime/store'
+
+// Keep the real AppState JS subscriptions/currentState updates; only the native OS read/event boundary is synthetic.
+jest.unmock('react-native/Libraries/AppState/AppState')
+jest.mock('react-native/Libraries/AppState/NativeAppState', () => ({
+    __esModule: true,
+    default: {
+        getConstants: (): { initialAppState: string } => ({ initialAppState: 'active' }),
+        getCurrentAppState: (success: (value: { app_state: string }) => void): void => success({ app_state: 'active' }),
+        addListener: jest.fn(),
+        removeListeners: jest.fn(),
+    },
+}))
 
 // The pathname is an external store, as the router's is: a change re-renders only the components that read it.
 const mockPath = {
@@ -72,18 +85,21 @@ function Reader(): null {
     return null
 }
 
-function harness(options: { enabled?: boolean; platform?: string; roots?: ReactElement }): {
+function harness(options: { enabled?: boolean; platform?: string; roots?: ReactElement; cancelQueued?: boolean }): {
     ui: ReactElement
+    runQueued: () => void
     flush: () => Promise<void>
 } {
     const queue: (() => void)[] = []
     const schedule = (run: () => void): (() => void) => {
         queue.push(run)
         return (): void => {
+            if (options.cancelQueued === false) return
             const at = queue.indexOf(run)
             if (at >= 0) queue.splice(at, 1)
         }
     }
+    const runQueued = (): void => queue.splice(0).forEach((run) => run())
     return {
         ui: (
             <NativeMeterProvider
@@ -97,18 +113,200 @@ function harness(options: { enabled?: boolean; platform?: string; roots?: ReactE
                 <MeterTriggers />
             </NativeMeterProvider>
         ),
+        runQueued,
         flush: async (): Promise<void> => {
-            await act(async () => {
-                queue.splice(0).forEach((run) => run())
-            })
+            await act(async () => runQueued())
         },
     }
 }
 
+const initialDimensions = { window: Dimensions.get('window'), screen: Dimensions.get('screen') }
+const changeAppState = (state: AppStateStatus): void =>
+    DeviceEventEmitter.emit('appStateDidChange', { app_state: state })
+
 beforeEach(() => {
+    changeAppState('active')
+    Dimensions.set(initialDimensions)
     mockPath.value = '/'
     mockPath.listeners.clear()
     reading.current = null
+})
+
+describe('foreground checkpoint eligibility', () => {
+    it.each(['background', 'inactive', 'unknown', null] as const)(
+        'waits for active instead of measuring an initial %s app',
+        async (initial) => {
+            Object.assign(AppState, { currentState: initial })
+            const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+            const test = harness({ enabled: true, roots: <Root target={root(tree())} kind="app" /> })
+            const view = await render(test.ui)
+            try {
+                await test.flush()
+                expect(reading.current?.active).toBe(true)
+                expect(reading.current?.snapshot?.latest).toBeNull()
+                expect(reading.current?.session?.sampleCount).toBe(0)
+                expect(decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))).toEqual([])
+
+                await act(async () => changeAppState('active'))
+                await test.flush()
+                expect(reading.current?.snapshot?.latest?.counts).toEqual({
+                    generated: 3,
+                    fallback: 0,
+                    shell: 2,
+                    total: 5,
+                })
+                expect(reading.current?.session?.sampleCount).toBe(1)
+                expect(decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))).toHaveLength(1)
+            } finally {
+                await view.unmount()
+                log.mockRestore()
+            }
+        },
+    )
+
+    it.each(['background', 'disabled', 'unmounted', 'resumed'] as const)(
+        'does not publish an obsolete queued frame when the meter is %s, even if cancellation is too late',
+        async (stop) => {
+            const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+            const test = harness({
+                enabled: true,
+                roots: <Root target={root(tree())} kind="app" />,
+                cancelQueued: false,
+            })
+            const view = await render(test.ui)
+            try {
+                if (stop === 'background')
+                    await act(async () => {
+                        changeAppState('background')
+                        // A dispatched frame can run before React gets to the effect cleanup.
+                        test.runQueued()
+                    })
+                else if (stop === 'resumed') await act(async () => changeAppState('background'))
+                else if (stop === 'disabled') await view.rerender(harness({ enabled: false }).ui)
+                else await view.unmount()
+                if (stop === 'resumed')
+                    await act(async () => {
+                        mockPath.set('/guide/opaque-manual')
+                        changeAppState('active')
+                    })
+                await test.flush()
+                const events = decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))
+                if (stop === 'resumed') {
+                    expect(events).toHaveLength(1)
+                    expect(events[0]).toEqual(
+                        expect.objectContaining({ checkpoint: expect.objectContaining({ screen: 'guide' }) }),
+                    )
+                } else expect(events).toEqual([])
+            } finally {
+                if (stop !== 'unmounted') await view.unmount()
+                log.mockRestore()
+            }
+        },
+    )
+
+    it('re-arms a frame when inactive and active are batched around its dispatched callback', async () => {
+        const test = harness({ enabled: true, roots: <Root target={root(tree())} kind="app" /> })
+        const view = await render(test.ui)
+        try {
+            await act(async () => {
+                changeAppState('inactive')
+                test.runQueued()
+                changeAppState('active')
+            })
+            await test.flush()
+            expect(reading.current?.session?.sampleCount).toBe(1)
+            expect(reading.current?.snapshot?.stale).toBe(false)
+            expect(reading.current?.snapshot?.latest?.counts).toEqual({ generated: 3, fallback: 0, shell: 2, total: 5 })
+        } finally {
+            await view.unmount()
+        }
+    })
+
+    it('coalesces hidden document, layout, route and manual requests into one fresh current checkpoint on resume', async () => {
+        const log = jest.spyOn(console, 'info').mockImplementation((): void => undefined)
+        const { controller } = await runtime([])
+        const documents = new DocumentStore({ mode: 'off', id: (): string => 'hidden-document' })
+        const nodes = [element('truebuild-render-origin:generated')]
+        const document = element('', nodes)
+        const target = {
+            current: Object.assign(document, { ownerDocument: { documentElement: document } }),
+        } as unknown as RefObject<ComponentRef<typeof View> | null>
+        function FocusedRoot(): ReactElement {
+            return (
+                <Root target={target} kind="app" selection={{ screen: screenOfPath(usePathname()), focused: true }} />
+            )
+        }
+        const value: WorkflowValue = {
+            controller,
+            documents,
+            state: controller.getSnapshot(),
+            entry: undefined,
+            screens: null,
+        }
+        const test = harness({ enabled: true, roots: <FocusedRoot /> })
+        const view = await render(<WorkflowContext.Provider value={value}>{test.ui}</WorkflowContext.Provider>)
+        try {
+            await test.flush()
+            expect(reading.current?.session?.sampleCount).toBe(1)
+            await act(async () => changeAppState('inactive'))
+            await test.flush()
+            await act(async () => {
+                changeAppState('background')
+                mockPath.set('/guide/opaque-manual')
+                nodes.push(element('truebuild-render-origin:fallback', [element()]))
+                Dimensions.set({
+                    window: { ...initialDimensions.window, width: 1024, height: 768, fontScale: 2 },
+                    screen: { ...initialDimensions.screen, width: 1024, height: 768, fontScale: 2 },
+                })
+                documents.request({
+                    kind: 'home',
+                    session: null,
+                    stepId: null,
+                    captureId: null,
+                    result: null,
+                    failure: null,
+                    uiState: { library: { entries: [], soleManualId: null } },
+                })
+                reading.current?.measureNow()
+            })
+            await test.flush()
+            expect(reading.current?.snapshot?.stale).toBe(true)
+            expect(reading.current?.session?.sampleCount).toBe(1)
+            expect(decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))).toHaveLength(1)
+
+            await act(async () => changeAppState('active'))
+            await test.flush()
+            await test.flush()
+            const latest = reading.current?.snapshot?.latest
+            expect(latest?.checkpoint.screen).toBe('guide')
+            expect(latest?.checkpoint.checkpointId).toEqual(expect.stringContaining('layout'))
+            expect(latest?.checkpoint.checkpointId).toEqual(expect.stringContaining('document'))
+            expect(latest?.checkpoint.checkpointId).toEqual(expect.stringContaining('requested'))
+            expect(latest?.counts).toEqual({ generated: 1, fallback: 2, shell: 1, total: 4 })
+            expect(latest?.methods.allMounted.counts).toEqual(latest?.counts)
+            expect(latest?.methods.focusedVisible.counts).toEqual(latest?.counts)
+            expect(reading.current?.session?.sampleCount).toBe(2)
+            expect(decodeNativeCheckpointLines(log.mock.calls.map(([value]) => String(value)))).toHaveLength(2)
+        } finally {
+            await view.unmount()
+            documents.dispose()
+            controller.dispose()
+            log.mockRestore()
+        }
+    })
+
+    it('removes its foreground subscription on disable and unmount', async () => {
+        const before = DeviceEventEmitter.listenerCount('appStateDidChange')
+        const test = harness({ enabled: true, roots: <Root target={root(tree())} kind="app" /> })
+        const view = await render(test.ui)
+        expect(DeviceEventEmitter.listenerCount('appStateDidChange')).toBe(before + 1)
+        await view.rerender(harness({ enabled: false }).ui)
+        expect(DeviceEventEmitter.listenerCount('appStateDidChange')).toBe(before)
+        await view.rerender(test.ui)
+        expect(DeviceEventEmitter.listenerCount('appStateDidChange')).toBe(before + 1)
+        await view.unmount()
+        expect(DeviceEventEmitter.listenerCount('appStateDidChange')).toBe(before)
+    })
 })
 
 describe('the device host meter wiring', () => {

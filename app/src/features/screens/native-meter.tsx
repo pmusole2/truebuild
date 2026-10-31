@@ -3,12 +3,13 @@ import {
     useContext,
     useEffect,
     useMemo,
+    useRef,
     useState,
     useSyncExternalStore,
     type ReactElement,
     type ReactNode,
 } from 'react'
-import { Platform, useWindowDimensions } from 'react-native'
+import { AppState, Platform, useWindowDimensions } from 'react-native'
 import { usePathname } from 'expo-router'
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { useCoach } from '../onboarding/coach-provider'
@@ -143,7 +144,8 @@ const none = (): (() => void) => (): void => undefined
  * Takes the checkpoints. It sits where it can see the workflow and the coach, and takes one explicit checkpoint when
  * the focused screen, the delivered documents, the tip, the busy state or the window layout change, and whenever a
  * root is added or removed (a sheet, an overlay, the camera). Each change only marks the last measurement out of date;
- * one measurement follows on the next frame. No observer, no timer and no polling.
+ * one measurement follows on the next foreground frame. Outside the app, changes stay stale until the app is active
+ * again: no unseen TrueBuild checkpoint or zero-host substitute is published. No host-tree observer, timer or polling.
  */
 export function MeterTriggers(): null {
     const control = useContext(MeterControlContext)
@@ -163,6 +165,35 @@ export function MeterTriggers(): null {
         control?.meter.getSnapshot ?? ((): null => null),
         control?.meter.getSnapshot ?? ((): null => null),
     )
+    const isForeground = useRef(false)
+    const [foreground, setForeground] = useState(false)
+    const [foregroundTransition, setForegroundTransition] = useState(0)
+    useEffect(() => {
+        if (control === null || !AppState.isAvailable) {
+            setForeground(false)
+            return undefined
+        }
+        let mounted = true
+        const changed = (state: typeof AppState.currentState): void => {
+            if (!mounted) return
+            const next = state === 'active'
+            if (next !== isForeground.current) {
+                isForeground.current = next
+                // A batched inactive/active cycle can finish with the same boolean after its frame was refused.
+                setForegroundTransition((previous) => previous + 1)
+                control.note(next ? 'foreground' : 'background')
+            }
+            setForeground(next)
+        }
+        const subscription = AppState.addEventListener('change', changed)
+        // Subscribe before reading so an initial native answer cannot be missed. Null/unknown is not foreground.
+        changed(AppState.currentState)
+        return (): void => {
+            mounted = false
+            isForeground.current = false
+            subscription.remove()
+        }
+    }, [control])
     const screen = screenOfPath(pathname)
     const tip = coach?.active?.token ?? null
     const busy = workflow?.state.pending != null
@@ -204,8 +235,11 @@ export function MeterTriggers(): null {
     const stale = snapshot?.stale === true
     const version = snapshot?.version
     useEffect(() => {
-        if (control === null || !stale) return undefined
-        return control.schedule((): void => {
+        if (control === null || !stale || !foreground) return undefined
+        let cancelled = false
+        const stop = control.schedule((): void => {
+            // AppState can change before React cleans up this frame; cancellation can also arrive after it was queued.
+            if (cancelled || !isForeground.current) return
             const started = performance.now()
             const measurement = control.meter.sample({
                 sessionId: control.sessionId,
@@ -269,8 +303,12 @@ export function MeterTriggers(): null {
                 },
             })
         })
+        return (): void => {
+            cancelled = true
+            stop()
+        }
         // A new root, tip or document while one is scheduled replaces it, so a burst becomes one checkpoint.
-    }, [control, stale, version, screen, viewIdentity])
+    }, [control, foreground, foregroundTransition, stale, version, screen, viewIdentity])
     return null
 }
 
