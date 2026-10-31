@@ -63,6 +63,7 @@ import { useJudge } from '../screens/judge-context'
 import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
 import type { FrameBindings } from './types'
+import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
 import Animated from 'react-native-reanimated'
 import { useContentFade } from '../../ui/motion'
@@ -1810,9 +1811,13 @@ export function NativeDocumentRenderer({
     }, [bodyPage, bodyMount])
     const [loadedCapture, setLoadedCapture] = useState<string | null>(null)
     const matchesCapture = captureMatchesDocument(document, bindings.capture)
+    const placement = useMemo(() => capturePlacement(document), [document])
+    // The load witness belongs to the held capture and where its one native image sits (body mount and ancestry), not to
+    // which compatible document draws it: a recomposition keeps the mounted image, so it must not gate the page again.
+    // Another capture, ancestry, body mount or inspection mounts a fresh image, which must load before the page shows.
     const expectedPhoto =
         matchesCapture && bindings.capture !== null
-            ? JSON.stringify([document.screenId, bindings.capture.binding, bindings.inspect])
+            ? JSON.stringify([bodyMount, placement, bindings.capture.binding, bindings.inspect])
             : null
     useLayoutEffect(() => {
         setLoadedCapture(null)

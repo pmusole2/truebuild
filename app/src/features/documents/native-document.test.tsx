@@ -18,6 +18,7 @@ import { captureUiState } from '../screens/ui-state'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider, type HapticPort } from '../../ui/feedback'
 import { DocumentRenderer } from './document-renderer'
+import { capturePlacement } from './capture-placement'
 import { sha256Hex } from './sha256'
 import type { FrameBindings } from './types'
 import { entry, runtime, source } from '../screens/test-support/route-harness'
@@ -760,6 +761,33 @@ describe('the actual v2 catalog renderer', () => {
             await view.rerender(wrap(<DocumentRenderer document={recomposed} bindings={answered} variant="busy" />))
             expect(bodyScroller()).toBe(body)
             expect(scrollTo).not.toHaveBeenCalled()
+        })
+
+        it('never gates the loaded held photo again when a compatible composition replaces the shown Answer', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { answerInputs, answered } = heldPages(inputs, bindings)
+            const first = compose(answerInputs)
+            const second = composeEdited(answerInputs, withOpener)
+            // Another document, the same mounted native image: only the content around the photo differs.
+            expect(second.screenId).not.toBe(first.screenId)
+            expect(capturePlacement(second)).toBe(capturePlacement(first))
+            const shown = jest.fn()
+            const view = await render(
+                wrap(<DocumentRenderer document={first} bindings={{ ...answered, onVariantShown: shown }} />),
+            )
+            await loadHeldPhoto()
+            const image = screen.getByTestId('frozen-photo-image')
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            shown.mockClear()
+
+            await view.rerender(
+                wrap(<DocumentRenderer document={second} bindings={{ ...answered, onVariantShown: shown }} />),
+            )
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            const states = shown.mock.calls.filter(([candidate]) => candidate === second).map(([, state]) => state)
+            expect(states).not.toContain('pending')
+            expect(readyShown(shown, second)).toBeGreaterThan(0)
         })
 
         it('still waits for the first load of a freshly mounted Answer before revealing it', async () => {

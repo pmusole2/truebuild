@@ -3,11 +3,11 @@ import {
     variantsOfV2,
     type ScreenContextInputsV2,
     type ScreenDocumentV2,
-    type ScreenNodeV2,
     type ScreenVariantV2,
     type VariantState,
 } from '@truebuild/contracts'
 import { useOptionalWorkflow } from '../capture/workflow-context'
+import { capturePlacement } from '../documents/capture-placement'
 import { DocumentStore, documentKey, localDocument, type DocumentRuntimeEntry } from './store'
 import { isResultLayoutDocument } from './result-layout-runtime'
 import { isQuestionLayoutDocument } from './question-layout-runtime'
@@ -30,28 +30,6 @@ export function activeDocumentVariant(
     const variants = variantsOfV2(document)
     const selected = variants.find((candidate) => candidate.name === state) ?? variants[0]!
     return { variant: selected.variant, activeState: selected.name }
-}
-
-/** Child positions and container types own the native photo instance, independently of the document's content. */
-function capturePlacement(document: ScreenDocumentV2): string {
-    return JSON.stringify(
-        variantsOfV2(document).map(({ name, variant }) => {
-            const paths: string[][] = []
-            const visit = (node: ScreenNodeV2, parents: string[]): void => {
-                const component =
-                    node.type === 'Section'
-                        ? `${node.type}:${node.collapsible}`
-                        : node.type === 'Scroll'
-                          ? `${node.type}:${node.axis}`
-                          : node.type
-                const path = [...parents, component]
-                if (node.type === 'Image' && node.source.kind === 'capture') paths.push(path)
-                if ('children' in node) node.children.forEach((child, index) => visit(child, [...path, String(index)]))
-            }
-            visit(variant.body, [])
-            return [name, paths]
-        }),
-    )
 }
 
 /** Always returns the actual complete v2 document and its active full variant. No v1 slot/frame conversion. */
