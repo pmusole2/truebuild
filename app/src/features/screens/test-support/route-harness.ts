@@ -74,6 +74,10 @@ export type Replies = {
     /** Held until released, so a test can observe the working state. */
     parse?: Promise<void>
     check_gate?: Promise<void>
+    /** Held until released, so a test can observe the pending question before its answer arrives. */
+    question_gate?: Promise<void>
+    /** The question is handed back as a 202 ticket (the screen then says it is still thinking); the gate holds its result. */
+    question_ticket?: boolean
 }
 
 export async function runtime(
@@ -96,9 +100,12 @@ export async function runtime(
         )
     }
     const calls: string[] = []
+    let askedPages: string[] | undefined
     const fetch: ModelFetch = async (url, init) => {
         calls.push(new URL(url).pathname)
-        const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+        // A ticketed question is collected with a JSON body that names no pages; they were named by the question itself.
+        const collecting = url.endsWith('/questions/result')
+        const meta = JSON.parse(String(collecting ? init.body : (init.body as FormData).get('metadata'))) as {
             requestId: string
             binding: Record<string, unknown>
             pages?: { pageId: string }[]
@@ -107,7 +114,22 @@ export async function runtime(
         if (url.endsWith('/parse')) await replies.parse
         if (url.endsWith('/checks') && replies.failCheck === true) return new Response('', { status: 502 })
         if (url.endsWith('/checks')) await replies.check_gate
-        const ref = { pageId: meta.sourcePageIds?.[0] ?? 'page', region: null }
+        if (url.endsWith('/questions') && replies.question_ticket === true) {
+            askedPages = meta.sourcePageIds
+            return new Response(
+                JSON.stringify({
+                    status: 'pending',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    ticket: 'flow-ticket',
+                    retryAfterMs: 500,
+                    expiresInMs: 30_000,
+                }),
+                { status: 202, headers: { 'content-type': 'application/json' } },
+            )
+        }
+        if (url.endsWith('/questions') || collecting) await replies.question_gate
+        const ref = { pageId: (collecting ? askedPages : meta.sourcePageIds)?.[0] ?? 'page', region: null }
         if (url.endsWith('/checks/overlay')) {
             const body = replies.overlay ?? { model: 'muse-wonder-1.0', effort: 'max', observedRegion: null }
             return new Response(
@@ -124,7 +146,7 @@ export async function runtime(
         const overrides = typeof replies.check === 'function' ? await replies.check() : (replies.check ?? {})
         const value = url.endsWith('/parse')
             ? parsed(meta.pages![0]!.pageId)
-            : url.endsWith('/questions')
+            : url.endsWith('/questions') || collecting
               ? { answer: 'The groove faces inward.', sourceRefs: [ref], missingEvidence: [], ...replies.answer }
               : ({
                     decision: 'pass',

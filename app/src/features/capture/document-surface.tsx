@@ -125,7 +125,14 @@ export function DocumentSurface({
         dismissParents?.()
     }
     const questionCapture = useRef<{ before: string | null; manualId: string | null; entered: boolean } | null>(null)
-    const previousAnswer = useRef(state.answer)
+    // The question sheet closes in the render that delivers its answer, never through its own closing animation: an
+    // effect and a timer would let the finished answer draw the composer again first (ready form, empty photo, Ask).
+    // Back and Close keep the animation.
+    const [seenAnswer, setSeenAnswer] = useState(state.answer)
+    if (seenAnswer !== state.answer) {
+        setSeenAnswer(state.answer)
+        if (state.answer !== null && more.open && more.mode === 'ask') more.hide()
+    }
     const [dismissedAnswer, setDismissedAnswer] = useState<typeof state.answer>(null)
     const [presentedResult, setPresentedResult] = useState<{
         document: ScreenDocumentV2
@@ -273,11 +280,6 @@ export function DocumentSurface({
             if (state.capture?.reusable === true && state.capture.binding.captureId !== waiting.before) more.show('ask')
         }
     }, [focused, state.route, state.selectedId, state.cameraIntent, state.capture, state.pending, more])
-    useEffect(() => {
-        if (state.answer !== null && previousAnswer.current !== state.answer && effectiveKind === 'questions')
-            closeSheet?.()
-        previousAnswer.current = state.answer
-    }, [state.answer, effectiveKind, closeSheet])
     const takeQuestionPhoto = (): void => {
         questionCapture.current = {
             before: state.capture?.binding.captureId ?? null,

@@ -1027,6 +1027,83 @@ describe('every other screen is composed from its own document', () => {
         expect(controller.getSnapshot().question).toBe('Which way?')
     })
 
+    // The Ask sheet over a checked, held photo, with the part and question chosen as the person leaves them before Ask.
+    async function atAskSheet(replies: Replies): Promise<Mounted> {
+        const mounted = await mount([entry()], { screens: { generated: ['questions', 'answer'] }, replies })
+        await press('Continue building')
+        await screen.findByText(/^Step 1 of \d+$/u)
+        await press('Take photo')
+        await act(async () => mounted.controller.shutter(async () => source))
+        await loadPhoto()
+        await press('Ask about this step')
+        await loadPhoto()
+        await act(async () => {
+            mounted.controller.targetChanged({ kind: 'part', partId: 'side-panel' })
+            mounted.controller.questionChanged('Which way?')
+        })
+        return mounted
+    }
+    const askSheet = (): ReturnType<typeof within> => within(screen.getByTestId('more-sheet'))
+
+    it.each([
+        ['Asking', false],
+        ['Still thinking', true],
+    ])(
+        'closes the Ask sheet as its answer arrives after %s, never showing the composer or Ask again',
+        async (pending, ticket) => {
+            jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
+            const gate = deferred<void>()
+            const { controller, calls } = await atAskSheet({ question_gate: gate.promise, question_ticket: ticket })
+            const heldPhoto = controller.getSnapshot().capture?.binding.captureId
+            await fireEvent.press(askSheet().getByRole('button', { name: 'Ask' }))
+            await flush()
+            // A ticketed question is collected after the server's own wait; either way its answer is held until released.
+            if (ticket) await act(async () => jest.advanceTimersByTimeAsync(500))
+            await flush()
+            expect(controller.getSnapshot().pending).toMatch(new RegExp(`^${pending}`, 'u'))
+            expect(askSheet().queryByRole('button', { name: 'Ask' })).toBeNull()
+
+            await act(async () => gate.resolve())
+            await flush()
+            // Timers are held at the sheet's own closing boundary. The answer is complete and the composer is gone.
+            expect(controller.getSnapshot().answer?.answer).toBe('The groove faces inward.')
+            expect(controller.getSnapshot().pending).toBeNull()
+            expect(screen.queryByRole('button', { name: 'Ask', includeHiddenElements: true })).toBeNull()
+            expect(screen.queryByTestId('more-sheet')).toBeNull()
+            await act(async () => jest.advanceTimersByTime(400))
+            expect(screen.queryByTestId('more-sheet')).toBeNull()
+
+            // The Answer is its own page: its photo loads before the answer is revealed, and nothing was asked twice.
+            expect(screen.queryByText('The groove faces inward.')).toBeNull()
+            await loadPhoto()
+            expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
+            expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+            expect(calls.filter((path) => path === '/api/questions')).toHaveLength(1)
+            expect(calls.filter((path) => path === '/api/questions/result')).toHaveLength(ticket ? 1 : 0)
+            expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)
+            expect(controller.getSnapshot().question).toBe('Which way?')
+        },
+    )
+
+    it('keeps the sheet’s own closing motion for the person’s Close while the question waits', async () => {
+        jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
+        const gate = deferred<void>()
+        const { controller } = await atAskSheet({ question_gate: gate.promise })
+        await fireEvent.press(askSheet().getByRole('button', { name: 'Ask' }))
+        await flush()
+        await fireEvent.press(askSheet().getByRole('button', { name: 'Close' }))
+        expect(screen.getByTestId('more-sheet')).toBeTruthy()
+        await act(async () => jest.advanceTimersByTime(150))
+        expect(screen.queryByTestId('more-sheet')).toBeNull()
+        // The answer still lands on its own page afterwards; the closed sheet does not come back for it.
+        await act(async () => gate.resolve())
+        await flush()
+        expect(controller.getSnapshot().answer?.answer).toBe('The groove faces inward.')
+        expect(screen.queryByTestId('more-sheet')).toBeNull()
+        await loadPhoto()
+        expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
+    })
+
     it('composes the More sheet’s intro on Home', async () => {
         await mount([])
         await press('More')
