@@ -3,6 +3,7 @@
 import type * as ReactModule from 'react'
 import type * as ReactNative from 'react-native'
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react-native'
+import { StyleSheet } from 'react-native'
 import { createController, createDocuments, createScreens } from '../capture/controller-factory'
 import {
     documentMaterialV2,
@@ -24,7 +25,7 @@ import { measureRenderOriginTree } from '../../ui/test-support/render-origin-cov
 import { judgeStorage } from './judge-storage'
 import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { LibraryEntry } from '../capture/library'
-import type { JsonElement } from 'test-renderer'
+import type { JsonElement, TestInstance } from 'test-renderer'
 
 // The production root layout, routes, screens, controller and screen store run unchanged. Only the device/transport
 // boundary is injected: the model transport, storage and image normalization, and the /api/screens server.
@@ -987,17 +988,18 @@ describe('every other screen is composed from its own document', () => {
         await press('Take photo')
         await act(async () => controller.shutter(async () => source))
         await loadPhoto()
+        const resultImage = screen.getByTestId('frozen-photo-image')
         await act(async () => {
             controller.targetChanged({ kind: 'part', partId: 'side-panel' })
             controller.questionChanged('Which way?')
         })
         hold = true
         await act(async () => controller.ask())
-        // Answer is a new workflow page: its newly mounted photo must load before its result is revealed.
-        expect(screen.queryByText('The groove faces inward.')).toBeNull()
-        await loadPhoto()
-        expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+        // Answer is a new workflow page on the Result's own, already loaded native photo: it has nothing to wait for.
+        expect(await screen.findByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+        expect(screen.getByText('The groove faces inward.')).toBeTruthy()
+        expect(screen.getByTestId('frozen-photo-image')).toBe(resultImage)
+        expect(StyleSheet.flatten(resultImage.props.style).width).toBeGreaterThan(0)
         const heldPhoto = controller.getSnapshot().capture?.binding.captureId
         const answerRequest = server.requests.find((request) => request.op === 'generate' && request.kind === 'answer')!
         const answerInputs = inputsFromDocumentMetadata(answerRequest)
@@ -1028,20 +1030,21 @@ describe('every other screen is composed from its own document', () => {
     })
 
     // The Ask sheet over a checked, held photo, with the part and question chosen as the person leaves them before Ask.
-    async function atAskSheet(replies: Replies): Promise<Mounted> {
+    async function atAskSheet(replies: Replies): Promise<Mounted & { resultImage: TestInstance }> {
         const mounted = await mount([entry()], { screens: { generated: ['questions', 'answer'] }, replies })
         await press('Continue building')
         await screen.findByText(/^Step 1 of \d+$/u)
         await press('Take photo')
         await act(async () => mounted.controller.shutter(async () => source))
         await loadPhoto()
+        const resultImage = screen.getByTestId('frozen-photo-image')
         await press('Ask about this step')
         await loadPhoto()
         await act(async () => {
             mounted.controller.targetChanged({ kind: 'part', partId: 'side-panel' })
             mounted.controller.questionChanged('Which way?')
         })
-        return mounted
+        return { ...mounted, resultImage }
     }
     const askSheet = (): ReturnType<typeof within> => within(screen.getByTestId('more-sheet'))
 
@@ -1053,7 +1056,10 @@ describe('every other screen is composed from its own document', () => {
         async (pending, ticket) => {
             jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
             const gate = deferred<void>()
-            const { controller, calls } = await atAskSheet({ question_gate: gate.promise, question_ticket: ticket })
+            const { controller, calls, resultImage } = await atAskSheet({
+                question_gate: gate.promise,
+                question_ticket: ticket,
+            })
             const heldPhoto = controller.getSnapshot().capture?.binding.captureId
             await fireEvent.press(askSheet().getByRole('button', { name: 'Ask' }))
             await flush()
@@ -1073,11 +1079,12 @@ describe('every other screen is composed from its own document', () => {
             await act(async () => jest.advanceTimersByTime(400))
             expect(screen.queryByTestId('more-sheet')).toBeNull()
 
-            // The Answer is its own page: its photo loads before the answer is revealed, and nothing was asked twice.
-            expect(screen.queryByText('The groove faces inward.')).toBeNull()
-            await loadPhoto()
-            expect(await screen.findByText('The groove faces inward.')).toBeTruthy()
-            expect(screen.getByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+            // The Answer is its own page, shown on the Result's loaded native photo from under the sheet, and nothing was
+            // asked twice.
+            expect(await screen.findByRole('button', { name: 'Back to the guide' })).toBeTruthy()
+            expect(screen.getByText('The groove faces inward.')).toBeTruthy()
+            expect(screen.getByTestId('frozen-photo-image')).toBe(resultImage)
+            expect(StyleSheet.flatten(resultImage.props.style).width).toBeGreaterThan(0)
             expect(calls.filter((path) => path === '/api/questions')).toHaveLength(1)
             expect(calls.filter((path) => path === '/api/questions/result')).toHaveLength(ticket ? 1 : 0)
             expect(controller.getSnapshot().capture?.binding.captureId).toBe(heldPhoto)

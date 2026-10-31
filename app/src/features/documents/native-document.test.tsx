@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import { useEffect, type ReactElement } from 'react'
-import { Dimensions, PanResponder, Platform, StyleSheet, View } from 'react-native'
+import { Dimensions, PanResponder, Platform, ScrollView, StyleSheet, View } from 'react-native'
+import type { TestInstance } from 'test-renderer'
 import {
     assembleDocumentV2,
     buildFallbackProposalV2,
@@ -13,6 +14,7 @@ import {
     type ScreenNodeV2,
 } from '@truebuild/contracts'
 import { partSourceRefs } from '../screens/part-source'
+import { captureUiState } from '../screens/ui-state'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider, type HapticPort } from '../../ui/feedback'
 import { DocumentRenderer } from './document-renderer'
@@ -117,6 +119,91 @@ async function setup(
         failure: null,
     }
     return { ...ports, bindings, inputs, run }
+}
+
+const HELD_ANSWER = 'Seat the divider with its groove side down.'
+/** The model-authored Result and Answer pages the app publishes for one held photo, and the bindings that hold each. */
+function heldPages(
+    inputs: ScreenContextInputsV2,
+    bindings: FrameBindings,
+): {
+    result: ScreenDocumentV2
+    answer: ScreenDocumentV2
+    answerInputs: ScreenContextInputsV2
+    answered: FrameBindings
+} {
+    const state = bindings.live!.state
+    const question = 'Which way does the groove face?'
+    const value = { answer: HELD_ANSWER, sourceRefs: state.check!.sourceRefs, missingEvidence: [] }
+    const uiState = captureUiState(state)
+    const answerInputs: ScreenContextInputsV2 = {
+        ...inputs,
+        kind: 'answer',
+        result: { kind: 'question', question, value },
+        uiState,
+    }
+    return {
+        result: recordedDocument({ ...inputs, uiState })!,
+        answer: recordedDocument(answerInputs)!,
+        answerInputs,
+        answered: {
+            ...bindings,
+            answeredQuestion: question,
+            live: { ...bindings.live!, state: { ...state, answer: value, answeredQuestion: question } },
+        },
+    }
+}
+/** A valid composition of these inputs with every variant's body edited alike, so the held photo never moves. */
+function composeEdited(inputs: ScreenContextInputsV2, edit: (body: ScreenNodeV2) => ScreenNodeV2): ScreenDocumentV2 {
+    const material = documentMaterialV2(inputs)
+    const proposal = buildFallbackProposalV2(material)
+    proposal.body = edit(proposal.body)
+    for (const { name, variant } of variantsOfV2(proposal)) if (name !== 'ready') variant.body = edit(variant.body)
+    return screenDocumentV2Schema.parse(
+        assembleDocumentV2(
+            material,
+            proposal,
+            { source: 'generated', evidence: 'synthetic-fixture', fallbackReason: null },
+            { sha256Hex, now: () => new Date('2026-10-29T00:00:00Z') },
+        ),
+    )
+}
+/** Edits the children of the page's one stack, below its scroller. */
+const inStack =
+    (edit: (children: ScreenNodeV2[]) => ScreenNodeV2[]) =>
+    (body: ScreenNodeV2): ScreenNodeV2 =>
+        body.type === 'Scroll' && body.children[0]?.type === 'Stack'
+            ? { ...body, children: [{ ...body.children[0], children: edit(body.children[0].children) }] }
+            : body
+/** The held photo one container deeper. */
+const deeper = inStack((children) => [{ type: 'Card', surface: 'raised', padding: 'md', tone: 'neutral', children }])
+/** One manual source opener right after the held photo: it lines up in every page and variant. */
+const withOpener = inStack((children) => [
+    children[0]!,
+    { type: 'Citation', sources: [0], label: null, display: 'chip' },
+    ...children.slice(1),
+])
+/** No scroller of its own: the renderer supplies the one its body scrolls in. */
+const unscrolled = (body: ScreenNodeV2): ScreenNodeV2 =>
+    body.type === 'Scroll' && body.children[0]?.type === 'Stack' ? body.children[0] : body
+/** The photo's native frame measures itself and its native image finishes loading, as the device reports them. */
+async function loadHeldPhoto(): Promise<void> {
+    await fireEvent(screen.getByTestId('frozen-photo-frame'), 'layout', {
+        nativeEvent: { layout: { width: 300, height: 200 } },
+    })
+    await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
+}
+/** How often this document's ready variant was actually committed, as the native renderer reports it. */
+const readyShown = (shown: jest.Mock, document: ScreenDocumentV2): number =>
+    shown.mock.calls.filter(([candidate, state]) => candidate === document && state === 'ready').length
+const bodyScroller = (): TestInstance =>
+    screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]!
+/** The ScrollView instance behind a rendered scroller host: the one a `scrollTo` call is made on. */
+function scrollViewOf(host: TestInstance): unknown {
+    for (let fiber = host.unstable_fiber; fiber !== null; fiber = fiber.return) {
+        if (fiber.stateNode instanceof ScrollView) return fiber.stateNode
+    }
+    return undefined
 }
 
 describe('the actual v2 catalog renderer', () => {
@@ -538,6 +625,202 @@ describe('the actual v2 catalog renderer', () => {
         await view.rerender(wrap(<DocumentRenderer document={generated} bindings={bindings} />))
         expect(screen.getByTestId('document-screen').queryAll((node) => node.type === 'RCTScrollView')[0]).toBe(body)
         expect(screen.getByRole('button', { name: inputs.session!.title }).props.accessibilityState.expanded).toBe(true)
+    })
+
+    describe('a held photo shared by its Result and its Answer', () => {
+        const scrollTo = jest.mocked(ScrollView.prototype.scrollTo)
+        beforeEach(() => scrollTo.mockClear())
+
+        it('keeps the loaded native image, its measured frame and its earned reveal across the published Result and Answer', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { result, answer, answered } = heldPages(inputs, bindings)
+            const reason = bindings.live!.state.check!.reason
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            expect(screen.getByText(reason)).toBeTruthy()
+            const frame = screen.getByTestId('frozen-photo-frame')
+            const image = screen.getByTestId('frozen-photo-image')
+            expect(StyleSheet.flatten(image.props.style).width).toBeGreaterThan(0)
+
+            // Nothing is measured or loaded again: the same native image still holds the photo, and still has its size.
+            await view.rerender(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(screen.getByTestId('frozen-photo-frame')).toBe(frame)
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(StyleSheet.flatten(image.props.style).width).toBeGreaterThan(0)
+            expect(StyleSheet.flatten(image.props.style).height).toBeGreaterThan(0)
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            expect(screen.queryByText(reason)).toBeNull()
+
+            // Back to the guide is the same page change in reverse.
+            await view.rerender(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(screen.getByText(reason)).toBeTruthy()
+            expect(screen.queryByText(HELD_ANSWER)).toBeNull()
+        })
+
+        it('starts the Answer at the top of the Result’s own scroller', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { result, answer, answered } = heldPages(inputs, bindings)
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const body = bodyScroller()
+            expect(scrollTo).not.toHaveBeenCalled()
+
+            await view.rerender(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(bodyScroller()).toBe(body)
+            expect(scrollTo).toHaveBeenCalledTimes(1)
+            expect(scrollTo).toHaveBeenLastCalledWith({ x: 0, y: 0, animated: false })
+            expect(scrollTo.mock.contexts[0]).toBe(scrollViewOf(body))
+        })
+
+        it('starts the Answer at the top of the scroller the renderer supplies for a body without one', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { answerInputs, answered } = heldPages(inputs, bindings)
+            const result = composeEdited(inputs, unscrolled)
+            const answer = composeEdited(answerInputs, unscrolled)
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const body = bodyScroller()
+            const image = screen.getByTestId('frozen-photo-image')
+            expect(scrollTo).not.toHaveBeenCalled()
+
+            await view.rerender(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(bodyScroller()).toBe(body)
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            expect(scrollTo).toHaveBeenCalledTimes(1)
+            expect(scrollTo).toHaveBeenLastCalledWith({ x: 0, y: 0, animated: false })
+            expect(scrollTo.mock.contexts[0]).toBe(scrollViewOf(body))
+        })
+
+        it('closes the Details section the person opened on the Result when the Answer arrives', async () => {
+            const { inputs, bindings } = await setup(true)
+            // A step with an explicit safety classification keeps its optional directions behind one Details section.
+            inputs.session!.reviewedSteps[0]!.safetyNotes = []
+            const { result, answer, answered } = heldPages(inputs, bindings)
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const image = screen.getByTestId('frozen-photo-image')
+            await fireEvent.press(screen.getByRole('button', { name: 'Details' }))
+            expect(screen.getByRole('button', { name: 'Details' }).props.accessibilityState.expanded).toBe(true)
+
+            await view.rerender(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(screen.getByRole('button', { name: 'Details' }).props.accessibilityState.expanded).toBe(false)
+        })
+
+        it.each(['published', 'composed'] as const)(
+            'closes the manual source the person opened on the Result when the %s Answer arrives',
+            async (pages) => {
+                const { inputs, bindings } = await setup(true)
+                const held = heldPages(inputs, bindings)
+                const [result, answer] =
+                    pages === 'published' ? [held.result, held.answer] : [compose(inputs), compose(held.answerInputs)]
+                const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+                await loadHeldPhoto()
+                const openers = (): TestInstance[] => screen.getAllByRole('button', { name: 'See it in the manual' })
+                const image = screen.getByTestId('frozen-photo-image')
+                for (const opener of openers()) await fireEvent.press(opener)
+                expect(openers().map((opener) => opener.props.accessibilityState.expanded)).not.toContain(false)
+
+                await view.rerender(wrap(<DocumentRenderer document={answer} bindings={held.answered} />))
+                expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+                expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+                expect(openers().map((opener) => opener.props.accessibilityState.expanded)).not.toContain(true)
+            },
+        )
+
+        it('starts a source opener of the Answer closed even where it lines up with the one opened on the Result', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { answerInputs, answered } = heldPages(inputs, bindings)
+            const result = composeEdited(inputs, withOpener)
+            const answer = composeEdited(answerInputs, withOpener)
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const opener = (): TestInstance => screen.getAllByRole('button', { name: 'See it in the manual' })[0]!
+            await fireEvent.press(opener())
+            expect(opener().props.accessibilityState.expanded).toBe(true)
+            const image = screen.getByTestId('frozen-photo-image')
+
+            await view.rerender(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(screen.getByTestId('frozen-photo-image')).toBe(image)
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            expect(opener().props.accessibilityState.expanded).toBe(false)
+        })
+
+        it('leaves the scroller where it is for another composition and variant of the same page', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { answer, answerInputs, answered } = heldPages(inputs, bindings)
+            const view = await render(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            await loadHeldPhoto()
+            const body = bodyScroller()
+            const recomposed = compose(answerInputs, [], 'fallback')
+            expect(recomposed.screenId).not.toBe(answer.screenId)
+            await view.rerender(wrap(<DocumentRenderer document={recomposed} bindings={answered} />))
+            await view.rerender(wrap(<DocumentRenderer document={recomposed} bindings={answered} variant="busy" />))
+            expect(bodyScroller()).toBe(body)
+            expect(scrollTo).not.toHaveBeenCalled()
+        })
+
+        it('still waits for the first load of a freshly mounted Answer before revealing it', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { answer, answered } = heldPages(inputs, bindings)
+            await render(wrap(<DocumentRenderer document={answer} bindings={answered} />))
+            expect(screen.queryByText(HELD_ANSWER)).toBeNull()
+            await loadHeldPhoto()
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+        })
+
+        it('still waits for a fresh scroller and native image when the Answer holds another capture', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { result } = heldPages(inputs, bindings)
+            const capture = {
+                ...bindings.capture!,
+                binding: { ...bindings.capture!.binding, captureId: 'next-capture' },
+            }
+            const other: FrameBindings = {
+                ...bindings,
+                capture,
+                live: { ...bindings.live!, state: { ...bindings.live!.state, capture } },
+            }
+            const next = heldPages({ ...inputs, captureId: 'next-capture' }, other)
+            const shown = jest.fn()
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const body = bodyScroller()
+            const image = screen.getByTestId('frozen-photo-image')
+            await view.rerender(
+                wrap(
+                    <DocumentRenderer document={next.answer} bindings={{ ...next.answered, onVariantShown: shown }} />,
+                ),
+            )
+            expect(bodyScroller()).not.toBe(body)
+            expect(screen.getByTestId('frozen-photo-image')).not.toBe(image)
+            expect(screen.queryByText(HELD_ANSWER)).toBeNull()
+            expect(readyShown(shown, next.answer)).toBe(0)
+            await loadHeldPhoto()
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            expect(readyShown(shown, next.answer)).toBeGreaterThan(0)
+        })
+
+        it('still waits for a fresh native image when the Answer places the photo in another ancestry', async () => {
+            const { inputs, bindings } = await setup(true)
+            const { result, answerInputs, answered } = heldPages(inputs, bindings)
+            const elsewhere = composeEdited(answerInputs, deeper)
+            const shown = jest.fn()
+            const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
+            await loadHeldPhoto()
+            const image = screen.getByTestId('frozen-photo-image')
+            await view.rerender(
+                wrap(<DocumentRenderer document={elsewhere} bindings={{ ...answered, onVariantShown: shown }} />),
+            )
+            expect(screen.getByTestId('frozen-photo-image')).not.toBe(image)
+            expect(screen.queryByText(HELD_ANSWER)).toBeNull()
+            expect(readyShown(shown, elsewhere)).toBe(0)
+            await loadHeldPhoto()
+            expect(screen.getByText(HELD_ANSWER)).toBeTruthy()
+            expect(readyShown(shown, elsewhere)).toBeGreaterThan(0)
+        })
     })
 
     it('gives an inspected authored body scroller its allocated viewport even with its source disclosure open', async () => {

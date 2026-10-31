@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import {
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactElement,
+    type ReactNode,
+    type RefObject,
+} from 'react'
 import {
     I18nManager,
     Image,
@@ -9,6 +18,7 @@ import {
     StyleSheet,
     useWindowDimensions,
     View,
+    type ScrollViewInstance,
 } from 'react-native'
 import Svg, { Circle } from 'react-native-svg'
 import {
@@ -162,6 +172,12 @@ type Environment = {
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
     trailing: ReactNode
+    /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
+    rootScroll: RefObject<ScrollViewInstance | null>
+    /** The workflow page being shown: the local state of every node outside `photoBranch` belongs to it alone. */
+    page: string
+    /** The held photo's own path and every path above it: the one branch of a page that may outlive that page. */
+    photoBranch: ReadonlySet<string>
 }
 const marked = (environment: Environment, path: string): string => {
     const origin = environment.document.metadata.origins[path]
@@ -346,6 +362,19 @@ function duplicateFactPaths(
     }
     visit(body, path)
     return omitted
+}
+
+/** The held photo's own path and every path above it. */
+function heldPhotoBranch(body: ScreenNodeV2, path: string): Set<string> {
+    const branch = new Set<string>()
+    const visit = (node: ScreenNodeV2, at: string): boolean => {
+        const below = 'children' in node ? node.children.map((child, index) => visit(child, `${at}.${index}`)) : []
+        const holds = (node.type === 'Image' && node.source.kind === 'capture') || below.includes(true)
+        if (holds) branch.add(at)
+        return holds
+    }
+    visit(body, path)
+    return branch
 }
 
 function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean {
@@ -1211,7 +1240,13 @@ function PieceTile({
 
 type NodeProps = { node: ScreenNodeV2; environment: Environment; path: string }
 
+/** Only the branch that holds the shared photo outlives its page; every other node starts fresh with a new page. */
 function Node(props: NodeProps): ReactElement {
+    const { environment, path } = props
+    return <PageNode key={environment.photoBranch.has(path) ? 'photo' : environment.page} {...props} />
+}
+
+function PageNode(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
     if (props.environment.omittedDuplicates.has(props.path)) return <></>
     if (!props.environment.bindings.inspect)
@@ -1368,6 +1403,7 @@ function NodeContent({
         case 'Scroll':
             return (
                 <ScrollView
+                    ref={path === `${environment.prefix}body` ? environment.rootScroll : undefined}
                     nativeID={mark}
                     horizontal={node.axis === 'horizontal'}
                     style={path === `${environment.prefix}body` ? styles.grow : undefined}
@@ -1751,6 +1787,27 @@ export function NativeDocumentRenderer({
         document.bound.stepId,
         document.kind === 'result' || document.kind === 'answer' ? document.bound.captureId : null,
     ])
+    // A held photo's Result and its Answer are two pages of one mounted body, so the one native photo carries across
+    // them. Every other page change mounts a fresh body.
+    const bodyMount =
+        document.kind === 'result' || document.kind === 'answer'
+            ? JSON.stringify([
+                  'held',
+                  document.bound.manualId,
+                  document.bound.revision,
+                  document.bound.stepId,
+                  document.bound.captureId,
+              ])
+            : bodyPage
+    const rootScroll = useRef<ScrollViewInstance>(null)
+    const shownBody = useRef({ page: bodyPage, mount: bodyMount })
+    useLayoutEffect(() => {
+        const before = shownBody.current
+        shownBody.current = { page: bodyPage, mount: bodyMount }
+        // The body kept for this page is still where the last page left it: a new page starts at its top.
+        if (before.page !== bodyPage && before.mount === bodyMount)
+            rootScroll.current?.scrollTo({ x: 0, y: 0, animated: false })
+    }, [bodyPage, bodyMount])
     const [loadedCapture, setLoadedCapture] = useState<string | null>(null)
     const matchesCapture = captureMatchesDocument(document, bindings.capture)
     const expectedPhoto =
@@ -1813,6 +1870,9 @@ export function NativeDocumentRenderer({
             lowPriorityPaths,
         }),
         trailing: null,
+        rootScroll,
+        page: bodyPage,
+        photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
     }
     const findRegions = (node: ScreenNodeV2): boolean =>
         node.type === 'VerdictCard' ? node.showRegions : 'children' in node && node.children.some(findRegions)
@@ -1902,7 +1962,7 @@ export function NativeDocumentRenderer({
                     </View>
                 ) : null}
                 <Animated.View
-                    key={bodyPage}
+                    key={bodyMount}
                     nativeID={marked(environment, `${selected.prefix}body`)}
                     style={[styles.grow, fade, stepMotion]}
                 >
@@ -1910,6 +1970,7 @@ export function NativeDocumentRenderer({
                         <Node node={selected.variant.body} environment={environment} path={`${selected.prefix}body`} />
                     ) : (
                         <ScrollView
+                            ref={rootScroll}
                             keyboardShouldPersistTaps="handled"
                             nestedScrollEnabled
                             contentContainerStyle={{
