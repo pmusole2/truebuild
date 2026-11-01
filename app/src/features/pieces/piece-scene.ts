@@ -190,7 +190,8 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
                             point.z + Math.abs(point.y - framedCenter.y) / verticalLimit,
                         )
                 }
-                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 0.01, framedDistance / zoom))
+                // Keep the camera outside the piece’s bounding sphere even at maximum zoom and any rotation.
+                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 1.2, framedDistance / zoom))
                 camera.near = radius * 0.005
                 camera.far = camera.position.z + radius * 20
                 camera.updateProjectionMatrix()

@@ -1582,7 +1582,6 @@ export function createModelHandlers(options: {
         pieces: createPieceHandler({
             auth,
             provider,
-            samProvider,
             runtimeMode: options.runtimeMode ?? 'meta',
             work: createBackgroundWork(counter, gate),
             deadlineMs: policy.stages['step-pages'].deadlineMs,

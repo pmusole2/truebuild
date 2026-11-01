@@ -3,6 +3,7 @@ import {
     canonicalJson,
     manualPieceInputSchema,
     PIECE_BATCH_LIMIT,
+    PIECE_CROP_VERSION,
     PIECE_GEOMETRY_PROMPT_VERSION,
     PIECE_SPEC_LIMITS,
     pieceCutoutSchema,
@@ -146,7 +147,7 @@ export function manualPieceInputOf(
 
 /**
  * Cache identity of a manual's pieces: the ordered page pictures (content hash, size and MIME type), salted with the geometry
- * prompt version and, per part in parse order, its drawing box with the content hash of the page it cites. Page ids, parsed
+ * prompt and crop versions and, per part in parse order, its drawing box with the content hash of the page it cites. Page ids, parsed
  * names, labels and part ids are excluded, so a re-parse of the same pictures keeps its stored result and never pays again.
  */
 export function manualPieceContentHash(
@@ -158,6 +159,7 @@ export function manualPieceContentHash(
         canonicalJson([
             manual.pages.map((page) => [page.contentHash, page.width, page.height, page.mimeType]),
             promptVersion,
+            PIECE_CROP_VERSION,
             manual.parts.map((part) =>
                 part.drawingBox === undefined || part.drawingBox === null
                     ? null

@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { pieceIdSchema, pieceSpecSchema } from './piece-spec'
 
 export const PIECE_GEOMETRY_PROMPT_VERSION = 2
+/** Invalidates cached crops/geometry when deterministic crop selection changes, without changing the model prompt. */
+export const PIECE_CROP_VERSION = 1
 /** Top-left normalized drawing rectangle on the cited source page. Malformed optional hints are omitted. */
 export const pieceDrawingBoxSchema = z
     .tuple([
