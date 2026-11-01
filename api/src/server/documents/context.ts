@@ -63,12 +63,17 @@ function allowedIntents(material: DocumentMaterialV2): AppIntent[] {
  * The state-bound list and editor nodes this screen has state for: the same bindings the semantic gate enforces
  * (`binding_unavailable`), so the model is never handed a choice the gate would refuse.
  */
-function nativeNodes(ui: ScreenContextInputsV2['uiState']): string[] {
+function nativeNodes(inputs: ScreenContextInputsV2, material: DocumentMaterialV2): string[] {
+    const ui = inputs.uiState
     return [
         ...(ui?.library ? ['ManualList'] : []),
         ...(ui?.pages ? ['PageList'] : []),
         ...(ui?.capture ? ['TextField'] : []),
         ...(ui?.review?.currentQuestion ? ['FactEditor'] : []),
+        ...((ui?.pages?.languageOptions.length ?? 0) > 0 || (ui?.language?.options.length ?? 0) > 0
+            ? ['Choice:language']
+            : []),
+        ...(ui?.capture && inputs.captureId !== null && material.partIds.length > 0 ? ['Choice:part-target'] : []),
     ]
 }
 
@@ -158,7 +163,7 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                         ? { question: companion.question }
                         : null,
                 ui: screenContextPartsV2(inputs).content.ui,
-                nativeNodes: nativeNodes(used.uiState),
+                nativeNodes: nativeNodes(used, material),
                 boundKeys: availableBoundKeys(material),
                 allowedIntents: allowed,
                 /** Home is the root: its header.back must be null, so the way back is not offered to it at all. */

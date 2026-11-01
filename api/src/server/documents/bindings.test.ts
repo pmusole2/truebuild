@@ -3,6 +3,7 @@ import {
     type ScreenKindV2,
     type ScreenNodeV2,
     type ScreenProposalV2,
+    type ScreenUiStateV2,
 } from '@truebuild/contracts'
 import { describe, expect, it } from 'vitest'
 
@@ -59,5 +60,46 @@ describe('unsupported live bindings are rejected by the server gate', () => {
         const home = buildFallbackProposalV2(context.material)
         expect(checkProposal(withNode(home, page), context).join()).toContain('binding_unavailable')
         expect(checkProposal(withNode(home, list), context)).not.toContain('binding_unavailable')
+    })
+    const nativeNodesOf = (inputs: ReturnType<typeof documentInputs>): string[] =>
+        (buildDocumentContext(inputs).view.dynamic.document as { nativeNodes: string[] }).nativeNodes
+    const heldResult = documentInputs('result')
+    const pagesWith = (languageOptions: string[]): ScreenUiStateV2 => ({
+        ...fullUi,
+        pages: { ...fullUi.pages!, languageOptions },
+    })
+    it.each([
+        [
+            'language absent: no page languages and no ui.language',
+            documentInputs('pages', demoSession(), pagesWith([])),
+            'Choice:language',
+            false,
+        ],
+        [
+            'language present: page languages',
+            documentInputs('pages', demoSession(), pagesWith(['en'])),
+            'Choice:language',
+            true,
+        ],
+        [
+            'language present: ui.language options',
+            documentInputs('more', demoSession(), { ...pagesWith([]), language: { options: ['en'] } }),
+            'Choice:language',
+            true,
+        ],
+        ['part-target present: capture ui, held capture, parts', heldResult, 'Choice:part-target', true],
+        [
+            'part-target absent: no ui.capture',
+            { ...heldResult, uiState: { ...fullUi, capture: undefined } },
+            'Choice:part-target',
+            false,
+        ],
+        ['part-target absent: capture not held', { ...heldResult, captureId: null }, 'Choice:part-target', false],
+        ['part-target absent: no parts', { ...heldResult, stepId: null, session: null }, 'Choice:part-target', false],
+    ])('lists a bound Choice only when the gate would accept it: %s', (_name, inputs, entry, listed) => {
+        expect(nativeNodesOf(inputs).includes(entry)).toBe(listed)
+        expect(DOCUMENT_INSTRUCTIONS).toContain(
+            'Use Choice in bound mode only when nativeNodes lists Choice:<binding>.',
+        )
     })
 })
