@@ -4,7 +4,6 @@ import {
     LIMITS,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
-    pieceSpecSchema,
     type ManualPieceInput,
     type PieceBatchRequest,
     type PieceBatchResult,
@@ -17,6 +16,7 @@ import { createDeadline, RequestStoppedError } from './deadline'
 import { exactModelFiles, ModelBodyError, modelFileBytes, readModelMultipart } from './model-multipart'
 import { validateAndNormalizeImages, type ObservationImage } from './media'
 import { refinePieceCrop, type PieceCropResult } from './piece-crop'
+import { salvagePiece } from './piece-salvage'
 import type { BackgroundWork } from './screens/service'
 
 interface PiecePorts {
@@ -146,7 +146,8 @@ export async function generatePieceBatch(
         const candidates = proposals.filter(
             (value) => typeof value === 'object' && value !== null && 'id' in value && value.id === part.id,
         )
-        const parsed = candidates.length === 1 ? pieceSpecSchema.safeParse(candidates[0]) : null
+        const salvage = candidates.length === 1 ? salvagePiece(candidates[0]) : null
+        const parsed = salvage?.parsed ?? null
         const issueCodes =
             generation === undefined
                 ? [failure]
@@ -178,6 +179,11 @@ export async function generatePieceBatch(
                 requestId: metadata.requestId,
                 pieceId: part.id,
                 description: descriptions.get(part.id) ?? null,
+                droppedParts: salvage?.droppedParts ?? [],
+                originalPartCount: salvage?.originalPartCount ?? null,
+                retainedPartCount: piece === null ? 0 : (salvage?.retainedPartCount ?? 0),
+                retention: salvage?.retention ?? 'invalid-piece',
+                salvaged: piece !== null && (salvage?.salvaged ?? false),
                 status: result.status,
                 originalBox: part.drawingBox ?? null,
                 refinedBox: crop?.box ?? null,
