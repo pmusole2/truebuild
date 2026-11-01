@@ -5,15 +5,19 @@ import {
     ConeGeometry,
     CylinderGeometry,
     DirectionalLight,
+    ExtrudeGeometry,
     Group,
     HemisphereLight,
+    LatheGeometry,
     Mesh,
     MeshStandardMaterial,
     PerspectiveCamera,
     Scene,
+    Shape,
     SphereGeometry,
     SRGBColorSpace,
     TorusGeometry,
+    Vector2,
     Vector3,
     WebGLRenderer,
     type BufferGeometry,
@@ -45,10 +49,38 @@ function geometry(part: PieceSpec['parts'][number]): BufferGeometry {
             return new TorusGeometry(part.dimensions.radius, part.dimensions.tube, 16, 40)
         case 'capsule':
             return new CapsuleGeometry(part.dimensions.radius, part.dimensions.length, 12, 24)
+        case 'lathe': {
+            const profile = part.profile.map(([r, y]) => new Vector2(r, y))
+            const first = profile[0]!
+            const last = profile[profile.length - 1]!
+            // Close a profile to its axis so nonzero endpoint radii still make a solid rather than an open tube.
+            if (first.x > 0) profile.unshift(new Vector2(0, first.y))
+            if (last.x > 0) profile.push(new Vector2(0, last.y))
+            const area = profile.reduce((sum, point, index) => {
+                const next = profile[(index + 1) % profile.length]!
+                return sum + point.x * next.y - next.x * point.y
+            }, 0)
+            // Three's meridian normals face outward when the radial profile winds bottom-to-top.
+            if (area < 0) profile.reverse()
+            return new LatheGeometry(profile, part.segments)
+        }
+        case 'extrude': {
+            const shape = new Shape(part.outline.map(([x, y]) => new Vector2(x, y)))
+            const bevel = part.bevel ?? 0
+            return new ExtrudeGeometry(shape, {
+                depth: part.depth,
+                bevelEnabled: bevel > 0,
+                bevelThickness: bevel,
+                bevelSize: bevel,
+                bevelSegments: 2,
+                curveSegments: 8,
+                steps: 1,
+            })
+        }
     }
 }
 
-/** Closed, fixed-resolution primitives only: no loaders, scripts, URLs or model-selected tessellation. */
+/** Closed, bounded-resolution parts only: no loaders, scripts, URLs or unbounded tessellation. */
 export function createPieceObject(piece: PieceSpec): Group {
     const object = new Group()
     try {
@@ -104,6 +136,51 @@ function canvasFor(gl: ExpoWebGLRenderingContext): HTMLCanvasElement {
     return canvas as unknown as HTMLCanvasElement
 }
 
+/** Fit every current transformed part bound with a 20% viewport margin, including after a drag or resize. */
+export function framePieceCamera(
+    camera: PerspectiveCamera,
+    object: Group,
+    width: number,
+    height: number,
+    zoom: number,
+): void {
+    object.updateWorldMatrix(true, true)
+    const points: Vector3[] = []
+    const bounds = new Box3()
+    object.traverse((child) => {
+        if (!(child instanceof Mesh)) return
+        if (child.geometry.boundingBox === null) child.geometry.computeBoundingBox()
+        const box = child.geometry.boundingBox!
+        for (const x of [box.min.x, box.max.x])
+            for (const y of [box.min.y, box.max.y])
+                for (const z of [box.min.z, box.max.z]) {
+                    const point = new Vector3(x, y, z).applyMatrix4(child.matrixWorld)
+                    points.push(point)
+                    bounds.expandByPoint(point)
+                }
+    })
+    const center = bounds.getCenter(new Vector3())
+    const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.001)
+    camera.aspect = Math.max(1, width) / Math.max(1, height)
+    const verticalLimit = Math.tan((camera.fov * Math.PI) / 360) * 0.8
+    const horizontalLimit = verticalLimit * camera.aspect
+    let distance = 0
+    for (const point of points)
+        distance = Math.max(
+            distance,
+            point.z - center.z + Math.abs(point.x - center.x) / horizontalLimit,
+            point.z - center.z + Math.abs(point.y - center.y) / verticalLimit,
+        )
+    // Keep the camera outside the complete bounding sphere even when the user zooms in.
+    const cameraDistance = Math.max(radius * 1.2, distance / zoom)
+    camera.position.set(center.x, center.y, center.z + cameraDistance)
+    camera.near = radius * 0.005
+    camera.far = cameraDistance + radius * 20
+    camera.updateProjectionMatrix()
+    camera.lookAt(center)
+    camera.updateMatrixWorld()
+}
+
 export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec, background: string): PieceScene {
     const renderer = new WebGLRenderer({ canvas: canvasFor(gl), context: gl, antialias: true, alpha: false })
     let allocated: Group | null = null
@@ -114,8 +191,6 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
         const camera = new PerspectiveCamera(35, 1, 0.001, 10000)
         const pivot = createPieceObject(piece)
         allocated = pivot
-        const bounds = new Box3().setFromObject(pivot)
-        const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.001)
         scene.add(pivot, new HemisphereLight(0xeaf1ff, 0x8d8172, 2.2))
         const key = new DirectionalLight(0xffffff, 3)
         key.position.set(3, 5, 4)
@@ -130,7 +205,6 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
             zoom = 1,
             width = 0,
             height = 0,
-            framedDistance = 0,
             targetPitch = -0.24,
             targetYaw = 0.48,
             lastFrameAt = performance.now()
@@ -143,21 +217,6 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
             lastFrameAt = performance.now()
         }
         reset()
-        // Frame the actual starting pose rather than its much larger bounding sphere. Its projected extents occupy
-        // about 80% of the viewport on each axis, so wide pieces use its width instead of shrinking to its height.
-        pivot.updateWorldMatrix(true, true)
-        const initial = new Box3()
-        const framing: Vector3[] = []
-        pivot.traverse((child) => {
-            if (!(child instanceof Mesh)) return
-            const positions = child.geometry.getAttribute('position')
-            for (let index = 0; index < positions.count; index++) {
-                const point = new Vector3().fromBufferAttribute(positions, index).applyMatrix4(child.matrixWorld)
-                initial.expandByPoint(point)
-                framing.push(point)
-            }
-        })
-        const framedCenter = initial.getCenter(new Vector3())
         return {
             draw: (): boolean => {
                 if (disposed) return false
@@ -178,24 +237,8 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
                     width = w
                     height = h
                     renderer.setSize(w, h, false)
-                    camera.aspect = w / h
-                    const vertical = (camera.fov * Math.PI) / 360
-                    const horizontalLimit = Math.tan(vertical) * camera.aspect * 0.8
-                    const verticalLimit = Math.tan(vertical) * 0.8
-                    framedDistance = 0
-                    for (const point of framing)
-                        framedDistance = Math.max(
-                            framedDistance,
-                            point.z + Math.abs(point.x - framedCenter.x) / horizontalLimit,
-                            point.z + Math.abs(point.y - framedCenter.y) / verticalLimit,
-                        )
                 }
-                // Keep the camera outside the piece’s bounding sphere even at maximum zoom and any rotation.
-                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 1.2, framedDistance / zoom))
-                camera.near = radius * 0.005
-                camera.far = camera.position.z + radius * 20
-                camera.updateProjectionMatrix()
-                camera.lookAt(framedCenter.x, framedCenter.y, 0)
+                framePieceCamera(camera, pivot, w, h, zoom)
                 renderer.render(scene, camera)
                 gl.endFrameEXP()
                 return moving

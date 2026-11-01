@@ -12,6 +12,7 @@ import {
 import { z } from 'zod'
 
 import { wireProposalSchema } from './document-wire'
+import { pieceDescriptionSchema } from './piece-prompt'
 
 // Provider grounding refers to the exact auto-oriented image sent, on Meta's 0–1000 grid.
 // Only small edge overruns are tolerated; inversion, zero area and gross coordinates are refused.
@@ -337,7 +338,13 @@ export function assertStrictSchema(schema: Schema): void {
 
 export const metaOutputSchemas = {
     pieces: strictSchema(
-        z.toJSONSchema(z.strictObject({ pieces: z.array(pieceSpecSchema).max(8) }), { target: 'draft-7', io: 'input' }),
+        z.toJSONSchema(
+            z.strictObject({
+                descriptions: z.array(pieceDescriptionSchema).max(8),
+                pieces: z.array(pieceSpecSchema).max(8),
+            }),
+            { target: 'draft-7', io: 'input' },
+        ),
     ),
     parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
     // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.

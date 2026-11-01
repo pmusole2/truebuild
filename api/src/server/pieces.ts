@@ -10,7 +10,7 @@ import {
     type PieceBatchResult,
 } from '@truebuild/contracts'
 import { MetaProviderError, type MetaProvider, type ScreenGeneration } from '../providers/meta-provider'
-import { PIECE_GEOMETRY_PROMPT_VERSION } from '../providers/piece-prompt'
+import { PIECE_GEOMETRY_PROMPT_VERSION, pieceDescriptionSchema } from '../providers/piece-prompt'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { ConcurrencyGate } from './budget'
 import { createDeadline, RequestStoppedError } from './deadline'
@@ -131,6 +131,17 @@ export async function generatePieceBatch(
         raw.pieces.length <= 8
             ? raw.pieces
             : []
+    const described: unknown[] =
+        typeof raw === 'object' && raw !== null && 'descriptions' in raw && Array.isArray(raw.descriptions)
+            ? raw.descriptions.slice(0, 8)
+            : []
+    // Descriptions are diagnostics only: an invalid one is dropped and never changes a piece's acceptance.
+    const descriptions = new Map(
+        described.flatMap((value) => {
+            const parsed = pieceDescriptionSchema.safeParse(value)
+            return parsed.success ? [[parsed.data.id, parsed.data.description] as const] : []
+        }),
+    )
     const results: PieceBatchResult['results'] = metadata.parts.map((part) => {
         const candidates = proposals.filter(
             (value) => typeof value === 'object' && value !== null && 'id' in value && value.id === part.id,
@@ -166,6 +177,7 @@ export async function generatePieceBatch(
                 promptVersion: PIECE_GEOMETRY_PROMPT_VERSION,
                 requestId: metadata.requestId,
                 pieceId: part.id,
+                description: descriptions.get(part.id) ?? null,
                 status: result.status,
                 originalBox: part.drawingBox ?? null,
                 refinedBox: crop?.box ?? null,
