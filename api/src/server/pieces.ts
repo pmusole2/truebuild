@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import sharp from 'sharp'
 import {
     LIMITS,
@@ -62,14 +62,53 @@ async function cutout(image: ObservationImage, record: TrackRecord): Promise<str
     return uri.length <= 360_000 ? uri : null
 }
 
+interface PieceCrop {
+    uri: string
+    image: ObservationImage
+}
+
+async function readCrop(uri: string): Promise<PieceCrop | null> {
+    try {
+        const bytes = new Uint8Array(Buffer.from(uri.slice('data:image/png;base64,'.length), 'base64'))
+        const info = await sharp(bytes, { limitInputPixels: LIMITS.imagePixels }).metadata()
+        if (!info.width || !info.height || info.format !== 'png' || (info.pages !== undefined && info.pages > 1))
+            return null
+        return { uri, image: { bytes, width: info.width, height: info.height, mimeType: 'image/png' } }
+    } catch {
+        return null
+    }
+}
+
+async function cropDrawing(part: ManualPieceInput, image: ObservationImage | undefined): Promise<PieceCrop | null> {
+    if (part.cutoutUri) return readCrop(part.cutoutUri)
+    if (!image || !part.drawingBox) return null
+    const [x, y, width, height] = part.drawingBox
+    // A 5% margin around the drawing preserves strokes at the parse box's edge without neighboring table cells.
+    const left = Math.max(0, Math.floor((x - width * 0.05) * image.width))
+    const top = Math.max(0, Math.floor((y - height * 0.05) * image.height))
+    const right = Math.min(image.width, Math.ceil((x + width * 1.05) * image.width))
+    const bottom = Math.min(image.height, Math.ceil((y + height * 1.05) * image.height))
+    if (right <= left || bottom <= top) return null
+    try {
+        const bytes = await sharp(image.bytes)
+            .extract({ left, top, width: right - left, height: bottom - top })
+            .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
+            .png({ compressionLevel: 9 })
+            .toBuffer()
+        const uri = `data:image/png;base64,${bytes.toString('base64')}`
+        return uri.length <= 360_000 ? readCrop(uri) : null
+    } catch {
+        return null
+    }
+}
+
 async function segmentPart(
     part: ManualPieceInput,
-    image: ObservationImage | undefined,
+    image: ObservationImage,
     ports: PiecePorts,
     signal: AbortSignal,
 ): Promise<string | null> {
-    if (part.cutoutUri) return part.cutoutUri
-    if (!image || !ports.samProvider) return null
+    if (!ports.samProvider) return null
     const prompt = part.name
         .replace(/[^\p{L}\p{N} '-]/gu, ' ')
         .replace(/\s+/gu, ' ')
@@ -109,7 +148,7 @@ async function segmentPart(
             }
         })
     } catch {
-        // An absent SAM cutout is normal: name/dimensions can still produce a useful approximate piece.
+        // SAM refines an existing crop only. Missing detections preserve the plain drawing image.
         signal.throwIfAborted()
         return null
     }
@@ -124,59 +163,72 @@ export async function generatePieceBatch(
 ): Promise<PieceBatchResult> {
     const started = performance.now()
     const cuts = new Map<string, string | null>()
-    let next = 0
-    const segment = async (): Promise<void> => {
-        while (next < metadata.parts.length) {
-            const part = metadata.parts[next++]!
-            cuts.set(
-                part.id,
-                await segmentPart(part, part.pageId === null ? undefined : pages.get(part.pageId), ports, signal),
-            )
-        }
+    const crops = new Map<string, PieceCrop>()
+    const refinedIds = new Set<string>()
+    for (const part of metadata.parts) {
+        const crop = await cropDrawing(part, part.pageId === null ? undefined : pages.get(part.pageId))
+        cuts.set(part.id, crop?.uri ?? null)
+        if (crop) crops.set(part.id, crop)
     }
-    await Promise.all([segment(), segment()])
     const images: ObservationImage[] = []
     const imagePieceIds: string[] = []
     for (const part of metadata.parts) {
-        const uri = cuts.get(part.id)
-        if (!uri) continue
-        try {
-            const bytes = new Uint8Array(Buffer.from(uri.slice('data:image/png;base64,'.length), 'base64'))
-            const info = await sharp(bytes, { limitInputPixels: LIMITS.imagePixels }).metadata()
-            if (!info.width || !info.height || info.format !== 'png' || (info.pages !== undefined && info.pages > 1)) {
-                cuts.set(part.id, null)
-                continue
-            }
-            images.push({ bytes, width: info.width, height: info.height, mimeType: 'image/png' })
-            imagePieceIds.push(part.id)
-        } catch {
-            cuts.set(part.id, null)
-        }
+        const crop = crops.get(part.id)
+        if (!crop) continue
+        images.push(crop.image)
+        imagePieceIds.push(part.id)
     }
     let generation: ScreenGeneration | undefined
     let failure = 'response:provider_error'
+    const generate = async (): Promise<void> => {
+        try {
+            if (!ports.provider?.generatePieces) failure = 'response:unconfigured'
+            else
+                generation = await counted(ports, signal, ports.deadlineMs, () =>
+                    ports.provider!.generatePieces!(
+                        { requestId: metadata.requestId, parts: metadata.parts, imagePieceIds, images },
+                        signal,
+                    ),
+                )
+        } catch (error) {
+            signal.throwIfAborted()
+            failure =
+                error instanceof RequestStoppedError
+                    ? 'response:timeout'
+                    : error instanceof MetaProviderError
+                      ? `response:${error.code}`
+                      : 'response:provider_error'
+        }
+    }
+    const refinement = new AbortController()
+    const refinementSignal = AbortSignal.any([signal, refinement.signal])
+    let acceptingRefinements = true
+    let next = 0
+    const refine = async (): Promise<void> => {
+        while (!refinementSignal.aborted && next < metadata.parts.length) {
+            const part = metadata.parts[next++]!
+            const crop = crops.get(part.id)
+            if (!crop || part.cutoutUri) continue
+            const refined = await segmentPart(part, crop.image, ports, refinementSignal)
+            if (refined && acceptingRefinements && !refinementSignal.aborted) {
+                cuts.set(part.id, refined)
+                refinedIds.add(part.id)
+            }
+        }
+    }
+    // Admit Wonder first, with plain crops. Optional SAM must never hold a completed geometry response.
+    const generated = generate()
+    void Promise.allSettled([refine(), refine()])
     try {
-        if (!ports.provider?.generatePieces) failure = 'response:unconfigured'
-        else
-            generation = await counted(ports, signal, ports.deadlineMs, () =>
-                ports.provider!.generatePieces!(
-                    { requestId: metadata.requestId, parts: metadata.parts, imagePieceIds, images },
-                    signal,
-                ),
-            )
-    } catch (error) {
-        signal.throwIfAborted()
-        failure =
-            error instanceof RequestStoppedError
-                ? 'response:timeout'
-                : error instanceof MetaProviderError
-                  ? `response:${error.code}`
-                  : 'response:provider_error'
+        await generated
+    } finally {
+        acceptingRefinements = false
+        refinement.abort()
     }
     signal.throwIfAborted()
     if (
         generation !== undefined &&
-        (generation.telemetry.model !== 'muse-wonder-1.0' || generation.telemetry.effort !== 'medium')
+        (generation.telemetry.model !== 'muse-wonder-1.0' || generation.telemetry.effort !== 'high')
     ) {
         generation = undefined
         failure = 'response:model_identity'
@@ -225,6 +277,12 @@ export async function generatePieceBatch(
                 requestId: metadata.requestId,
                 pieceId: part.id,
                 status: result.status,
+                drawingBox: part.drawingBox ?? null,
+                cropOK: crops.has(part.id),
+                samRefined: refinedIds.has(part.id),
+                cropSha256: crops.has(part.id)
+                    ? createHash('sha256').update(crops.get(part.id)!.image.bytes).digest('hex')
+                    : null,
                 issueCodes,
                 model: generation?.telemetry.model ?? null,
                 effort: generation?.telemetry.effort ?? null,
@@ -236,7 +294,7 @@ export async function generatePieceBatch(
         contentHash: metadata.contentHash,
         results,
         model: generation?.telemetry.model === 'muse-wonder-1.0' ? generation.telemetry.model : null,
-        effort: generation?.telemetry.effort === 'medium' ? 'medium' : null,
+        effort: generation?.telemetry.effort === 'high' ? 'high' : null,
         durationMs: Math.max(0, performance.now() - started),
     })
 }

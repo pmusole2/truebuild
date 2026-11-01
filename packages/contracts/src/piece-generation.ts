@@ -1,6 +1,18 @@
 import { z } from 'zod'
 import { pieceIdSchema, pieceSpecSchema } from './piece-spec'
 
+export const PIECE_GEOMETRY_PROMPT_VERSION = 2
+/** Top-left normalized drawing rectangle on the cited source page. Malformed optional hints are omitted. */
+export const pieceDrawingBoxSchema = z
+    .tuple([
+        z.number().finite().min(0).max(1),
+        z.number().finite().min(0).max(1),
+        z.number().finite().positive().max(1),
+        z.number().finite().positive().max(1),
+    ])
+    .refine(([x, y, width, height]) => x + width <= 1 && y + height <= 1)
+export const optionalPieceDrawingBoxSchema = pieceDrawingBoxSchema.nullable().optional().catch(undefined)
+
 export const PIECE_BATCH_LIMIT = 8
 export const PIECE_CUTOUT_MAX_CHARS = 360_000
 export const pieceCutoutSchema = z
@@ -19,6 +31,7 @@ export const manualPieceInputSchema = z.strictObject({
     label: z.string().trim().min(1).max(80).nullable(),
     dimensions: z.string().trim().min(1).max(300).nullable(),
     pageId: z.string().min(1).max(128).nullable(),
+    drawingBox: optionalPieceDrawingBoxSchema,
     cutoutUri: pieceCutoutSchema.nullable().optional(),
     repair: z.strictObject({ issueCodes: z.array(issueCode).min(1).max(40) }).optional(),
 })
@@ -69,7 +82,7 @@ export const pieceBatchResultSchema = z
             .min(1)
             .max(PIECE_BATCH_LIMIT),
         model: z.literal('muse-wonder-1.0').nullable(),
-        effort: z.literal('medium').nullable(),
+        effort: z.literal('high').nullable(),
         durationMs: z.number().finite().nonnegative(),
     })
     .superRefine((value, context) => {
@@ -81,7 +94,7 @@ export const pieceBatchResultSchema = z
                 context.addIssue({ code: 'custom', message: 'Piece status must match validation' })
             if (result.piece !== null && (result.piece.id !== result.id || result.piece.name !== result.name))
                 context.addIssue({ code: 'custom', message: 'A piece must retain its requested identity' })
-            if (accepted && (value.model !== 'muse-wonder-1.0' || value.effort !== 'medium'))
+            if (accepted && (value.model !== 'muse-wonder-1.0' || value.effort !== 'high'))
                 context.addIssue({ code: 'custom', message: 'A generated piece requires observed Wonder provenance' })
         }
     })

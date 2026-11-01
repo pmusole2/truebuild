@@ -144,7 +144,7 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
         }
         reset()
         // Frame the actual starting pose rather than its much larger bounding sphere. Its projected extents occupy
-        // about 80% of the shorter viewport side; dragging can then reveal the whole piece without an initial zoom.
+        // about 80% of the viewport on each axis, so wide pieces use its width instead of shrinking to its height.
         pivot.updateWorldMatrix(true, true)
         const initial = new Box3()
         const framing: Vector3[] = []
@@ -180,9 +180,8 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
                     renderer.setSize(w, h, false)
                     camera.aspect = w / h
                     const vertical = (camera.fov * Math.PI) / 360
-                    const target = Math.min(w, h) * 0.8
-                    const horizontalLimit = Math.tan(vertical) * camera.aspect * (target / w)
-                    const verticalLimit = Math.tan(vertical) * (target / h)
+                    const horizontalLimit = Math.tan(vertical) * camera.aspect * 0.8
+                    const verticalLimit = Math.tan(vertical) * 0.8
                     framedDistance = 0
                     for (const point of framing)
                         framedDistance = Math.max(
@@ -191,7 +190,7 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
                             point.z + Math.abs(point.y - framedCenter.y) / verticalLimit,
                         )
                 }
-                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 1.2, framedDistance / zoom))
+                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 0.01, framedDistance / zoom))
                 camera.near = radius * 0.005
                 camera.far = camera.position.z + radius * 20
                 camera.updateProjectionMatrix()

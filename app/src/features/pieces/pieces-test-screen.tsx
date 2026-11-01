@@ -5,7 +5,7 @@ import { useOptionalWorkflow } from '../capture/workflow-context'
 import { Card, Screen, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Title } from '../../ui/text'
 import { PieceViewer, PiecesGrid } from './piece-viewer'
-import { manualPieceContentHash, manualPieceInputs } from './piece-registry'
+import { manualPieceContentHash, manualPieceInputOf } from './piece-registry'
 import { createPieces } from './piece-runtime'
 
 const clock = (ms: number | null | undefined): string => (ms == null ? '—' : new Date(ms).toISOString().slice(11, 23))
@@ -24,15 +24,17 @@ export default function PiecesTestScreen(): ReactElement {
     const active = workflow?.piecesSnapshot
     const session =
         workflow?.entry?.session ??
-        workflow?.state.entries.find((entry) => manualPieceContentHash(entry.session) === active?.contentHash)
-            ?.session ??
+        workflow?.state.entries.find(
+            (entry) => manualPieceContentHash(manualPieceInputOf(entry.session)) === active?.contentHash,
+        )?.session ??
         workflow?.state.entries.find((entry) => entry.session.parts.length > 0)?.session
     useEffect(() => {
-        if (session !== undefined)
-            void saved.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, async () => ({}))
+        if (session !== undefined) void saved.prepare(manualPieceInputOf(session), async () => ({}))
     }, [saved, session])
     const snapshot =
-        active?.contentHash === (session === undefined ? null : manualPieceContentHash(session)) ? active : stored
+        active?.contentHash === (session === undefined ? null : manualPieceContentHash(manualPieceInputOf(session)))
+            ? active
+            : stored
     const rows = [
         ...(snapshot?.pieces ?? []).map((piece) => ({
             id: piece.id,
@@ -63,31 +65,35 @@ export default function PiecesTestScreen(): ReactElement {
                     <View testID="pieces-test-timing">
                         <Caption>{`Requested ${clock(snapshot?.timing.requestedAt)} · Started ${clock(snapshot?.timing.startedAt)} · Ready ${clock(snapshot?.timing.readyAt)}${elapsed(snapshot?.timing.requestedAt, snapshot?.timing.readyAt)}`}</Caption>
                     </View>
-                    {rows.map((row) => (
-                        <Card key={row.id}>
-                            <View testID={`pieces-test-row-${row.id}`} style={{ gap: 6 }}>
-                                {row.cutout === undefined ? (
-                                    <Heading>{row.name}</Heading>
-                                ) : (
-                                    <Image
-                                        source={{ uri: row.cutout }}
-                                        resizeMode="contain"
-                                        accessibilityLabel={row.name}
-                                        style={{ width: '100%', height: 120 }}
-                                    />
-                                )}
-                                <Body>{`${row.name} · ${row.status}${row.issues === '' ? '' : ` · ${row.issues}`}`}</Body>
-                                {(snapshot?.pieces.slice(0, 3) ?? []).find((piece) => piece.id === row.id) ===
-                                undefined ? null : (
-                                    <PieceViewer
-                                        piece={snapshot?.pieces.find((piece) => piece.id === row.id)}
-                                        fallbackImageUri={row.cutout}
-                                        height={240}
-                                    />
-                                )}
-                            </View>
-                        </Card>
-                    ))}
+                    {rows.map((row) => {
+                        const piece = snapshot?.pieces.find((item) => item.id === row.id)
+                        return (
+                            <Card key={row.id}>
+                                <View testID={`pieces-test-row-${row.id}`} style={{ gap: 6 }}>
+                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                        <View style={{ flex: 1 }}>
+                                            {row.cutout === undefined ? (
+                                                <Heading>{row.name}</Heading>
+                                            ) : (
+                                                <Image
+                                                    source={{ uri: row.cutout }}
+                                                    resizeMode="contain"
+                                                    accessibilityLabel={row.name}
+                                                    style={{ width: '100%', height: 240 }}
+                                                />
+                                            )}
+                                        </View>
+                                        {piece === undefined ? null : (
+                                            <View style={{ flex: 1 }}>
+                                                <PieceViewer piece={piece} fallbackImageUri={row.cutout} height={240} />
+                                            </View>
+                                        )}
+                                    </View>
+                                    <Body>{`${row.name} · ${row.status}${row.issues === '' ? '' : ` · ${row.issues}`}`}</Body>
+                                </View>
+                            </Card>
+                        )
+                    })}
                     <PiecesGrid pieces={snapshot?.pieces ?? []} cutouts={snapshot?.cutouts} />
                 </Stack>
             </Screen>

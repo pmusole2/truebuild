@@ -16,7 +16,7 @@ import { documentKey } from '../document-runtime/store'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { useDocumentOwner, useDocumentVisibility } from '../documents/ownership'
 import type { FrameBindings } from '../documents/types'
-import { manualPieceContentHash } from '../pieces/piece-registry'
+import { manualPieceContentHash, manualPieceInputOf } from '../pieces/piece-registry'
 import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
 import { useJudge } from '../screens/judge-context'
@@ -191,7 +191,11 @@ export function DocumentSurface({
     // The registry is frozen per screen identity at first display: readiness later never regenerates this screen.
     const frozenPieces =
         inputs.session !== null && effectiveKind !== 'guide'
-            ? (workflow.pieces?.pin(documentKey(inputs), manualPieceContentHash(inputs.session), focused) ?? null)
+            ? (workflow.pieces?.pin(
+                  documentKey(inputs),
+                  manualPieceContentHash(manualPieceInputOf(inputs.session)),
+                  focused,
+              ) ?? null)
             : null
     if (frozenPieces !== null && frozenPieces.pieces.length > 0) inputs.pieces = [...frozenPieces.pieces]
     const cancelledPages = effectiveKind === 'pages' && state.notice?.startsWith('Cancelled.') === true

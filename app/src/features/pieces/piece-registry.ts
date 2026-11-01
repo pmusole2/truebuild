@@ -3,8 +3,10 @@ import {
     canonicalJson,
     manualPieceInputSchema,
     PIECE_BATCH_LIMIT,
+    PIECE_GEOMETRY_PROMPT_VERSION,
     PIECE_SPEC_LIMITS,
     pieceCutoutSchema,
+    pieceDrawingBoxSchema,
     pieceIdSchema,
     pieceSpecSchema,
     type ManualPage,
@@ -34,6 +36,7 @@ export const PIECE_CUTOUT_BUDGET_CHARS = 1_500_000
 const PIN_LIMIT = 64
 const PIECE_NAME_MAX = 80
 
+type PieceDrawingBox = z.infer<typeof pieceDrawingBoxSchema>
 export type PieceManualPage = Pick<ManualPage, 'pageId' | 'width' | 'height' | 'mimeType' | 'contentHash'>
 export type PieceRequestPart = ManualPieceInput
 /** A manual as the registry sees it: ordered page identities and the parts a request may name. */
@@ -78,6 +81,13 @@ export function stablePieceIds(parts: readonly StableFacts[]): string[] {
     })
 }
 
+/** A box is kept exactly as written and only when the contract accepts it as written; an invalid hint is never repaired. */
+function validDrawingBox(box: readonly number[] | null | undefined): PieceDrawingBox | undefined {
+    if (box === null || box === undefined) return undefined
+    const parsed = pieceDrawingBoxSchema.safeParse(box)
+    return parsed.success ? parsed.data : undefined
+}
+
 function stepQuantity(session: Pick<ManualSession, 'reviewedSteps'>, partId: string): number | null {
     for (const step of session.reviewedSteps) {
         for (const part of step.parts) {
@@ -102,25 +112,58 @@ export function manualPieceInputs(
         const identityName = part.name.value
         // The manual may hold names up to 200 characters; the piece contract allows 80. The display name is bounded, the fact is not.
         const name = Array.from(identityName.trim()).slice(0, PIECE_NAME_MAX).join('')
+        const drawingBox = validDrawingBox(part.drawingBox)
         return [
-            { name, identityName, label: part.label ?? null, dimensions: part.dimensions ?? null, pageId, quantity },
+            {
+                name,
+                identityName,
+                label: part.label ?? null,
+                dimensions: part.dimensions ?? null,
+                pageId,
+                quantity,
+                drawingBox,
+            },
         ]
     })
     const ids = stablePieceIds(named)
     return named.flatMap((part, index): PieceRequestPart[] => {
-        const { identityName: _identity, ...request } = part
-        const parsed = manualPieceInputSchema.safeParse({ id: ids[index], ...request })
+        const { identityName: _identity, drawingBox, ...request } = part
+        const parsed = manualPieceInputSchema.safeParse({
+            id: ids[index],
+            ...request,
+            ...(drawingBox === undefined ? {} : { drawingBox }),
+        })
         return parsed.success ? [parsed.data] : []
     })
 }
 
+/** The manual the registry is fed for a session: the same pages and request parts generation and screen bindings read. */
+export function manualPieceInputOf(
+    session: Pick<ManualSession, 'pages' | 'parts' | 'reviewedSteps'>,
+): PieceManualInput {
+    return { pages: session.pages, parts: manualPieceInputs(session) }
+}
+
 /**
- * Cache identity of a manual's pieces: the ordered page pictures (content hash, size and MIME type). Parsed names, labels,
- * part ids and page ids are excluded, so a re-parse of the same pictures keeps its stored result and never pays again.
+ * Cache identity of a manual's pieces: the ordered page pictures (content hash, size and MIME type), salted with the geometry
+ * prompt version and, per part in parse order, its drawing box with the content hash of the page it cites. Page ids, parsed
+ * names, labels and part ids are excluded, so a re-parse of the same pictures keeps its stored result and never pays again.
  */
-export function manualPieceContentHash(manual: { readonly pages: readonly PieceManualPage[] }): string {
+export function manualPieceContentHash(
+    manual: PieceManualInput,
+    promptVersion: number = PIECE_GEOMETRY_PROMPT_VERSION,
+): string {
+    const citedContent = new Map(manual.pages.map((page) => [page.pageId, page.contentHash]))
     return sha256Hex(
-        canonicalJson(manual.pages.map((page) => [page.contentHash, page.width, page.height, page.mimeType])),
+        canonicalJson([
+            manual.pages.map((page) => [page.contentHash, page.width, page.height, page.mimeType]),
+            promptVersion,
+            manual.parts.map((part) =>
+                part.drawingBox === undefined || part.drawingBox === null
+                    ? null
+                    : [part.drawingBox, part.pageId === null ? null : (citedContent.get(part.pageId) ?? null)],
+            ),
+        ]),
     )
 }
 

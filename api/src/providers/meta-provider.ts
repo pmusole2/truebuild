@@ -665,7 +665,7 @@ const PARSE_INSTRUCTIONS =
               ? [PARSE_SAFETY, line]
               : [line],
     ).join(' ') +
-    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Do not infer dimensions or add a model call.'
+    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Also give drawingBox:[x,y,w,h] in normalized 0–1 top-left page coordinates tightly enclosing that part’s drawing on the same cited page, excluding nearby labels and table borders; use null if no drawing is visible. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -1416,7 +1416,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                             ? []
                             : await validateAndNormalizeImages(input.images, deadline.signal, 8)
                     const parts = input.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
-                    // Geometry shares the production Wonder output budget; medium is the requested background policy.
+                    // Geometry shares the production Wonder output budget; high improves background visual fidelity.
                     return dispatchDetailed(
                         'pieces',
                         { requestId: input.requestId, parts, imagePieceIds: input.imagePieceIds },
@@ -1429,7 +1429,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         false,
                         'step-pages',
                         false,
-                        'medium',
+                        'high',
                     )
                 },
             )

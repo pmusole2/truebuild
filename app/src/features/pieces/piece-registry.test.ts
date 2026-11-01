@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { PieceBatchResult, PieceSpec } from '@truebuild/contracts'
+import {
+    createDemoManual,
+    PIECE_GEOMETRY_PROMPT_VERSION,
+    type PieceBatchResult,
+    type PieceSpec,
+} from '@truebuild/contracts'
 import type { KeyValueStorage } from '../capture/library'
 import {
     manualPieceContentHash,
+    manualPieceInputOf,
     PieceRegistry,
     type PieceGenerationPort,
     type PieceManualInput,
@@ -237,7 +243,7 @@ describe('piece registry', () => {
                         issueCodes: [],
                     })),
                     model: 'muse-wonder-1.0',
-                    effort: 'medium',
+                    effort: 'high',
                     durationMs: 1,
                 }
             },
@@ -250,6 +256,37 @@ describe('piece registry', () => {
             ),
         ])
         expect(peak).toBe(2)
+    })
+
+    it('keys the cache by prompt version and each box with its cited page content, and keeps only a valid box as written', () => {
+        const second = { ...page, pageId: 'page-2', contentHash: 'c'.repeat(64) }
+        const twin = { ...page, pageId: 'page-3' }
+        const citing = (
+            pageId: string,
+            value: [number, number, number, number] = [0.1, 0.2, 0.3, 0.4],
+            pages: PieceManualInput['pages'] = [page, second],
+        ): PieceManualInput => ({
+            pages,
+            parts: manual.parts.map((part, index) => (index === 0 ? { ...part, pageId, drawingBox: value } : part)),
+        })
+        const boxedHash = manualPieceContentHash(citing('page-1'))
+        expect(boxedHash).not.toBe(manualPieceContentHash({ pages: [page, second], parts: manual.parts }))
+        expect(manualPieceContentHash(manual, PIECE_GEOMETRY_PROMPT_VERSION - 1)).not.toBe(hash)
+        expect(manualPieceContentHash(citing('page-1', [0.1, 0.2, 0.3, 0.5]))).not.toBe(boxedHash)
+        expect(manualPieceContentHash(citing('page-2'))).not.toBe(boxedHash)
+        expect(manualPieceContentHash(citing('page-1', undefined, [page, twin]))).toBe(
+            manualPieceContentHash(citing('page-3', undefined, [page, twin])),
+        )
+
+        const session = createDemoManual()
+        const withBoxes = (value: [number, number, number, number]): PieceManualInput =>
+            manualPieceInputOf({
+                ...session,
+                parts: session.parts.map((part, index) => (index === 0 ? { ...part, drawingBox: value } : part)),
+            })
+        expect(withBoxes([0.1234567, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toEqual([0.1234567, 0.2, 0.3, 0.4])
+        expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toBeUndefined()
+        expect(manualPieceInputOf(session).parts[0]?.drawingBox).toBeUndefined()
     })
 
     it('pins each screen identity to the snapshot it first displayed', async () => {
