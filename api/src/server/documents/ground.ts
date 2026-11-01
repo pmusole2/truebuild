@@ -13,9 +13,9 @@ import { decodeWireProposal, wireIssueCodes } from '../../providers/document-wir
 import { sha256, type DocumentContext } from './context'
 
 /**
- * The gate every model document passes. It only ever REJECTS: it returns machine issue codes (a component path and a
- * static rule, never the rejected text) and the caller repairs once or replaces the whole document with the complete
- * deterministic one. Nothing the model wrote is edited, dropped, appended to or merged.
+ * The strict gate every model document passes, after any separately enabled structural normalization. This gate only
+ * REJECTS: it returns machine issue codes (a component path and a static rule, never rejected text), and the caller
+ * repairs once or replaces the whole document with the complete deterministic one. It never edits authored content.
  */
 export type Evaluation = { ok: true; proposal: ScreenProposalV2 } | { ok: false; issues: string[] }
 

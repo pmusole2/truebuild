@@ -40,6 +40,8 @@ export interface DocumentFacts {
     carried?: CarriedStatesV2
     /** Generated documents only: state variants the shell filled from its templates (origin `shell`). */
     shellStates?: readonly VariantState[]
+    /** A failed Home composition continues with the complete deterministic root, attributed to the shell. */
+    shellHome?: true
     effort?: DocumentMetadataV2['effort']
     repaired?: boolean
     rejectedIssues?: number | null
@@ -77,7 +79,16 @@ export function assembleDocumentV2(
         about.shellStates !== undefined && about.shellStates.length > 0 ? [...about.shellStates] : undefined
     const origins = Object.fromEntries(
         variantComponentPathsV2(proposal).flatMap(({ name, paths }) =>
-            paths.map((path) => [path, variantOriginV2({ source: about.source, carried, shellStates }, name)] as const),
+            paths.map(
+                (path) =>
+                    [
+                        path,
+                        variantOriginV2(
+                            { source: about.source, carried, shellStates, shellHome: about.shellHome },
+                            name,
+                        ),
+                    ] as const,
+            ),
         ),
     )
     const metadata: DocumentMetadataV2 = {
@@ -89,6 +100,7 @@ export function assembleDocumentV2(
         ...(about.authoring === undefined ? {} : { authoring: about.authoring }),
         ...(carried === undefined ? {} : { carried }),
         ...(shellStates === undefined ? {} : { shellStates }),
+        ...(about.shellHome === undefined ? {} : { shellHome: about.shellHome }),
         stage: screenStageV2(inputs.kind),
         model: about.model ?? null,
         effort: about.effort ?? null,
@@ -116,6 +128,7 @@ export function assembleDocumentV2(
                 // Present only on a document that carries states, so every other document keeps the identity it always had.
                 ...(carried === undefined ? {} : { carried }),
                 ...(shellStates === undefined ? {} : { shellStates }),
+                ...(about.shellHome === undefined ? {} : { shellHome: about.shellHome }),
                 ...(about.authoring === undefined ? {} : { authoring: about.authoring }),
             }),
         ),

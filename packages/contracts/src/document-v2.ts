@@ -738,9 +738,11 @@ export function variantOriginV2(
         source: 'generated' | 'fallback'
         carried?: CarriedStatesV2 | undefined
         shellStates?: readonly VariantState[] | undefined
+        shellHome?: true | undefined
     },
     name: 'ready' | VariantState,
 ): 'generated' | 'fallback' | 'shell' {
+    if (metadata.shellHome) return 'shell'
     if (name === 'ready') return metadata.source
     if (metadata.shellStates?.includes(name)) return 'shell'
     return metadata.carried?.[name] !== undefined ? 'generated' : metadata.source
@@ -994,7 +996,7 @@ export const carriedStatesV2Schema = z.strictObject(
 export type CarriedStatesV2 = z.infer<typeof carriedStatesV2Schema>
 
 export const documentMetadataV2Schema = z.strictObject({
-    /** `generated`: the model's document, accepted unchanged. `fallback`: the complete deterministic document. */
+    /** `generated`: the model's accepted ready content. `fallback`: the complete deterministic document. */
     source: screenSourceSchema.exclude(['shell']),
     /** Server-owned origin of each component path (see `componentPathsV2`). Uniform with `source`. */
     origins: z.record(z.string().regex(COMPONENT_PATH_V2), screenSourceSchema),
@@ -1031,6 +1033,8 @@ export const documentMetadataV2Schema = z.strictObject({
      * authors only the ready screen). Their components carry the `shell` origin, never `generated`.
      */
     shellStates: z.array(z.enum(VARIANT_STATES)).optional(),
+    /** The deterministic Home used after a live composition failure; it has no model authorship. */
+    shellHome: z.literal(true).optional(),
     authoring: syntheticAuthorV2Schema.optional(),
     stage: z.enum(['screen', 'step-page']),
     model: z.enum(['muse-spark-1.3', 'muse-wonder-1.0']).nullable(),
@@ -1409,6 +1413,20 @@ export const screenDocumentV2Schema = z
         if (factIds.size !== document.facts.length) add('Duplicate fact identity')
         const limit = document.sources.length
         const { metadata } = document
+        if (metadata.shellHome) {
+            if (document.kind !== 'home' || metadata.source !== 'fallback') {
+                add('Only a fallback Home is a shell Home')
+            }
+            if (
+                metadata.model !== null ||
+                metadata.effort !== null ||
+                metadata.carried !== undefined ||
+                metadata.authoring !== undefined ||
+                metadata.shellStates !== undefined
+            ) {
+                add('A shell Home carries no model authorship or borrowed states')
+            }
+        }
         const variantPaths = variantComponentPathsV2(document)
         const paths = variantPaths.flatMap((variant) => variant.paths)
         const known = new Set(paths)

@@ -161,6 +161,10 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 nativeNodes: nativeNodes(used.uiState),
                 boundKeys: availableBoundKeys(material),
                 allowedIntents: allowed,
+                /** Home is the root: its header.back must be null, so the way back is not offered to it at all. */
+                headerBack: allowed.some((candidate) => candidate.intent === 'navigate' && candidate.target === 'back')
+                    ? 'navigate/back'
+                    : null,
                 allowedLabels: Object.fromEntries(
                     allowed.map((candidate) => [`${candidate.intent}:${candidate.target}`, labelsFor(candidate)]),
                 ),

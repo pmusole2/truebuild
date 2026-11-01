@@ -13,7 +13,7 @@ import {
     INVALID_QUESTIONS_MANUAL,
     REPAIR_ONCE_MANUAL,
 } from '../../providers/document-fixtures'
-import { DOCUMENT_PROMPT_VERSION } from '../../providers/document-prompt'
+import { DOCUMENT_INSTRUCTIONS, DOCUMENT_PROMPT_VERSION } from '../../providers/document-prompt'
 import { decodeWireProposal, encodeWireProposal, type WireProposal } from '../../providers/document-wire'
 import {
     MetaProviderError,
@@ -454,6 +454,46 @@ describe('service: synthetic fixture documents', () => {
 })
 
 describe('service: a live provider', () => {
+    it('normalizes provider documents before repair, honors opt-out, preserves fixture gates and logs every dropped ID in bounded events', async () => {
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const good = goodWire('home')
+        const leaf = good.nodes.find((node) => node.children === undefined)!
+        const value = {
+            ...good,
+            header: { ...good.header, back: goodWire('guide').header.back },
+            nodes: [...good.nodes, ...Array.from({ length: 30 }, (_, index) => ({ ...leaf, id: `orphan${index}` }))],
+        }
+        for (const enabled of [true, false]) {
+            log.mockClear()
+            const live = liveService([value, good], { AI_DOCUMENT_NORMALIZATION: enabled ? '1' : '0' })
+            const document = await live.service.generate(documentInputs('home'))
+            expect(document.metadata.source).toBe('generated')
+            expect(document.metadata.repaired).toBe(!enabled)
+            expect(live.inputs).toHaveLength(enabled ? 1 : 2)
+            const events = log.mock.calls.flatMap(([message]) => {
+                if (typeof message !== 'string') return []
+                const event = JSON.parse(message) as { event: string; droppedCount: number; issueCodes: string[] }
+                return event.event === 'document_normalization' ? [event] : []
+            })
+            expect(events.length).toBe(enabled ? 2 : 0)
+            if (enabled) {
+                expect(events.every((event) => event.issueCodes.length <= 24 && event.droppedCount === 31)).toBe(true)
+                expect(events.flatMap((event) => event.issueCodes)).toHaveLength(31)
+            }
+        }
+        log.mockClear()
+        let calls = 0
+        const fixture = fixtureService({}, { fixtureGenerator: async () => (++calls === 1 ? value : good) })
+        const document = await fixture.service.generate(documentInputs('home'))
+        expect(document.metadata).toMatchObject({ source: 'generated', repaired: true })
+        expect(calls).toBe(2)
+        expect(
+            log.mock.calls.some(
+                ([message]) => typeof message === 'string' && message.includes('document_normalization'),
+            ),
+        ).toBe(false)
+    })
+
     it('records only what the call observed and credits the model its response named', async () => {
         const { service, inputs } = liveService([goodWire('guide')])
         const document = await service.generate(documentInputs('guide'))
@@ -506,6 +546,43 @@ describe('service: a live provider', () => {
         expect(document.metadata.model).toBe('muse-wonder-1.0')
         expect(new Set(Object.values(document.metadata.origins))).toEqual(new Set(['fallback']))
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+    })
+
+    it('tells the model Home has no back action, in the instructions and in the supplied context', () => {
+        expect(DOCUMENT_INSTRUCTIONS).toContain(
+            'Every node id appears exactly once, in one children list or one overlay content. Never share children between parents. No wrapper nodes outside body. Home has no back action.',
+        )
+        expect(contextFor('home').view.dynamic.document).toMatchObject({ headerBack: null })
+        expect(contextFor('guide').view.dynamic.document).toMatchObject({ headerBack: 'navigate/back' })
+    })
+
+    it('returns the shell Home with no back and no model claim when the single Home repair is also rejected', async () => {
+        const { service, inputs } = liveService([{}, {}])
+        const document = await service.generate(documentInputs('home'))
+        expect(inputs).toHaveLength(2)
+        expect(document.metadata).toMatchObject({
+            source: 'fallback',
+            fallbackReason: 'repair_failed',
+            repaired: true,
+            model: null,
+            effort: null,
+        })
+        expect(document.metadata.shellHome).toBe(true)
+        expect(new Set(Object.values(document.metadata.origins))).toEqual(new Set(['shell']))
+        expect(document.header.back).toBeNull()
+        expect(JSON.stringify(document.body)).toContain('ManualList')
+        expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+        for (const invalid of [
+            { ...document, kind: 'guide' },
+            { ...document, metadata: { ...document.metadata, model: 'muse-wonder-1.0', effort: 'medium' } },
+            { ...document, metadata: { ...document.metadata, source: 'generated' } },
+            {
+                ...document,
+                metadata: { ...document.metadata, origins: { ...document.metadata.origins, body: 'generated' } },
+            },
+        ]) {
+            expect(screenDocumentV2Schema.safeParse(invalid).success).toBe(false)
+        }
     })
 
     it('repairs a completed but malformed answer, and never an incomplete or timed-out one', async () => {

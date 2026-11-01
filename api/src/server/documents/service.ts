@@ -40,6 +40,7 @@ import { PrecomputeRegistry, ScreenCache, SingleFlight, StaleGuard, StaleRevisio
 import type { BackgroundWork, StepScreenContext } from '../screens/service'
 import { buildDocumentContext, sha256, type DocumentContext } from './context'
 import { evaluateProposal, evaluateWire, type Evaluation } from './ground'
+import { normalizeDocumentWire } from './normalize-wire'
 import { issueShownV2, resolveShownV2, type IssuedShownV2 } from './shown'
 
 /** What a test-only synthetic generator is told about the document it is asked to compose. */
@@ -317,6 +318,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         context: DocumentContext,
         reason: FallbackReasonV2,
         extra: Partial<CachedDocument['observed']> = {},
+        shellHome = false,
     ): ScreenDocumentV2 {
         const document = publish(
             assembleDocumentV2(
@@ -328,6 +330,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     evidence,
                     fallbackReason: reason,
                     promptVersion: DOCUMENT_PROMPT_VERSION,
+                    ...(shellHome ? { shellHome: true } : {}),
                 },
                 deps,
             ),
@@ -464,7 +467,9 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         }
         const failure = (reason: FallbackReasonV2): Made => {
             const { generatedAt: _at, ...seen } = observed()
-            return { document: deterministic(context, reason, seen), cached: null }
+            // Home is the app's own root screen: after a failed composition the shell's Home carries no model claim.
+            const honest = context.inputs.kind === 'home' ? { ...seen, model: null, effort: null } : seen
+            return { document: deterministic(context, reason, honest, context.inputs.kind === 'home'), cached: null }
         }
 
         /**
@@ -524,11 +529,34 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const isMalformed = (error: unknown): boolean =>
             error instanceof MetaProviderError && error.code === 'invalid_output' && error.detail === 'malformed'
 
+        const evaluateResponse = (value: unknown, attempt: 'initial' | 'repair'): Evaluation => {
+            // Normalize only provider-authored wire documents; synthetic fixture generators retain their strict oracle.
+            const normalized =
+                policy.documentNormalization && fixture === null
+                    ? normalizeDocumentWire(value, context)
+                    : { value, issueCodes: [] }
+            const perEvent = 24
+            for (let offset = 0; offset < normalized.issueCodes.length; offset += perEvent) {
+                console.info(
+                    JSON.stringify({
+                        event: 'document_normalization',
+                        contextKey: context.bound.contextKey,
+                        kind: context.inputs.kind,
+                        attempt,
+                        droppedCount: normalized.issueCodes.length,
+                        chunk: offset / perEvent,
+                        issueCodes: normalized.issueCodes.slice(offset, offset + perEvent),
+                    }),
+                )
+            }
+            return evaluateWire(normalized.value, context)
+        }
+
         const run = async (): Promise<Made> => {
             let evaluated: Evaluation
             try {
                 const value = await attempt()
-                evaluated = timed(() => evaluateWire(value, context))
+                evaluated = timed(() => evaluateResponse(value, 'initial'))
             } catch (error) {
                 // Only a completed-but-unusable answer may be repaired; incomplete, timeout and ambiguous dispatch never.
                 if (!isMalformed(error)) throw error
@@ -541,7 +569,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 repaired = true
                 try {
                     const value = await attempt(evaluated.issues)
-                    evaluated = timed(() => evaluateWire(value, context))
+                    evaluated = timed(() => evaluateResponse(value, 'repair'))
                 } catch (error) {
                     if (isMalformed(error)) {
                         logRejection(context, 'repair', ['response:not_json_or_not_schema'])

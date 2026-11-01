@@ -52,6 +52,7 @@ export type GenerativeUiMode = 'full' | 'steps' | 'off'
 export interface AiPolicy {
     stages: Readonly<Record<PolicyStage, StagePolicy>>
     generativeUi: GenerativeUiMode
+    documentNormalization: boolean
 }
 
 /** Longest deadline `createDeadline` accepts. */
@@ -101,6 +102,12 @@ export function generativeUiMode(value: string | undefined): GenerativeUiMode {
     if (value === undefined || value === '') return 'full'
     if (value === 'full' || value === 'steps' || value === 'off') return value
     throw new Error('invalid_generative_ui')
+}
+
+function documentNormalization(value: string | undefined): boolean {
+    if (value === undefined || value === '' || value === '1') return true
+    if (value === '0') return false
+    throw new Error('invalid_ai_document_normalization')
 }
 
 export interface PolicyDefaults {
@@ -193,13 +200,18 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
             measurementId,
         }
     }
-    return { stages, generativeUi: generativeUiMode(environment.GENERATIVE_UI) }
+    return {
+        stages,
+        generativeUi: generativeUiMode(environment.GENERATIVE_UI),
+        documentNormalization: documentNormalization(environment.AI_DOCUMENT_NORMALIZATION),
+    }
 }
 
 /** Public, secret-free summary for `/api/session`. */
 export function describeAiPolicy(policy: AiPolicy): Record<string, unknown> {
     return {
         generativeUi: policy.generativeUi,
+        documentNormalization: policy.documentNormalization,
         efforts: AI_EFFORTS,
         stages: Object.fromEntries(
             POLICY_STAGES.map((stage) => {
