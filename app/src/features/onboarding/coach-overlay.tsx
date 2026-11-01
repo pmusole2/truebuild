@@ -377,13 +377,7 @@ export function CoachOverlayView({
                         />
                     )}
                     {large ? null : (
-                        <View
-                            ref={attachMeterRoot}
-                            testID="coach-heading"
-                            accessible={true}
-                            accessibilityRole="header"
-                            nativeID={originId(origin)}
-                        >
+                        <View ref={attachMeterRoot} testID="coach-heading" nativeID={originId(origin)}>
                             <Heading>{heading}</Heading>
                         </View>
                     )}

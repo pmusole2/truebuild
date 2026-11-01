@@ -180,7 +180,8 @@ type Environment = {
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
     trailing: ReactNode
-    guidePiecePath: string | null
+    /** Guide pills already shown by resolved text, so a repeated quantity or status reads once. */
+    guidePillPaths: ReadonlySet<string>
     /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
     rootScroll: RefObject<ScrollViewInstance | null>
     /** The workflow page being shown: the local state of every node outside `photoBranch` belongs to it alone. */
@@ -1516,11 +1517,13 @@ function NodeContent({
                     />
                 </View>
             )
-        case 'Badge':
+        case 'Badge': {
+            const label = text(node.label)
+            if (document.kind === 'guide' && !environment.guidePillPaths.has(path)) return null
             return (
                 <StatusTag
                     nativeID={mark}
-                    label={text(node.label)}
+                    label={label}
                     tone={
                         node.tone === 'info'
                             ? 'accent'
@@ -1532,6 +1535,7 @@ function NodeContent({
                     }
                 />
             )
+        }
         case 'Checklist':
             return (
                 <View nativeID={mark} style={styles.stack}>
@@ -1767,12 +1771,8 @@ function NodeContent({
             return <PieceTile node={node} environment={environment} path={path} />
         // Model placement names the step catalog; geometry and counts are app-owned live bindings.
         case 'PieceViewer': {
-            if (document.kind === 'guide')
-                return path === environment.guidePiecePath ? (
-                    <View nativeID={mark}>
-                        <GuidePieces environment={environment} />
-                    </View>
-                ) : null
+            // Guide pieces render once as full-width app chrome (see environment.trailing), never inside an authored column.
+            if (document.kind === 'guide') return null
             const piece = bindings.pieces?.find((item) => item.id === node.pieceId)
             return (
                 <View nativeID={mark}>
@@ -1781,12 +1781,7 @@ function NodeContent({
             )
         }
         case 'PiecesGrid':
-            if (document.kind === 'guide')
-                return path === environment.guidePiecePath ? (
-                    <View nativeID={mark}>
-                        <GuidePieces environment={environment} />
-                    </View>
-                ) : null
+            if (document.kind === 'guide') return null
             return (
                 <View nativeID={mark}>
                     <PiecesGrid
@@ -1937,7 +1932,7 @@ export function NativeDocumentRenderer({
             lowPriorityPaths,
         }),
         trailing: null,
-        guidePiecePath: null,
+        guidePillPaths: new Set<string>(),
         rootScroll,
         page: bodyPage,
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
@@ -1945,20 +1940,22 @@ export function NativeDocumentRenderer({
     const findRegions = (node: ScreenNodeV2): boolean =>
         node.type === 'VerdictCard' ? node.showRegions : 'children' in node && node.children.some(findRegions)
     environment.showRegions = findRegions(selected.variant.body)
-    if (document.kind === 'guide')
-        visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
-            if (
-                !hidden &&
-                environment.guidePiecePath === null &&
-                (node.type === 'PieceViewer' || node.type === 'PiecesGrid')
-            )
-                environment.guidePiecePath = path
+    if (document.kind === 'guide') {
+        const labels = new Set<string>()
+        const paths = new Set<string>()
+        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
+            if (hidden || node.type !== 'Badge') return
+            const label = documentText(document, bindings, node.label).trim().replace(/\s+/gu, ' ')
+            if (!labels.has(label)) {
+                labels.add(label)
+                paths.add(path)
+            }
         })
+        environment.guidePillPaths = paths
+    }
     environment.trailing = (
         <>
-            {document.kind === 'guide' && environment.guidePiecePath === null ? (
-                <GuidePieces environment={environment} />
-            ) : null}
+            {document.kind === 'guide' ? <GuidePieces environment={environment} /> : null}
             {bindings.inspect && document.kind !== 'judge' ? (
                 <Judge
                     environment={environment}

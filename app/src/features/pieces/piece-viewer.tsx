@@ -25,6 +25,26 @@ import { loadPieceGL } from './piece-gl'
 // The normal document renderer may import this module without loading GL or Three (including on unsupported devices).
 const LazyGLView = lazy(loadPieceGL)
 
+type FallbackReason =
+    | 'invalid_spec'
+    | 'gl_unavailable'
+    | 'registry_rejected_or_unavailable'
+    | 'startup_timeout'
+    | 'scene_creation_failed'
+    | 'draw_failed'
+    | 'context_lost'
+    | 'gl_surface_failed'
+
+/** At most one bounded diagnostic per mounted instance; no names, images or model text are logged. */
+function useFallbackLog(pieceId: string | null, reason: FallbackReason | null): void {
+    const reported = useRef(false)
+    useEffect(() => {
+        if (reason === null || reported.current) return
+        reported.current = true
+        console.info(JSON.stringify({ event: 'piece_viewer_fallback', pieceId, reason }))
+    }, [pieceId, reason])
+}
+
 function validatedPiece(value: unknown): PieceSpec | null {
     try {
         const parsed = pieceSpecSchema.safeParse(value)
@@ -104,7 +124,9 @@ export function PieceViewer({ piece, fallbackImageUri, height = 320, onFrame }: 
     const parsed = useMemo(() => validatedPiece(piece), [piece])
     const size = Number.isFinite(height) ? Math.max(160, Math.min(640, height)) : 320
     const fallback = <PieceCard name={parsed?.name ?? fallbackName(piece)} imageUri={fallbackImageUri} height={size} />
-    if (parsed === null || !availableGL()) return fallback
+    const glAvailable = parsed !== null && availableGL()
+    useFallbackLog(parsed?.id ?? null, parsed === null ? 'invalid_spec' : glAvailable ? null : 'gl_unavailable')
+    if (parsed === null || !glAvailable) return fallback
     return (
         <ValidPieceViewer
             key={JSON.stringify(parsed)}
@@ -133,7 +155,9 @@ function ValidPieceViewer({
     onFrame?: (timestampMs: number) => void
 }): ReactElement {
     const { colors } = useTheme()
-    const [failed, setFailed] = useState(false)
+    const [failureReason, setFailureReason] = useState<FallbackReason | null>(null)
+    const failed = failureReason !== null
+    useFallbackLog(piece.id, failureReason)
     const host = useRef<ComponentRef<typeof View>>(null)
     const mounted = useRef(true)
     const unavailable = useRef(false)
@@ -166,16 +190,22 @@ function ValidPieceViewer({
             // GLView also releases its owned context; context loss must keep the fallback usable.
         }
     }, [clearStartup])
-    const fail = useCallback((): void => {
-        unavailable.current = true
-        release()
-        if (mounted.current) setFailed(true)
-    }, [release])
+    const fail = useCallback(
+        (reason: FallbackReason): void => {
+            unavailable.current = true
+            release()
+            if (mounted.current) setFailureReason(reason)
+        },
+        [release],
+    )
     const watchStartup = useCallback((): void => {
         clearStartup()
         if (!mounted.current || unavailable.current || scene.current !== null) return
         // A native surface can fail without ever delivering onContextCreate; it still resolves to the name card.
-        startupTimer.current = setTimeout(fail, Math.max(0, startupDeadline.current - performance.now()))
+        startupTimer.current = setTimeout(
+            () => fail('startup_timeout'),
+            Math.max(0, startupDeadline.current - performance.now()),
+        )
     }, [clearStartup, fail])
     const draw = useCallback((): void => {
         if (!mounted.current || scene.current === null || frame.current !== null) return
@@ -187,7 +217,7 @@ function ValidPieceViewer({
                 reportFrame.current?.(timestamp)
                 if (moving) draw()
             } catch {
-                fail()
+                fail('draw_failed')
             }
         })
     }, [fail])
@@ -211,7 +241,7 @@ function ValidPieceViewer({
                 clearStartup()
                 draw()
             } catch {
-                if (epoch === creationEpoch.current) fail()
+                if (epoch === creationEpoch.current) fail('scene_creation_failed')
             }
         },
         [piece, colors.surfaceSunken, draw, release, fail, watchStartup, clearStartup],
@@ -287,7 +317,7 @@ function ValidPieceViewer({
         [draw],
     )
     if (failed) return fallback
-    const webEvents = Platform.OS === 'web' ? { onContextLost: fail } : {}
+    const webEvents = Platform.OS === 'web' ? { onContextLost: (): void => fail('context_lost') } : {}
     return (
         <View style={styles.viewer} testID="piece-viewer">
             <Heading>{piece.name}</Heading>
@@ -318,7 +348,7 @@ function ValidPieceViewer({
                 }}
                 {...responder.panHandlers}
             >
-                <GLBoundary fallback={fallback} failed={fail}>
+                <GLBoundary fallback={fallback} failed={(): void => fail('gl_surface_failed')}>
                     <Suspense fallback={fallback}>
                         <LazyGLView style={styles.gl} onContextCreate={create} onLayout={draw} {...webEvents} />
                     </Suspense>
@@ -379,6 +409,51 @@ function specsById(pieces: readonly PieceSpec[]): Map<string, PieceSpec> {
     return specs
 }
 
+/** One linked piece in Guide mode: its own inline viewer, with a ready marker set by the first real 3D frame. */
+function GuidePieceCard({
+    row,
+    cutout,
+    onFrame,
+}: {
+    row: GridRow
+    cutout: string | undefined
+    onFrame: ((timestampMs: number) => void) | undefined
+}): ReactElement {
+    const [ready, setReady] = useState(false)
+    const readyRef = useRef(false)
+    useFallbackLog(
+        row.pieceId,
+        row.spec === undefined && row.state === 'unavailable' ? 'registry_rejected_or_unavailable' : null,
+    )
+    const pieceFrame = useCallback(
+        (timestampMs: number): void => {
+            onFrame?.(timestampMs)
+            if (readyRef.current) return
+            readyRef.current = true
+            setReady(true)
+        },
+        [onFrame],
+    )
+    return (
+        <View style={styles.guideCard} testID={`piece-card-${row.pieceId}`}>
+            <View style={styles.guideHeader}>
+                <Body>{row.name}</Body>
+                {row.quantity === null ? null : (
+                    <View testID={`piece-quantity-${row.pieceId}`}>
+                        <Caption>{`×${row.quantity}`}</Caption>
+                    </View>
+                )}
+            </View>
+            {row.spec === undefined ? (
+                <PiecePlaceholder pieceId={row.pieceId} name={row.name} state={row.state} imageUri={cutout} />
+            ) : (
+                <PieceViewer piece={row.spec} fallbackImageUri={cutout} height={240} onFrame={pieceFrame} />
+            )}
+            {ready ? <View testID={`piece-viewer-ready-${row.pieceId}`} style={styles.marker} /> : null}
+        </View>
+    )
+}
+
 function PiecePlaceholder({
     pieceId,
     name,
@@ -411,7 +486,7 @@ function PiecePlaceholder({
     )
 }
 
-/** The grid stays 2D; selecting a tile focuses the single GPU viewer instead of allocating a context per tile. */
+/** Guides show every linked piece inline; other grids share one GPU viewer selected by the 2D tiles. */
 export function PiecesGrid({
     pieces,
     pieceIds,
@@ -452,34 +527,21 @@ export function PiecesGrid({
     }, [accepted, items, pieces, pieceIds])
     const [selected, setSelected] = useState<string | null>(null)
     const current = rows.find((row) => row.pieceId === selected) ?? rows[0]
-    const currentID = current?.pieceId ?? null
-    const specJSON = current?.spec === undefined ? null : JSON.stringify(current.spec)
-    const [readyToken, setReadyToken] = useState<string | null>(null)
-    const readyRef = useRef<string | null>(null)
-    const reportFrame = useRef(onFrame)
-    useEffect(() => {
-        reportFrame.current = onFrame
-    }, [onFrame])
-    // A different piece or a different spec for the same id starts a new viewer, so its readiness must restart.
-    useEffect(() => {
-        readyRef.current = null
-        setReadyToken(null)
-    }, [currentID, specJSON])
-    const frameFromCurrent = useCallback(
-        (timestampMs: number): void => {
-            reportFrame.current?.(timestampMs)
-            if (currentID === null || specJSON === null) return
-            const token = `${currentID}\n${specJSON}`
-            // After the first frame for this spec, later frames only reach the external callback; no state update.
-            if (readyRef.current === token) return
-            readyRef.current = token
-            setReadyToken(token)
-        },
-        [currentID, specJSON],
-    )
     if (current === undefined) return <PieceCard name="Assembly pieces" height={240} />
-    const ready =
-        items !== undefined && currentID !== null && specJSON !== null && readyToken === `${currentID}\n${specJSON}`
+    // Guide mode: every linked piece shows its own 3D view; the legacy single shared viewer stays for non-guide grids.
+    if (items !== undefined)
+        return (
+            <View style={styles.viewer} testID="pieces-grid">
+                {rows.map((row) => (
+                    <GuidePieceCard
+                        key={`${row.pieceId}\n${row.spec === undefined ? '' : JSON.stringify(row.spec)}`}
+                        row={row}
+                        cutout={cutouts?.[row.pieceId]}
+                        onFrame={onFrame}
+                    />
+                ))}
+            </View>
+        )
     return (
         <View style={styles.viewer} testID="pieces-grid">
             {current.spec === undefined ? (
@@ -490,13 +552,8 @@ export function PiecesGrid({
                     imageUri={cutouts?.[current.pieceId]}
                 />
             ) : (
-                <PieceViewer
-                    piece={current.spec}
-                    fallbackImageUri={cutouts?.[current.pieceId]}
-                    onFrame={items === undefined ? onFrame : frameFromCurrent}
-                />
+                <PieceViewer piece={current.spec} fallbackImageUri={cutouts?.[current.pieceId]} onFrame={onFrame} />
             )}
-            {ready ? <View testID={`piece-viewer-ready-${current.pieceId}`} style={styles.marker} /> : null}
             <View style={styles.grid}>
                 {rows.map((row) => (
                     <Pressable
@@ -530,6 +587,8 @@ export function PiecesGrid({
 
 const styles = StyleSheet.create({
     viewer: { gap: space.sm },
+    guideCard: { gap: space.xs },
+    guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
     viewport: { borderRadius: radius.lg, overflow: 'hidden' },
     gl: { flex: 1 },
     fallback: {

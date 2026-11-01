@@ -432,9 +432,13 @@ async function restoredSnapshot(storage: KeyValueStorage, manifest: Manifest): P
     return snapshotOf(manifest.status === 'done' ? 'ready' : 'incomplete', manifest.contentHash, entries, timing)
 }
 
-/** Takes up to `PIECE_CONCURRENCY` batches: repairs first (they are due), then fresh parts, each batch at most eight. */
-function takeWave(entries: readonly Entry[]): Entry[][] {
+/** The opening step gets singleton batches first; afterward, repairs and fresh parts share the normal bounded waves. */
+function takeWave(entries: readonly Entry[], priorityPieceIds: readonly string[]): Entry[][] {
     const pending = entries.filter((entry) => entry.state === 'pending')
+    for (const id of priorityPieceIds) {
+        const firstStepPiece = pending.find((entry) => entry.part.id === id)
+        if (firstStepPiece !== undefined) return [[firstStepPiece]]
+    }
     const queue = [
         ...pending.filter((entry) => entry.attempts === 1),
         ...pending.filter((entry) => entry.attempts === 0),
@@ -582,8 +586,12 @@ export class PieceRegistry {
 
     getSnapshot = (): PieceSnapshot => this.current
 
-    /** Starts (or joins) the registry for the manual's content. Resolves once that content is settled or stopped. */
-    prepare(manual: PieceManualInput, loadPageUris: () => Promise<Readonly<Record<string, string>>>): Promise<void> {
+    /** Starts (or joins) the registry; opening-step priorities change scheduling only, never its cache identity. */
+    prepare(
+        manual: PieceManualInput,
+        loadPageUris: () => Promise<Readonly<Record<string, string>>>,
+        priorityPieceIds: readonly string[] = [],
+    ): Promise<void> {
         if (manual.parts.length === 0) return Promise.resolve()
         const hash = manualPieceContentHash(manual)
         if (this.target === hash) return this.active.get(hash) ?? Promise.resolve()
@@ -600,7 +608,13 @@ export class PieceRegistry {
             contentHash: hash,
             timing: { requestedAt, startedAt: null, readyAt: null },
         })
-        const settled = this.settle(hash, manual, loadPageUris, requestedAt).finally(() => this.active.delete(hash))
+        const settled = this.settle(
+            hash,
+            manual,
+            loadPageUris,
+            requestedAt,
+            priorityPieceIds.slice(0, MAX_PARTS),
+        ).finally(() => this.active.delete(hash))
         this.active.set(hash, settled)
         return settled
     }
@@ -630,6 +644,7 @@ export class PieceRegistry {
         manual: PieceManualInput,
         loadPageUris: () => Promise<Readonly<Record<string, string>>>,
         requestedAt: number,
+        priorityPieceIds: readonly string[],
     ): Promise<void> {
         try {
             const read = await readManifest(this.ports.storage, hash)
@@ -638,7 +653,7 @@ export class PieceRegistry {
                 return this.publish(hash, await restoredSnapshot(this.ports.storage, read.manifest))
             const generate = this.ports.generate
             if (generate === null) return this.publish(hash, unavailable(hash))
-            this.publish(hash, await this.run(hash, manual, loadPageUris, generate, requestedAt))
+            this.publish(hash, await this.run(hash, manual, loadPageUris, generate, requestedAt, priorityPieceIds))
         } catch {
             this.publish(hash, unavailable(hash))
         }
@@ -655,6 +670,7 @@ export class PieceRegistry {
         loadPageUris: () => Promise<Readonly<Record<string, string>>>,
         generate: PieceGenerationPort,
         requestedAt: number,
+        priorityPieceIds: readonly string[],
     ): Promise<PieceSnapshot> {
         let pageUris: Readonly<Record<string, string>>
         try {
@@ -682,7 +698,7 @@ export class PieceRegistry {
         const persist = (): Promise<boolean> => writeManifest(this.ports.storage, toManifest(run, ledger))
         if (!(await persist())) return unavailable(hash)
         for (;;) {
-            const wave = takeWave(run.entries)
+            const wave = takeWave(run.entries, priorityPieceIds)
             if (wave.length === 0) {
                 run.status = 'done'
                 run.timing.readyAt = this.now()

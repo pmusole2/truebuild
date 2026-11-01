@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
-import { useEffect, type ReactElement } from 'react'
+import { StrictMode, useEffect, type ReactElement } from 'react'
 import { Dimensions, PanResponder, Platform, ScrollView, StyleSheet, View } from 'react-native'
 import type { TestInstance } from 'test-renderer'
 import {
@@ -1434,4 +1434,37 @@ describe('the actual v2 catalog renderer', () => {
             await view.unmount()
         }
     })
+})
+
+it('shows each resolved Guide pill once across nested containers without dropping distinct labels', async () => {
+    const { inputs, bindings, controller } = await setup()
+    const more: ScreenNodeV2 = { type: 'Badge', label: { kind: 'literal', text: 'More' }, tone: 'info' }
+    const parts: ScreenNodeV2 = { type: 'Badge', label: { kind: 'literal', text: 'Close' }, tone: 'neutral' }
+    const extras: ScreenNodeV2[] = [
+        more,
+        {
+            type: 'Row',
+            gap: 'sm',
+            align: 'center',
+            justify: 'start',
+            wrap: true,
+            children: [more, parts, { type: 'Stack', gap: 'sm', align: 'stretch', children: [more, more, more] }],
+        },
+    ]
+    const view = await render(
+        <StrictMode>{wrap(<DocumentRenderer document={compose(inputs, extras)} bindings={bindings} />)}</StrictMode>,
+    )
+    try {
+        expect(view.getAllByText('More')).toHaveLength(1)
+        expect(view.getAllByText('Close')).toHaveLength(1)
+        await view.rerender(
+            <StrictMode>
+                {wrap(<DocumentRenderer document={compose(inputs, extras)} bindings={bindings} />)}
+            </StrictMode>,
+        )
+        expect(view.getAllByText('More')).toHaveLength(1)
+    } finally {
+        await view.unmount()
+        controller.dispose()
+    }
 })

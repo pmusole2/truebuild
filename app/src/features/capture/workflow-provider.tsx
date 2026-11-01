@@ -8,7 +8,7 @@ import type { ScreenStore } from '../screens/screen-store'
 import { sessionForPrecompute, sessionForScreens } from '../screens/screen-spec'
 import { testRestoreDelayMs } from './test-controls'
 import type { DocumentStore } from '../document-runtime/store'
-import { manualPieceInputs, type PieceRegistry, type PieceSnapshot } from '../pieces/piece-registry'
+import { manualPieceInputs, stepPiecesForStep, type PieceRegistry, type PieceSnapshot } from '../pieces/piece-registry'
 import { createPieces } from '../pieces/piece-runtime'
 import { homeUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
 import { editableQuestions } from './quick-check-model'
@@ -127,8 +127,11 @@ function ControllerHost({
     // A parsed manual starts its piece registry once: stored results answer, otherwise one background run begins.
     useEffect(() => {
         if (pieces === null || session === undefined || session.parts.length === 0) return
-        void pieces.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, () =>
-            controller.pageImages(session.manualId, session.revision),
+        const firstStepId = session.reviewedSteps[0]?.stepId ?? session.rawExtraction?.steps[0]?.stepId ?? null
+        void pieces.prepare(
+            { pages: session.pages, parts: manualPieceInputs(session) },
+            () => controller.pageImages(session.manualId, session.revision),
+            stepPiecesForStep(session, firstStepId).map((piece) => piece.pieceId),
         )
     }, [controller, pieces, session])
     // The context moved on: a newer revision of the selected manual aborts and forgets the older screens. A reviewed
