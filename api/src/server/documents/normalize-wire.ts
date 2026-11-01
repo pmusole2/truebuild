@@ -116,11 +116,12 @@ export function normalizeDocumentWire(
     }
     for (const node of copied.nodes) {
         if (!object(node) || idOf(node.id) === null) return { value, issueCodes: [] }
+        // A leaf's unexpected children field is payload: an invalid overlay may be dropped, but a body leaf stays invalid.
         if (
+            typeof node.type === 'string' &&
+            containers.has(node.type) &&
             'children' in node &&
-            (typeof node.type !== 'string' ||
-                !containers.has(node.type) ||
-                !Array.isArray(node.children) ||
+            (!Array.isArray(node.children) ||
                 node.children.length > DOCUMENT_V2_LIMITS.children ||
                 node.children.some((child) => idOf(child) === null))
         ) {
@@ -151,7 +152,7 @@ export function normalizeDocumentWire(
             return false
         }
         used.add(id)
-        if (Array.isArray(node.children)) {
+        if (typeof node.type === 'string' && containers.has(node.type) && Array.isArray(node.children)) {
             const originalLength = node.children.length
             const children = node.children.filter((child) => visit(idOf(child)!, depth + 1))
             node.children = children

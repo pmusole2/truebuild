@@ -116,6 +116,7 @@ describe('document wire normalization', () => {
             { ...coach, heading: 'Unlisted heading' },
             { ...coach, placement: 'elsewhere' },
             { ...coach, targetId: 'camera-shutter' },
+            { ...coach, children: ['unknown'] },
             { id: 'coach', type: 'Spacer', size: 'md' },
         ]) {
             const invalid = { ...value, nodes: [...base.nodes, invalidCoach] }
@@ -138,6 +139,16 @@ describe('document wire normalization', () => {
         const bodyResult = normalizeDocumentWire(bodyCoach, home).value as typeof bodyCoach
         expect(bodyResult.nodes.find((node) => node.id === 'coach')?.heading).toBe('Unlisted heading')
         expect(evaluateWire(bodyResult, home).ok).toBe(false)
+        const bodyChildren = {
+            ...bodyCoach,
+            nodes: bodyCoach.nodes.map((node) => (node.id === 'coach' ? { ...node, children: ['unknown'] } : node)),
+        }
+        const bodyChildrenResult = normalizeDocumentWire(bodyChildren, home).value as typeof bodyChildren
+        expect(bodyChildrenResult.nodes.find((node) => node.id === 'coach')).toMatchObject({
+            heading: 'Unlisted heading',
+            children: ['unknown'],
+        })
+        expect(evaluateWire(bodyChildrenResult, home).ok).toBe(false)
         const back = { label: 'Back', intent: { intent: 'navigate', target: 'guide' } }
         const homeBack = { ...base, header: { ...base.header, back } }
         expect((normalizeDocumentWire(homeBack, home).value as typeof homeBack).header.back).toBeNull()
