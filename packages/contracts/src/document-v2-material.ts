@@ -75,6 +75,8 @@ export interface DocumentMaterialV2 {
     completion: 'witnessed' | 'unwitnessed'
     /** Parts of the current step whose names are known (a tile resolves name and quantity from the session). */
     partIds: string[]
+    /** Ids of the supplied piece registry (empty when none is supplied): the only pieces a native piece node may name. */
+    pieceIds: string[]
     /** Indexes of the step's own diagram sources (empty when the step cites none). */
     diagram: number[]
 }
@@ -433,6 +435,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             ? 'witnessed'
             : 'unwitnessed',
         partIds: overviewSteps === null ? partIds.slice(0, 12) : partIds,
+        pieceIds: (inputs.pieces ?? []).map((piece) => piece.id),
         diagram,
     }
 }

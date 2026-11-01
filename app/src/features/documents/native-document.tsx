@@ -62,6 +62,7 @@ import { originId, RenderOriginProvider, mergeNativeIds, type RenderOrigin } fro
 import { useJudge } from '../screens/judge-context'
 import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
+import { PieceViewer, PiecesGrid } from '../pieces/piece-viewer'
 import type { FrameBindings } from './types'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
@@ -1762,6 +1763,19 @@ function NodeContent({
             )
         case 'PieceTile':
             return <PieceTile node={node} environment={environment} path={path} />
+        // The registry resolves each id. An id it no longer holds renders the viewer's fallback card, never a crash.
+        case 'PieceViewer':
+            return (
+                <View nativeID={mark}>
+                    <PieceViewer piece={bindings.pieces?.find((piece) => piece.id === node.pieceId)} />
+                </View>
+            )
+        case 'PiecesGrid':
+            return (
+                <View nativeID={mark}>
+                    <PiecesGrid pieces={bindings.pieces ?? []} pieceIds={node.pieceIds} />
+                </View>
+            )
         case 'VerdictCard': {
             return <Verdict node={node} environment={environment} path={path} />
         }

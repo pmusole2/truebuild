@@ -35,6 +35,8 @@ const CONTEXT_BOUND_NODES: ReadonlySet<ScreenNodeTypeV2> = new Set<ScreenNodeTyp
     'Citation',
     'ManualPage',
     'PieceTile',
+    'PieceViewer',
+    'PiecesGrid',
     'VerdictCard',
     'FactEditor',
     'CameraView',

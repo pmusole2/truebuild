@@ -3,6 +3,8 @@ export const NATIVE_CAPABILITY_TYPES = [
     'CameraView',
     'ManualPage',
     'PieceTile',
+    'PieceViewer',
+    'PiecesGrid',
     'VerdictCard',
     'JudgePanel',
     'CompareColumns',

@@ -43,6 +43,15 @@ function ThemedStack(): ReactElement {
                         animation: reduceMotion ? 'none' : 'slide_from_bottom',
                     }}
                 />
+                <Stack.Protected
+                    guard={
+                        __DEV__ &&
+                        process.env.EXPO_PUBLIC_PIECE_VIEWER_TEST === '1' &&
+                        process.env.EXPO_PUBLIC_PROVIDER_MODE === 'fixture'
+                    }
+                >
+                    <Stack.Screen name="piece-viewer-test" options={{ headerShown: false }} />
+                </Stack.Protected>
             </Stack>
         </>
     )

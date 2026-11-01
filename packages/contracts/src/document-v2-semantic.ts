@@ -175,6 +175,15 @@ export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentM
             case 'PieceTile':
                 if (!material.partIds.includes(node.partId)) add(path, 'unknown_part')
                 break
+            case 'PieceViewer':
+                if (material.pieceIds.length === 0) add(path, 'piece_unavailable')
+                else if (!material.pieceIds.includes(node.pieceId)) add(path, 'unknown_piece_id')
+                break
+            case 'PiecesGrid':
+                if (material.pieceIds.length === 0) add(path, 'piece_unavailable')
+                else if (node.pieceIds.some((pieceId) => !material.pieceIds.includes(pieceId)))
+                    add(path, 'unknown_piece_id')
+                break
             case 'Image':
                 if (node.source.kind === 'page' && !pageIds.has(node.source.pageId)) add(path, 'unknown_page')
                 if (node.source.kind === 'part' && !material.partIds.includes(node.source.partId))

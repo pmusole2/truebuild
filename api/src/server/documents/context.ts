@@ -74,6 +74,7 @@ function nativeNodes(inputs: ScreenContextInputsV2, material: DocumentMaterialV2
             ? ['Choice:language']
             : []),
         ...(ui?.capture && inputs.captureId !== null && material.partIds.length > 0 ? ['Choice:part-target'] : []),
+        ...(material.pieceIds.length > 0 ? ['PieceViewer', 'PiecesGrid'] : []),
     ]
 }
 
@@ -181,6 +182,8 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 ),
                 cameraCues: CAMERA_CUES_V2,
                 cameraPills: CAMERA_PILLS_V2,
+                // The registry's ids only, present only where a registry was supplied (never its geometry).
+                ...(used.pieces == null ? {} : { pieceIds: material.pieceIds }),
             },
         },
     }

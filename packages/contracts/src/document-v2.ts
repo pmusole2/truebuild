@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { PIECE_SPEC_LIMITS } from './piece-spec'
 import { canonicalJson } from './screen-context'
 import { aiEffortSchema } from './telemetry'
 import {
@@ -412,6 +413,9 @@ const pieceTileNode = leaf('PieceTile', {
     showQuantity: z.boolean(),
     size: z.enum(['sm', 'md', 'lg']),
 })
+// Piece registry views: each names only ids of the registry the inputs supply (see `ScreenContextInputsV2.pieces`).
+const pieceViewerNode = leaf('PieceViewer', { pieceId: id })
+const piecesGridNode = leaf('PiecesGrid', { pieceIds: z.array(id).min(1).max(PIECE_SPEC_LIMITS.pieces) })
 const verdictCardNode = leaf('VerdictCard', {
     result: z.enum(['check', 'question']),
     variant: z.enum(['banner', 'card']),
@@ -470,6 +474,8 @@ export const LEAF_SCHEMAS_V2 = [
     cameraViewNode,
     manualPageNode,
     pieceTileNode,
+    pieceViewerNode,
+    piecesGridNode,
     verdictCardNode,
     judgePanelNode,
     compareColumnsNode,
@@ -547,6 +553,8 @@ export const NATIVE_NODE_TYPES = [
     'CameraView',
     'ManualPage',
     'PieceTile',
+    'PieceViewer',
+    'PiecesGrid',
     'VerdictCard',
     'JudgePanel',
     'CompareColumns',

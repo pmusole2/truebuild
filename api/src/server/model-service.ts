@@ -1301,6 +1301,7 @@ export function createModelHandlers(options: {
                 completedStepIds: metadata.completedStepIds,
                 uiState: metadata.uiState,
                 ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
+                ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
             }
             let value: Extract<z.infer<typeof screensV2ResultSchema>, { status: 'ok' }>['value'] = {
                 document: null,

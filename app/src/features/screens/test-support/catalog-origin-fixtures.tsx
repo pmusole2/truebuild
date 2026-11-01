@@ -16,6 +16,7 @@ import type { FrameBindings } from '../../documents/types'
 import { sha256Hex } from '../../documents/sha256'
 import { documentForV2 } from './fixture-server'
 import { entry, runtime, source } from './route-harness'
+import { VIEWER_FIXTURE_PIECES } from '../../pieces/__fixtures__/piece-spec'
 
 const noop = (): void => undefined
 /** Purposeful catalog substitutions: actual step status/checklist/navigation, not hidden nodes or metric filler. */
@@ -37,6 +38,8 @@ function catalogNodes(inputs: ScreenContextInputsV2): readonly ScreenNodeV2[] {
         { type: 'Meter', binding: 'build', label: null, tone: 'neutral' },
         { type: 'Stepper', binding: 'steps', label: null },
         { type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: true },
+        { type: 'PieceViewer', pieceId: VIEWER_FIXTURE_PIECES[0]!.id },
+        { type: 'PiecesGrid', pieceIds: VIEWER_FIXTURE_PIECES.map((piece) => piece.id) },
         { type: 'Divider', inset: true },
         { type: 'Spacer', size: 'sm' },
     ]
@@ -106,6 +109,7 @@ export async function catalogOriginFixture(kind: ScreenKindV2): Promise<{
         label: questions.length === 0 ? undefined : `Question 1 of ${questions.length}`,
     }
     const inputs = documentInputs(kind, { state, entry: selected }, quick, kind === 'more')
+    if (kind === 'guide') inputs.pieces = VIEWER_FIXTURE_PIECES
     if (kind === 'camera')
         inputs.uiState = {
             ...inputs.uiState,
@@ -153,6 +157,7 @@ export async function catalogOriginFixture(kind: ScreenKindV2): Promise<{
             closeSheet: noop,
         },
         session: selected?.session,
+        ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
         pageUris: state.pageUris,
         pageImageStatus: 'ready',
         capture: state.capture,

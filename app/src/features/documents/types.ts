@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react'
-import type { AppIntent, ManualSession, ScreenDocumentV2, TextRefV2, VariantState } from '@truebuild/contracts'
+import type {
+    AppIntent,
+    ManualSession,
+    PieceSpec,
+    ScreenDocumentV2,
+    TextRefV2,
+    VariantState,
+} from '@truebuild/contracts'
 import type { CaptureView, SegmentMark } from '../capture/controller'
 import type { ResolvedIntent } from '../screens/intents'
 import type { LiveScreen } from '../screens/live'
@@ -59,4 +66,9 @@ export type FrameBindings = {
     readonly operationNotice?: string | null
     readonly answeredQuestion?: string | null
     readonly language?: { readonly value: string; readonly onChange: (value: string) => void }
+    /**
+     * The piece registry the context was composed for: resolves each native piece node by id. Absent, or an id it no
+     * longer holds: the viewer shows its fallback card (no geometry is drawn and nothing throws).
+     */
+    readonly pieces?: readonly PieceSpec[]
 }

@@ -56,6 +56,7 @@ export function inputsFromDocumentMetadata(metadata: ModelScreensV2Metadata): Sc
         failure: metadata.failure,
         completedStepIds: metadata.completedStepIds,
         uiState: metadata.uiState,
+        ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
     }
 }
 

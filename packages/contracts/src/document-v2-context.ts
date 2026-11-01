@@ -9,6 +9,7 @@ import {
     type ScreenResultInput,
 } from './screen-context'
 import type { ScreenFailure, ScreenKind } from './screen'
+import type { PieceSpec } from './piece-spec'
 import {
     SCREEN_CATALOG_V2_VERSION,
     type DocumentSourceV2,
@@ -41,6 +42,11 @@ export interface ScreenContextInputsV2 {
     uiState?: ScreenUiStateV2 | null | undefined
     /** More only: the answer held beside a retained check (see `CompanionAnswerV2`). Absent/null: none. */
     companionAnswer?: CompanionAnswerV2 | null | undefined
+    /**
+     * The app's piece registry: the only pieces a native piece node may name. Absent/null: none is available, and the
+     * key of the screen is exactly what it was before the registry existed.
+     */
+    pieces?: readonly PieceSpec[] | null | undefined
 }
 
 /** A More that is about one reviewed step (the person opened it from that step); a global More has no step. */
@@ -65,7 +71,7 @@ export const companionAnswerOfV2 = (
 export function usedScopeV2(inputs: ScreenContextInputsV2): ScreenContextInputsV2 {
     const global = inputs.kind === 'more' && inputs.stepId === null
     const base: ScreenContextInputsV2 = global
-        ? { ...inputs, session: null, captureId: null, result: null, companionAnswer: null }
+        ? { ...inputs, session: null, captureId: null, result: null, companionAnswer: null, pieces: null }
         : inputs
     const companionAnswer = companionAnswerOfV2(base)
     return companionAnswer === null && base.companionAnswer === undefined ? base : { ...base, companionAnswer }
@@ -301,6 +307,8 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
                       }),
                   }),
             ...(figure === null ? {} : { figure: figure.ref }),
+            // The piece registry is grounding only where supplied: absent keeps every existing key exactly as it was.
+            ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
         },
         identity: { ...parts.identity, captureId: captureWitnessV2(inputs) },
     }

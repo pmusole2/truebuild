@@ -540,6 +540,7 @@ export function DocumentSurface({
             closeSheet: more.hide,
         },
         session: entry?.session,
+        ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
         pageUris: state.pageUris,
         pageImageStatus: state.storageReadOnly
             ? 'unavailable'

@@ -35,6 +35,8 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
+import { piecesSpecSchema } from './piece-spec'
+
 export const MAX_PARSE_PAGES = 8
 export const PARSE_SPLIT_MESSAGE = 'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.'
 export const parseLanguageSchema = z
@@ -525,6 +527,11 @@ export const modelScreensV2MetadataSchema = z
         /** More only: the answer held beside a retained check on the same held photo (absent/null: none). */
         companionAnswer: companionAnswerV2Schema.nullable().optional(),
         /**
+         * generate only: the app's piece registry (absent/null: none). It grounds native piece nodes; the model never
+         * generates geometry, it only names ids the registry supplies.
+         */
+        pieces: piecesSpecSchema.nullable().optional(),
+        /**
          * precompute/progress/cancel: the kinds the job prepares (a finite allowlist; absent = the existing full set). A
          * client that wants only the guides of unreviewed steps sends `['guide']` on the whole job. Only precompute acts
          * on it; the other two name the same job. The server's generative-UI mode still bounds what is prepared.
@@ -535,6 +542,8 @@ export const modelScreensV2MetadataSchema = z
         const issue = (message: string): void => {
             ctx.addIssue({ code: 'custom', message })
         }
+        if (value.pieces != null && value.op !== 'generate')
+            issue('A piece registry is sent with a generate request only')
         if (value.requestedKinds !== undefined) {
             if (value.op === 'generate') issue('A single screen takes no requested kinds')
             if (new Set(value.requestedKinds).size !== value.requestedKinds.length) issue('Requested kinds are unique')
@@ -647,6 +656,7 @@ export function screensV2GenerateRequest(
         ...(inputs.completedStepIds === undefined ? {} : { completedStepIds: [...inputs.completedStepIds] }),
         ...(inputs.uiState === undefined ? {} : { uiState: inputs.uiState }),
         ...(inputs.companionAnswer == null ? {} : { companionAnswer: inputs.companionAnswer }),
+        ...(inputs.pieces == null ? {} : { pieces: [...inputs.pieces] }),
     }
 }
 
