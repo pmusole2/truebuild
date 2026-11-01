@@ -329,18 +329,103 @@ function ValidPieceViewer({
     )
 }
 
+const MAX_GRID_ITEMS = 30
+
+/** One closed step-catalog entry; a named tile exists even while its 3D spec is still pending. */
+export type PieceGridItem = {
+    pieceId: string
+    name: string
+    quantity: number | null
+    state?: 'pending' | 'unavailable'
+}
+
+type GridRow = {
+    pieceId: string
+    name: string
+    quantity: number | null
+    state?: PieceGridItem['state']
+    spec: PieceSpec | undefined
+}
+
+/** Only a known positive safe integer is shown; an unknown count is absent rather than guessed. */
+function knownQuantity(value: unknown): number | null {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function catalogItems(items: readonly PieceGridItem[], pieceIds: readonly string[] | undefined): PieceGridItem[] {
+    if (!Array.isArray(items) || items.length > MAX_GRID_ITEMS) return []
+    const ids = new Set<string>()
+    for (const item of items) {
+        if (!item || typeof item.pieceId !== 'string' || item.pieceId.length === 0 || typeof item.name !== 'string')
+            return []
+        if (ids.has(item.pieceId)) return []
+        ids.add(item.pieceId)
+    }
+    if (pieceIds === undefined) return [...items]
+    if (!Array.isArray(pieceIds)) return []
+    const wanted = new Set(pieceIds)
+    if (wanted.size > MAX_GRID_ITEMS) return []
+    return items.filter((item) => wanted.has(item.pieceId))
+}
+
+/** Valid specs only; a spec whose id is ambiguous is dropped so its tile stays a placeholder. */
+function specsById(pieces: readonly PieceSpec[]): Map<string, PieceSpec> {
+    const specs = new Map<string, PieceSpec>()
+    if (!Array.isArray(pieces) || pieces.length > MAX_GRID_ITEMS) return specs
+    const values = pieces.map(validatedPiece).filter((piece): piece is PieceSpec => piece !== null)
+    const counts = new Map<string, number>()
+    for (const piece of values) counts.set(piece.id, (counts.get(piece.id) ?? 0) + 1)
+    for (const piece of values) if (counts.get(piece.id) === 1) specs.set(piece.id, piece)
+    return specs
+}
+
+function PiecePlaceholder({
+    pieceId,
+    name,
+    state,
+    imageUri,
+}: {
+    pieceId: string
+    name: string
+    state?: PieceGridItem['state']
+    imageUri?: string
+}): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View
+            testID={`piece-placeholder-${pieceId}`}
+            accessibilityLabel={name}
+            style={[styles.fallback, styles.placeholder, { backgroundColor: colors.surfaceSunken }]}
+        >
+            {imageUri === undefined ? null : (
+                <Image
+                    source={{ uri: imageUri }}
+                    resizeMode="contain"
+                    style={styles.fallbackImage}
+                    accessibilityLabel={name}
+                />
+            )}
+            <Heading>{name}</Heading>
+            <Caption>{state === 'unavailable' ? '3D view unavailable' : 'Preparing 3D view'}</Caption>
+        </View>
+    )
+}
+
 /** The grid stays 2D; selecting a tile focuses the single GPU viewer instead of allocating a context per tile. */
 export function PiecesGrid({
     pieces,
     pieceIds,
     cutouts,
     onFrame,
+    items,
 }: {
     readonly pieces: readonly PieceSpec[]
     readonly pieceIds?: readonly string[]
     /** 2D cutout by piece id: the fallback picture while a piece has no usable 3D view. */
     readonly cutouts?: Readonly<Record<string, string>>
     readonly onFrame?: (timestampMs: number) => void
+    /** Closed step catalog: its order and names drive the tiles; pieces only supply the 3D specs. */
+    readonly items?: readonly PieceGridItem[]
 }): ReactElement {
     const { colors } = useTheme()
     const accepted = useMemo((): PieceSpec[] => {
@@ -353,31 +438,89 @@ export function PiecesGrid({
         if (!Array.isArray(pieceIds) || pieceIds.length > 30) return []
         return values.filter((piece) => pieceIds.includes(piece.id))
     }, [pieces, pieceIds])
+    const rows = useMemo((): GridRow[] => {
+        if (items === undefined)
+            return accepted.map((piece) => ({ pieceId: piece.id, name: piece.name, quantity: null, spec: piece }))
+        const specs = specsById(pieces)
+        return catalogItems(items, pieceIds).map((item) => ({
+            pieceId: item.pieceId,
+            name: item.name,
+            quantity: knownQuantity(item.quantity),
+            state: item.state,
+            spec: specs.get(item.pieceId),
+        }))
+    }, [accepted, items, pieces, pieceIds])
     const [selected, setSelected] = useState<string | null>(null)
-    const current = accepted.find((piece) => piece.id === selected) ?? accepted[0]
+    const current = rows.find((row) => row.pieceId === selected) ?? rows[0]
+    const currentID = current?.pieceId ?? null
+    const specJSON = current?.spec === undefined ? null : JSON.stringify(current.spec)
+    const [readyToken, setReadyToken] = useState<string | null>(null)
+    const readyRef = useRef<string | null>(null)
+    const reportFrame = useRef(onFrame)
+    useEffect(() => {
+        reportFrame.current = onFrame
+    }, [onFrame])
+    // A different piece or a different spec for the same id starts a new viewer, so its readiness must restart.
+    useEffect(() => {
+        readyRef.current = null
+        setReadyToken(null)
+    }, [currentID, specJSON])
+    const frameFromCurrent = useCallback(
+        (timestampMs: number): void => {
+            reportFrame.current?.(timestampMs)
+            if (currentID === null || specJSON === null) return
+            const token = `${currentID}\n${specJSON}`
+            // After the first frame for this spec, later frames only reach the external callback; no state update.
+            if (readyRef.current === token) return
+            readyRef.current = token
+            setReadyToken(token)
+        },
+        [currentID, specJSON],
+    )
     if (current === undefined) return <PieceCard name="Assembly pieces" height={240} />
+    const ready =
+        items !== undefined && currentID !== null && specJSON !== null && readyToken === `${currentID}\n${specJSON}`
     return (
         <View style={styles.viewer} testID="pieces-grid">
-            <PieceViewer piece={current} fallbackImageUri={cutouts?.[current.id]} onFrame={onFrame} />
+            {current.spec === undefined ? (
+                <PiecePlaceholder
+                    pieceId={current.pieceId}
+                    name={current.name}
+                    state={current.state}
+                    imageUri={cutouts?.[current.pieceId]}
+                />
+            ) : (
+                <PieceViewer
+                    piece={current.spec}
+                    fallbackImageUri={cutouts?.[current.pieceId]}
+                    onFrame={items === undefined ? onFrame : frameFromCurrent}
+                />
+            )}
+            {ready ? <View testID={`piece-viewer-ready-${current.pieceId}`} style={styles.marker} /> : null}
             <View style={styles.grid}>
-                {accepted.map((piece) => (
+                {rows.map((row) => (
                     <Pressable
-                        key={piece.id}
-                        testID={`piece-tile-${piece.id}`}
+                        key={row.pieceId}
+                        testID={`piece-tile-${row.pieceId}`}
                         accessibilityRole="button"
-                        accessibilityLabel={`View ${piece.name}`}
-                        accessibilityState={{ selected: current.id === piece.id }}
-                        onPress={(): void => setSelected(piece.id)}
+                        accessibilityLabel={`View ${row.name}`}
+                        accessibilityState={{ selected: current.pieceId === row.pieceId }}
+                        onPress={(): void => setSelected(row.pieceId)}
                         style={[
                             styles.tile,
                             {
                                 backgroundColor: colors.surface,
-                                borderColor: current.id === piece.id ? colors.accent : colors.border,
+                                borderColor: current.pieceId === row.pieceId ? colors.accent : colors.border,
                             },
                         ]}
                     >
-                        <View style={[styles.swatch, { backgroundColor: piece.color }]} />
-                        <Body>{piece.name}</Body>
+                        <View style={[styles.swatch, { backgroundColor: row.spec?.color ?? colors.border }]} />
+                        <Body>{row.name}</Body>
+                        {row.quantity === null ? null : (
+                            <View testID={`piece-quantity-${row.pieceId}`}>
+                                <Caption>{`×${row.quantity}`}</Caption>
+                            </View>
+                        )}
                     </Pressable>
                 ))}
             </View>
@@ -408,4 +551,8 @@ const styles = StyleSheet.create({
         borderWidth: 2,
     },
     swatch: { width: 40, height: 24, borderRadius: radius.sm },
+    // Matches the default viewport height so the placeholder-to-viewer swap does not jump the page.
+    placeholder: { minHeight: 320 },
+    // Test-visible readiness witness only: it takes no layout space and draws nothing.
+    marker: { position: 'absolute', width: 0, height: 0 },
 })

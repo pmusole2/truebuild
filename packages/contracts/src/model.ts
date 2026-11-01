@@ -14,6 +14,8 @@ import {
     screenManualJsonV2,
     screenUiStateV2Schema,
     screenStateSchema,
+    STEP_PIECES_MAX_V2,
+    stepPiecesUsedV2,
     partRegionSchema,
     questionResultSchema,
     screenKindSchema,
@@ -35,7 +37,7 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
-import { piecesSpecSchema } from './piece-spec'
+import { pieceIdSchema, piecesSpecSchema } from './piece-spec'
 
 export const MAX_PARSE_PAGES = 8
 export const PARSE_SPLIT_MESSAGE = 'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.'
@@ -496,6 +498,22 @@ export const companionAnswerV2Schema = z.strictObject({
     value: questionResultSchema,
 })
 
+/**
+ * A guide's closed piece catalog (see `StepPieceV2`): at most `STEP_PIECES_MAX_V2` distinct valid registry ids, each with a
+ * positive safe-integer quantity or null (not known). The app supplies ids and quantities; nothing is inferred.
+ */
+export const stepPiecesV2Schema = z
+    .array(
+        z.strictObject({
+            pieceId: pieceIdSchema,
+            quantity: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable(),
+        }),
+    )
+    .max(STEP_PIECES_MAX_V2)
+    .refine((pieces) => new Set(pieces.map((piece) => piece.pieceId)).size === pieces.length, {
+        message: 'Step piece ids are unique',
+    })
+
 /** The screens a precompute can prepare, by kind (a guide is one per step). The default is all of them. */
 export const PRECOMPUTE_KINDS_V2 = ['reading', 'guide', 'completion', 'judge', 'compare', 'home'] as const
 export type PrecomputeKindV2 = (typeof PRECOMPUTE_KINDS_V2)[number]
@@ -531,6 +549,8 @@ export const modelScreensV2MetadataSchema = z
          * generates geometry, it only names ids the registry supplies.
          */
         pieces: piecesSpecSchema.nullable().optional(),
+        /** generate only, guide only: the step's closed piece catalog (absent/null/empty: none known). Ids and quantities. */
+        stepPieces: stepPiecesV2Schema.nullable().optional(),
         /**
          * precompute/progress/cancel: the kinds the job prepares (a finite allowlist; absent = the existing full set). A
          * client that wants only the guides of unreviewed steps sends `['guide']` on the whole job. Only precompute acts
@@ -544,6 +564,8 @@ export const modelScreensV2MetadataSchema = z
         }
         if (value.pieces != null && value.op !== 'generate')
             issue('A piece registry is sent with a generate request only')
+        if (value.stepPieces != null && (value.op !== 'generate' || value.kind !== 'guide'))
+            issue('A step piece catalog is sent with a guide generate request only')
         if (value.requestedKinds !== undefined) {
             if (value.op === 'generate') issue('A single screen takes no requested kinds')
             if (new Set(value.requestedKinds).size !== value.requestedKinds.length) issue('Requested kinds are unique')
@@ -638,6 +660,7 @@ export function screensV2GenerateRequest(
     sha256Hex: (text: string) => string,
 ): ModelScreensV2Metadata {
     const { session } = inputs
+    const stepPieces = stepPiecesUsedV2(inputs)
     return {
         mode: 'model',
         requestId,
@@ -657,6 +680,7 @@ export function screensV2GenerateRequest(
         ...(inputs.uiState === undefined ? {} : { uiState: inputs.uiState }),
         ...(inputs.companionAnswer == null ? {} : { companionAnswer: inputs.companionAnswer }),
         ...(inputs.pieces == null ? {} : { pieces: [...inputs.pieces] }),
+        ...(stepPieces === null ? {} : { stepPieces: [...stepPieces] }),
     }
 }
 

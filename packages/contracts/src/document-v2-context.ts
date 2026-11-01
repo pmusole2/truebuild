@@ -26,6 +26,18 @@ export interface CompanionAnswerV2 {
     value: QuestionResult
 }
 
+/** Most pieces a guide's step may name (the closed catalog of one step). */
+export const STEP_PIECES_MAX_V2 = 30
+
+/**
+ * One piece a guide's step names: its registry id and its quantity (null: not known). The app draws the piece and its
+ * quantity; the model names the id only.
+ */
+export interface StepPieceV2 {
+    pieceId: string
+    quantity: number | null
+}
+
 /**
  * Everything a version 2 composition is derived from. The API builds its grounding from exactly this and the app builds
  * its request (and its local deterministic document) from exactly this, so the context key cannot drift between them.
@@ -47,6 +59,24 @@ export interface ScreenContextInputsV2 {
      * key of the screen is exactly what it was before the registry existed.
      */
     pieces?: readonly PieceSpec[] | null | undefined
+    /**
+     * Guide only: the closed catalog of the pieces this step names, known before the registry's geometry is ready. Absent,
+     * null or empty: the guide names no piece, and the key of the screen is exactly what it was before this existed.
+     */
+    stepPieces?: readonly StepPieceV2[] | null | undefined
+}
+
+/**
+ * The step's piece catalog as a document uses it: a guide's non-empty `stepPieces`, reduced to its id and quantity, or
+ * null. Every other screen has none, whatever the caller sent, so the key and the request read the same value.
+ */
+export function stepPiecesUsedV2(
+    inputs: Pick<ScreenContextInputsV2, 'kind' | 'stepPieces'>,
+): readonly StepPieceV2[] | null {
+    const pieces = inputs.kind === 'guide' ? inputs.stepPieces : null
+    return pieces != null && pieces.length > 0
+        ? pieces.map((piece) => ({ pieceId: piece.pieceId, quantity: piece.quantity }))
+        : null
 }
 
 /** A More that is about one reviewed step (the person opened it from that step); a global More has no step. */
@@ -74,7 +104,9 @@ export function usedScopeV2(inputs: ScreenContextInputsV2): ScreenContextInputsV
         ? { ...inputs, session: null, captureId: null, result: null, companionAnswer: null, pieces: null }
         : inputs
     const companionAnswer = companionAnswerOfV2(base)
-    return companionAnswer === null && base.companionAnswer === undefined ? base : { ...base, companionAnswer }
+    const scoped = companionAnswer === null && base.companionAnswer === undefined ? base : { ...base, companionAnswer }
+    const stepPieces = stepPiecesUsedV2(scoped)
+    return stepPieces === null && scoped.stepPieces === undefined ? scoped : { ...scoped, stepPieces }
 }
 
 /**
@@ -309,6 +341,8 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
             ...(figure === null ? {} : { figure: figure.ref }),
             // The piece registry is grounding only where supplied: absent keeps every existing key exactly as it was.
             ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
+            // A guide's closed piece catalog: part of the key only where it names pieces (already normalized, see above).
+            ...(inputs.stepPieces == null ? {} : { stepPieces: inputs.stepPieces }),
         },
         identity: { ...parts.identity, captureId: captureWitnessV2(inputs) },
     }

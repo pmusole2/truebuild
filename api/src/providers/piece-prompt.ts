@@ -1,15 +1,4 @@
-import { pieceIdSchema } from '@truebuild/contracts'
-import { z } from 'zod'
-
 export { PIECE_GEOMETRY_PROMPT_VERSION } from '@truebuild/contracts'
-
-/** Bound of the visible-feature description returned beside each piece. It is logged server-side and never answered to the app. */
-export const PIECE_DESCRIPTION_MAX_CHARS = 400
-export const pieceDescriptionSchema = z.strictObject({
-    id: pieceIdSchema,
-    description: z.string().max(PIECE_DESCRIPTION_MAX_CHARS),
-})
-
 export const PIECE_GEOMETRY_INSTRUCTIONS = [
     'Create approximate 3D assembly-piece previews from the supplied manual inventory and part drawing crops. These are visual approximations, never manufacturing dimensions or verified fit.',
     'Return {pieces:[PieceSpec,...]} for exactly the requested ids. Copy each id and name exactly. Every spec has id, name, one hex color, and parts (1–40). Each part has type, dimensions, position:[x,y,z] and rotation:[x,y,z] in radians.',

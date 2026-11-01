@@ -12,7 +12,6 @@ import {
 import { z } from 'zod'
 
 import { wireProposalSchema } from './document-wire'
-import { pieceDescriptionSchema } from './piece-prompt'
 
 // Provider grounding refers to the exact auto-oriented image sent, on Meta's 0–1000 grid.
 // Only small edge overruns are tolerated; inversion, zero area and gross coordinates are refused.
@@ -336,12 +335,22 @@ export function assertStrictSchema(schema: Schema): void {
     if (properties > 5_000 || strings > 120_000 || enums > 1_000) throw new Error('invalid_provider_schema')
 }
 
+// Geometry inference uses the six primitives named by the active prompt. The shared piece contract still accepts
+// lathe/extrude so cached registries and viewer fixtures remain renderable.
+const [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart] =
+    pieceSpecSchema.shape.parts.element.options
+const requestedPieceSchema = pieceSpecSchema.extend({
+    parts: z
+        .array(z.discriminatedUnion('type', [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart]))
+        .min(1)
+        .max(40),
+})
+
 export const metaOutputSchemas = {
     pieces: strictSchema(
         z.toJSONSchema(
             z.strictObject({
-                descriptions: z.array(pieceDescriptionSchema).max(8),
-                pieces: z.array(pieceSpecSchema).max(8),
+                pieces: z.array(requestedPieceSchema).max(8),
             }),
             { target: 'draft-7', io: 'input' },
         ),

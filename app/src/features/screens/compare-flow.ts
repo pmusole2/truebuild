@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { ManualSession, ScreenContextInputsV2 } from '@truebuild/contracts'
 import type { LibraryEntry } from '../capture/library'
+import { stepPiecesForStep } from '../pieces/piece-registry'
 
 // What the Compare screen and the navigation that opens it must agree on. This stays a leaf (no screen or route
 // imports): native-routes already reaches the judge controls through the document renderer, so a shared import there
@@ -31,13 +32,16 @@ export function compareOpeningEntries(entries: readonly LibraryEntry[]): Library
 
 /** The exact document a pane requests: a real v2 guide on its manual's first reviewed step, with no photo or result. */
 export function comparePaneInputs(session: ManualSession): ScreenContextInputsV2 {
+    const stepId = session.reviewedSteps[0]?.stepId ?? null
+    const stepPieces = stepPiecesForStep(session, stepId)
     return {
         kind: 'guide',
         session,
-        stepId: session.reviewedSteps[0]?.stepId ?? null,
+        stepId,
         captureId: null,
         result: null,
         failure: null,
+        ...(stepPieces.length === 0 ? {} : { stepPieces }),
     }
 }
 

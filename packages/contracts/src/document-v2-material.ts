@@ -75,7 +75,10 @@ export interface DocumentMaterialV2 {
     completion: 'witnessed' | 'unwitnessed'
     /** Parts of the current step whose names are known (a tile resolves name and quantity from the session). */
     partIds: string[]
-    /** Ids of the supplied piece registry (empty when none is supplied): the only pieces a native piece node may name. */
+    /**
+     * Ids a native piece node may name: a guide's step catalog (`stepPieces`, never the whole registry), otherwise the
+     * supplied piece registry. Empty when none is known: a piece node is then refused (`piece_unavailable`).
+     */
     pieceIds: string[]
     /** Indexes of the step's own diagram sources (empty when the step cites none). */
     diagram: number[]
@@ -435,7 +438,10 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             ? 'witnessed'
             : 'unwitnessed',
         partIds: overviewSteps === null ? partIds.slice(0, 12) : partIds,
-        pieceIds: (inputs.pieces ?? []).map((piece) => piece.id),
+        pieceIds:
+            inputs.kind === 'guide'
+                ? (inputs.stepPieces ?? []).map((piece) => piece.pieceId)
+                : (inputs.pieces ?? []).map((piece) => piece.id),
         diagram,
     }
 }

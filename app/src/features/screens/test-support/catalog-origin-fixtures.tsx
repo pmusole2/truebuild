@@ -109,7 +109,10 @@ export async function catalogOriginFixture(kind: ScreenKindV2): Promise<{
         label: questions.length === 0 ? undefined : `Question 1 of ${questions.length}`,
     }
     const inputs = documentInputs(kind, { state, entry: selected }, quick, kind === 'more')
-    if (kind === 'guide') inputs.pieces = VIEWER_FIXTURE_PIECES
+    if (kind === 'guide') {
+        inputs.pieces = VIEWER_FIXTURE_PIECES
+        inputs.stepPieces = VIEWER_FIXTURE_PIECES.map((piece) => ({ pieceId: piece.id, quantity: 1 }))
+    }
     if (kind === 'camera')
         inputs.uiState = {
             ...inputs.uiState,
@@ -158,6 +161,14 @@ export async function catalogOriginFixture(kind: ScreenKindV2): Promise<{
         },
         session: selected?.session,
         ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
+        ...(inputs.stepPieces == null
+            ? {}
+            : {
+                  stepPieces: inputs.stepPieces.map((piece) => ({
+                      ...piece,
+                      name: VIEWER_FIXTURE_PIECES.find((spec) => spec.id === piece.pieceId)!.name,
+                  })),
+              }),
         pageUris: state.pageUris,
         pageImageStatus: 'ready',
         capture: state.capture,

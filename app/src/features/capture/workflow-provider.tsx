@@ -124,6 +124,13 @@ function ControllerHost({
     }, [controller])
     const entry = state.entries.find((candidate) => candidate.session.manualId === state.selectedId)
     const session = entry?.session
+    // A parsed manual starts its piece registry once: stored results answer, otherwise one background run begins.
+    useEffect(() => {
+        if (pieces === null || session === undefined || session.parts.length === 0) return
+        void pieces.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, () =>
+            controller.pageImages(session.manualId, session.revision),
+        )
+    }, [controller, pieces, session])
     // The context moved on: a newer revision of the selected manual aborts and forgets the older screens. A reviewed
     // manual starts composing every step page in the background, current step first; a fresh read starts them before review.
     useEffect(() => {
@@ -172,13 +179,6 @@ function ControllerHost({
         const reserved = controller.reserveManual()
         if (reserved !== null) documents.warmup(newManualInputs(state, reserved))
     }, [controller, documents, homeVisible, state.loading, state.pending, state.storageReadOnly, state.entries])
-    // A parsed manual starts its piece registry once: stored results answer, otherwise one background run begins.
-    useEffect(() => {
-        if (pieces === null || session === undefined || session.parts.length === 0) return
-        void pieces.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, () =>
-            controller.pageImages(session.manualId, session.revision),
-        )
-    }, [controller, pieces, session])
     useEffect(() => (): void => screens?.dispose(), [screens])
     useEffect(() => (): void => documents?.dispose(), [documents])
     const value = useMemo(

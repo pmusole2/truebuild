@@ -39,7 +39,8 @@ const PIECE_NAME_MAX = 80
 
 type PieceDrawingBox = z.infer<typeof pieceDrawingBoxSchema>
 export type PieceManualPage = Pick<ManualPage, 'pageId' | 'width' | 'height' | 'mimeType' | 'contentHash'>
-export type PieceRequestPart = ManualPieceInput
+/** Parse identity is app-local; geometry requests and persisted manifests retain their existing wire shape. */
+export type PieceRequestPart = ManualPieceInput & { readonly partId?: string }
 /** A manual as the registry sees it: ordered page identities and the parts a request may name. */
 export type PieceManualInput = {
     readonly pages: readonly PieceManualPage[]
@@ -116,6 +117,7 @@ export function manualPieceInputs(
         const drawingBox = validDrawingBox(part.drawingBox)
         return [
             {
+                partId: part.partId,
                 name,
                 identityName,
                 label: part.label ?? null,
@@ -128,14 +130,49 @@ export function manualPieceInputs(
     })
     const ids = stablePieceIds(named)
     return named.flatMap((part, index): PieceRequestPart[] => {
-        const { identityName: _identity, drawingBox, ...request } = part
+        const { identityName: _identity, drawingBox, partId, ...request } = part
         const parsed = manualPieceInputSchema.safeParse({
             id: ids[index],
             ...request,
             ...(drawingBox === undefined ? {} : { drawingBox }),
         })
-        return parsed.success ? [parsed.data] : []
+        return parsed.success ? [{ ...parsed.data, partId }] : []
     })
+}
+
+/** The current parse's identities map onto the stable geometry ids, independent of inventory quantities. */
+export function pieceIdsByPartId(
+    session: Pick<ManualSession, 'pages' | 'parts' | 'reviewedSteps'>,
+): ReadonlyMap<string, string> {
+    return new Map(
+        manualPieceInputs(session)
+            .slice(0, MAX_PARTS)
+            .flatMap((part): [string, string][] => (part.partId === undefined ? [] : [[part.partId, part.id]])),
+    )
+}
+
+/** A guide names only the pieces linked to its own step, with that step's count, never the inventory count. */
+export function stepPiecesForStep(
+    session: Pick<ManualSession, 'pages' | 'parts' | 'reviewedSteps' | 'rawExtraction'>,
+    stepId: string | null,
+): { pieceId: string; quantity: number | null }[] {
+    if (stepId === null) return []
+    const step =
+        session.reviewedSteps.find((item) => item.stepId === stepId) ??
+        session.rawExtraction?.steps.find((item) => item.stepId === stepId)
+    if (step === undefined) return []
+    const ids = pieceIdsByPartId(session)
+    return step.parts.flatMap((part) => {
+        const pieceId = ids.get(part.partId)
+        return pieceId === undefined
+            ? []
+            : [{ pieceId, quantity: part.quantity.state === 'known' ? part.quantity.value : null }]
+    })
+}
+
+function geometryPart(part: PieceRequestPart): ManualPieceInput {
+    const { partId: _partId, ...wire } = part
+    return wire
 }
 
 /** The manual the registry is fed for a session: the same pages and request parts generation and screen bindings read. */
@@ -377,7 +414,7 @@ function snapshotOf(
             if (entry.cutoutUri !== null) cardCutouts[id] = entry.cutoutUri
         }
     }
-    return { status, contentHash: hash, pieces, cutouts, cards, cardCutouts, timing }
+    return { status, contentHash: hash, pieces, cutouts, cards, cardCutouts, timing: { ...timing } }
 }
 
 async function restoredSnapshot(storage: KeyValueStorage, manifest: Manifest): Promise<PieceSnapshot> {
@@ -430,10 +467,10 @@ async function dispatchBatch(
     pageUris: Readonly<Record<string, string>>,
     requestId: string,
 ): Promise<ReadonlyMap<string, Outcome> | null> {
-    const parts: PieceRequestPart[] = batch.map((entry) =>
+    const parts: ManualPieceInput[] = batch.map((entry) =>
         repairIds.includes(entry.part.id)
-            ? { ...entry.part, cutoutUri: entry.cutoutUri, repair: { issueCodes: entry.issueCodes } }
-            : entry.part,
+            ? { ...geometryPart(entry.part), cutoutUri: entry.cutoutUri, repair: { issueCodes: entry.issueCodes } }
+            : geometryPart(entry.part),
     )
     const pageIds = new Set(parts.flatMap((part) => (part.pageId === null ? [] : [part.pageId])))
     const pages = manual.pages.filter((page) => pageIds.has(page.pageId))
@@ -496,7 +533,7 @@ function toManifest(run: Run, ledger: CutoutLedger): Manifest {
         contentHash: run.hash,
         status: run.status,
         entries: run.entries.map((entry) => ({
-            part: entry.part,
+            part: geometryPart(entry.part),
             state: entry.state,
             piece: entry.piece,
             issueCodes: [...entry.issueCodes],
@@ -694,6 +731,8 @@ export class PieceRegistry {
                 run.status = 'halted'
                 break
             }
+            // A valid step need not wait for another step's repair batch before its geometry becomes visible.
+            this.publish(hash, snapshotOf('pending', hash, run.entries, run.timing))
         }
         if (run.status === 'done') await persist()
         return snapshotOf(run.status === 'done' ? 'ready' : 'incomplete', hash, run.entries, run.timing)
@@ -710,15 +749,27 @@ export class PieceRegistry {
     }
 
     /**
-     * The snapshot a screen identity was first displayed with. Later readiness never changes that screen; a new identity
-     * (a new screen or content) gets the latest snapshot.
+     * Keep a displayed screen stable. A guide's non-empty linked catalog remains live until its pieces settle, so a lightweight
+     * placeholder may become 3D without composing the page again; other screens preserve their first displayed context.
      */
-    pin(identity: string, contentHash?: string, displayed = true): PieceSnapshot {
+    pin(identity: string, contentHash?: string, displayed = true, expectedPieceIds?: readonly string[]): PieceSnapshot {
         const known = this.pinned.get(identity)
         if (known !== undefined) return known
-        const snapshot = contentHash === undefined || this.current.contentHash === contentHash ? this.current : IDLE
+        const current = contentHash === undefined || this.current.contentHash === contentHash ? this.current : IDLE
+        // Partial waves are a Guide-only delivery. Other pages still receive no registry until the run is ready.
+        const snapshot: PieceSnapshot =
+            expectedPieceIds === undefined && current.status === 'pending'
+                ? { ...current, pieces: [], cutouts: {}, cards: [], cardCutouts: {} }
+                : current
         // Hidden stack routes can mount early; only an actual display may freeze their piece context.
-        if (!displayed) return snapshot
+        if (!displayed || (expectedPieceIds !== undefined && snapshot.pieces.length === 0)) return snapshot
+        if (expectedPieceIds !== undefined) {
+            const settled = new Set([
+                ...snapshot.pieces.map((piece) => piece.id),
+                ...snapshot.cards.filter((card) => card.state === 'rejected').map((card) => card.id),
+            ])
+            if (expectedPieceIds.some((id) => !settled.has(id))) return snapshot
+        }
         if (this.pinned.size >= PIN_LIMIT) {
             const oldest = this.pinned.keys().next().value
             if (oldest !== undefined) this.pinned.delete(oldest)

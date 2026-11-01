@@ -182,8 +182,10 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 ),
                 cameraCues: CAMERA_CUES_V2,
                 cameraPills: CAMERA_PILLS_V2,
-                // The registry's ids only, present only where a registry was supplied (never its geometry).
-                ...(used.pieces == null ? {} : { pieceIds: material.pieceIds }),
+                // The ids only (never geometry): the registry's where one was supplied, a guide's step catalog otherwise.
+                ...(used.pieces == null && used.kind !== 'guide' ? {} : { pieceIds: material.pieceIds }),
+                // A guide's closed catalog, exact ids and quantities (the app renders the quantity); null when none is known.
+                ...(used.kind === 'guide' ? { stepPieces: used.stepPieces ?? null } : {}),
             },
         },
     }

@@ -29,6 +29,7 @@ import { JUDGE_STORAGE_KEY } from './judge-store'
 import type { LibraryEntry } from '../capture/library'
 import type { JsonElement, TestInstance } from 'test-renderer'
 import { DOCUMENT_FOCUS_GRACE_MS } from '../document-runtime/use-document'
+import { stepPiecesForStep } from '../pieces/piece-registry'
 
 // The production root layout, routes, screens, controller and screen store run unchanged. Only the device/transport
 // boundary is injected: the model transport, storage and image normalization, and the /api/screens server.
@@ -222,7 +223,15 @@ describe('Guide composed by the document', () => {
         expect(await screen.findByText(/^Step 1 of \d+$/u)).toBeTruthy()
         const guides = documentPrecomputeInputs({
             session: controller.current!.session,
-        }).filter((item) => item.inputs.kind === 'guide')
+        })
+            .filter((item) => item.inputs.kind === 'guide')
+            .map((item) => ({
+                ...item,
+                inputs: {
+                    ...item.inputs,
+                    stepPieces: stepPiecesForStep(controller.current!.session, item.inputs.stepId),
+                },
+            }))
         await waitFor(() => expect(guides.every((item) => store.peek(item.inputs)?.status === 'ready')).toBe(true))
         const guideRequests = (): typeof server.requests =>
             server.requests.filter((request) => request.op === 'generate' && request.kind === 'guide')

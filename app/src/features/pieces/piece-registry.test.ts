@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
     createDemoManual,
     PIECE_GEOMETRY_PROMPT_VERSION,
@@ -9,7 +9,9 @@ import type { KeyValueStorage } from '../capture/library'
 import {
     manualPieceContentHash,
     manualPieceInputOf,
+    manualPieceInputs,
     PieceRegistry,
+    stepPiecesForStep,
     type PieceGenerationPort,
     type PieceManualInput,
 } from './piece-registry'
@@ -289,16 +291,74 @@ describe('piece registry', () => {
         expect(manualPieceInputOf(session).parts[0]?.drawingBox).toBeUndefined()
     })
 
-    it('pins each screen identity to the snapshot it first displayed', async () => {
+    it('maps only a step’s linked pieces and quantities, and pins only after its pieces settle', async () => {
+        const source = createDemoManual()
+        const linked = source.reviewedSteps[1]!
+        const session = {
+            ...source,
+            reviewedSteps: source.reviewedSteps.map((step) =>
+                step.stepId !== linked.stepId
+                    ? step
+                    : {
+                          ...step,
+                          parts: step.parts.map((part, index) =>
+                              index !== 1
+                                  ? part
+                                  : {
+                                        ...part,
+                                        quantity: { state: 'known' as const, value: 4, sourceRefs: step.sourceRefs },
+                                    },
+                          ),
+                      },
+            ),
+        }
+        const mapped = manualPieceInputs(session)
+        expect(mapped.map((part) => part.partId)).toEqual(session.parts.map((part) => part.partId))
+        expect(stepPiecesForStep(session, linked.stepId)).toEqual([
+            { pieceId: mapped[0]!.id, quantity: 1 },
+            { pieceId: mapped[1]!.id, quantity: 4 },
+        ])
+        expect(stepPiecesForStep({ ...session, reviewedSteps: [{ ...linked, parts: [] }] }, linked.stepId)).toEqual([])
+        expect(stepPiecesForStep(session, 'not-a-step')).toEqual([])
         const storage = memoryStorage()
-        const { generate } = scriptedGenerate(storage)
+        const scripted = scriptedGenerate(storage)
+        let releaseRepair: (() => void) | undefined
+        const repairGate = new Promise<void>((resolve) => {
+            releaseRepair = resolve
+        })
+        const generate: PieceGenerationPort = async (input) => {
+            expect(input.request.parts.every((part) => !('partId' in part))).toBe(true)
+            if (input.request.parts.some((part) => part.repair !== undefined)) await repairGate
+            return scripted.generate(input)
+        }
         const registry = new PieceRegistry({ storage, generate, newId: (): string => 'request' })
-        const early = registry.pin('quick-check:overview')
+        const early = registry.pin('guide:early', hash, true, ['part-3'])
+        const frozenOtherScreen = registry.pin('quick-check:overview')
         registry.pin('hidden-page', hash, false)
         expect(early.status).toBe('idle')
-        await registry.prepare(manual, async (): Promise<Record<string, string>> => pageUris)
-        expect(registry.pin('quick-check:overview')).toBe(early)
+        const running = registry.prepare(
+            { ...manual, parts: manual.parts.map((part, index) => ({ ...part, partId: `parse-${index}` })) },
+            async (): Promise<Record<string, string>> => pageUris,
+        )
+        await vi.waitFor(() => expect(registry.getSnapshot().pieces.length).toBeGreaterThan(0))
+        const pending = registry.pin('guide:part-3', hash, true, ['part-3'])
+        expect(pending.status).toBe('pending')
+        expect(pending.pieces.some((part) => part.id === 'part-3')).toBe(false)
+        const partialOther = registry.pin('more:mid-wave', hash)
+        expect(partialOther.pieces).toHaveLength(0)
+        expect(partialOther.timing.readyAt).toBeNull()
+        releaseRepair!()
+        await running
+        expect(storage.values.get(manifestKey)).not.toContain('"partId"')
+        expect(registry.pin('guide:early', hash, true, ['part-3'])).not.toBe(early)
+        expect(registry.pin('guide:early', hash, true, ['part-3']).pieces.length).toBeGreaterThan(0)
+        expect(registry.pin('quick-check:overview')).toBe(frozenOtherScreen)
+        expect(registry.pin('more:mid-wave', hash)).toBe(partialOther)
+        expect(partialOther.timing.readyAt).toBeNull()
         expect(registry.pin('quick-check:overview').pieces).toHaveLength(0)
+        expect(registry.pin('guide:part-3', hash, true, ['part-3']).pieces.some((part) => part.id === 'part-3')).toBe(
+            true,
+        )
         const late = registry.pin('completion:summary')
         expect(late.status).toBe('ready')
         expect(late.pieces.length).toBeGreaterThan(0)

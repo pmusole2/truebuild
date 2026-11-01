@@ -16,7 +16,7 @@ import { documentKey } from '../document-runtime/store'
 import { DocumentRenderer } from '../documents/document-renderer'
 import { useDocumentOwner, useDocumentVisibility } from '../documents/ownership'
 import type { FrameBindings } from '../documents/types'
-import { manualPieceContentHash, manualPieceInputOf } from '../pieces/piece-registry'
+import { manualPieceContentHash, manualPieceInputOf, manualPieceInputs } from '../pieces/piece-registry'
 import { useCoach, useCoachScreen } from '../onboarding/coach-provider'
 import type { CoachCandidate, OnboardingScreen } from '../onboarding/coach-types'
 import { useJudge } from '../screens/judge-context'
@@ -188,16 +188,40 @@ export function DocumentSurface({
                       : 'guide'
               : kind
     const inputs = documentInputs(effectiveKind, workflow, progress, contextualMore)
-    // The registry is frozen per screen identity at first display: readiness later never regenerates this screen.
+    // Guide composition names the closed step catalog before geometry exists. Its input never changes when the
+    // registry advances: only the live native bindings swap the placeholder for a viewer.
+    const stepIds =
+        effectiveKind === 'guide' && (inputs.stepPieces?.length ?? 0) > 0
+            ? inputs.stepPieces!.map((piece) => piece.pieceId)
+            : undefined
     const frozenPieces =
-        inputs.session !== null && effectiveKind !== 'guide'
+        inputs.session !== null
             ? (workflow.pieces?.pin(
                   documentKey(inputs),
                   manualPieceContentHash(manualPieceInputOf(inputs.session)),
                   focused,
+                  stepIds,
               ) ?? null)
             : null
-    if (frozenPieces !== null && frozenPieces.pieces.length > 0) inputs.pieces = [...frozenPieces.pieces]
+    if (effectiveKind === 'guide') delete inputs.pieces
+    else if (frozenPieces !== null && frozenPieces.pieces.length > 0) inputs.pieces = [...frozenPieces.pieces]
+    const names = new Map(
+        inputs.session === null ? [] : manualPieceInputs(inputs.session).map((piece) => [piece.id, piece.name]),
+    )
+    const stepPieceItems: FrameBindings['stepPieces'] =
+        effectiveKind === 'guide'
+            ? (inputs.stepPieces ?? []).map((piece) => ({
+                  ...piece,
+                  name: names.get(piece.pieceId) ?? 'Assembly piece',
+                  state:
+                      workflow.pieces === null ||
+                      frozenPieces?.cards.some((card) => card.id === piece.pieceId && card.state === 'rejected') ===
+                          true ||
+                      ['unavailable', 'incomplete', 'ready'].includes(frozenPieces?.status ?? '')
+                          ? ('unavailable' as const)
+                          : ('pending' as const),
+              }))
+            : undefined
     const cancelledPages = effectiveKind === 'pages' && state.notice?.startsWith('Cancelled.') === true
     const notice =
         operationNotice ??
@@ -551,8 +575,19 @@ export function DocumentSurface({
             closeSheet: more.hide,
         },
         session: entry?.session,
-        ...(inputs.pieces == null ? {} : { pieces: inputs.pieces }),
-        ...(frozenPieces === null ? {} : { pieceCutouts: frozenPieces.cutouts }),
+        ...(effectiveKind === 'guide'
+            ? { pieces: frozenPieces?.pieces ?? [], stepPieces: stepPieceItems }
+            : inputs.pieces == null
+              ? {}
+              : { pieces: inputs.pieces }),
+        ...(frozenPieces === null
+            ? {}
+            : {
+                  pieceCutouts: {
+                      ...frozenPieces.cutouts,
+                      ...(effectiveKind === 'guide' ? frozenPieces.cardCutouts : {}),
+                  },
+              }),
         pageUris: state.pageUris,
         pageImageStatus: state.storageReadOnly
             ? 'unavailable'

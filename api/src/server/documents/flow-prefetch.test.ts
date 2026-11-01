@@ -11,6 +11,7 @@ import { createDocumentService } from './service'
 import { inputsFromDocumentMetadata } from '../../../../app/src/api/document-client'
 import type { ModelApiClient } from '../../../../app/src/api/model-client'
 import { reviewedSession } from '../../../../app/src/features/capture/reviewed-session'
+import { stepPiecesForStep } from '../../../../app/src/features/pieces/piece-registry'
 import { DocumentStore } from '../../../../app/src/features/document-runtime/store'
 
 describe('parse-time destination preparation', () => {
@@ -61,6 +62,7 @@ describe('parse-time destination preparation', () => {
         })
         const guide: ScreenContextInputsV2 = {
             kind: 'guide',
+            stepPieces: stepPiecesForStep(confirmed, 'step-1'),
             session: confirmed,
             stepId: 'step-1',
             captureId: null,
@@ -70,6 +72,7 @@ describe('parse-time destination preparation', () => {
         const quick: ScreenContextInputsV2 = {
             ...guide,
             kind: 'quick-check',
+            stepPieces: undefined,
             session: raw,
             stepId: null,
             uiState: { review: { currentQuestion: null, blockers: 0, canConfirm: true } },

@@ -6,6 +6,7 @@ import type { WorkflowValue } from './workflow-context'
 import type { WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
 import { reviewedSession } from './reviewed-session'
+import { stepPiecesForStep } from '../pieces/piece-registry'
 
 function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending === null) return null
@@ -103,6 +104,10 @@ export function documentInputs(
     }
     const activity = activityOf(state.pending)
     inputs.uiState = { ...inputs.uiState, busy: activity === null ? null : { activity } }
+    if (kind === 'guide' && inputs.session !== null) {
+        const pieces = stepPiecesForStep(inputs.session, inputs.stepId)
+        if (pieces.length > 0) inputs.stepPieces = pieces
+    }
     return inputs
 }
 

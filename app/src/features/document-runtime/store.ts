@@ -30,6 +30,7 @@ import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { isResultLayoutDocument } from './result-layout-runtime'
 import { reviewedSession } from '../capture/reviewed-session'
+import { stepPiecesForStep } from '../pieces/piece-registry'
 
 export type DocumentRuntimeEntry = {
     readonly status: 'pending' | 'ready'
@@ -116,7 +117,7 @@ export class DocumentStore {
     private readonly preparedSessions = new Map<string, { sourceHash: string; hash: string; session: ManualSession }>()
     private readonly guides = new Map<
         string,
-        { manualId: string; revision: number; screen: ScreenContext; uiState: ScreenUiStateV2 }
+        { manualId: string; revision: number; screen: ScreenContext; uiState: ScreenUiStateV2; hasStepPieces: boolean }
     >()
     private readonly documentSizes = new WeakMap<ScreenDocumentV2, number>()
     private readonly acceptedDocuments = new WeakSet<ScreenDocumentV2>()
@@ -600,7 +601,11 @@ export class DocumentStore {
         const preparation = this.preparedSessions.get(session.manualId)
         const target =
             preparation?.sourceHash === sha256Hex(screenManualJsonV2(session)) ? preparation.session : session
-        const items = documentPrecomputeInputs({ session: target, uiState })
+        const items = documentPrecomputeInputs({ session: target, uiState }).map((item) => {
+            if (item.inputs.kind !== 'guide') return item
+            const pieces = stepPiecesForStep(target, item.inputs.stepId)
+            return pieces.length === 0 ? item : { ...item, inputs: { ...item.inputs, stepPieces: pieces } }
+        })
         const guides = items.filter((item) => item.inputs.kind === 'guide')
         const focused = guides.find((item) => item.key === focusKey) ?? guides[0]
         const hash = sha256Hex(screenManualJsonV2(target))
@@ -619,6 +624,7 @@ export class DocumentStore {
                       {
                           ...focused.inputs,
                           kind: 'camera',
+                          stepPieces: undefined,
                           uiState: {
                               camera: {
                                   mode: 'build-photo',
@@ -680,6 +686,7 @@ export class DocumentStore {
             revision: inputs.session.revision,
             screen: { screenId: document.screenId, contextKey: document.bound.contextKey },
             uiState: screenUiStateV2Schema.parse(screenUiForKindV2('guide', inputs.uiState) ?? {}),
+            hasStepPieces: inputs.stepPieces !== undefined,
         })
         while (this.guides.size > MAX_ENTRIES) this.guides.delete(this.guides.keys().next().value!)
     }
@@ -695,6 +702,7 @@ export class DocumentStore {
             result: null,
             failure: null,
             uiState: held.uiState,
+            ...(held.hasStepPieces ? { stepPieces: stepPiecesForStep(session, stepId) } : {}),
         }
         return held.screen.contextKey === sha256Hex(screenContextJsonV2(current)) ? held.screen : null
     }

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { PieceGridItem } from '../pieces/piece-viewer'
 import type {
     AppIntent,
     ManualSession,
@@ -71,6 +72,8 @@ export type FrameBindings = {
      * longer holds: the viewer shows its fallback card (no geometry is drawn and nothing throws).
      */
     readonly pieces?: readonly PieceSpec[]
-    /** 2D cutout by ready piece id: the fallback picture for a piece node, and the only picture a guide step shows. */
+    /** Closed app-owned step catalog: names, counts and pending states do not come from the document model. */
+    readonly stepPieces?: readonly PieceGridItem[]
+    /** 2D cutout by piece id, used while the GPU view is unavailable. */
     readonly pieceCutouts?: Readonly<Record<string, string>>
 }

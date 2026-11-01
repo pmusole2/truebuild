@@ -26,6 +26,7 @@ import {
     citationPlanV2,
     sourceKeyV2,
     variantsOfV2,
+    visitVariantNodesV2,
     type CheckResult,
     type QuestionResult,
     type ScreenDocumentV2,
@@ -34,7 +35,6 @@ import {
     type TextRefV2,
     type CitationPlanEntryV2,
     type DocumentSourceV2,
-    type PieceSpec,
 } from '@truebuild/contracts'
 import { AppButton, IconButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -180,6 +180,7 @@ type Environment = {
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
     trailing: ReactNode
+    guidePiecePath: string | null
     /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
     rootScroll: RefObject<ScrollViewInstance | null>
     /** The workflow page being shown: the local state of every node outside `photoBranch` belongs to it alone. */
@@ -1764,42 +1765,35 @@ function NodeContent({
             )
         case 'PieceTile':
             return <PieceTile node={node} environment={environment} path={path} />
-        // The registry resolves each id. An id it no longer holds renders the viewer's fallback card, never a crash.
-        // A guide step never draws 3D: its piece shows the stored 2D cutout, or its name when none was stored.
+        // Model placement names the step catalog; geometry and counts are app-owned live bindings.
         case 'PieceViewer': {
+            if (document.kind === 'guide')
+                return path === environment.guidePiecePath ? (
+                    <View nativeID={mark}>
+                        <GuidePieces environment={environment} />
+                    </View>
+                ) : null
             const piece = bindings.pieces?.find((item) => item.id === node.pieceId)
-            const cutoutUri = bindings.pieceCutouts?.[node.pieceId]
             return (
                 <View nativeID={mark}>
-                    {document.kind === 'guide' ? (
-                        <PieceCutoutCard id={node.pieceId} piece={piece} cutoutUri={cutoutUri} />
-                    ) : (
-                        <PieceViewer piece={piece} fallbackImageUri={cutoutUri} />
-                    )}
+                    <PieceViewer piece={piece} fallbackImageUri={bindings.pieceCutouts?.[node.pieceId]} />
                 </View>
             )
         }
         case 'PiecesGrid':
+            if (document.kind === 'guide')
+                return path === environment.guidePiecePath ? (
+                    <View nativeID={mark}>
+                        <GuidePieces environment={environment} />
+                    </View>
+                ) : null
             return (
                 <View nativeID={mark}>
-                    {document.kind === 'guide' ? (
-                        node.pieceIds
-                            .filter((id) => bindings.pieces?.some((item) => item.id === id) === true)
-                            .map((id) => (
-                                <PieceCutoutCard
-                                    key={id}
-                                    id={id}
-                                    piece={bindings.pieces?.find((item) => item.id === id)}
-                                    cutoutUri={bindings.pieceCutouts?.[id]}
-                                />
-                            ))
-                    ) : (
-                        <PiecesGrid
-                            pieces={bindings.pieces ?? []}
-                            pieceIds={node.pieceIds}
-                            cutouts={bindings.pieceCutouts}
-                        />
-                    )}
+                    <PiecesGrid
+                        pieces={bindings.pieces ?? []}
+                        pieceIds={node.pieceIds}
+                        cutouts={bindings.pieceCutouts}
+                    />
                 </View>
             )
         case 'VerdictCard': {
@@ -1943,6 +1937,7 @@ export function NativeDocumentRenderer({
             lowPriorityPaths,
         }),
         trailing: null,
+        guidePiecePath: null,
         rootScroll,
         page: bodyPage,
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
@@ -1950,10 +1945,29 @@ export function NativeDocumentRenderer({
     const findRegions = (node: ScreenNodeV2): boolean =>
         node.type === 'VerdictCard' ? node.showRegions : 'children' in node && node.children.some(findRegions)
     environment.showRegions = findRegions(selected.variant.body)
-    environment.trailing =
-        bindings.inspect && document.kind !== 'judge' ? (
-            <Judge environment={environment} panel="built-view" mark={marked(environment, `${selected.prefix}body`)} />
-        ) : null
+    if (document.kind === 'guide')
+        visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
+            if (
+                !hidden &&
+                environment.guidePiecePath === null &&
+                (node.type === 'PieceViewer' || node.type === 'PiecesGrid')
+            )
+                environment.guidePiecePath = path
+        })
+    environment.trailing = (
+        <>
+            {document.kind === 'guide' && environment.guidePiecePath === null ? (
+                <GuidePieces environment={environment} />
+            ) : null}
+            {bindings.inspect && document.kind !== 'judge' ? (
+                <Judge
+                    environment={environment}
+                    panel="built-view"
+                    mark={marked(environment, `${selected.prefix}body`)}
+                />
+            ) : null}
+        </>
+    )
     const action = (
         node: Omit<ScreenVariantV2['bar']['primary'], 'type'>,
         role: 'primary' | 'secondary',
@@ -2085,35 +2099,30 @@ export function NativeDocumentRenderer({
     )
 }
 
-/** A 2D cutout card: the only piece picture a guide step draws, and the fallback when a piece has no stored 3D view. */
-function PieceCutoutCard({
-    id,
-    piece,
-    cutoutUri,
-}: {
-    id: string
-    piece: PieceSpec | undefined
-    cutoutUri: string | undefined
-}): ReactElement {
-    const name = piece?.name ?? 'Assembly piece'
+/** App-owned catalog/quantities stay live while the immutable document is shown. */
+function GuidePieces({ environment }: { environment: Environment }): ReactElement | null {
+    const items = environment.bindings.stepPieces ?? []
+    if (items.length === 0) return null
     return (
-        <View testID={`piece-cutout-${id}`} accessibilityLabel={name} style={styles.stack}>
-            {cutoutUri === undefined ? null : (
-                <Image
-                    source={{ uri: cutoutUri }}
-                    resizeMode="contain"
-                    accessibilityLabel={name}
-                    style={styles.cutout}
+        <RenderOriginProvider origin="shell">
+            <View
+                testID={`guide-pieces-${environment.document.bound.stepId ?? 'none'}`}
+                nativeID={originId('shell')}
+                style={styles.stack}
+            >
+                <PiecesGrid
+                    pieces={environment.bindings.pieces ?? []}
+                    items={items}
+                    pieceIds={items.map((item) => item.pieceId)}
+                    cutouts={environment.bindings.pieceCutouts}
                 />
-            )}
-            <Body>{name}</Body>
-        </View>
+            </View>
+        </RenderOriginProvider>
     )
 }
 
 const styles = StyleSheet.create({
     stack: { gap: space.sm },
-    cutout: { width: '100%', height: 140 },
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },

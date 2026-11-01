@@ -57,6 +57,7 @@ export function inputsFromDocumentMetadata(metadata: ModelScreensV2Metadata): Sc
         completedStepIds: metadata.completedStepIds,
         uiState: metadata.uiState,
         ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
+        ...(metadata.stepPieces == null ? {} : { stepPieces: metadata.stepPieces }),
     }
 }
 
@@ -145,6 +146,7 @@ function validRequest(metadata: ModelScreensV2Metadata, requestId: string): bool
         metadata.captureId !== null ||
         metadata.result !== null ||
         (metadata.companionAnswer !== undefined && metadata.companionAnswer !== null) ||
+        (metadata.stepPieces !== undefined && metadata.stepPieces !== null) ||
         metadata.failure !== null ||
         new Set(metadata.want).size !== metadata.want.length ||
         (metadata.op !== 'progress' && metadata.want.length > 0) ||
