@@ -34,12 +34,12 @@ const newRequestId = (): string => {
  * Production manual piece registry. Device storage holds manifests and cutouts; the geometry client is wired only when
  * generative UI is on, so off makes no piece request and still reads what an earlier run stored.
  */
-export function createPieces(): PieceRegistry {
+export function createPieces(options: { readonly readOnly?: boolean } = {}): PieceRegistry {
     const client = new ModelApiClient({ baseUrl: API_BASE_URL, secret: API_SECRET })
     return new PieceRegistry({
         storage: lazyStorage,
         generate:
-            GENERATIVE_UI === 'off'
+            options.readOnly === true || GENERATIVE_UI === 'off'
                 ? null
                 : ({ request, pageUris }): Promise<PieceBatchResult | null> => client.pieceBatch(request, pageUris),
         newId: newRequestId,

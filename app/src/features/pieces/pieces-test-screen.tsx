@@ -1,11 +1,12 @@
 import { Stack as RouterStack } from 'expo-router'
-import type { ReactElement } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { Image, View } from 'react-native'
 import { useOptionalWorkflow } from '../capture/workflow-context'
 import { Card, Screen, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Title } from '../../ui/text'
 import { PieceViewer, PiecesGrid } from './piece-viewer'
-import { manualPieceContentHash } from './piece-registry'
+import { manualPieceContentHash, manualPieceInputs } from './piece-registry'
+import { createPieces } from './piece-runtime'
 
 const clock = (ms: number | null | undefined): string => (ms == null ? '—' : new Date(ms).toISOString().slice(11, 23))
 const elapsed = (from: number | null | undefined, to: number | null | undefined): string =>
@@ -17,11 +18,21 @@ const elapsed = (from: number | null | undefined, to: number | null | undefined)
  */
 export default function PiecesTestScreen(): ReactElement {
     const workflow = useOptionalWorkflow()
-    const snapshot = workflow?.piecesSnapshot
+    // A direct development URL reloads the workflow without a selection. Read its saved manual, never generate it.
+    const [saved] = useState(() => createPieces({ readOnly: true }))
+    const stored = useSyncExternalStore(saved.subscribe, saved.getSnapshot, saved.getSnapshot)
+    const active = workflow?.piecesSnapshot
     const session =
         workflow?.entry?.session ??
-        workflow?.state.entries.find((entry) => manualPieceContentHash(entry.session) === snapshot?.contentHash)
-            ?.session
+        workflow?.state.entries.find((entry) => manualPieceContentHash(entry.session) === active?.contentHash)
+            ?.session ??
+        workflow?.state.entries.find((entry) => entry.session.parts.length > 0)?.session
+    useEffect(() => {
+        if (session !== undefined)
+            void saved.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, async () => ({}))
+    }, [saved, session])
+    const snapshot =
+        active?.contentHash === (session === undefined ? null : manualPieceContentHash(session)) ? active : stored
     const rows = [
         ...(snapshot?.pieces ?? []).map((piece) => ({
             id: piece.id,

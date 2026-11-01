@@ -142,6 +142,12 @@ describe('piece registry', () => {
         expect(reloaded.getSnapshot().status).toBe('ready')
         expect(reloaded.getSnapshot().pieces).toHaveLength(9)
         expect(reloaded.getSnapshot().cutouts['part-0']).toBe(CUTOUT)
+        const readOnly = new PieceRegistry({ storage, generate: null, newId: (): string => 'never-sent' })
+        await readOnly.prepare(manual, async (): Promise<never> => {
+            throw new Error('Read-only cache must not load pages')
+        })
+        expect(readOnly.getSnapshot().status).toBe('ready')
+        expect(readOnly.getSnapshot().pieces).toEqual(reloaded.getSnapshot().pieces)
 
         const failing = memoryStorage()
         const halted = scriptedGenerate(failing, (): void => {
