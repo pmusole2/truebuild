@@ -501,7 +501,6 @@ export class DocumentStore {
         } catch {
             issue = 'provider_error'
         }
-        held.generating = false
         if (!this.current(key, held)) return
         const replacementTooLarge =
             document !== null &&

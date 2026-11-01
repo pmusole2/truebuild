@@ -11,6 +11,7 @@ import { fixtureDocuments } from '../screens/test-support/fixture-server'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
 import { DocumentRenderer } from '../documents/document-renderer'
+import { EssentialDocumentControls } from '../capture/essential-controls'
 import type { FrameBindings } from '../documents/types'
 import { resultLayoutDocument } from './result-layout-runtime'
 import { DocumentStore } from './store'
@@ -35,17 +36,24 @@ function Observed({
     inputs,
     bindings,
     focused = true,
+    shell,
 }: {
     inputs: ScreenContextInputsV2
     bindings?: FrameBindings
     focused?: boolean
+    shell?: (reading: ReturnType<typeof useDocument>) => ReactElement
 }): ReactElement {
     const reading = useDocument(inputs, { focused, state: inputs.uiState?.busy == null ? 'ready' : 'busy' })
     return (
         <>
             <Text testID="catalog-document">{`${reading.document.screenId}:${reading.issue ?? 'none'}:${reading.document.metadata.source}:${reading.document.metadata.authoring?.fixtureId ?? 'exact'}`}</Text>
             {bindings === undefined ? null : (
-                <DocumentRenderer document={reading.document} variant={reading.activeState} bindings={bindings} />
+                <DocumentRenderer
+                    document={reading.document}
+                    variant={reading.activeState}
+                    bindings={bindings}
+                    {...(shell === undefined ? {} : { essentialControls: shell(reading) })}
+                />
             )}
         </>
     )
@@ -55,12 +63,18 @@ function tree(
     inputs: ScreenContextInputsV2,
     bindings?: FrameBindings,
     focused = true,
+    shell?: (reading: ReturnType<typeof useDocument>) => ReactElement,
 ): ReactElement {
     return (
         <ThemeProvider>
             <FeedbackProvider reduceMotion>
                 <WorkflowContext.Provider value={value}>
-                    <Observed inputs={inputs} bindings={bindings} focused={focused} />
+                    <Observed
+                        inputs={inputs}
+                        bindings={bindings}
+                        focused={focused}
+                        {...(shell === undefined ? {} : { shell })}
+                    />
                 </WorkflowContext.Provider>
             </FeedbackProvider>
         </ThemeProvider>
@@ -435,3 +449,88 @@ it.each(['competing request', 'oversized exact response'] as const)(
         }
     },
 )
+
+it('shows a nonblocking Double-checking cue under a cannot-verify verdict, keeps Retake enabled, then shows the updated verdict', async () => {
+    let release!: () => void
+    const { controller } = await runtime([entry()], {
+        check: {
+            decision: 'cannot_verify',
+            reason: 'First look: the groove is hidden.',
+            missingEvidence: ['Groove is obscured.'],
+            model: 'muse-spark-1.3',
+            secondOpinion: { status: 'available', model: 'muse-wonder-1.0', token: 'second-ticket' },
+        },
+        second_opinion_gate: new Promise<void>((resolve) => (release = resolve)),
+        second_opinion: {
+            decision: 'cannot_verify',
+            reason: 'Closer look: the groove is still hidden.',
+            missingEvidence: ['Groove is obscured.'],
+            model: 'muse-wonder-1.0',
+            secondOpinion: { status: 'completed', model: 'muse-wonder-1.0' },
+        },
+    })
+    await controller.restore()
+    await controller.open(controller.getSnapshot().entries[0]!.session.manualId, 'guide')
+    controller.camera({ kind: 'check' })
+    const shutter = controller.shutter(async () => source)
+    const nav = defaultNav(controller)
+    const server = fixtureDocuments({ generated: ['result', 'answer'] })
+    const store = new DocumentStore({ client: server, mode: 'full', id: (): string => 'double-checking' })
+    const more = { open: false, mode: 'details' as const, show: (): void => undefined, hide: (): void => undefined }
+    const scene = (): ReactElement => {
+        const state = controller.getSnapshot()
+        const selected = controller.current!
+        const value: WorkflowValue = { controller, state, entry: selected, screens: null, documents: store }
+        const bindings: FrameBindings = {
+            resolve: (intent) =>
+                resolveIntent(intent, {
+                    kind: 'result',
+                    state,
+                    entry: selected,
+                    controller,
+                    nav,
+                    extras: {},
+                }),
+            live: { state, entry: selected, controller, nav, more },
+            session: selected.session,
+            pageUris: state.pageUris,
+            capture: state.capture,
+            marks: [],
+            heroMode: 'inline',
+            inspect: false,
+        }
+        return tree(value, documentInputs('result', value), bindings, true, (reading) => (
+            <EssentialDocumentControls
+                kind="result"
+                variant={reading.variant}
+                state={state}
+                entry={selected}
+                busy={state.pending !== null}
+                resolve={bindings.resolve}
+                controller={controller}
+                nav={nav}
+            />
+        ))
+    }
+    await waitFor(() => expect(controller.getSnapshot().check?.secondOpinion?.status).toBe('available'))
+    const view = await render(scene())
+    try {
+        await loadPhoto()
+        expect(screen.getByText('First look: the groove is hidden.')).toBeTruthy()
+        expect(screen.getByText('Double-checking…')).toBeTruthy()
+        expect(controller.getSnapshot().pending).toBeNull()
+        expect(screen.getByRole('button', { name: 'Retake photo' })).toBeEnabled()
+        await act(async () => {
+            release()
+            await shutter
+        })
+        await view.rerender(scene())
+        await waitFor(() => expect(screen.getByText('Closer look: the groove is still hidden.')).toBeTruthy())
+        expect(screen.queryByText('Double-checking…')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Retake photo' })).toBeEnabled()
+    } finally {
+        await view.unmount()
+        store.dispose()
+        controller.dispose()
+    }
+})

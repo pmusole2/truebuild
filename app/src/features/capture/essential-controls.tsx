@@ -4,6 +4,7 @@ import { visitVariantNodesV2, type AppIntent, type ScreenKindV2, type ScreenVari
 import { AppButton } from '../../ui/button'
 import { RenderOriginProvider, originId } from '../../ui/render-origin'
 import { space } from '../../theme/tokens'
+import { Caption } from '../../ui/text'
 import type { FrameBindings } from '../documents/types'
 import type { ResolvedIntent } from '../screens/intents'
 import type { LibraryEntry } from './library'
@@ -86,7 +87,12 @@ export function EssentialDocumentControls({
                   .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt))[0]
             : undefined
     const steps = kind === 'guide' && !stepper && entry?.session.reviewStatus === 'reviewed' ? entry : undefined
-    if (importAction === null && resume === undefined && steps === undefined) return null
+    // The closer look runs with no `pending`, so this cue is informational and never part of `disabled` below.
+    const doubleChecking =
+        kind === 'result' &&
+        state.check?.decision === 'cannot_verify' &&
+        state.check.secondOpinion?.status === 'available'
+    if (importAction === null && resume === undefined && steps === undefined && !doubleChecking) return null
     const disabled = busy || state.storageReadOnly
     return (
         <RenderOriginProvider origin="shell">
@@ -95,6 +101,11 @@ export function EssentialDocumentControls({
                 testID="essential-controls"
                 style={{ paddingHorizontal: space.md, gap: space.xs }}
             >
+                {!doubleChecking ? null : (
+                    <View testID="shell-double-checking" nativeID={originId('shell')} accessibilityLiveRegion="polite">
+                        <Caption>Double-checking…</Caption>
+                    </View>
+                )}
                 {importAction === null ? null : (
                     <AppButton
                         label="Choose photos"

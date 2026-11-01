@@ -146,7 +146,7 @@ export function useDocument(
                 : immediateShell
             : current
     useEffect(() => {
-        if (!shellFirst || options.focused !== true) return
+        if (!__DEV__ || !shellFirst || options.focused !== true) return
         console.info(
             JSON.stringify({
                 event: 'document_background_composition',

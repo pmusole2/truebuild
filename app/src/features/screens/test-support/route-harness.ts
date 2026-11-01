@@ -74,6 +74,9 @@ export type Replies = {
     /** Held until released, so a test can observe the working state. */
     parse?: Promise<void>
     check_gate?: Promise<void>
+    /** The closer look is held until released, then replies with these overrides on the primary check's shape. */
+    second_opinion_gate?: Promise<void>
+    second_opinion?: Partial<CheckResult>
     /** Held until released, so a test can observe the pending question before its answer arrives. */
     question_gate?: Promise<void>
     /** The question is handed back as a 202 ticket (the screen then says it is still thinking); the gate holds its result. */
@@ -114,6 +117,8 @@ export async function runtime(
         if (url.endsWith('/parse')) await replies.parse
         if (url.endsWith('/checks') && replies.failCheck === true) return new Response('', { status: 502 })
         if (url.endsWith('/checks')) await replies.check_gate
+        const closer = url.endsWith('/second-opinion')
+        if (closer) await replies.second_opinion_gate
         if (url.endsWith('/questions') && replies.question_ticket === true) {
             askedPages = meta.sourcePageIds
             return new Response(
@@ -143,7 +148,12 @@ export async function runtime(
                 { headers: { 'content-type': 'application/json' } },
             )
         }
-        const overrides = typeof replies.check === 'function' ? await replies.check() : (replies.check ?? {})
+        const overrides =
+            closer && replies.second_opinion !== undefined
+                ? replies.second_opinion
+                : typeof replies.check === 'function'
+                  ? await replies.check()
+                  : (replies.check ?? {})
         const value = url.endsWith('/parse')
             ? parsed(meta.pages![0]!.pageId)
             : url.endsWith('/questions') || collecting

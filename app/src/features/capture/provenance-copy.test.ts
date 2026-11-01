@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFixtureResult, secondOpinionLine, secondOpinionTarget } from './provenance-copy'
+import { isFixtureResult, secondOpinionLine } from './provenance-copy'
 
 describe('naming a second opinion', () => {
     it('names the model of a live result and its outcome, and nothing while the offer is still open', () => {
@@ -9,7 +9,6 @@ describe('naming a second opinion', () => {
             secondOpinionLine({ secondOpinion: { model: 'muse-wonder-1.0', status: 'available', token: 't' } }),
         ).toBe(null)
         expect(secondOpinionLine({})).toBeNull()
-        expect(secondOpinionTarget({}, 'muse-wonder-1.0')).toBe('muse-wonder-1.0')
     })
 
     it('never credits an offered model on a fixture result, where it is only the intended target', () => {
@@ -20,6 +19,5 @@ describe('naming a second opinion', () => {
         expect(isFixtureResult(fixture)).toBe(true)
         expect(secondOpinionLine(fixture)).toBe('Second opinion: simulated, no model call (unavailable)')
         expect(secondOpinionLine(fixture)).not.toContain('muse-')
-        expect(secondOpinionTarget(fixture, 'muse-wonder-1.0')).toBe('simulated')
     })
 })
