@@ -308,7 +308,7 @@ async function* run(
                 },
                 deadline,
                 (status, latencyMs) => onMetrics?.({ operation: 'segment', model: SAM_MODEL, status, latencyMs }),
-                1, // Every HTTP response is final, including SAM failures; only a pre-response network retry is allowed.
+                2, // One short Retry-After 429 plus one eligible network retry; all response-body failures remain final.
                 undefined,
                 2,
             )

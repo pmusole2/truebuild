@@ -187,7 +187,7 @@ describe('Home composed by the document', () => {
         expect(generateCalls(server)).toContain('home')
     })
 
-    it('keeps Home timeout recovery visible, rejects the expired response, and generates only after Try again', async () => {
+    it('shows honest shell progress within fifteen seconds and swaps in the original generated page while focused', async () => {
         jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] })
         const gate = deferred<void>()
         const { store, view, server } = await mount([], {
@@ -195,25 +195,22 @@ describe('Home composed by the document', () => {
             recordings: 'off',
         })
         expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
-        await act(async () => jest.advanceTimersByTime(DOCUMENT_FOCUS_GRACE_MS + 1))
-        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
-        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
-        await act(async () => gate.resolve())
-        expect(screen.getByText('That took too long')).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+        await act(async () => jest.advanceTimersByTime(15_001))
+        expect(screen.getByText(STATE_COPY_V2.busy.heading)).toBeTruthy()
+        expect(screen.queryByText('That took too long')).toBeNull()
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'home')!
-        await waitFor(() =>
-            expect(store.peek(inputsFromDocumentMetadata(request))?.document.metadata.fallbackReason).toBe('timeout'),
-        )
+        expect(store.peek(inputsFromDocumentMetadata(request))?.status).toBe('pending')
         expect(hostCounts(view).generated).toBe(0)
-        expect(hostCounts(view).fallback).toBeGreaterThan(0)
-        expect(server.requests.filter((item) => item.op === 'generate' && item.kind === 'home')).toHaveLength(1)
-        await press('Try again')
+        await act(async () => gate.resolve())
         await screen.findByRole('button', { name: 'Add a manual' })
-        const attempts = server.requests.filter((item) => item.op === 'generate' && item.kind === 'home')
-        expect(attempts).toHaveLength(2)
-        expect(attempts[1]!.requestId).not.toBe(request.requestId)
+        const generated = store.peek(inputsFromDocumentMetadata(request))!.document
+        expect(generated.metadata.source).toBe('generated')
+        expect(screen.getByTestId('library-screen').props.nativeID).toContain(
+            `truebuild-document-root:${generated.screenId}`,
+        )
         expect(hostCounts(view).generated).toBeGreaterThan(0)
+        expect(server.requests.filter((item) => item.op === 'generate' && item.kind === 'home')).toHaveLength(1)
+        expect(DOCUMENT_FOCUS_GRACE_MS).toBeLessThanOrEqual(15_000)
     })
 })
 

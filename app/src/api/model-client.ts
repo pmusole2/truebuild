@@ -67,8 +67,8 @@ export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 // Outlast the default 85s parse route and its supported 105s override ceiling; local page reads share this budget.
 export const MODEL_PARSE_TIMEOUT_MS = 110_000
-// Paid baseline: Spark low verdict 7.9s; leave room for transport before offering a retry.
-export const MODEL_CHECK_TIMEOUT_MS = 12_000
+// Live checks reached 11.6–11.75s; 15s lets the 12s server budget return honest result/timeout feedback.
+export const MODEL_CHECK_TIMEOUT_MS = 15_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
 // The server answers a question within QUESTION_SYNC_WAIT_MS (8 s by default) or hands back a 202 ticket. The first

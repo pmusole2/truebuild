@@ -931,8 +931,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             (status, latencyMs) => {
                 options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
             },
-            // HTTP responses are final; only the separate bounded pre-response network retry is allowed.
-            1,
+            // One short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
+            2,
             transportObservation,
             2,
         )
@@ -1004,7 +1004,22 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 return telemetry
             }
 
+            const reject = (issueCodes: readonly string[]): void => {
+                console.info(
+                    JSON.stringify({
+                        event: 'provider_rejection',
+                        operation: metricsOperation,
+                        requestId,
+                        stage,
+                        model: identified ?? null,
+                        effort,
+                        issueCodes,
+                    }),
+                )
+            }
+
             if (identified === undefined) {
+                reject(['response:model_identity'])
                 // Never repaired or retried: a response that does not report the requested model contributes nothing.
                 const failed = new MetaProviderError('invalid_output')
                 failed.telemetry = emit(Math.max(0, performance.now() - received))
@@ -1012,6 +1027,15 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             }
 
             if (text === undefined) {
+                reject(
+                    isIncompleteResponse(raw)
+                        ? ['response:incomplete']
+                        : !envelope.success
+                          ? envelope.error.issues.map(
+                                (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
+                            )
+                          : ['response:missing_message'],
+                )
                 const failed = new MetaProviderError(
                     'invalid_output',
                     isIncompleteResponse(raw) ? 'incomplete' : 'malformed',
@@ -1025,6 +1049,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             try {
                 parsed = JSON.parse(text)
             } catch {
+                reject(['response:invalid_json'])
                 const failed = new MetaProviderError('invalid_output', 'malformed')
                 failed.telemetry = emit(Math.max(0, performance.now() - received))
                 throw failed
@@ -1036,7 +1061,14 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             const telemetry = emit(Math.max(0, performance.now() - received))
 
             if (!validated.success) {
-                throw new MetaProviderError('invalid_output', 'malformed')
+                reject(
+                    validated.error.issues.map(
+                        (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
+                    ),
+                )
+                const failed = new MetaProviderError('invalid_output', 'malformed')
+                failed.telemetry = telemetry
+                throw failed
             }
 
             return { value: validated.data, telemetry: { ...telemetry, model: identified } }

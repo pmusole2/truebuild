@@ -137,7 +137,40 @@ export const providerParseSchema = z
             ctx.addIssue({ code: 'custom', message: 'Invalid extraction' })
     })
 
-export const providerCheckSchema = z
+/** What the person is told when the photo cannot establish the orientation. */
+export const RETAKE_FROM_FRONT = 'Retake the photo from the front.'
+
+/**
+ * An uncertain orientation can never establish a verdict (the public contract says so): whatever pass or refusal the
+ * model claimed beside it becomes cannot_verify with a retake instruction. This runs after the strict shape check and
+ * before the cross-field refinement, so unknown keys, citations and every other evidence rule are enforced unchanged;
+ * every uncertain result, including cannot_verify, carries the same clear retake action.
+ */
+function unverifiableWhenOrientationUncertain<
+    T extends {
+        decision: 'pass' | 'refuse' | 'cannot_verify'
+        orientationAssessment: 'correct' | 'reversed' | 'uncertain'
+        reason: string
+        missingEvidence: string[]
+        layout?: unknown
+        observedRegion?: unknown
+    },
+>(value: T): T {
+    if (value.orientationAssessment !== 'uncertain') return value
+    const evidence = value.missingEvidence.filter((item) => item !== RETAKE_FROM_FRONT)
+    return {
+        ...value,
+        decision: 'cannot_verify',
+        reason:
+            value.decision === 'cannot_verify' && evidence.length < 100
+                ? value.reason
+                : `The orientation could not be determined. ${RETAKE_FROM_FRONT}`,
+        // Keep every supplied item at the public 100-item boundary; the reason still leads with the retake action.
+        missingEvidence: evidence.length < 100 ? [RETAKE_FROM_FRONT, ...evidence] : value.missingEvidence,
+    }
+}
+
+const providerCheckShape = z
     .strictObject({
         ...checkResultSchema.shape,
         layout: layoutProposal,
@@ -158,6 +191,8 @@ export const providerCheckSchema = z
         observedRegion: gridBox.nullable(),
     })
     .omit({ model: true, modelNotes: true, telemetry: true, secondOpinion: true, followUps: true, evidence: true })
+export const providerCheckSchema = providerCheckShape
+    .transform(unverifiableWhenOrientationUncertain)
     .superRefine((value, ctx) => {
         const {
             partsAssessment: _parts,
@@ -177,13 +212,15 @@ export const providerCheckSchema = z
  * visible-check evidence are still required, so the evidence needed for a pass or a refusal is unchanged.
  */
 const verdictShape = z
-    .strictObject(providerCheckSchema.shape)
+    .strictObject(providerCheckShape.shape)
     .omit({ layout: true, nextPartRegion: true, targetRegion: true, observedRegion: true })
-export const providerVerdictSchema = verdictShape.superRefine((value, ctx) => {
-    const { partsAssessment: _parts, connectionAssessment: _connection, checks: _checks, ...publicValue } = value
-    if (!checkResultSchema.safeParse({ ...publicValue, observedRegion: null }).success)
-        ctx.addIssue({ code: 'custom', message: 'Invalid check evidence' })
-})
+export const providerVerdictSchema = verdictShape
+    .transform(unverifiableWhenOrientationUncertain)
+    .superRefine((value, ctx) => {
+        const { partsAssessment: _parts, connectionAssessment: _connection, checks: _checks, ...publicValue } = value
+        if (!checkResultSchema.safeParse({ ...publicValue, observedRegion: null }).success)
+            ctx.addIssue({ code: 'custom', message: 'Invalid check evidence' })
+    })
 export const providerQuestionSchema = z
     .strictObject({
         ...questionResultSchema.shape,
@@ -302,7 +339,7 @@ export const metaOutputSchemas = {
     // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.
     check: strictSchema(
         z.toJSONSchema(
-            z.strictObject(providerCheckSchema.shape).omit({ layout: true, nextPartRegion: true, targetRegion: true }),
+            z.strictObject(providerCheckShape.shape).omit({ layout: true, nextPartRegion: true, targetRegion: true }),
             {
                 target: 'draft-7',
                 io: 'input',

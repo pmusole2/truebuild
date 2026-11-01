@@ -74,7 +74,7 @@ export function observationImage(observation: Observation): ImageBytes {
 export const QUESTION_JOB_MARGIN_MS = 5_000
 export const QUESTION_JOB_CEILING_MS = 75_000
 // Preparing the cited pages is still bounded like a check; the first request then gets its own, longer budget.
-const QUESTION_PREP_MS = MODEL_CHECK_TIMEOUT_MS
+const QUESTION_PREP_MS = MODEL_QUESTION_FIRST_TIMEOUT_MS
 const QUESTION_FIRST_ACTION_MS = QUESTION_PREP_MS + MODEL_QUESTION_FIRST_TIMEOUT_MS
 const POLL_MIN_MS = 500
 const POLL_MAX_MS = 3_000

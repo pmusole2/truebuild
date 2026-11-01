@@ -50,7 +50,6 @@ export async function mount(
             let id = 0
             return (): string => `s-${++id}`
         })(),
-        pollMs: 1,
         // Latency/failure protocol cases must explicitly request the transport path; normal mounts keep recordings.
         ...(options.recordings === 'off' ? { recordings: (): null => null } : {}),
     })

@@ -276,7 +276,20 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
     function publish(candidate: ScreenDocumentV2): ScreenDocumentV2 | null {
         const parsed = screenDocumentV2Schema.safeParse(candidate)
-        if (!parsed.success) return null
+        if (!parsed.success) {
+            console.info(
+                JSON.stringify({
+                    event: 'document_rejection',
+                    contextKey: candidate.bound.contextKey,
+                    kind: candidate.kind,
+                    attempt: 'publication',
+                    issueCodes: parsed.error.issues.map(
+                        (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
+                    ),
+                }),
+            )
+            return null
+        }
         const document = parsed.data
         const stated = new Set<string>()
         for (const { name, prefix, variant } of variantsOfV2(document)) {
@@ -349,9 +362,27 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         )
     }
 
+    /** Static validator codes only: never log the rejected model text, prompt or manual facts. */
+    function logRejection(
+        context: DocumentContext,
+        attempt: 'cache' | 'initial' | 'repair',
+        issues: readonly string[],
+    ): void {
+        console.info(
+            JSON.stringify({
+                event: 'document_rejection',
+                contextKey: context.bound.contextKey,
+                kind: context.inputs.kind,
+                attempt,
+                issueCodes: issues,
+            }),
+        )
+    }
+
     /** Re-checks an accepted proposal against the requesting context; null if it no longer satisfies it. */
     function fromCache(context: DocumentContext, cached: CachedDocument): ScreenDocumentV2 | null {
         const checked = evaluateProposal(cached.proposal, context)
+        if (!checked.ok) logRejection(context, 'cache', checked.issues)
         return checked.ok ? generated(context, checked.proposal, cached.observed, true) : null
     }
 
@@ -505,16 +536,23 @@ export function createDocumentService(options: DocumentServiceOptions): Document
             }
             if (!evaluated.ok) {
                 // The single repair covers structural AND semantic rejection of a completed answer; then whole fallback.
+                logRejection(context, 'initial', evaluated.issues)
                 rejectedIssues = evaluated.issues.length
                 repaired = true
                 try {
                     const value = await attempt(evaluated.issues)
                     evaluated = timed(() => evaluateWire(value, context))
                 } catch (error) {
-                    if (isMalformed(error)) return failure('repair_failed')
+                    if (isMalformed(error)) {
+                        logRejection(context, 'repair', ['response:not_json_or_not_schema'])
+                        return failure('repair_failed')
+                    }
                     throw error
                 }
-                if (!evaluated.ok) return failure('repair_failed')
+                if (!evaluated.ok) {
+                    logRejection(context, 'repair', evaluated.issues)
+                    return failure('repair_failed')
+                }
             }
             const seen = observed()
             const document = generated(context, evaluated.proposal, seen, false)

@@ -9,6 +9,8 @@ import { metaOutputSchemas } from './meta-schemas'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
 import { observed } from '../test-support/telemetry'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
+import { createDeadline } from '../server/deadline'
+import { MetaTransport, retryAfterDeadline } from './meta-transport'
 
 const ENDPOINT = 'https://api.meta.ai/v1/responses'
 const signal = (): AbortSignal => new AbortController().signal
@@ -184,21 +186,46 @@ function jsonResponder(body: unknown): Responder {
 }
 
 describe('inactive direct Meta transport', (): void => {
-    it.each(['correct', 'reversed', 'uncertain'] as const)(
-        'accepts conservative synthetic %s orientation',
-        async (orientation) => {
-            const value = createHeroResponse(orientation)
-            await localServer(jsonResponder(responseBody(value)), async (transport) => {
-                expect(await transport.provider.checkStep(await validInput(), signal())).toEqual(
-                    observed({
-                        ...value,
-                        model: 'muse-spark-1.3',
-                    }),
-                )
-                expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
-            })
-        },
-    )
+    it.each([
+        { orientation: 'correct', decision: 'pass' },
+        { orientation: 'reversed', decision: 'refuse' },
+        { orientation: 'uncertain', decision: 'cannot_verify' },
+        { orientation: 'reversed', decision: 'pass' },
+        { orientation: 'uncertain', decision: 'pass' },
+        { orientation: 'uncertain', decision: 'refuse' },
+        { orientation: 'uncertain', decision: 'refuse', fullEvidence: true },
+    ] as const)('preserves orientation safety and maps uncertain $decision to a front-photo retake', async (claim) => {
+        const original = createHeroResponse(claim.orientation)
+        const missingEvidence =
+            'fullEvidence' in claim
+                ? Array.from({ length: 100 }, (_, i) => `Unobservable item ${i}`)
+                : original.missingEvidence
+        const value = { ...original, decision: claim.decision, missingEvidence }
+        await localServer(jsonResponder(responseBody(value)), async (transport) => {
+            const pending = transport.provider.checkStep(await validInput(), signal())
+            if (claim.orientation === 'reversed' && claim.decision === 'pass') {
+                await expect(pending).rejects.toMatchObject({ code: 'invalid_output' })
+            } else {
+                const mapped = await pending
+                if (claim.orientation === 'uncertain') {
+                    expect(mapped).toMatchObject({
+                        decision: 'cannot_verify',
+                        orientationAssessment: 'uncertain',
+                        observedRegion: null,
+                    })
+                    expect([mapped.reason, ...mapped.missingEvidence].join(' ')).toContain(
+                        'Retake the photo from the front.',
+                    )
+                    expect(mapped.reason).not.toContain('outward')
+                    if (missingEvidence.length === 100) expect(mapped.missingEvidence).toEqual(missingEvidence)
+                    else
+                        for (const item of ['Retake the photo from the front.', ...missingEvidence])
+                            expect(mapped.missingEvidence).toContain(item)
+                } else expect(mapped).toEqual(observed({ ...value, model: 'muse-spark-1.3' }))
+            }
+            expect(JSON.stringify(transport.bodies[0])).toContain('ORIENTATION ASSESSMENT')
+        })
+    })
 
     it('rejects a new panel pass that omits the optional public orientation field', async () => {
         const { orientationAssessment: _, ...legacyPass } = result
@@ -259,17 +286,6 @@ describe('inactive direct Meta transport', (): void => {
     it('rejects reversed citations that do not identify the expected orientation diagram', async () => {
         const value = createHeroResponse('reversed')
         value.sourceRefs = [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }]
-        await localServer(jsonResponder(responseBody(value)), async (transport) => {
-            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                code: 'invalid_output',
-            })
-        })
-    })
-
-    it.each([
-        { ...createHeroResponse('reversed'), decision: 'pass' },
-        { ...createHeroResponse('uncertain'), decision: 'pass', missingEvidence: [] },
-    ])('rejects a confident contradictory orientation result %#', async (value) => {
         await localServer(jsonResponder(responseBody(value)), async (transport) => {
             await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
                 code: 'invalid_output',
@@ -647,7 +663,7 @@ describe('inactive direct Meta transport', (): void => {
                 } catch (error: unknown) {
                     expect(error).toBeInstanceOf(MetaProviderError)
                     expect(error instanceof Error ? error.message : '').toMatch(/^(invalid_output|provider_error)$/)
-                    expect(transport.dispatches()).toBe(respond === beforeResponseReset ? 2 : 1)
+                    expect(transport.dispatches()).toBe(1)
                 }
             })
         }
@@ -888,7 +904,7 @@ describe('documented Meta conformance', () => {
                 ...(withoutGeometry(createHeroResponse('reversed')) as Record<string, unknown>),
                 partsAssessment: 'matches',
                 connectionAssessment: 'matches',
-                orientationAssessment: 'uncertain',
+                orientationAssessment: 'correct',
                 checks: [
                     {
                         checkId: 'groove-inward',
@@ -964,12 +980,11 @@ describe('pre-response-only bounded Meta retries', () => {
             )
         },
     )
-    it('retries eligible pre-response failures once with an unchanged body and short backoff', async () => {
+    it('bounds identical network and short Retry-After retries while retaining response and deadline custody', async () => {
         const input = await validInput()
         for (const failure of [
             new TypeError('fetch failed'),
             Object.assign(new Error('synthetic timeout'), { code: 'ETIMEDOUT' }),
-            new Error('synthetic failure', { cause: { code: 'ECONNRESET' } }),
         ]) {
             const bodies: unknown[] = []
             const transport = vi.fn<typeof fetch>(async (_url, init) => {
@@ -985,13 +1000,204 @@ describe('pre-response-only bounded Meta retries', () => {
             expect(value.decision).toBe('pass')
             expect(bodies).toHaveLength(2)
             expect(bodies[0]).toBe(bodies[1])
+            expect(performance.now() - before).toBeGreaterThanOrEqual(100)
             expect(performance.now() - before).toBeLessThan(300)
         }
-        const transport = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
+        for (const failure of [
+            Object.assign(new Error('unknown send state'), { code: 'ECONNRESET' }),
+            new Error('synthetic failure', { cause: { code: 'ECONNRESET' } }),
+            new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }),
+            new TypeError('fetch failed', { cause: new AggregateError([{ code: 'ECONNRESET' }]) }),
+            new TypeError('fetch failed', {
+                cause: new AggregateError([new Error('closed socket', { cause: { code: 'UND_ERR_SOCKET' } })]),
+            }),
+            new TypeError('fetch failed', { cause: { code: 'ETIMEDOUT', cause: { code: 'ECONNRESET' } } }),
+        ]) {
+            const transport = vi.fn<typeof fetch>().mockRejectedValue(failure)
+            await expect(
+                createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(input, signal()),
+            ).rejects.toMatchObject({ code: 'provider_error' })
+            expect(transport).toHaveBeenCalledTimes(1)
+        }
+        const exhausted = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed'))
         await expect(
-            createMetaProvider({ apiKey: 'synthetic', fetchImpl: transport }).checkStep(input, signal()),
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl: exhausted }).checkStep(input, signal()),
         ).rejects.toMatchObject({ code: 'provider_error' })
-        expect(transport).toHaveBeenCalledTimes(2)
+        expect(exhausted).toHaveBeenCalledTimes(2)
+
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
+        vi.setSystemTime(new Date('2026-11-01T05:00:00.000Z'))
+        try {
+            const eligible = new Response(null, {
+                status: 429,
+                headers: { 'retry-after': new Date(Date.now() + 1_000).toUTCString() },
+            })
+            const ineligible = new Response(null, {
+                status: 429,
+                headers: { 'retry-after': new Date(Date.now() + 3_000).toUTCString() },
+            })
+            const retryAt = retryAfterDeadline(eligible)
+            expect(retryAt).toBe(performance.now() + 1_000)
+            expect(retryAfterDeadline(ineligible)).toBeUndefined()
+            await vi.advanceTimersByTimeAsync(1_000.5)
+            expect(retryAfterDeadline(eligible)).toBe(retryAt)
+            expect(retryAfterDeadline(ineligible)).toBeUndefined()
+
+            for (const [status, retryAfter, retried] of [
+                [429, '0', true],
+                [429, '0.1', true],
+                [429, '2', true],
+                [429, 'date-short', true],
+                [429, undefined, false],
+                [429, '', false],
+                [429, 'invalid', false],
+                [429, 'Sun, 31 Feb 2026 05:00:00 GMT', false],
+                [429, '10', false],
+                [429, '2.001', false],
+                [429, '9'.repeat(400), false],
+                [429, 'date-long', false],
+                [500, '0', false],
+                [503, '0', false],
+            ] as const) {
+                const header =
+                    retryAfter === 'date-short'
+                        ? new Date(Date.now() + 1_000).toUTCString()
+                        : retryAfter === 'date-long'
+                          ? new Date(Date.now() + 10_000).toUTCString()
+                          : retryAfter
+                let cancelled = false
+                let dispatch!: () => void
+                const dispatched = new Promise<void>((resolve) => {
+                    dispatch = resolve
+                })
+                const bodies: unknown[] = []
+                const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+                    bodies.push(init?.body)
+                    dispatch()
+                    return bodies.length === 1
+                        ? new Response(
+                              new ReadableStream({
+                                  cancel: (): void => {
+                                      cancelled = true
+                                  },
+                              }),
+                              {
+                                  status,
+                                  headers: {
+                                      ...(header === undefined ? {} : { 'retry-after': header }),
+                                      ...(retried
+                                          ? {
+                                                'x-ratelimit-remaining-requests': '0',
+                                                'x-ratelimit-remaining-tokens': '0',
+                                            }
+                                          : {}),
+                                  },
+                              },
+                          )
+                        : Response.json(responseBody(result))
+                })
+                const pending = createMetaProvider({ apiKey: 'synthetic', fetchImpl: fetcher })
+                    .checkStep(input, signal())
+                    .then(
+                        (value) => value.decision,
+                        (error: unknown) => error,
+                    )
+                await dispatched
+                await vi.advanceTimersByTimeAsync(0)
+                if (retried && header !== undefined) {
+                    const delay = /^\d+(?:\.\d+)?$/u.test(header)
+                        ? Number(header) * 1_000
+                        : Math.max(0, Date.parse(header) - Date.now())
+                    if (delay > 0) {
+                        await vi.advanceTimersByTimeAsync(delay - 1)
+                        expect(fetcher).toHaveBeenCalledTimes(1)
+                    }
+                }
+                await vi.advanceTimersByTimeAsync(2_001)
+                expect(fetcher).toHaveBeenCalledTimes(retried ? 2 : 1)
+                if (retried) {
+                    expect(await pending).toBe('pass')
+                    expect(bodies).toHaveLength(2)
+                    expect(bodies[0]).toBe(bodies[1])
+                } else {
+                    expect(await pending).toMatchObject({ code: 'provider_error' })
+                    expect(bodies).toHaveLength(1)
+                }
+                expect(cancelled).toBe(true)
+            }
+            for (const sequence of [
+                ['network', '429', 'ok'],
+                ['429', 'network', 'ok'],
+                ['network', '429', 'network', 'ok'],
+                ['429', 'network', '429', 'ok'],
+            ]) {
+                let dispatch!: () => void
+                const dispatched = new Promise<void>((resolve) => {
+                    dispatch = resolve
+                })
+                const bodies: unknown[] = []
+                const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+                    bodies.push(init?.body)
+                    dispatch()
+                    const item = sequence[bodies.length - 1]
+                    if (item === 'network') throw new TypeError('fetch failed')
+                    return item === '429'
+                        ? new Response('busy', {
+                              status: 429,
+                              headers: {
+                                  'retry-after': '0.1',
+                                  'x-ratelimit-remaining-requests': '0',
+                                  'x-ratelimit-remaining-tokens': '0',
+                              },
+                          })
+                        : Response.json(responseBody(result))
+                })
+                const pending = createMetaProvider({ apiKey: 'synthetic', fetchImpl: fetcher })
+                    .checkStep(input, signal())
+                    .then(
+                        (value) => value.decision,
+                        (error: unknown) => error,
+                    )
+                await dispatched
+                await vi.advanceTimersByTimeAsync(1_000)
+                expect(await pending).toEqual(
+                    sequence.length === 3 ? 'pass' : expect.objectContaining({ code: 'provider_error' }),
+                )
+                expect(bodies).toHaveLength(3)
+                expect(new Set(bodies).size).toBe(1)
+            }
+            for (const stop of ['timeout', 'cancelled']) {
+                let cancelled = false
+                const controller = new AbortController()
+                const fetcher = vi.fn<typeof fetch>(
+                    async () =>
+                        new Response(
+                            new ReadableStream({
+                                cancel: (): void => {
+                                    cancelled = true
+                                },
+                            }),
+                            { status: 429, headers: { 'retry-after': '2' } },
+                        ),
+                )
+                const deadline = createDeadline(1_000, controller.signal)
+                try {
+                    const pending = new MetaTransport(fetcher).send('muse-spark-1.3', {}, deadline).then(
+                        () => 'unexpected_response',
+                        (error: unknown) => error,
+                    )
+                    if (stop === 'cancelled') setTimeout(() => controller.abort(), 25)
+                    await vi.advanceTimersByTimeAsync(1_001)
+                    expect(await pending).toMatchObject({ message: stop })
+                    expect(fetcher).toHaveBeenCalledTimes(1)
+                    expect(cancelled).toBe(true)
+                } finally {
+                    deadline.dispose()
+                }
+            }
+        } finally {
+            vi.useRealTimers()
+        }
     })
     it('does not retry a response-body reset or a cancelled pre-response failure', async () => {
         const input = await validInput()

@@ -384,7 +384,7 @@ it('keeps intentional off mode immediate and makes no generation request', async
 it('keeps a disabled Quick check immediate in steps mode without awaiting or dispatching its document', async () => {
     const { controller, calls, storage } = await runtime([entry('steps', 'unreviewed')])
     const server = fixtureDocuments({ generated: ['guide'] })
-    const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps', pollMs: 1 })
+    const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps' })
     jest.mocked(createController).mockReturnValue(controller)
     jest.mocked(createDocuments).mockReturnValue(store)
     jest.mocked(createScreens).mockReturnValue(null)
@@ -404,7 +404,7 @@ it('opens a completed manual directly in steps mode without preparing an unseen 
     manual.completedStepIds = ['step-1']
     const { controller, calls, storage } = await runtime([manual])
     const server = fixtureDocuments({ generated: ['guide'] })
-    const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'finished', pollMs: 1 })
+    const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'finished' })
     jest.mocked(createController).mockReturnValue(controller)
     jest.mocked(createDocuments).mockReturnValue(store)
     jest.mocked(createScreens).mockReturnValue(null)
@@ -826,7 +826,7 @@ describe('a cold Compare', () => {
         else {
             const { controller, calls, storage } = await runtime(manuals())
             const server = fixtureDocuments({ generated: ['compare', 'guide'] })
-            const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps', pollMs: 1 })
+            const store = new DocumentStore({ client: server, mode: 'steps', id: (): string => 'steps' })
             jest.mocked(createController).mockReturnValue(controller)
             jest.mocked(createDocuments).mockReturnValue(store)
             jest.mocked(createScreens).mockReturnValue(null)

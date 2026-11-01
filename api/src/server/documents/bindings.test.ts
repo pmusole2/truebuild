@@ -6,7 +6,8 @@ import {
 } from '@truebuild/contracts'
 import { describe, expect, it } from 'vitest'
 
-import { demoSession, documentInputs, fullUi } from '../../test-support/document-inputs'
+import { DOCUMENT_INSTRUCTIONS } from '../../providers/document-prompt'
+import { demoSession, documentInputs, fullUi, libraryUi } from '../../test-support/document-inputs'
 import { buildDocumentContext } from './context'
 import { checkProposal } from './ground'
 
@@ -45,5 +46,18 @@ describe('unsupported live bindings are rejected by the server gate', () => {
                 label: { kind: 'literal', text: 'Show how Meta AI built this' },
             }).join(),
         ).toContain('binding_unavailable')
+    })
+
+    it('hands a library-only Home the ManualList it must place and no PageList it has no state for', () => {
+        const context = buildDocumentContext(documentInputs('home', demoSession(), { library: libraryUi }))
+        const document = context.view.dynamic.document as { requirements: { nodes: string[] }; nativeNodes: string[] }
+        expect(document.requirements.nodes).toEqual(['ManualList'])
+        expect(document.nativeNodes).toEqual(['ManualList'])
+        expect(DOCUMENT_INSTRUCTIONS).toContain('nativeNodes')
+        const page: ScreenNodeV2 = { type: 'PageList', layout: 'list', showNumbers: false }
+        const list: ScreenNodeV2 = { type: 'ManualList', entries: 'recent', layout: 'cards', showProgress: true }
+        const home = buildFallbackProposalV2(context.material)
+        expect(checkProposal(withNode(home, page), context).join()).toContain('binding_unavailable')
+        expect(checkProposal(withNode(home, list), context)).not.toContain('binding_unavailable')
     })
 })

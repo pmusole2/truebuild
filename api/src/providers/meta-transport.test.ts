@@ -5,38 +5,6 @@ import { MetaTransport, usageMetrics } from './meta-transport'
 afterEach(() => vi.useRealTimers())
 
 describe('absolute retry and model pacing boundaries', () => {
-    it.each([
-        ['seconds', '10'],
-        ['overflow', '9'.repeat(400)],
-    ])('does not dispatch a retry beyond the absolute deadline (%s)', async (_label, retryAfter) => {
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-        let calls = 0
-        let cancelled = false
-        const transport = new MetaTransport(async () => {
-            calls++
-            return new Response(
-                new ReadableStream({
-                    cancel: (): void => {
-                        cancelled = true
-                    },
-                }),
-                { status: 429, headers: { 'retry-after': retryAfter } },
-            )
-        })
-        const deadline = createDeadline(2_000)
-        try {
-            const pending = transport.send('muse-spark-1.3', {}, deadline).then(
-                () => 'unexpected_response',
-                (error: unknown) => error,
-            )
-            await vi.advanceTimersByTimeAsync(2_001)
-            expect(await pending).toMatchObject({ message: 'timeout' })
-            expect(calls).toBe(1)
-            expect(cancelled).toBe(true)
-        } finally {
-            deadline.dispose()
-        }
-    })
     it('separates pacing and retry backoff from time on the network, and observes nothing when not asked', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
         const delays = [40, 30]

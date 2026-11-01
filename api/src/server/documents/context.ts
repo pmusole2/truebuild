@@ -59,6 +59,19 @@ function allowedIntents(material: DocumentMaterialV2): AppIntent[] {
     )
 }
 
+/**
+ * The state-bound list and editor nodes this screen has state for: the same bindings the semantic gate enforces
+ * (`binding_unavailable`), so the model is never handed a choice the gate would refuse.
+ */
+function nativeNodes(ui: ScreenContextInputsV2['uiState']): string[] {
+    return [
+        ...(ui?.library ? ['ManualList'] : []),
+        ...(ui?.pages ? ['PageList'] : []),
+        ...(ui?.capture ? ['TextField'] : []),
+        ...(ui?.review?.currentQuestion ? ['FactEditor'] : []),
+    ]
+}
+
 export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentContext {
     const material = documentMaterialV2(inputs)
     const { identity } = screenContextPartsV2(inputs)
@@ -145,6 +158,7 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                         ? { question: companion.question }
                         : null,
                 ui: screenContextPartsV2(inputs).content.ui,
+                nativeNodes: nativeNodes(used.uiState),
                 boundKeys: availableBoundKeys(material),
                 allowedIntents: allowed,
                 allowedLabels: Object.fromEntries(

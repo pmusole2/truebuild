@@ -18,19 +18,16 @@ import {
     type ScreenDocumentV2,
     type ScreenUiStateV2,
 } from '@truebuild/contracts'
-import type { PrecomputeKindV2, ScreenContext, ScreensV2Result } from '@truebuild/contracts/model'
+import type { ScreenContext } from '@truebuild/contracts/model'
 import {
-    documentJobContextKey,
     documentMatchesInputs,
     documentPrecomputeInputs,
     documentRequest,
     interpretDocuments,
-    type ScreensV2Request,
 } from '../../api/document-client'
 import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
-import { futureDocumentStates } from './future-states'
 import { isResultLayoutDocument } from './result-layout-runtime'
 import { reviewedSession } from '../capture/reviewed-session'
 
@@ -46,8 +43,6 @@ export type DocumentStoreOptions = {
     readonly mode: 'full' | 'steps' | 'off'
     readonly id: () => string
     readonly now?: () => number
-    readonly pollMs?: number
-    readonly maxPolls?: number
     readonly warmupConcurrency?: number
     readonly maxDocumentBytes?: number
     readonly recordings?: typeof recordedDocument
@@ -68,20 +63,10 @@ type Held = {
     readonly manualHash: string | null
     readonly abort: AbortController
 }
-type Job = {
-    readonly session: ManualSession
-    readonly abort: AbortController
-    readonly context: string
-    readonly uiState: ScreenUiStateV2 | null | undefined
-    readonly completedStepIds: readonly string[] | undefined
-    readonly requestedKinds: readonly PrecomputeKindV2[] | undefined
-}
 export const DOCUMENT_CACHE_MAX_ENTRIES = 512
 export const DOCUMENT_CACHE_MAX_BYTES = 32 * 1_024 * 1_024
 const MAX_ENTRIES = DOCUMENT_CACHE_MAX_ENTRIES
-export const DOCUMENT_PROGRESS_POLL_MS = 1_500
-export const DOCUMENT_PROGRESS_MAX_POLLS = 60
-/** Bound phone-side background collection; server generation and cache may finish afterwards. */
+/** Bound a navigation waiter; generation may still finish and be cached after that waiter ends. */
 export const DOCUMENT_COLLECTION_DEADLINE_MS = 120_000
 
 export function documentKey(inputs: ScreenContextInputsV2): string {
@@ -106,18 +91,6 @@ export function localDocument(
         }),
     )
 }
-function pause(ms: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve) => {
-        const finish = (): void => {
-            clearTimeout(timer)
-            signal.removeEventListener('abort', finish)
-            resolve()
-        }
-        const timer = setTimeout(finish, ms)
-        signal.addEventListener('abort', finish, { once: true })
-        if (signal.aborted) finish()
-    })
-}
 function reasonFor(code: string): FallbackReasonV2 {
     if (code === 'timeout' || code === 'unconfigured' || code === 'invalid_output' || code === 'provider_error')
         return code
@@ -137,8 +110,6 @@ export class DocumentStore {
     private readonly manuals = new Map<string, { revision: number; hash: string }>()
     /** Future Confirm identity only. It never replaces the observed session or grants shown-Guide custody. */
     private readonly preparedSessions = new Map<string, { sourceHash: string; hash: string; session: ManualSession }>()
-    private readonly jobs = new Map<string, Job>()
-    private readonly attemptedJobs = new Map<string, string>()
     private readonly guides = new Map<
         string,
         { manualId: string; revision: number; screen: ScreenContext; uiState: ScreenUiStateV2 }
@@ -149,7 +120,7 @@ export class DocumentStore {
     private readonly warmQueue = new Map<string, ScreenContextInputsV2>()
     /** A workflow render must not silently regenerate a completed background page after cache eviction. */
     private readonly flowAttempts = new Set<string>()
-    /** One current Guide family only; these priorities never override the hard cache limits. */
+    /** Protect only the current Guide; its priority never overrides the hard cache limits. */
     private focusedGuide: { manualId: string; revision: number; hash: string; keys: Set<string> } | null = null
     private warming = 0
     private version = 0
@@ -158,12 +129,7 @@ export class DocumentStore {
     constructor(private readonly options: DocumentStoreOptions) {
         this.mode = options.mode
         this.now = options.now ?? Date.now
-        for (const value of [
-            options.pollMs ?? DOCUMENT_PROGRESS_POLL_MS,
-            options.maxPolls ?? DOCUMENT_PROGRESS_MAX_POLLS,
-            options.warmupConcurrency ?? 2,
-            options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES,
-        ]) {
+        for (const value of [options.warmupConcurrency ?? 2, options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES]) {
             if (!Number.isSafeInteger(value) || value <= 0) throw new Error('invalid_document_runtime_limit')
         }
     }
@@ -221,12 +187,6 @@ export class DocumentStore {
                 held.abort.abort()
                 this.held.delete(key)
             }
-        for (const [key, job] of this.jobs)
-            if (job.session.manualId === session.manualId && key !== hash && key !== preparedHash) {
-                job.abort.abort()
-                this.jobs.delete(key)
-                if (job.session.revision < session.revision) void this.cancelJob(job)
-            }
         for (const [key, record] of this.guides)
             if (record.manualId === session.manualId && record.revision !== session.revision) this.guides.delete(key)
         this.publish()
@@ -246,12 +206,6 @@ export class DocumentStore {
             }
         for (const [key, record] of this.guides)
             if (record.manualId === manualId && record.revision < revision) this.guides.delete(key)
-        for (const [key, job] of this.jobs) {
-            if (job.session.manualId !== manualId || job.session.revision >= revision) continue
-            job.abort.abort()
-            this.jobs.delete(key)
-            void this.cancelJob(job)
-        }
         this.publish()
     }
     /** Stop obsolete Reading work without minting another request or accepting a late completed document. */
@@ -265,14 +219,6 @@ export class DocumentStore {
         }
         for (const [key, inputs] of this.warmQueue) {
             if (inputs.kind === 'reading' && inputs.session?.manualId === manualId) this.warmQueue.delete(key)
-        }
-        for (const [key, job] of this.jobs) {
-            if (job.session.manualId !== manualId) continue
-            job.abort.abort()
-            this.jobs.delete(key)
-            this.attemptedJobs.delete(key)
-            void this.cancelJob(job)
-            changed = true
         }
         if (changed) this.publish()
     }
@@ -480,14 +426,7 @@ export class DocumentStore {
                     finish(held.entry.document)
                     return
                 }
-                const collecting = [...this.jobs.values()].some((job) =>
-                    documentPrecomputeInputs(job).some((item) => documentKey(item.inputs) === key),
-                )
-                if (
-                    !collecting &&
-                    ((!inFlight(held?.entry) && held?.entry.status === 'ready') || this.evicted.has(key))
-                )
-                    finish(null)
+                if ((!inFlight(held?.entry) && held?.entry.status === 'ready') || this.evicted.has(key)) finish(null)
             }
             const timer = setTimeout(() => finish(null), timeoutMs)
             unsubscribe = this.subscribe(check)
@@ -500,7 +439,7 @@ export class DocumentStore {
             this.held.size > MAX_ENTRIES ||
             this.getCacheUsage().documentBytes > (this.options.maxDocumentBytes ?? DOCUMENT_CACHE_MAX_BYTES)
         ) {
-            // Prefer unrelated LRU payloads, then the old Guide family if it cannot fit. A current foreground
+            // Prefer unrelated LRU payloads, then the current Guide if it cannot fit. A current foreground
             // admission keeps the original MRU behavior; even it is removed when individually oversized.
             const oldest =
                 [...this.held].find(([key]) => key !== foregroundKey && !this.focusedGuide?.keys.has(key)) ??
@@ -680,170 +619,6 @@ export class DocumentStore {
         while (this.flowAttempts.size > MAX_ENTRIES) this.flowAttempts.delete(this.flowAttempts.values().next().value!)
         this.queueWarmup(pending, true)
     }
-    precompute(
-        session: ManualSession,
-        focusKey: string | null,
-        uiState?: ScreenUiStateV2 | null,
-        completedStepIds?: readonly string[],
-    ): void {
-        if (
-            (session.reviewStatus === 'reviewed' ? session.reviewedSteps : (session.rawExtraction?.steps ?? []))
-                .length === 0
-        )
-            return
-        if (
-            this.disposed ||
-            this.mode === 'off' ||
-            this.options.client === undefined ||
-            (this.manuals.get(session.manualId)?.revision ?? 0) > session.revision
-        )
-            return
-        this.observeSession(session)
-        const guides = documentPrecomputeInputs({ session, uiState, completedStepIds }).filter(
-            (item) => item.inputs.kind === 'guide',
-        )
-        guides.sort((a, b) => Number(b.key === focusKey) - Number(a.key === focusKey))
-        const focused = guides.find((item) => item.key === focusKey)
-        const family = focused === undefined ? [] : [focused.inputs, ...futureDocumentStates(focused.inputs)]
-        const focusKeys = new Set(family.map(documentKey))
-        const focusChanged =
-            focusKeys.size !== (this.focusedGuide?.keys.size ?? 0) ||
-            [...focusKeys].some((key) => !this.focusedGuide?.keys.has(key))
-        const hash = sha256Hex(screenManualJsonV2(session))
-        this.focusedGuide =
-            focused === undefined
-                ? null
-                : { manualId: session.manualId, revision: session.revision, hash, keys: focusKeys }
-        const directGuides = this.mode === 'steps' && session.reviewStatus === 'reviewed'
-        const warmups = (items: typeof guides): ScreenContextInputsV2[] =>
-            items.flatMap((item) =>
-                directGuides ? [item.inputs, ...futureDocumentStates(item.inputs)] : futureDocumentStates(item.inputs),
-            )
-        const requestedKinds: readonly PrecomputeKindV2[] | undefined = this.mode === 'steps' ? ['guide'] : undefined
-        const context = documentJobContextKey({ session, uiState, completedStepIds, requestedKinds }),
-            key = hash
-        if (this.attemptedJobs.get(key) === context) {
-            // Changing the visible step must promote its queued contexts even while the original job is running.
-            // Do not restart the job or requeue every evicted background page on ordinary workflow renders.
-            if (focusChanged) this.queueWarmup(focused === undefined ? [] : warmups([focused]), true)
-            return
-        }
-        this.attemptedJobs.set(key, context)
-        while (this.attemptedJobs.size > MAX_ENTRIES) this.attemptedJobs.delete(this.attemptedJobs.keys().next().value!)
-        if (directGuides) {
-            this.queueWarmup(warmups(guides), true)
-            return
-        }
-        this.jobs.get(key)?.abort.abort()
-        const job: Job = { session, abort: new AbortController(), context, uiState, completedStepIds, requestedKinds }
-        this.jobs.set(key, job)
-        void this.runJob(key, job, focusKey, uiState, completedStepIds)
-        this.queueWarmup(warmups(guides), true)
-    }
-    private async control(request: ScreensV2Request, signal?: AbortSignal): Promise<ScreensV2Result> {
-        const metadata = documentRequest(request, `documents-${this.options.id()}`)
-        const result = await this.options.client!.screensV2(metadata, { requestId: metadata.requestId, signal })
-        return interpretDocuments(200, JSON.stringify(result), metadata)
-    }
-    private async runJob(
-        key: string,
-        job: Job,
-        focusKey: string | null,
-        uiState: ScreenUiStateV2 | null | undefined,
-        completedStepIds: readonly string[] | undefined,
-    ): Promise<void> {
-        const common = { session: job.session, uiState, completedStepIds, requestedKinds: job.requestedKinds },
-            expected = documentPrecomputeInputs(common)
-        const deadline = setTimeout(() => job.abort.abort(), DOCUMENT_COLLECTION_DEADLINE_MS)
-        try {
-            let response = await this.control({ ...common, op: 'precompute', focusKey }, job.abort.signal)
-            const received = new Set<string>()
-            let previousWant: readonly string[] = []
-            for (let poll = 0; poll <= (this.options.maxPolls ?? DOCUMENT_PROGRESS_MAX_POLLS); poll++) {
-                if (
-                    job.abort.signal.aborted ||
-                    this.disposed ||
-                    this.stale(job.session) ||
-                    this.jobs.get(key) !== job ||
-                    response.status !== 'ok'
-                )
-                    return
-                if (response.value.progress !== null && response.value.progress.mode !== this.mode) {
-                    void this.cancelJob(job)
-                    return
-                }
-                for (const document of response.value.documents) {
-                    const name = document.kind === 'guide' ? `guide:${document.bound.stepId}` : document.kind
-                    const context = expected.find((item) => item.key === name)?.inputs
-                    if (context === undefined || !this.enabled(context) || !documentMatchesInputs(document, context))
-                        continue
-                    this.acceptedDocuments.add(document)
-                    const cacheKey = documentKey(context),
-                        held = this.held.get(cacheKey)
-                    if (
-                        held?.entry.status !== 'ready' ||
-                        held.readyAt === null ||
-                        (held.entry.document.metadata.source === 'fallback' && document.metadata.source === 'generated')
-                    ) {
-                        held?.abort.abort()
-                        this.held.set(cacheKey, {
-                            inputs: context,
-                            entry: { status: 'ready', document, issue: null },
-                            readyAt: this.now(),
-                            background: true,
-                            manualHash: context.session === null ? null : key,
-                            abort: new AbortController(),
-                        })
-                        this.trimCache()
-                        this.publish()
-                    }
-                    received.add(name)
-                }
-                const progress = response.value.progress
-                if (progress === null) return
-                const remaining = progress.items.filter(
-                    (item) => !received.has(item.key) && !['failed', 'cancelled'].includes(item.state),
-                )
-                if (remaining.length === 0) return
-                if (poll === (this.options.maxPolls ?? DOCUMENT_PROGRESS_MAX_POLLS)) return
-                const want = remaining
-                    .filter((item) => ['ready', 'fallback'].includes(item.state))
-                    .slice(0, 8)
-                    .map((item) => item.key)
-                // Collect newly completed real payloads immediately. Only unfinished/repeated work waits for a poll.
-                if (!want.some((name) => !previousWant.includes(name)))
-                    await pause(this.options.pollMs ?? DOCUMENT_PROGRESS_POLL_MS, job.abort.signal)
-                if (job.abort.signal.aborted) return
-                previousWant = want
-                response = await this.control(
-                    { ...common, op: 'progress', want, jobContextKey: job.context },
-                    job.abort.signal,
-                )
-            }
-        } catch {
-            /* Collection ends quietly; on-demand requests retain a complete fallback. */
-        } finally {
-            clearTimeout(deadline)
-            if (this.jobs.get(key) === job) {
-                this.jobs.delete(key)
-                if (!this.disposed) this.publish()
-            }
-        }
-    }
-    private async cancelJob(job: Job): Promise<void> {
-        if (this.options.client === undefined) return
-        try {
-            await this.control({
-                op: 'cancel',
-                session: job.session,
-                uiState: job.uiState,
-                completedStepIds: job.completedStepIds,
-                requestedKinds: job.requestedKinds,
-            })
-        } catch {
-            /* Best effort; never retry. */
-        }
-    }
     noteShown(document: ScreenDocumentV2, focused: boolean, presentedInputs?: ScreenContextInputsV2): void {
         if (
             !focused ||
@@ -896,14 +671,8 @@ export class DocumentStore {
         if (this.disposed) return
         this.disposed = true
         for (const held of this.held.values()) held.abort.abort()
-        for (const job of this.jobs.values()) {
-            job.abort.abort()
-            void this.cancelJob(job)
-        }
         this.held.clear()
         this.evicted.clear()
-        this.jobs.clear()
-        this.attemptedJobs.clear()
         this.preparedSessions.clear()
         this.guides.clear()
         this.warmQueue.clear()

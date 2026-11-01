@@ -1,7 +1,7 @@
 import { SecondOpinionTickets, reconcileSecondOpinion, unavailableSecondOpinion } from './second-opinion'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { retryableNetworkFailure } from '../providers/meta-transport'
+import { retryableNetworkFailure, retryAfterDeadline } from '../providers/meta-transport'
 import { admission } from './request-clock'
 
 import {
@@ -103,12 +103,15 @@ type EffectContext = {
     deadline: Deadline
     dispatched: boolean
     counter?: ModelCallCounter
-    retry: boolean
+    retry: false | 'network' | 'rate_limit'
+    networkRetried?: boolean
+    rateLimitRetried?: boolean
+    retryAt?: number
     fingerprint?: string
     attempts: number
     /** Present only on an admitted parse route; the one-use repair child never carries it. */
     repair?: { used: boolean }
-    /** Status of the first upstream response; only a first 200 can authorize the repair. */
+    /** First terminal response status: an admitted intermediate 429 does not consume the separate repair grant. */
     firstStatus?: number
 }
 const effects = new AsyncLocalStorage<EffectContext>()
@@ -164,13 +167,21 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                 .digest('hex')
             if (
                 context.dispatched &&
-                (!context.retry || fingerprint !== context.fingerprint || context.attempts >= 2)
+                (!context.retry ||
+                    fingerprint !== context.fingerprint ||
+                    context.attempts >= 3 ||
+                    (context.retryAt !== undefined && performance.now() < context.retryAt))
             ) {
                 throw new AdmissionError('duplicate_request', 409)
             }
-            if (context.dispatched) context.counter?.claim()
+            if (context.dispatched) {
+                context.counter?.claim()
+                if (context.retry === 'network') context.networkRetried = true
+                if (context.retry === 'rate_limit') context.rateLimitRetried = true
+            }
             context.dispatched = true
             context.retry = false
+            context.retryAt = undefined
             context.fingerprint = fingerprint
             context.attempts += 1
             const inherited = init?.signal ?? (input instanceof Request ? input.signal : undefined)
@@ -183,14 +194,16 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                         void response.body?.cancel().catch((): void => {})
                         throw error
                     }
-                    // Receiving any response ends transport retry authority; semantic repair needs its separate grant.
-                    context.retry = false
-                    context.firstStatus ??= response.status
+                    const retryAt = context.rateLimitRetried ? undefined : retryAfterDeadline(response)
+                    context.retry = retryAt === undefined ? false : 'rate_limit'
+                    context.retryAt = retryAt
+                    if (!context.retry) context.firstStatus ??= response.status
                     return response
                 },
                 (error: unknown): never => {
                     context.check()
-                    context.retry = context.attempts === 1 && retryableNetworkFailure(error)
+                    context.retry = !context.networkRetried && retryableNetworkFailure(error) ? 'network' : false
+                    context.retryAt = context.retry ? performance.now() + 100 : undefined
                     throw error
                 },
             )

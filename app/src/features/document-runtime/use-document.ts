@@ -12,8 +12,9 @@ import { DocumentStore, documentKey, localDocument, type DocumentRuntimeEntry } 
 import { isResultLayoutDocument } from './result-layout-runtime'
 import { isQuestionLayoutDocument } from './question-layout-runtime'
 
-// Paid baseline: Spark low screens 17s, quick-check medium 31s; allow the 45s Guide limit plus transport margin.
-export const DOCUMENT_FOCUS_GRACE_MS = 55_000
+// Keep the initial skeleton brief. After 15 seconds the shell reports progress while the original request continues;
+// a UI grace period is not a provider timeout and must never freeze out a valid page that arrives afterwards.
+export const DOCUMENT_FOCUS_GRACE_MS = 15_000
 
 export interface DocumentReading {
     readonly document: ScreenDocumentV2
@@ -94,10 +95,10 @@ export function useDocument(
             (entry?.status === 'ready' && capturePlacement(prior.document) !== capturePlacement(entry.document)))
     const current =
         questionPresentation ?? (preserveGenerated ? prior : (presentation ?? availablePrior ?? evicted ?? preview))
-    const [frozen, setFrozen] = useState<{ key: string; entry: DocumentRuntimeEntry } | null>(null)
+    const [progressKey, setProgressKey] = useState<string | null>(null)
     const grace = useRef({ key, elapsed: 0 })
     useEffect(() => {
-        // Background preparation belongs to warmup/precompute. A hidden route must not restart cancelled work on blur.
+        // Background preparation belongs to prepareFlow/warmup. A hidden route must not restart cancelled work on blur.
         // Non-ready states are deterministic app composition, never a reason for another model request.
         if (options.focused === true && (options.state === undefined || options.state === 'ready'))
             store.request(inputs)
@@ -106,44 +107,20 @@ export function useDocument(
     useEffect(() => {
         if (grace.current.key !== key) {
             grace.current = { key, elapsed: 0 }
-            setFrozen(null)
+            setProgressKey(null)
         }
-        if (progressiveResult) return
-        if (options.focused !== true) {
-            // A late cached document is eligible when the screen next becomes visible, never under active editing.
-            if (current.status === 'ready') setFrozen(null)
-            return
-        }
-        if (
-            (current.status === 'ready' &&
-                (current.document.metadata.source === 'generated' ||
-                    current.document.metadata.fallbackReason === 'disabled')) ||
-            frozen?.key === key
-        )
-            return
+        if (progressiveResult || options.focused !== true || current.status === 'ready' || progressKey === key) return
         const started = performance.now()
         const timer = setTimeout(
-            (): void => {
-                const cached = store.peek(inputs)
-                if (cached?.status === 'ready' && cached.document.metadata.source === 'generated') return
-                setFrozen({
-                    key,
-                    entry:
-                        cached?.status === 'ready'
-                            ? cached
-                            : current.status === 'ready'
-                              ? current
-                              : { status: 'ready', document: localDocument(inputs, 'timeout'), issue: 'timeout' },
-                })
-            },
+            (): void => setProgressKey(key),
             Math.max(0, DOCUMENT_FOCUS_GRACE_MS - grace.current.elapsed),
         )
         return (): void => {
             clearTimeout(timer)
             grace.current.elapsed += Math.max(0, performance.now() - started)
         }
-    }, [store, key, options.focused, current.status, current.document, frozen, progressiveResult])
-    const displayed = !progressiveResult && frozen?.key === key ? frozen.entry : current
+    }, [key, options.focused, current.status, current.document, progressKey, progressiveResult])
+    const displayed = current
     // Mounted presentation owns its committed props after cache eviction; no unseen cached payload is retained here.
     useEffect(() => {
         if (displayed.status === 'ready') retained.current = { key, entry: displayed }
@@ -153,7 +130,9 @@ export function useDocument(
         options.state !== undefined && options.state !== 'ready'
             ? options.state
             : displayed.status === 'pending' && inputs.kind !== 'result' && inputs.kind !== 'answer'
-              ? 'pending'
+              ? progressKey === key
+                  ? 'busy'
+                  : 'pending'
               : displayed.document.metadata.fallbackReason === 'timeout' && !progressiveResult
                 ? 'error'
                 : 'ready'
@@ -165,7 +144,7 @@ export function useDocument(
     }, [store, displayed.document, displayed.status, active.activeState, options.focused, version])
     const retry = useCallback((): void => {
         grace.current = { key, elapsed: 0 }
-        setFrozen(null)
+        setProgressKey(null)
         store.retry(inputs)
         store.request(inputs)
     }, [store, key])
