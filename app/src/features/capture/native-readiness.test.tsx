@@ -179,9 +179,9 @@ it.each(['unparsed', 'unreviewed'] as const)(
         await act(async () => parse.resolve())
         await flush()
         expect(mounted.controller.getSnapshot().route).toBe('overview')
-        expect(mounted.view.getPathname()).toBe('/reading/readiness')
-        expect(root('reading-screen')?.documentRoot).toBe(previous?.documentRoot)
-        expect(primary('reading-screen')).toBeDisabled()
+        expect(mounted.view.getPathname()).toBe('/check/readiness')
+        expect(root('overview-screen')?.origin).toBe('fallback')
+        expect(primary('overview-screen')).not.toBeDisabled()
         await act(async () => gate.resolve())
         await waitFor(() => expect(mounted!.view.getPathname()).toBe('/check/readiness'))
         expect(root('overview-screen')?.origin).toBe('generated')
@@ -425,7 +425,8 @@ it('prepares the same first real missing-fact question that the entered Quick ch
     mounted = await mount([manual], { screens: { generated: ['quick-check'], gate: gate.promise } })
     await press('Continue building')
     await flush()
-    expect(mounted.view.getPathname()).toBe('/')
+    expect(mounted.view.getPathname()).toBe('/check/question')
+    expect(root('overview-screen')?.origin).toBe('fallback')
     const request = mounted.server.requests.find(
         (request) => request.op === 'generate' && request.kind === 'quick-check',
     )

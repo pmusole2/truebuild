@@ -23,6 +23,7 @@ import { sha256Hex } from './sha256'
 import type { FrameBindings } from './types'
 import { entry, runtime, source } from '../screens/test-support/route-harness'
 import { defaultNav } from '../capture/screen-nav'
+import { resolveCameraCapture } from '../capture/essential-controls'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { recordedDocumentForTest } from './recorded/test-support'
 import { recordedDocument } from '../document-runtime/recorded-runtime'
@@ -1122,7 +1123,7 @@ describe('the actual v2 catalog renderer', () => {
         }
     })
 
-    it('binds the sole camera primary to the shutter instead of reopening the camera', async () => {
+    it('binds only the camera shutter to capture and routes Choose photos to the independent library capability', async () => {
         const { inputs, bindings, run } = await setup()
         const cameraInputs: ScreenContextInputsV2 = {
             ...inputs,
@@ -1150,6 +1151,39 @@ describe('the actual v2 catalog renderer', () => {
         await fireEvent.press(screen.getByTestId('camera-shutter'))
         expect(capture).toHaveBeenCalledTimes(1)
         expect(run).not.toHaveBeenCalled()
+        const choose = jest.fn()
+        const imported = {
+            ...document,
+            bar: {
+                ...document.bar,
+                secondary: {
+                    type: 'SecondaryAction' as const,
+                    label: 'Choose photos',
+                    intent: { intent: 'capture' as const, target: 'choose-pages' as const },
+                    icon: null,
+                },
+            },
+            metadata: {
+                ...document.metadata,
+                origins: { ...document.metadata.origins, 'bar.secondary': 'generated' as const },
+            },
+        }
+        const imports = {
+            ...cameraBindings,
+            camera: { ...cameraBindings.camera, ready: false },
+            resolve: (intent: Parameters<typeof resolveCameraCapture>[0]): ReturnType<FrameBindings['resolve']> =>
+                resolveCameraCapture(intent, cameraBindings.camera, false, choose) ?? {
+                    enabled: true,
+                    reason: null,
+                    run,
+                },
+        }
+        await view.rerender(wrap(<DocumentRenderer document={imported} bindings={imports} />))
+        expect(screen.getAllByTestId('camera-shutter')).toHaveLength(1)
+        expect(screen.getByRole('button', { name: 'Choose photos' })).toBeEnabled()
+        await fireEvent.press(screen.getByRole('button', { name: 'Choose photos' }))
+        expect(choose).toHaveBeenCalledTimes(1)
+        expect(capture).toHaveBeenCalledTimes(1)
         await view.rerender(wrap(<DocumentRenderer document={document} bindings={cameraBindings} variant="busy" />))
         expect(screen.getByTestId('raw-camera-preview')).toBeTruthy()
         expect(mounted).toHaveBeenCalledTimes(1)

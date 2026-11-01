@@ -10,6 +10,7 @@ import { testRestoreDelayMs } from './test-controls'
 import type { DocumentStore } from '../document-runtime/store'
 import { homeUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
 import { editableQuestions } from './quick-check-model'
+import { homeAfterConfirmInputs, newManualInputs } from './document-inputs'
 
 /**
  * The one owner of the capture controller. It is created and restored once above the native Stack and is disposed only
@@ -101,6 +102,7 @@ function ControllerHost({
     useEffect(() => {
         if (documents === null || session === undefined || state.loading) return
         documents.observeSession(session)
+        const afterConfirm = homeAfterConfirmInputs(state, entry)
         documents.prepareFlow(
             session,
             `guide:${session.reviewedSteps[entry?.stepIndex ?? 0]?.stepId ?? session.rawExtraction?.steps[0]?.stepId ?? ''}`,
@@ -120,8 +122,18 @@ function ControllerHost({
                 ...(entry === undefined ? {} : pagesUiState(entry)),
                 reading: { cancellation: READING_CANCELLATION_V2 },
             },
+            afterConfirm === null ? [] : [afterConfirm],
         )
     }, [documents, session, state.loading, state.entries])
+    // While Home shows, prepare what its two entry points open: Add for the manual it would create (its id and time are
+    // reserved by the controller, so the keys match the real ones) and that manual's page camera.
+    const homeVisible = state.route === 'library' && state.selectedId === null
+    useEffect(() => {
+        if (documents === null || documents.mode !== 'full' || !homeVisible || state.loading || state.pending !== null)
+            return
+        const reserved = controller.reserveManual()
+        if (reserved !== null) documents.warmup(newManualInputs(state, reserved))
+    }, [controller, documents, homeVisible, state.loading, state.pending, state.storageReadOnly, state.entries])
     useEffect(() => (): void => screens?.dispose(), [screens])
     useEffect(() => (): void => documents?.dispose(), [documents])
     const value = useMemo(

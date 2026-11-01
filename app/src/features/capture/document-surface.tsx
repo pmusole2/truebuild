@@ -30,8 +30,9 @@ export { documentInputs } from './document-inputs'
 import { useWorkflow, type WorkflowValue } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
 import { documentMatchesInputs } from '../../api/document-client'
+import { EssentialDocumentControls, resolveCameraCapture } from './essential-controls'
 
-/** One production route adapter. It binds live mechanics, never screen content or a parallel action bar. */
+/** One production route adapter binds validated content, live capabilities and app-owned essential chrome. */
 export function DocumentSurface({
     kind,
     quick,
@@ -326,15 +327,9 @@ export function DocumentSurface({
             })
             return resolved
         }
-        if (effectiveKind === 'camera' && intent.intent === 'capture') {
-            const enabled = !busy && camera?.ready === true
-            return {
-                enabled,
-                reason: enabled ? null : 'The camera is not ready.',
-                run: (): void => {
-                    if (enabled) camera?.capture()
-                },
-            }
+        if (effectiveKind === 'camera') {
+            const capture = resolveCameraCapture(intent, camera, busy, choosePages)
+            if (capture !== null) return capture
         }
         if (intent.intent === 'navigate' && intent.target === 'back') {
             return {
@@ -646,6 +641,18 @@ export function DocumentSurface({
             <DocumentRenderer
                 document={reading.document}
                 bindings={bindings}
+                essentialControls={
+                    <EssentialDocumentControls
+                        kind={effectiveKind}
+                        variant={reading.variant}
+                        state={state}
+                        entry={entry}
+                        busy={busy}
+                        resolve={resolve}
+                        controller={controller}
+                        nav={nav}
+                    />
+                }
                 variant={
                     ['result', 'answer'].includes(effectiveKind) && reading.status === 'pending' && !busy
                         ? 'ready'

@@ -1227,7 +1227,7 @@ describe('automatic separate second opinion', () => {
         await vi.waitFor(() => expect(forms).toHaveLength(2))
         expect(publications.some((check) => check?.secondOpinion?.status === 'available')).toBe(true)
         expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
-        expect(controller.getSnapshot().pending).toMatch(/Second opinion pending/)
+        expect(controller.getSnapshot().pending).toBeNull()
         await vi.advanceTimersByTimeAsync(59_000)
         expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
         finish()
@@ -1247,7 +1247,7 @@ describe('automatic separate second opinion', () => {
         const pending = controller.shutter(async () => photo)
         await vi.waitFor(() => expect(forms).toHaveLength(2))
         await vi.advanceTimersByTimeAsync(59_000)
-        expect(controller.getSnapshot().pending).toMatch(/Second opinion pending/)
+        expect(controller.getSnapshot().pending).toBeNull()
         expect(controller.getSnapshot().check?.reason).toBe('Primary Spark result.')
         await vi.advanceTimersByTimeAsync(1_001)
         await pending

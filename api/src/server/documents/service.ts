@@ -566,6 +566,8 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 // The single repair covers structural AND semantic rejection of a completed answer; then whole fallback.
                 logRejection(context, 'initial', evaluated.issues)
                 rejectedIssues = evaluated.issues.length
+                // Result already shows the app's verdict/photo shell; rejected background composition never delays it.
+                if (context.inputs.kind === 'result') return failure('invalid_output')
                 repaired = true
                 try {
                     const value = await attempt(evaluated.issues)

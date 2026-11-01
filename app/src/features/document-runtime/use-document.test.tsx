@@ -1,6 +1,16 @@
 import { act, render, screen } from '@testing-library/react-native'
 import { Text } from 'react-native'
-import { createDemoManual, type ScreenContextInputsV2 } from '@truebuild/contracts'
+import {
+    assembleDocumentV2,
+    buildFallbackProposalV2,
+    documentMaterialV2,
+    screenDocumentV2Schema,
+    createDemoManual,
+    type ScreenContextInputsV2,
+} from '@truebuild/contracts'
+import type { ModelApiClient } from '../../api/model-client'
+import { documentUnavailable } from '../../api/document-client'
+import { sha256Hex } from '../documents/sha256'
 import { WorkflowContext, type WorkflowValue } from '../capture/workflow-context'
 import { DocumentStore, localDocument } from './store'
 import { useDocument } from './use-document'
@@ -146,5 +156,90 @@ it('a focused pending screen gets a complete fallback immediately on cache evict
         await view.unmount()
         store.dispose()
         controller.dispose()
+    }
+})
+
+it('shows complete Quick-check and Result shells immediately, swaps only validated generated documents and keeps failures silent', async () => {
+    const sourceRefs = [{ pageId: inputs.session!.pages[0]!.pageId, region: null }]
+    const result: ScreenContextInputsV2 = {
+        ...inputs,
+        kind: 'result',
+        captureId: 'shell-photo',
+        result: {
+            kind: 'check',
+            value: {
+                decision: 'cannot_verify',
+                reason: 'The far side is hidden.',
+                sourceRefs,
+                missingEvidence: ['Retake from the front.'],
+                observedRegion: null,
+            },
+        },
+    }
+    for (const context of [{ ...inputs, kind: 'quick-check' as const }, result]) {
+        for (const accepted of [true, false]) {
+            let finish!: () => void
+            const material = documentMaterialV2(context)
+            const generated = screenDocumentV2Schema.parse(
+                assembleDocumentV2(
+                    material,
+                    buildFallbackProposalV2(material),
+                    { source: 'generated', evidence: 'synthetic-fixture', fallbackReason: null },
+                    { sha256Hex, now: () => new Date('2026-11-01T00:00:00Z') },
+                ),
+            )
+            const screensV2 = jest.fn<ReturnType<ModelApiClient['screensV2']>, Parameters<ModelApiClient['screensV2']>>(
+                (metadata) =>
+                    new Promise((resolve) => {
+                        finish = (): void =>
+                            resolve(
+                                accepted
+                                    ? {
+                                          status: 'ok',
+                                          mode: 'fixture',
+                                          requestId: metadata.requestId,
+                                          value: { document: generated, documents: [], progress: null },
+                                      }
+                                    : documentUnavailable(metadata.requestId, 'invalid_output'),
+                            )
+                    }),
+            )
+            const store = new DocumentStore({
+                mode: 'full',
+                client: { screensV2 },
+                recordings: (): null => null,
+                id: (): string => 'shell',
+            })
+            const { controller } = await runtime([entry()])
+            const value: WorkflowValue = {
+                controller,
+                state: controller.getSnapshot(),
+                entry: entry(),
+                screens: null,
+                documents: store,
+            }
+            const view = await render(
+                <WorkflowContext.Provider value={value}>
+                    <Observed focused context={context} />
+                </WorkflowContext.Provider>,
+            )
+            try {
+                expect(screensV2).toHaveBeenCalledTimes(1)
+                expect(screen.getByTestId('reading-state').props.children).toBe('ready:none:fallback')
+                expect(screen.getByTestId('active-state').props.children).toBe('ready')
+                if (context.kind === 'result')
+                    expect(screen.getByTestId('visible-variant').props.children).toContain('"type":"VerdictCard"')
+                await act(async () => finish())
+                expect(screen.getByTestId('reading-state').props.children).toBe(
+                    accepted ? 'ready:none:generated' : 'ready:none:fallback',
+                )
+                expect(screen.getByTestId('active-state').props.children).toBe('ready')
+                expect(screensV2).toHaveBeenCalledTimes(1)
+            } finally {
+                await view.unmount()
+                store.dispose()
+                controller.dispose()
+            }
+        }
     }
 })

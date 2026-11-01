@@ -178,10 +178,15 @@ function targetInputs(controller: CaptureController, kind: PreparedKind): Screen
         }
     return inputs
 }
+/**
+ * Whether arriving at `kind` holds the source screen until its complete document is collected. Quick check never holds:
+ * its shell mounts at once and the focused screen requests (or reuses the prefetched) document in the background.
+ */
 function prepares(documents: DocumentStore | null | undefined, kind: PreparedKind): documents is DocumentStore {
     return (
         documents !== null &&
         documents !== undefined &&
+        kind !== 'quick-check' &&
         (documents.mode === 'full' || (documents.mode === 'steps' && kind === 'guide'))
     )
 }

@@ -3,6 +3,9 @@ import { captureUiState, homeUiState, moreUiState, pagesUiState, reviewUiState }
 import { publishableResult } from '../screens/screen-spec'
 import type { QuickProgress } from '../screens/quick-progress'
 import type { WorkflowValue } from './workflow-context'
+import type { WorkflowState } from './controller'
+import type { LibraryEntry } from './library'
+import { reviewedSession } from './reviewed-session'
 
 function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending === null) return null
@@ -101,4 +104,35 @@ export function documentInputs(
     const activity = activityOf(state.pending)
     inputs.uiState = { ...inputs.uiState, busy: activity === null ? null : { activity } }
     return inputs
+}
+
+/**
+ * The Home a person reaches after Confirm: the library as it will be once the candidate `reviewedSession` is saved over
+ * the selected entry, built by the screen's own input function so its key is the key the real Home asks for. Null when
+ * there is nothing to confirm.
+ */
+export function homeAfterConfirmInputs(
+    state: WorkflowState,
+    entry: LibraryEntry | undefined,
+): ScreenContextInputsV2 | null {
+    const candidate =
+        entry === undefined || entry.session.reviewStatus === 'reviewed' ? null : reviewedSession(entry.session)
+    if (entry === undefined || candidate === null || (entry.session.rawExtraction?.steps.length ?? 0) === 0) return null
+    const entries = state.entries.map((current) =>
+        current === entry ? { ...entry, session: candidate, capture: null } : current,
+    )
+    return documentInputs('home', { state: { ...state, pending: null, entries }, entry })
+}
+
+/**
+ * Add and its page camera for the manual that Add creates from Home (`reserved`: its id and time are fixed by the
+ * controller, so these keys are the real ones). The camera assumes the permission is already granted, as the guide
+ * camera preparation does; a different observed access simply keys a different document.
+ */
+export function newManualInputs(state: WorkflowState, reserved: LibraryEntry): ScreenContextInputsV2[] {
+    const idle = { ...state, pending: null, capture: null, cameraIntent: null }
+    const camera = documentInputs('camera', { state: { ...idle, cameraIntent: { kind: 'page' } }, entry: reserved })
+    if (camera.uiState?.camera != null)
+        camera.uiState.camera = { ...camera.uiState.camera, permission: 'granted', failed: false, canAskAgain: true }
+    return [documentInputs('add', { state: idle, entry: reserved }), camera]
 }

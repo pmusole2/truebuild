@@ -491,9 +491,9 @@ describe('closer look keeps its guards', () => {
         expect(state.pending).toBeNull()
     })
 
-    it('announces the closer look while it runs and clears it when it ends', async () => {
+    it('keeps the verdict usable while the closer look runs and applies its guarded result', async () => {
         let finish: (value: unknown) => void = () => undefined
-        const { controller } = await ready({
+        const { controller, calls } = await ready({
             decision: 'cannot_verify',
             secondOpinion: (reply) =>
                 new Promise<Response>((resolve) => (finish = (value: unknown): void => resolve(reply(value)))),
@@ -501,7 +501,10 @@ describe('closer look keeps its guards', () => {
         const pending: (string | null)[] = []
         controller.subscribe(() => pending.push(controller.getSnapshot().pending))
         const work = check(controller)
-        await vi.waitFor(() => expect(pending.some((value) => value?.startsWith('Second opinion') === true)).toBe(true))
+        await vi.waitFor(() => expect(calls).toContain('/api/checks/second-opinion'))
+        expect(controller.getSnapshot().check?.secondOpinion?.status).toBe('available')
+        expect(controller.getSnapshot().pending).toBeNull()
+        expect(pending.some((value) => value?.startsWith('Second opinion') === true)).toBe(false)
         expect(controller.getSnapshot().check?.decision).toBe('cannot_verify')
         finish({
             decision: 'refuse',

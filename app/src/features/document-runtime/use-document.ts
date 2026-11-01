@@ -46,6 +46,11 @@ export function useDocument(
     const key = documentKey(inputs)
     // Verdict/answer truth and its photo are already visible in the local complete document. A compatible deeper
     // composition may arrive later for this exact keyed capture/result without remounting the loaded native photo.
+    const shellFirst = inputs.kind === 'quick-check' || inputs.kind === 'result'
+    const immediateShell = useMemo<DocumentRuntimeEntry>(
+        () => ({ status: 'ready', document: localDocument(inputs, 'busy'), issue: null }),
+        [key],
+    )
     const progressiveResult =
         (inputs.kind === 'result' || inputs.kind === 'answer') && inputs.captureId !== null && inputs.result !== null
     const entry = store.peek(inputs)
@@ -87,6 +92,7 @@ export function useDocument(
     // Keep the shown generated document when a late response would remount its photo. Cached incompatible responses
     // remain intact; the authored-spine selection above applies on later mounts too. Retention never crosses keys.
     const preserveGenerated =
+        !shellFirst &&
         (options.focused === true || progressiveResult) &&
         prior?.document.metadata.source === 'generated' &&
         (entry?.status !== 'ready' || entry.document.screenId !== prior.document.screenId) &&
@@ -109,7 +115,14 @@ export function useDocument(
             grace.current = { key, elapsed: 0 }
             setProgressKey(null)
         }
-        if (progressiveResult || options.focused !== true || current.status === 'ready' || progressKey === key) return
+        if (
+            shellFirst ||
+            progressiveResult ||
+            options.focused !== true ||
+            current.status === 'ready' ||
+            progressKey === key
+        )
+            return
         const started = performance.now()
         const timer = setTimeout(
             (): void => setProgressKey(key),
@@ -119,8 +132,38 @@ export function useDocument(
             clearTimeout(timer)
             grace.current.elapsed += Math.max(0, performance.now() - started)
         }
-    }, [key, options.focused, current.status, current.document, progressKey, progressiveResult])
-    const displayed = current
+    }, [key, options.focused, current.status, current.document, progressKey, progressiveResult, shellFirst])
+    // Quick-check facts and delivered verdicts never wait for layout composition. The complete deterministic READY
+    // shell remains until this exact context has a validated generated document; rejected layouts stay background.
+    // Explicit fixture campaigns keep their recorded held-photo spine while the verdict itself is pending.
+    // Live preview never resolves a recording and always starts on the deterministic shell above.
+    const fixtureResult =
+        preview.document.metadata.evidence === 'synthetic-fixture' && isResultLayoutDocument(preview.document)
+    const displayed =
+        shellFirst && !fixtureResult
+            ? presentation?.status === 'ready' && presentation.document.metadata.source === 'generated'
+                ? presentation
+                : immediateShell
+            : current
+    useEffect(() => {
+        if (!shellFirst || options.focused !== true) return
+        console.info(
+            JSON.stringify({
+                event: 'document_background_composition',
+                kind: inputs.kind,
+                contextKey: displayed.document.bound.contextKey,
+                outcome:
+                    displayed.document.metadata.source === 'generated'
+                        ? 'swapped'
+                        : entry?.status === 'ready'
+                          ? 'kept_shell'
+                          : 'shell',
+                model: entry?.document.metadata.model ?? null,
+                effort: entry?.document.metadata.effort ?? null,
+                fallbackReason: entry?.status === 'ready' ? entry.document.metadata.fallbackReason : null,
+            }),
+        )
+    }, [shellFirst, options.focused, key, displayed.document, entry?.status, entry?.document])
     // Mounted presentation owns its committed props after cache eviction; no unseen cached payload is retained here.
     useEffect(() => {
         if (displayed.status === 'ready') retained.current = { key, entry: displayed }
@@ -129,11 +172,11 @@ export function useDocument(
     const requested =
         options.state !== undefined && options.state !== 'ready'
             ? options.state
-            : displayed.status === 'pending' && inputs.kind !== 'result' && inputs.kind !== 'answer'
+            : !shellFirst && displayed.status === 'pending' && inputs.kind !== 'result' && inputs.kind !== 'answer'
               ? progressKey === key
                   ? 'busy'
                   : 'pending'
-              : displayed.document.metadata.fallbackReason === 'timeout' && !progressiveResult
+              : displayed.document.metadata.fallbackReason === 'timeout' && !progressiveResult && !shellFirst
                 ? 'error'
                 : 'ready'
     const active = activeDocumentVariant(displayed.document, requested)

@@ -1782,19 +1782,21 @@ function NodeContent({
     }
 }
 
-/** Direct v2 renderer: the selected document supplies the full header, body, bar and overlays without v1 conversion. */
+/** Direct v2 rendering of the validated header, body, bar and overlays, with optional app-owned essential chrome. */
 export function NativeDocumentRenderer({
     document,
     bindings,
     variant = 'ready',
     chrome = 'full',
     testID = 'document-screen',
+    essentialControls,
 }: {
     document: ScreenDocumentV2
     bindings: FrameBindings
     variant?: string
     chrome?: 'full' | 'body-only'
     testID?: string
+    essentialControls?: ReactNode
 }): ReactElement {
     const { width } = useWindowDimensions()
     const scope = useCoachScope()
@@ -1917,7 +1919,10 @@ export function NativeDocumentRenderer({
         role: 'primary' | 'secondary',
     ): BarAction => {
         const resolved = bindings.resolve(node.intent)
-        const isCamera = document.kind === 'camera' && node.intent.intent === 'capture'
+        const isCamera =
+            document.kind === 'camera' &&
+            node.intent.intent === 'capture' &&
+            (node.intent.target === 'take-photo' || node.intent.target === 'retake')
         const isDismiss =
             node.intent.intent === 'navigate' &&
             node.intent.target === 'back' &&
@@ -2021,6 +2026,7 @@ export function NativeDocumentRenderer({
                         </ScrollView>
                     )}
                 </Animated.View>
+                {essentialControls}
                 <FixedBottomBar
                     nativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}

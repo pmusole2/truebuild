@@ -361,6 +361,10 @@ describe('Result composed after an immediate verdict', () => {
                 screens: {
                     generated: ['result'],
                     recordedMetadata: true,
+                    // Hold only the Result under test; unrelated warmups must release their shared generation slots.
+                    onRequest: (request) => {
+                        compositionGate.current = request.kind === 'result' ? finalComposition.promise : undefined
+                    },
                     get gate() {
                         return compositionGate.current
                     },
@@ -417,7 +421,8 @@ describe('Result composed after an immediate verdict', () => {
             const heldUri = heldImage.props.source.uri as string
             await act(async () => primary.resolve())
             await waitFor(() => expect(controller.getSnapshot().check?.decision).toBe('cannot_verify'))
-            expect(screen.getByText('Taking a closer look…')).toBeTruthy()
+            expect(screen.getByText('The near joint is hidden.')).toBeTruthy()
+            expect(controller.getSnapshot().pending).toBeNull()
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
             const busyRequests = server.requests.filter(
                 (request) =>
@@ -430,7 +435,8 @@ describe('Result composed after an immediate verdict', () => {
             expect(busyRequests).toHaveLength(0)
             expect(screen.getByTestId('frozen-photo-image').props.style.width).toBeGreaterThan(0)
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
-            expect(screen.getByText('Taking a closer look…')).toBeTruthy()
+            expect(screen.getByText('The near joint is hidden.')).toBeTruthy()
+            expect(controller.getSnapshot().pending).toBeNull()
 
             await act(async () => {
                 closer.resolve()
@@ -443,14 +449,17 @@ describe('Result composed after an immediate verdict', () => {
             expect(screen.getByTestId('frozen-photo-image')).toBe(heldImage)
             expect(screen.getByTestId('frozen-photo-image').props.source.uri).toBe(heldUri)
             expect(controller.getSnapshot().capture).toBe(heldCapture)
-            const finalRequest = server.requests.find(
-                (request) =>
-                    request.op === 'generate' &&
-                    request.kind === 'result' &&
-                    request.result?.kind === 'check' &&
-                    request.result.value.decision === 'refuse' &&
-                    request.uiState?.busy == null,
-            )!
+            const readyRequest = (): (typeof server.requests)[number] | undefined =>
+                server.requests.find(
+                    (request) =>
+                        request.op === 'generate' &&
+                        request.kind === 'result' &&
+                        request.result?.kind === 'check' &&
+                        request.result.value.decision === 'refuse' &&
+                        request.uiState?.busy == null,
+                )
+            await waitFor(() => expect(readyRequest()).toBeDefined())
+            const finalRequest = readyRequest()!
             const finalInputs = inputsFromDocumentMetadata(finalRequest)
             const finalDocument = store.peek(finalInputs)!.document
             if (sheet !== 'none') {

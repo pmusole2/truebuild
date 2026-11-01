@@ -248,7 +248,8 @@ export function DoneRoute(): ReactElement {
 }
 
 export function CameraRoute(): ReactElement {
-    const { controller, state } = useWorkflow()
+    const { controller, state, entry } = useWorkflow()
+    const choosePages = useChoosePages(entry)
     const entered = useRef(state.route === 'camera')
     usePreventRemove(state.route === 'camera', controller.cancel)
     if (!entered.current) return <Redirect href="/" />
@@ -256,7 +257,18 @@ export function CameraRoute(): ReactElement {
         <>
             <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="camera">
-                <DocumentCamera />
+                <DocumentCamera
+                    choosePages={
+                        state.cameraIntent?.kind === 'page'
+                            ? (): void => {
+                                  const index =
+                                      state.cameraIntent?.kind === 'page' ? state.cameraIntent.replaceIndex : undefined
+                                  controller.cancel()
+                                  choosePages(index)
+                              }
+                            : undefined
+                    }
+                />
             </CoachRoute>
         </>
     )

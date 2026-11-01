@@ -25,12 +25,12 @@ function CameraPreviewShell({ children }: { children: ReactNode }): ReactElement
 }
 
 /** Native camera IO only. The CameraView document places its preview; its bar is the one shutter. */
-export function DocumentCamera(): ReactElement {
-    if (fixtureCameraEnabled()) return <FixtureCamera />
-    return <HardwareCamera />
+export function DocumentCamera({ choosePages }: { readonly choosePages?: () => void }): ReactElement {
+    if (fixtureCameraEnabled()) return <FixtureCamera choosePages={choosePages} />
+    return <HardwareCamera choosePages={choosePages} />
 }
 
-function FixtureCamera(): ReactElement {
+function FixtureCamera({ choosePages }: { readonly choosePages?: () => void }): ReactElement {
     const workflow = useWorkflow()
     if (!fixtureCameraEnabled()) throw new Error('Fixture camera disabled')
     // Loaded only inside the explicit DEV/isolated-loopback fixture boundary.
@@ -59,6 +59,7 @@ function FixtureCamera(): ReactElement {
     return (
         <DocumentSurface
             kind="camera"
+            choosePages={choosePages}
             camera={{
                 ...cameraPreparationState(controller)!,
                 ready,
@@ -81,7 +82,7 @@ function FixtureCamera(): ReactElement {
     )
 }
 
-function HardwareCamera(): ReactElement {
+function HardwareCamera({ choosePages }: { readonly choosePages?: () => void }): ReactElement {
     const { controller, state } = useWorkflow()
     const camera = useRef<CameraView>(null)
     const prepared = cameraPreparationState(controller)
@@ -121,6 +122,7 @@ function HardwareCamera(): ReactElement {
     return (
         <DocumentSurface
             kind="camera"
+            choosePages={choosePages}
             camera={{
                 ready: allowed && ready && !error && state.pending === null,
                 preview,

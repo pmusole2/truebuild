@@ -62,7 +62,11 @@ type Held = {
     readonly inputs: ScreenContextInputsV2
     readonly manualHash: string | null
     readonly abort: AbortController
+    /** True only while this entry's provider request is actually outstanding. */
+    generating: boolean
 }
+/** The global bound on simultaneous provider generations, displayed and background together. */
+const MAX_GENERATIONS = 4
 export const DOCUMENT_CACHE_MAX_ENTRIES = 512
 export const DOCUMENT_CACHE_MAX_BYTES = 32 * 1_024 * 1_024
 const MAX_ENTRIES = DOCUMENT_CACHE_MAX_ENTRIES
@@ -122,7 +126,6 @@ export class DocumentStore {
     private readonly flowAttempts = new Set<string>()
     /** Protect only the current Guide; its priority never overrides the hard cache limits. */
     private focusedGuide: { manualId: string; revision: number; hash: string; keys: Set<string> } | null = null
-    private warming = 0
     private version = 0
     private disposed = false
     private readonly now: () => number
@@ -376,11 +379,14 @@ export class DocumentStore {
             inputs,
             manualHash: inputs.session === null ? null : sha256Hex(screenManualJsonV2(inputs.session)),
             abort: new AbortController(),
+            generating: false,
         }
         this.evicted.delete(key)
         this.held.set(key, held)
         this.trimCache(background ? undefined : key)
-        if (inFlight(held.entry) && this.current(key, held)) void this.generate(key, held)
+        // At the global bound the entry stays pending in `held`; drainWarmup starts it when a generation completes.
+        if (inFlight(held.entry) && this.current(key, held) && this.inFlightTotal() < MAX_GENERATIONS)
+            void this.generate(key, held)
         this.publish()
         return held.entry
     }
@@ -470,7 +476,17 @@ export class DocumentStore {
             !this.stale(held.inputs.session, held.background)
         )
     }
+    /** Every completion, including stale and exact-generation failures, frees a slot and drains the queues. */
     private async generate(key: string, held: Held): Promise<void> {
+        held.generating = true
+        try {
+            await this.collect(key, held)
+        } finally {
+            held.generating = false
+            this.drainWarmup()
+        }
+    }
+    private async collect(key: string, held: Held): Promise<void> {
         let issue: string | null = null
         let document: ScreenDocumentV2 | null = null
         try {
@@ -485,6 +501,7 @@ export class DocumentStore {
         } catch {
             issue = 'provider_error'
         }
+        held.generating = false
         if (!this.current(key, held)) return
         const replacementTooLarge =
             document !== null &&
@@ -530,22 +547,33 @@ export class DocumentStore {
         for (const [key, context] of previous) if (!this.warmQueue.has(key)) this.warmQueue.set(key, context)
         this.drainWarmup()
     }
+    /** Every generation in flight, displayed or background, shares the one bound. */
+    private inFlightTotal(): number {
+        let count = 0
+        for (const held of this.held.values()) if (held.generating) count++
+        return count
+    }
+    /** Only undisplayed preparation is bounded by `warmupConcurrency`; a promoted entry keeps running as displayed. */
+    private backgroundInFlight(): number {
+        let count = 0
+        for (const held of this.held.values()) if (held.generating && held.background) count++
+        return count
+    }
     private drainWarmup(): void {
-        while (!this.disposed && this.warming < Math.min(this.options.warmupConcurrency ?? 2, 4)) {
+        // Displayed requests that were queued at the bound start first; they never wait on background preparation.
+        for (const [key, held] of [...this.held]) {
+            if (this.disposed || this.inFlightTotal() >= MAX_GENERATIONS) return
+            if (!held.background && inFlight(held.entry) && !held.generating && this.current(key, held))
+                void this.generate(key, held)
+        }
+        const limit = Math.min(this.options.warmupConcurrency ?? 2, MAX_GENERATIONS)
+        while (!this.disposed && this.inFlightTotal() < MAX_GENERATIONS && this.backgroundInFlight() < limit) {
             const next = this.warmQueue.entries().next().value
             if (next === undefined) return
             this.warmQueue.delete(next[0])
             const context = next[1]
             if (this.stale(context.session, true)) continue
-            const entry = this.admit(context, true)
-            if (!inFlight(entry) || this.held.get(next[0])?.entry !== entry) continue
-            this.warming++
-            const stop = this.subscribe(() => {
-                if (inFlight(this.peek(context))) return
-                stop()
-                this.warming--
-                this.drainWarmup()
-            })
+            this.admit(context, true)
         }
     }
     /**
@@ -558,6 +586,7 @@ export class DocumentStore {
         focusKey: string | null,
         quickCheck?: ScreenContextInputsV2,
         uiState?: ScreenUiStateV2 | null,
+        upcoming: readonly ScreenContextInputsV2[] = [],
     ): void {
         if (
             this.disposed ||
@@ -608,6 +637,9 @@ export class DocumentStore {
                 : []),
             ...(focused === undefined ? [] : [focused.inputs]),
             ...camera,
+            // Exact next-screen contexts the caller derived from real state (Home after Confirm, Add and page camera from
+            // Home). They are keyed like the screen's own request, so the screen reuses them instead of regenerating.
+            ...(this.mode === 'full' ? upcoming : []),
             ...guides.filter((item) => item !== focused).map((item) => item.inputs),
         ]
         const pending = destinations.filter((inputs) => {

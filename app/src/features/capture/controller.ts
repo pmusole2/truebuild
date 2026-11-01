@@ -36,7 +36,6 @@ import { askModelQuestion, loadCitedSources, observationImage } from '../assembl
 import type { Observation } from '../assembly/observation'
 import type { OverlayResult, ScreenContext } from '@truebuild/contracts/model'
 import type { Digest, LibraryEntry, LibraryStorage } from './library'
-import { secondOpinionTarget } from './provenance-copy'
 import { reviewedSession } from './reviewed-session'
 
 const QUESTION_CAPTURE_TIMEOUT_MS = 30_000
@@ -201,10 +200,14 @@ export class CaptureController {
     private readonly listeners = new Set<() => void>()
     private epoch = 0
     private operation: AbortController | null = null
-    private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'secondOpinion' | 'ask' | null = null
+    private operationKind: 'pages' | 'parse' | 'capture' | 'check' | 'ask' | null = null
     private checkCapture: CaptureBinding | null = null
     private followUps: AbortController | null = null
     private overlayPatch: OverlayResult | null = null
+    /** True only while an automatic closer look runs in the background; it never owns `pending`. */
+    private secondOpinionActive = false
+    /** The next new manual, fixed in advance so its Add and page-camera documents can be prepared while Home shows. */
+    private reservedManual: LibraryEntry | null = null
     private readonly now: () => number
     constructor(private readonly ports: CapturePorts) {
         this.now = ports.now ?? ((): number => Date.now())
@@ -253,6 +256,7 @@ export class CaptureController {
         this.followUps?.abort()
         this.followUps = null
         this.overlayPatch = null
+        this.secondOpinionActive = false
         return this.epoch
     }
     private invalidate(preserveQuestion = false): number {
@@ -294,7 +298,7 @@ export class CaptureController {
         const check = this.state.check
         const offer = check?.secondOpinion
         const cancelledCheck =
-            this.operationKind === 'secondOpinion' && check && offer?.status === 'available'
+            this.secondOpinionActive && check && offer?.status === 'available'
                 ? {
                       ...check,
                       secondOpinion: { model: offer.model, status: 'unavailable' as const },
@@ -331,10 +335,15 @@ export class CaptureController {
             storageReadOnly: restored.readOnly,
         })
     }
-    async createManual(): Promise<void> {
-        if (this.state.pending !== null || this.saving || this.state.storageReadOnly || this.state.loading) {
-            return
-        }
+    /**
+     * The empty manual the next Add will create, or null when none can be created now. It is stable until used (or until
+     * another manual is newer than it), so a prepared Add and page-camera document keep matching the manual that Add makes.
+     */
+    reserveManual(): LibraryEntry | null {
+        if (this.state.pending !== null || this.saving || this.state.storageReadOnly || this.state.loading) return null
+        const held = this.reservedManual
+        if (held !== null && this.state.entries.every((entry) => entry.session.updatedAt <= held.session.updatedAt))
+            return held
         const session: ManualSession = {
             manualId: `manual-${this.ports.id()}`,
             title: 'Untitled manual',
@@ -346,9 +355,19 @@ export class CaptureController {
             reviewedSteps: [],
             reviewStatus: 'unreviewed',
         }
-        const entry: LibraryEntry = { session, stepIndex: 0, completedStepIds: [], capture: null }
+        this.reservedManual = { session, stepIndex: 0, completedStepIds: [], capture: null }
+        return this.reservedManual
+    }
+    async createManual(): Promise<void> {
+        if (this.state.pending !== null || this.saving || this.state.storageReadOnly || this.state.loading) {
+            return
+        }
+        const entry = this.reserveManual()!
+        const session = entry.session
         const token = this.epoch
-        if ((await this.persist([...this.state.entries, entry])) && token === this.epoch) {
+        const saved = await this.persist([...this.state.entries, entry])
+        if (saved && this.reservedManual === entry) this.reservedManual = null
+        if (saved && token === this.epoch) {
             this.invalidate()
             this.publish({ selectedId: session.manualId, route: 'pages', notice: null, pageUris: {} })
         }
@@ -1065,10 +1084,21 @@ export class CaptureController {
                     // The primary action is complete. A fresh guard below owns only the optional follow-up.
                     guard.dispose()
                     if (result.status === 'ok') {
-                        // Overlay and masks are presentation only: they start now, never delay the verdict, the
-                        // automatic closer look or the next action, and stop with the capture that owns them.
-                        this.startFollowUps(context, result.value, token, this.now() - verdictStart)
-                        await this.followSecondOpinion(context, result.value, token, operation)
+                        // The verdict is already usable. Overlay, masks and the automatic closer look are background
+                        // follow-ups: none sets `pending`, none delays the next action, and all stop with this capture.
+                        const abort = new AbortController()
+                        this.followUps?.abort()
+                        this.followUps = abort
+                        this.startFollowUps(context, result.value, token, this.now() - verdictStart, abort.signal)
+                        // Release the busy state first: the closer look below runs with no `pending` and no operation,
+                        // so the verdict stays usable (ask, retake, navigate) while it works.
+                        if (this.operation === operation) {
+                            this.operation = null
+                            this.operationKind = null
+                            this.checkCapture = null
+                            this.publish({ pending: null })
+                        }
+                        await this.followSecondOpinion(context, result.value, token, abort.signal)
                     }
                 }
             }
@@ -1095,7 +1125,8 @@ export class CaptureController {
             }
             guard.dispose()
             if (this.checkCapture === capturedBinding) this.checkCapture = null
-            if (token === this.epoch) {
+            // A verdict releases the operation before its background follow-up; never clear a newer one.
+            if (token === this.epoch && (this.operation === operation || this.operation === null)) {
                 this.operation = null
                 this.operationKind = null
                 this.publish({ pending: null })
@@ -1126,27 +1157,26 @@ export class CaptureController {
         context: FrozenCheckContext,
         primary: CheckResult,
         token: number,
-        operation: AbortController,
+        signal: AbortSignal,
     ): Promise<void> {
         const offer = primary.secondOpinion
         if (
             primary.decision !== 'cannot_verify' ||
             offer?.status !== 'available' ||
-            !this.ownsCaptureOperation(token, operation, context.binding)
+            !this.ownsFollowUp(token, signal, context.binding)
         )
             return
 
-        const guard = createCallGuard(MODEL_SECOND_OPINION_TIMEOUT_MS, operation.signal)
+        const guard = createCallGuard(MODEL_SECOND_OPINION_TIMEOUT_MS, signal)
         const retained = (note: string, status: 'completed' | 'unavailable' = 'unavailable'): CheckResult => ({
             ...primary,
             secondOpinion: { model: offer.model, status },
             modelNotes: [...(primary.modelNotes ?? []).slice(0, 9), note],
         })
-        this.operationKind = 'secondOpinion'
-        this.publish({ pending: `Second opinion pending (${secondOpinionTarget(primary, offer.model)})…` })
+        this.secondOpinionActive = true
         try {
             guard.checkpoint()
-            if (!this.ownsCaptureOperation(token, operation, context.binding)) return
+            if (!this.ownsFollowUp(token, signal, context.binding)) return
             const result = await awaitStopped(
                 this.ports.client.secondOpinion(
                     context.binding,
@@ -1165,7 +1195,7 @@ export class CaptureController {
                 guard.signal,
             )
             guard.checkpoint()
-            if (!this.ownsCaptureOperation(token, operation, context.binding)) return
+            if (!this.ownsFollowUp(token, signal, context.binding)) return
             this.publish({
                 check: this.withOverlay(
                     result.status !== 'ok'
@@ -1179,7 +1209,7 @@ export class CaptureController {
                 ),
             })
         } catch {
-            if (this.ownsCaptureOperation(token, operation, context.binding)) {
+            if (this.ownsFollowUp(token, signal, context.binding)) {
                 this.publish({
                     check: this.withOverlay(
                         retained(
@@ -1192,6 +1222,7 @@ export class CaptureController {
             }
         } finally {
             guard.dispose()
+            if (this.ownsFollowUp(token, signal, context.binding)) this.secondOpinionActive = false
         }
     }
 
@@ -1214,14 +1245,17 @@ export class CaptureController {
      * After a verdict is published: the Wonder overlay (regions/layout) and the SAM masks, each only if the server
      * offered it. Neither can change the decision, neither is retried, and a stale capture's late reply is dropped.
      */
-    private startFollowUps(context: FrozenCheckContext, primary: CheckResult, token: number, verdictMs: number): void {
+    private startFollowUps(
+        context: FrozenCheckContext,
+        primary: CheckResult,
+        token: number,
+        verdictMs: number,
+        signal: AbortSignal,
+    ): void {
         const offers = primary.followUps
         const capture = this.state.capture
         if (offers === undefined || capture === null) return
         const captureId = context.binding.captureId
-        const abort = new AbortController()
-        this.followUps?.abort()
-        this.followUps = abort
         this.overlayPatch = null
         const overlayOffer = offers.overlay?.status === 'available' ? offers.overlay : null
         const prompts = offers.segments?.prompts.slice(0, SEGMENT_PROMPTS_USED) ?? []
@@ -1243,10 +1277,10 @@ export class CaptureController {
             },
         })
         if (runOverlay) {
-            void this.runOverlay(context, overlayOffer.token, token, abort.signal)
+            void this.runOverlay(context, overlayOffer.token, token, signal)
         }
         if (runSegments) {
-            void this.runSegments(context, capture.observation, prompts, token, abort.signal)
+            void this.runSegments(context, capture.observation, prompts, token, signal)
         }
     }
 
