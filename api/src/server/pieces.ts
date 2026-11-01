@@ -13,6 +13,7 @@ import {
 } from '@truebuild/contracts'
 import { MetaProviderError, type MetaProvider, type ScreenGeneration } from '../providers/meta-provider'
 import type { SamProvider } from '../providers/sam'
+import { PIECE_GEOMETRY_PROMPT_VERSION } from '../providers/piece-prompt'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { ConcurrencyGate } from './budget'
 import { createDeadline, RequestStoppedError } from './deadline'
@@ -220,6 +221,7 @@ export async function generatePieceBatch(
         console.info(
             JSON.stringify({
                 event: 'piece_generation',
+                promptVersion: PIECE_GEOMETRY_PROMPT_VERSION,
                 requestId: metadata.requestId,
                 pieceId: part.id,
                 status: result.status,
