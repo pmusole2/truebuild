@@ -3,6 +3,7 @@ import type { CaptureController, WorkflowState } from './controller'
 import type { LibraryEntry } from './library'
 import type { ScreenStore } from '../screens/screen-store'
 import type { DocumentStore } from '../document-runtime/store'
+import type { PieceRegistry, PieceSnapshot } from '../pieces/piece-registry'
 
 export type WorkflowValue = {
     readonly controller: CaptureController
@@ -13,6 +14,9 @@ export type WorkflowValue = {
     readonly screens: ScreenStore | null
     /** Complete v2 runtime; optional only for legacy isolated previews/tests. Off still has local complete documents. */
     readonly documents?: DocumentStore | null
+    /** The manual piece registry and its latest snapshot; absent or null when no registry is wired (previews, tests). */
+    readonly pieces?: PieceRegistry | null
+    readonly piecesSnapshot?: PieceSnapshot
 }
 
 export const WorkflowContext = createContext<WorkflowValue | null>(null)

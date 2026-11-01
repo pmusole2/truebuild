@@ -71,7 +71,6 @@ export const pieceSpecSchema = z.strictObject({
     parts: z.array(piecePartSchema).min(1).max(PIECE_SPEC_LIMITS.parts),
 })
 export type PieceSpec = z.infer<typeof pieceSpecSchema>
-export type PiecePart = PieceSpec['parts'][number]
 
 /** A registry of pieces: at most `PIECE_SPEC_LIMITS.pieces`, each id once. */
 export const piecesSpecSchema = z
@@ -80,4 +79,3 @@ export const piecesSpecSchema = z
     .refine((pieces) => new Set(pieces.map((piece) => piece.id)).size === pieces.length, {
         message: 'Piece ids are unique',
     })
-export type PiecesSpec = z.infer<typeof piecesSpecSchema>

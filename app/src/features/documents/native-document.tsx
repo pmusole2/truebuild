@@ -34,6 +34,7 @@ import {
     type TextRefV2,
     type CitationPlanEntryV2,
     type DocumentSourceV2,
+    type PieceSpec,
 } from '@truebuild/contracts'
 import { AppButton, IconButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
@@ -1764,16 +1765,41 @@ function NodeContent({
         case 'PieceTile':
             return <PieceTile node={node} environment={environment} path={path} />
         // The registry resolves each id. An id it no longer holds renders the viewer's fallback card, never a crash.
-        case 'PieceViewer':
+        // A guide step never draws 3D: its piece shows the stored 2D cutout, or its name when none was stored.
+        case 'PieceViewer': {
+            const piece = bindings.pieces?.find((item) => item.id === node.pieceId)
+            const cutoutUri = bindings.pieceCutouts?.[node.pieceId]
             return (
                 <View nativeID={mark}>
-                    <PieceViewer piece={bindings.pieces?.find((piece) => piece.id === node.pieceId)} />
+                    {document.kind === 'guide' ? (
+                        <PieceCutoutCard id={node.pieceId} piece={piece} cutoutUri={cutoutUri} />
+                    ) : (
+                        <PieceViewer piece={piece} fallbackImageUri={cutoutUri} />
+                    )}
                 </View>
             )
+        }
         case 'PiecesGrid':
             return (
                 <View nativeID={mark}>
-                    <PiecesGrid pieces={bindings.pieces ?? []} pieceIds={node.pieceIds} />
+                    {document.kind === 'guide' ? (
+                        node.pieceIds
+                            .filter((id) => bindings.pieces?.some((item) => item.id === id) === true)
+                            .map((id) => (
+                                <PieceCutoutCard
+                                    key={id}
+                                    id={id}
+                                    piece={bindings.pieces?.find((item) => item.id === id)}
+                                    cutoutUri={bindings.pieceCutouts?.[id]}
+                                />
+                            ))
+                    ) : (
+                        <PiecesGrid
+                            pieces={bindings.pieces ?? []}
+                            pieceIds={node.pieceIds}
+                            cutouts={bindings.pieceCutouts}
+                        />
+                    )}
                 </View>
             )
         case 'VerdictCard': {
@@ -2059,8 +2085,35 @@ export function NativeDocumentRenderer({
     )
 }
 
+/** A 2D cutout card: the only piece picture a guide step draws, and the fallback when a piece has no stored 3D view. */
+function PieceCutoutCard({
+    id,
+    piece,
+    cutoutUri,
+}: {
+    id: string
+    piece: PieceSpec | undefined
+    cutoutUri: string | undefined
+}): ReactElement {
+    const name = piece?.name ?? 'Assembly piece'
+    return (
+        <View testID={`piece-cutout-${id}`} accessibilityLabel={name} style={styles.stack}>
+            {cutoutUri === undefined ? null : (
+                <Image
+                    source={{ uri: cutoutUri }}
+                    resizeMode="contain"
+                    accessibilityLabel={name}
+                    style={styles.cutout}
+                />
+            )}
+            <Body>{name}</Body>
+        </View>
+    )
+}
+
 const styles = StyleSheet.create({
     stack: { gap: space.sm },
+    cutout: { width: '100%', height: 140 },
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },

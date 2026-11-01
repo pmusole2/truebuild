@@ -121,11 +121,16 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
         key.position.set(3, 5, 4)
         const fill = new DirectionalLight(0xd7e8ff, 1)
         fill.position.set(-4, 2, -3)
-        scene.add(key, fill)
+        const underside = new DirectionalLight(0xffead2, 2)
+        underside.position.set(1, -4, 3)
+        const rim = new DirectionalLight(0xdceaff, 1.6)
+        rim.position.set(-3, 1, -4)
+        scene.add(key, fill, underside, rim)
         let disposed = false,
             zoom = 1,
             width = 0,
             height = 0,
+            framedDistance = 0,
             targetPitch = -0.24,
             targetYaw = 0.48,
             lastFrameAt = performance.now()
@@ -138,6 +143,21 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
             lastFrameAt = performance.now()
         }
         reset()
+        // Frame the actual starting pose rather than its much larger bounding sphere. Its projected extents occupy
+        // about 80% of the shorter viewport side; dragging can then reveal the whole piece without an initial zoom.
+        pivot.updateWorldMatrix(true, true)
+        const initial = new Box3()
+        const framing: Vector3[] = []
+        pivot.traverse((child) => {
+            if (!(child instanceof Mesh)) return
+            const positions = child.geometry.getAttribute('position')
+            for (let index = 0; index < positions.count; index++) {
+                const point = new Vector3().fromBufferAttribute(positions, index).applyMatrix4(child.matrixWorld)
+                initial.expandByPoint(point)
+                framing.push(point)
+            }
+        })
+        const framedCenter = initial.getCenter(new Vector3())
         return {
             draw: (): boolean => {
                 if (disposed) return false
@@ -159,15 +179,23 @@ export function createPieceScene(gl: ExpoWebGLRenderingContext, piece: PieceSpec
                     height = h
                     renderer.setSize(w, h, false)
                     camera.aspect = w / h
+                    const vertical = (camera.fov * Math.PI) / 360
+                    const target = Math.min(w, h) * 0.8
+                    const horizontalLimit = Math.tan(vertical) * camera.aspect * (target / w)
+                    const verticalLimit = Math.tan(vertical) * (target / h)
+                    framedDistance = 0
+                    for (const point of framing)
+                        framedDistance = Math.max(
+                            framedDistance,
+                            point.z + Math.abs(point.x - framedCenter.x) / horizontalLimit,
+                            point.z + Math.abs(point.y - framedCenter.y) / verticalLimit,
+                        )
                 }
-                const vertical = (camera.fov * Math.PI) / 360
-                const limiting = Math.min(vertical, Math.atan(Math.tan(vertical) * camera.aspect))
-                const distance = (radius / Math.sin(limiting)) * 1.16
-                camera.position.set(0, 0, Math.max(radius * 1.2, distance / zoom))
+                camera.position.set(framedCenter.x, framedCenter.y, Math.max(radius * 1.2, framedDistance / zoom))
                 camera.near = radius * 0.005
                 camera.far = camera.position.z + radius * 20
                 camera.updateProjectionMatrix()
-                camera.lookAt(0, 0, 0)
+                camera.lookAt(framedCenter.x, framedCenter.y, 0)
                 renderer.render(scene, camera)
                 gl.endFrameEXP()
                 return moving

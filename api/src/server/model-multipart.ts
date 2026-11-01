@@ -43,6 +43,7 @@ export async function readModelMultipart<T>(
     schema: z.ZodType<T>,
     maxBytes: number,
     deadline: Deadline,
+    metadataMaxBytes: number = MODEL_METADATA_MAX_BYTES,
 ): Promise<{ metadata: T; files: Map<string, File> }> {
     const reader = request.body?.getReader()
     let released = false
@@ -103,7 +104,7 @@ export async function readModelMultipart<T>(
         deadline.checkpoint()
         const metadata = form.getAll('metadata')
         const raw = metadata[0]
-        if (metadata.length !== 1 || typeof raw !== 'string' || Buffer.byteLength(raw) > MODEL_METADATA_MAX_BYTES) {
+        if (metadata.length !== 1 || typeof raw !== 'string' || Buffer.byteLength(raw) > metadataMaxBytes) {
             throw new ModelBodyError(400)
         }
         let value: unknown
@@ -127,7 +128,7 @@ export async function readModelMultipart<T>(
             }
             names.add(name)
             if (name === 'metadata') {
-                if (typeof value !== 'string' || Buffer.byteLength(value) > MODEL_METADATA_MAX_BYTES) {
+                if (typeof value !== 'string' || Buffer.byteLength(value) > metadataMaxBytes) {
                     throw new ModelBodyError(400)
                 }
             } else {

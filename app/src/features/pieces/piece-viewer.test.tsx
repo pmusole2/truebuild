@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react-native'
 import { PieceViewer } from './piece-viewer'
 import { ThemeProvider } from '../../theme/theme'
-import { Platform } from 'react-native'
+import { PanResponder, Platform, type GestureResponderEvent, type PanResponderGestureState } from 'react-native'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
 
@@ -68,6 +68,58 @@ it('keeps a named 2D card when GL is unavailable and when the piece spec is inva
     } finally {
         await view?.unmount()
         jest.useRealTimers()
+        os.restore()
+    }
+})
+
+it('leaves a vertical swipe to the page and claims diagonal rotation or a pinch', async () => {
+    const os = jest.replaceProperty(Platform, 'OS', 'ios')
+    const create = jest.spyOn(PanResponder, 'create')
+    mockOptionalNativeModule.mockReturnValue({})
+    const view = await render(
+        <ThemeProvider>
+            <PieceViewer
+                piece={{
+                    id: 'test-piece',
+                    name: 'Piece',
+                    color: '#467abc',
+                    parts: [
+                        {
+                            type: 'box',
+                            dimensions: { width: 1, height: 1, depth: 1 },
+                            position: [0, 0, 0],
+                            rotation: [0, 0, 0],
+                        },
+                    ],
+                }}
+            />
+        </ThemeProvider>,
+    )
+    try {
+        const config = create.mock.calls.at(-1)![0]
+        const event = {} as GestureResponderEvent
+        const movement: PanResponderGestureState = {
+            stateID: 1,
+            moveX: 0,
+            moveY: 0,
+            x0: 0,
+            y0: 0,
+            dx: 0,
+            dy: 0,
+            vx: 0,
+            vy: 0,
+            numberActiveTouches: 1,
+        }
+        expect(config.onStartShouldSetPanResponder?.(event, movement)).toBe(false)
+        expect(config.onMoveShouldSetPanResponder?.(event, { ...movement, dx: 2, dy: 30 })).toBe(false)
+        expect(config.onMoveShouldSetPanResponder?.(event, { ...movement, dx: 25, dy: 20 })).toBe(true)
+        expect(config.onMoveShouldSetPanResponder?.(event, { ...movement, dx: 25, dy: 2 })).toBe(true)
+        expect(config.onStartShouldSetPanResponder?.(event, { ...movement, numberActiveTouches: 2 })).toBe(true)
+        expect(config.onMoveShouldSetPanResponder?.(event, { ...movement, numberActiveTouches: 2 })).toBe(true)
+        expect(config.onPanResponderTerminationRequest?.(event, movement)).toBe(false)
+    } finally {
+        await view.unmount()
+        create.mockRestore()
         os.restore()
     }
 })

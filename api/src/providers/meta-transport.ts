@@ -44,7 +44,8 @@ export function retryAfterDeadline(response: Response): number | undefined {
     return retryAt ?? undefined
 }
 export interface ProviderMetrics {
-    operation: 'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'document' | 'overlay'
+    operation:
+        'parse' | 'check' | 'question' | 'segment' | 'second_opinion' | 'screen' | 'document' | 'overlay' | 'pieces'
     /** The configured request target, never a claim about what answered; see `modelIdentity`. */
     model: string
     /** Whether the provider's own response reported `model`. Absent on events logged before any response body. */

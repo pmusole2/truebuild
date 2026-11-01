@@ -72,7 +72,14 @@ const connectionSchema = z
 export type Orientation = z.infer<typeof orientationSchema>
 export type Connection = z.infer<typeof connectionSchema>
 
-const manualPartSchema = z.strictObject({ partId: idSchema, name: factSchema(titleSchema) })
+const manualPartSchema = z.strictObject({
+    partId: idSchema,
+    name: factSchema(titleSchema),
+    /** Printed inventory data from the same cited page as the name; null/absent when not printed. */
+    label: z.string().trim().min(1).max(80).nullable().optional(),
+    dimensions: z.string().trim().min(1).max(300).nullable().optional(),
+    inventoryQuantity: z.number().int().positive().max(100_000).nullable().optional(),
+})
 const partRequirementSchema = z
     .strictObject({
         partId: idSchema,
@@ -734,3 +741,4 @@ export * from './document-v2-layout-template'
 export * from './document-v2-layout-template-compile'
 export * from './overlay-job-fixtures'
 export * from './piece-spec'
+export * from './piece-generation'

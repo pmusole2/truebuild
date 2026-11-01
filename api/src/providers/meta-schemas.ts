@@ -7,6 +7,7 @@ import {
     providerScreenProposalSchema,
     questionResultSchema,
     sourceRefSchema,
+    pieceSpecSchema,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
@@ -335,6 +336,9 @@ export function assertStrictSchema(schema: Schema): void {
 }
 
 export const metaOutputSchemas = {
+    pieces: strictSchema(
+        z.toJSONSchema(z.strictObject({ pieces: z.array(pieceSpecSchema).max(8) }), { target: 'draft-7', io: 'input' }),
+    ),
     parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
     // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.
     check: strictSchema(

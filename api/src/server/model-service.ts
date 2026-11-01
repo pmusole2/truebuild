@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { retryableNetworkFailure, retryAfterDeadline } from '../providers/meta-transport'
 import { admission } from './request-clock'
+import { createPieceHandler } from './pieces'
 
 import {
     checkResultSchema,
@@ -532,6 +533,7 @@ export function createModelHandlers(options: {
     questionSyncWaitMs?: number
 }): {
     parse: Handler
+    pieces: Handler
     check: Handler
     secondOpinion: Handler
     overlay: Handler
@@ -1577,6 +1579,14 @@ export function createModelHandlers(options: {
         }
     }
     return {
+        pieces: createPieceHandler({
+            auth,
+            provider,
+            samProvider,
+            runtimeMode: options.runtimeMode ?? 'meta',
+            work: createBackgroundWork(counter, gate),
+            deadlineMs: policy.stages['step-pages'].deadlineMs,
+        }),
         parse,
         check,
         secondOpinion,

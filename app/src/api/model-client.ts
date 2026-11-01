@@ -6,6 +6,8 @@ import {
     LIMITS,
     matchesBinding,
     parsedManualSchema,
+    pieceBatchRequestSchema,
+    pieceBatchResultSchema,
     questionResultSchema,
     screensResultSchema,
     segmentEventSchema,
@@ -16,6 +18,8 @@ import {
     type ManualPage,
     type ManualSession,
     type ParsedManual,
+    type PieceBatchRequest,
+    type PieceBatchResult,
     type QuestionResult,
     type QuestionTarget,
     type ScreenKind,
@@ -80,6 +84,10 @@ export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
 // Paid baseline: Spark low screens 17s, quick-check medium 31s; outlast the server's 30s limit.
 export const MODEL_SCREEN_TIMEOUT_MS = 35_000
 export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
+/** Geometry batches are the slowest model call; a timeout is an unknown outcome, so the registry never resends it. */
+export const MODEL_PIECES_TIMEOUT_MS = 120_000
+/** Eight cutouts of up to 360k characters each, plus piece specs; the default 1 MB limit cannot hold a full batch. */
+export const MODEL_PIECES_RESPONSE_MAX_BYTES = 4 * 1_024 * 1_024
 export const MODEL_SCREEN_CONTROL_TIMEOUT_MS = 10_000
 export const MODEL_OVERLAY_TIMEOUT_MS = 75_000
 export const MODEL_OVERLAY_FIRST_TIMEOUT_MS = 12_000
@@ -212,6 +220,14 @@ function ssePayload(block: string): string | null | undefined {
  * is bounded by one absolute monotonic deadline, validates the request and response against the frozen schemas, and
  * never publishes a value that does not echo its requestId, binding and mode.
  */
+/** Decodes a page picture the app already holds as a data URI; any other shape or MIME type is refused. */
+function bytesFromDataUri(uri: string | undefined, mimeType: ManualPage['mimeType']): Uint8Array | null {
+    const match = uri === undefined ? null : /^data:([a-z/]+);base64,([A-Za-z0-9+/]+=*)$/u.exec(uri)
+    if (match === null || match[1] !== mimeType) return null
+    const binary = atob(match[2] ?? '')
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+}
+
 export class ModelApiClient {
     private readonly baseUrl: string
     private readonly secret: string
@@ -707,6 +723,52 @@ export class ModelApiClient {
             signal: ctx.signal,
         }
         yield* this.streamSegments(call, form, ctx)
+    }
+
+    /**
+     * One geometry batch for the piece registry. Every answer that is not a valid result (an unavailable envelope, a bad
+     * status, a timeout, a malformed page) is null, which the registry records as an unknown outcome: it is never resent.
+     */
+    async pieceBatch(
+        request: PieceBatchRequest,
+        pageUris: Readonly<Record<string, string>>,
+    ): Promise<PieceBatchResult | null> {
+        const valid = pieceBatchRequestSchema.safeParse(request)
+        if (!valid.success) return null
+        const form = new FormData()
+        form.append('metadata', JSON.stringify(valid.data))
+        for (const page of valid.data.pages) {
+            const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
+            if (bytes === null) return null
+            appendMultipartImage(
+                form,
+                `page:${page.pageId}`,
+                { bytes, mimeType: page.mimeType, width: page.width, height: page.height },
+                page.pageId,
+            )
+        }
+        const guard = createCallGuard(MODEL_PIECES_TIMEOUT_MS, undefined)
+        try {
+            const url = new URL('/api/pieces', this.baseUrl).toString()
+            const response = await awaitStopped(
+                this.fetchImpl(url, this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            const text = await readBoundedText(
+                response,
+                guard.signal,
+                guard.checkpoint,
+                MODEL_PIECES_RESPONSE_MAX_BYTES,
+            )
+            if (!response.ok) return null
+            const result = pieceBatchResultSchema.safeParse(JSON.parse(text))
+            return result.success ? result.data : null
+        } catch {
+            return null
+        } finally {
+            guard.dispose()
+        }
     }
 
     private async post<T, P = never>(spec: {

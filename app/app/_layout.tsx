@@ -52,6 +52,9 @@ function ThemedStack(): ReactElement {
                 >
                     <Stack.Screen name="piece-viewer-test" options={{ headerShown: false }} />
                 </Stack.Protected>
+                <Stack.Protected guard={__DEV__ && process.env.EXPO_PUBLIC_PIECES_TEST === '1'}>
+                    <Stack.Screen name="pieces-test" options={{ headerShown: false }} />
+                </Stack.Protected>
             </Stack>
         </>
     )

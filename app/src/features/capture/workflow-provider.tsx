@@ -8,6 +8,8 @@ import type { ScreenStore } from '../screens/screen-store'
 import { sessionForPrecompute, sessionForScreens } from '../screens/screen-spec'
 import { testRestoreDelayMs } from './test-controls'
 import type { DocumentStore } from '../document-runtime/store'
+import { manualPieceInputs, type PieceRegistry, type PieceSnapshot } from '../pieces/piece-registry'
+import { createPieces } from '../pieces/piece-runtime'
 import { homeUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
 import { editableQuestions } from './quick-check-model'
 import { homeAfterConfirmInputs, newManualInputs } from './document-inputs'
@@ -21,47 +23,83 @@ export function WorkflowProvider({
     controller,
     screens,
     documents,
+    pieces,
     children,
 }: {
     readonly controller?: CaptureController
     readonly screens?: ScreenStore | null
     readonly documents?: DocumentStore | null
+    readonly pieces?: PieceRegistry | null
     readonly children: ReactNode
 }): ReactElement {
     const [runtime] = useState(
-        (): { controller: CaptureController | null; screens: ScreenStore | null; documents: DocumentStore | null } => {
+        (): {
+            controller: CaptureController | null
+            screens: ScreenStore | null
+            documents: DocumentStore | null
+            pieces: PieceRegistry | null
+        } => {
             if (controller !== undefined) {
-                return { controller, screens: screens ?? null, documents: documents ?? null }
+                return { controller, screens: screens ?? null, documents: documents ?? null, pieces: pieces ?? null }
             }
             try {
                 const created = documents ?? createDocuments()
-                return { controller: createController(null, created), screens: screens ?? null, documents: created }
+                return {
+                    controller: createController(null, created),
+                    screens: screens ?? null,
+                    documents: created,
+                    pieces: pieces ?? createPieces(),
+                }
             } catch {
-                return { controller: null, screens: null, documents: null }
+                return { controller: null, screens: null, documents: null, pieces: null }
             }
         },
     )
     return runtime.controller === null ? (
         <AppUnavailableScreen />
     ) : (
-        <ControllerHost controller={runtime.controller} screens={runtime.screens} documents={runtime.documents}>
+        <ControllerHost
+            controller={runtime.controller}
+            screens={runtime.screens}
+            documents={runtime.documents}
+            pieces={runtime.pieces}
+        >
             {children}
         </ControllerHost>
     )
 }
 
+const NO_SUBSCRIPTION = (): (() => void) => (): void => undefined
+const NO_PIECES: PieceSnapshot = {
+    status: 'idle',
+    contentHash: null,
+    pieces: [],
+    cutouts: {},
+    cards: [],
+    cardCutouts: {},
+    timing: { requestedAt: null, startedAt: null, readyAt: null },
+}
+const NO_PIECES_SNAPSHOT = (): PieceSnapshot => NO_PIECES
+
 function ControllerHost({
     controller,
     screens,
     documents,
+    pieces,
     children,
 }: {
     readonly controller: CaptureController
     readonly screens: ScreenStore | null
     readonly documents: DocumentStore | null
+    readonly pieces: PieceRegistry | null
     readonly children: ReactNode
 }): ReactElement {
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+    const piecesSnapshot = useSyncExternalStore(
+        pieces?.subscribe ?? NO_SUBSCRIPTION,
+        pieces?.getSnapshot ?? NO_PIECES_SNAPSHOT,
+        NO_PIECES_SNAPSHOT,
+    )
     useEffect(() => {
         // Test-only delay (development builds, query parameter) keeps the initial loading state visible for evidence capture.
         const delay = testRestoreDelayMs()
@@ -134,11 +172,26 @@ function ControllerHost({
         const reserved = controller.reserveManual()
         if (reserved !== null) documents.warmup(newManualInputs(state, reserved))
     }, [controller, documents, homeVisible, state.loading, state.pending, state.storageReadOnly, state.entries])
+    // A parsed manual starts its piece registry once: stored results answer, otherwise one background run begins.
+    useEffect(() => {
+        if (pieces === null || session === undefined || session.parts.length === 0) return
+        void pieces.prepare({ pages: session.pages, parts: manualPieceInputs(session) }, () =>
+            controller.pageImages(session.manualId, session.revision),
+        )
+    }, [controller, pieces, session])
     useEffect(() => (): void => screens?.dispose(), [screens])
     useEffect(() => (): void => documents?.dispose(), [documents])
     const value = useMemo(
-        (): WorkflowValue => ({ controller, state, entry, screens, documents }),
-        [controller, state, entry, screens, documents],
+        (): WorkflowValue => ({
+            controller,
+            state,
+            entry,
+            screens,
+            documents,
+            pieces,
+            piecesSnapshot,
+        }),
+        [controller, state, entry, screens, documents, pieces, piecesSnapshot],
     )
     return <WorkflowContext.Provider value={value}>{children}</WorkflowContext.Provider>
 }

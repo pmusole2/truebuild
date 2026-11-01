@@ -4,7 +4,8 @@ import { Text, View } from 'react-native'
 import { AppButton } from '../../../ui/button'
 import { Card, Screen, Stack } from '../../../ui/surface'
 import { Body, Caption, Heading, Title } from '../../../ui/text'
-import { PiecesGrid } from '../piece-viewer'
+import { PieceViewer, PiecesGrid } from '../piece-viewer'
+import { HERO_DIAGRAM_PNG_BASE64 } from '@truebuild/contracts/hero'
 import { VIEWER_FIXTURE_PIECES } from './piece-spec'
 
 /** Explicit dev-only fixture route. Counters observe completed renders; they never animate the viewer. */
@@ -55,6 +56,13 @@ export default function PieceViewerFixture(): ReactElement {
                     <Title>Assembly pieces</Title>
                     <Body>Tap a piece to inspect it. Drag to rotate, pinch to zoom, and double-tap to reset.</Body>
                     <PiecesGrid pieces={VIEWER_FIXTURE_PIECES} onFrame={onFrame} />
+                    <View testID="piece-fixture-cutout-fallback">
+                        <PieceViewer
+                            piece={{ name: 'Unresolved assembly piece', parts: [] }}
+                            fallbackImageUri={`data:image/png;base64,${HERO_DIAGRAM_PNG_BASE64}`}
+                            height={200}
+                        />
+                    </View>
                     <Text testID="piece-viewer-ready">{ready ? '3D ready' : 'Preparing 3D preview'}</Text>
                     <Card>
                         <Heading>Render cadence measurement</Heading>

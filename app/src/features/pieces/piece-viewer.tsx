@@ -144,6 +144,7 @@ function ValidPieceViewer({
     const frame = useRef<number | null>(null)
     const reportFrame = useRef(onFrame)
     const lastTap = useRef(0)
+    const tap = useRef({ x: 0, y: 0, moved: false })
     const gesture = useRef({ x: 0, y: 0, distance: null as number | null, pinched: false })
     useEffect(() => {
         reportFrame.current = onFrame
@@ -229,26 +230,41 @@ function ValidPieceViewer({
         const element: unknown = host.current
         if (Platform.OS !== 'web' || typeof HTMLElement === 'undefined' || !(element instanceof HTMLElement)) return
         const previous = element.style.touchAction
-        element.style.touchAction = 'none'
+        element.style.touchAction = 'pan-y'
         const wheel = (event: WheelEvent): void => {
             event.preventDefault()
             scene.current?.zoom(Math.exp(-Math.max(-500, Math.min(500, event.deltaY)) * 0.0018))
             draw()
         }
         element.addEventListener('wheel', wheel, { passive: false })
+        const reset = (): void => {
+            scene.current?.reset()
+            draw()
+        }
+        element.addEventListener('dblclick', reset)
         return (): void => {
             element.removeEventListener('wheel', wheel)
+            element.removeEventListener('dblclick', reset)
             element.style.touchAction = previous
         }
     }, [draw, failed])
     const responder = useMemo(
         () =>
             PanResponder.create({
-                onStartShouldSetPanResponder: () => true,
-                onMoveShouldSetPanResponder: () => true,
+                // Leave an ordinary touch unclaimed until its direction is clear, so the parent can scroll vertically.
+                onStartShouldSetPanResponder: (_event, movement) => movement.numberActiveTouches > 1,
+                onMoveShouldSetPanResponder: (_event, movement) =>
+                    movement.numberActiveTouches > 1 ||
+                    (Math.hypot(movement.dx, movement.dy) > 6 && Math.abs(movement.dx) >= Math.abs(movement.dy) * 0.6),
+                onMoveShouldSetPanResponderCapture: (_event, movement) => movement.numberActiveTouches > 1,
                 onPanResponderTerminationRequest: () => false,
-                onPanResponderGrant: (event): void => {
-                    gesture.current = { x: 0, y: 0, distance: fingerDistance(event), pinched: false }
+                onPanResponderGrant: (event, movement): void => {
+                    gesture.current = {
+                        x: movement.dx,
+                        y: movement.dy,
+                        distance: fingerDistance(event),
+                        pinched: false,
+                    }
                 },
                 onPanResponderMove: (event, movement): void => {
                     const distance = fingerDistance(event)
@@ -267,16 +283,6 @@ function ValidPieceViewer({
                     gesture.current.distance = distance
                     draw()
                 },
-                onPanResponderRelease: (_event, movement): void => {
-                    if (!gesture.current.pinched && Math.hypot(movement.dx, movement.dy) < 6) {
-                        const now = Date.now()
-                        if (now - lastTap.current < 320) {
-                            scene.current?.reset()
-                            draw()
-                            lastTap.current = 0
-                        } else lastTap.current = now
-                    } else lastTap.current = 0
-                },
             }),
         [draw],
     )
@@ -290,6 +296,26 @@ function ValidPieceViewer({
                 testID="piece-viewer-gesture-surface"
                 accessibilityLabel={`${piece.name}, interactive 3D view`}
                 style={[styles.viewport, { height, backgroundColor: colors.surfaceSunken }]}
+                onTouchStart={(event): void => {
+                    const { pageX, pageY, touches } = event.nativeEvent
+                    tap.current = { x: pageX, y: pageY, moved: touches.length > 1 }
+                }}
+                onTouchMove={(event): void => {
+                    const { pageX, pageY, touches } = event.nativeEvent
+                    if (touches.length > 1 || Math.hypot(pageX - tap.current.x, pageY - tap.current.y) > 6)
+                        tap.current.moved = true
+                }}
+                onTouchEnd={(event): void => {
+                    if (event.nativeEvent.touches.length > 0) return
+                    if (!tap.current.moved) {
+                        const now = Date.now()
+                        if (now - lastTap.current < 320) {
+                            scene.current?.reset()
+                            draw()
+                            lastTap.current = 0
+                        } else lastTap.current = now
+                    } else lastTap.current = 0
+                }}
                 {...responder.panHandlers}
             >
                 <GLBoundary fallback={fallback} failed={fail}>
@@ -307,10 +333,13 @@ function ValidPieceViewer({
 export function PiecesGrid({
     pieces,
     pieceIds,
+    cutouts,
     onFrame,
 }: {
     readonly pieces: readonly PieceSpec[]
     readonly pieceIds?: readonly string[]
+    /** 2D cutout by piece id: the fallback picture while a piece has no usable 3D view. */
+    readonly cutouts?: Readonly<Record<string, string>>
     readonly onFrame?: (timestampMs: number) => void
 }): ReactElement {
     const { colors } = useTheme()
@@ -329,7 +358,7 @@ export function PiecesGrid({
     if (current === undefined) return <PieceCard name="Assembly pieces" height={240} />
     return (
         <View style={styles.viewer} testID="pieces-grid">
-            <PieceViewer piece={current} onFrame={onFrame} />
+            <PieceViewer piece={current} fallbackImageUri={cutouts?.[current.id]} onFrame={onFrame} />
             <View style={styles.grid}>
                 {accepted.map((piece) => (
                     <Pressable

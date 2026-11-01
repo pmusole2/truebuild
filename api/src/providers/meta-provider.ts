@@ -28,6 +28,9 @@ import {
     type QuestionResult,
     type QuestionTarget,
     type SourceRef,
+    type ManualPieceInput,
+    manualPieceInputSchema,
+    pieceIdSchema,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
@@ -62,6 +65,7 @@ import {
     metaVerdictOutputSchema,
 } from './meta-schemas'
 import { DOCUMENT_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
+import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
 import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
 
@@ -240,6 +244,15 @@ export interface AnswerQuestionInput extends CheckStepInput {
 }
 
 export interface MetaProvider {
+    generatePieces?(
+        input: {
+            requestId: string
+            parts: readonly ManualPieceInput[]
+            imagePieceIds: string[]
+            images: ObservationImage[]
+        },
+        signal: AbortSignal,
+    ): Promise<ScreenGeneration>
     parseManual(input: ParseManualInput, signal: AbortSignal): Promise<ParsedManual>
     checkStep(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
@@ -652,7 +665,7 @@ const PARSE_INSTRUCTIONS =
               ? [PARSE_SAFETY, line]
               : [line],
     ).join(' ') +
-    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step.'
+    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Do not infer dimensions or add a model call.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -812,6 +825,8 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             case 'screen':
             case 'document':
                 return 'screens'
+            case 'pieces':
+                return 'step-pages'
         }
     }
 
@@ -839,13 +854,15 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 ? PARSE_INSTRUCTIONS
                 : operation === 'screen'
                   ? SCREEN_INSTRUCTIONS
-                  : operation === 'document'
-                    ? DOCUMENT_INSTRUCTIONS
-                    : operation === 'overlay'
-                      ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
-                      : withLayout
-                        ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
-                        : INSTRUCTIONS
+                  : operation === 'pieces'
+                    ? PIECE_GEOMETRY_INSTRUCTIONS
+                    : operation === 'document'
+                      ? DOCUMENT_INSTRUCTIONS
+                      : operation === 'overlay'
+                        ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
+                        : withLayout
+                          ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
+                          : INSTRUCTIONS
         const baseInstructions =
             language === undefined
                 ? operationInstructions
@@ -1372,6 +1389,50 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 )
                 return { value, telemetry }
             })
+        },
+
+        async generatePieces(input, signal): Promise<ScreenGeneration> {
+            const parsed = z
+                .strictObject({
+                    requestId: z.string().min(1).max(128),
+                    parts: z.array(manualPieceInputSchema).min(1).max(8),
+                    imagePieceIds: z.array(pieceIdSchema).max(8),
+                })
+                .safeParse({ requestId: input.requestId, parts: input.parts, imagePieceIds: input.imagePieceIds })
+            if (
+                !parsed.success ||
+                input.images.length !== input.imagePieceIds.length ||
+                new Set(input.parts.map((part) => part.id)).size !== input.parts.length ||
+                new Set(input.imagePieceIds).size !== input.imagePieceIds.length ||
+                input.imagePieceIds.some((id) => !input.parts.some((part) => part.id === id))
+            )
+                throw new MetaProviderError('invalid_input')
+            return execute(
+                policy.stages['step-pages'].deadlineMs,
+                signal,
+                async (deadline): Promise<ScreenGeneration> => {
+                    const images =
+                        input.images.length === 0
+                            ? []
+                            : await validateAndNormalizeImages(input.images, deadline.signal, 8)
+                    const parts = input.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
+                    // Geometry shares the production Wonder output budget; medium is the requested background policy.
+                    return dispatchDetailed(
+                        'pieces',
+                        { requestId: input.requestId, parts, imagePieceIds: input.imagePieceIds },
+                        images,
+                        z.unknown(),
+                        deadline,
+                        'muse-wonder-1.0',
+                        false,
+                        undefined,
+                        false,
+                        'step-pages',
+                        false,
+                        'medium',
+                    )
+                },
+            )
         },
 
         async generateDocument(input, signal): Promise<ScreenGeneration> {

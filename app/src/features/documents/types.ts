@@ -71,4 +71,6 @@ export type FrameBindings = {
      * longer holds: the viewer shows its fallback card (no geometry is drawn and nothing throws).
      */
     readonly pieces?: readonly PieceSpec[]
+    /** 2D cutout by ready piece id: the fallback picture for a piece node, and the only picture a guide step shows. */
+    readonly pieceCutouts?: Readonly<Record<string, string>>
 }
