@@ -3,6 +3,7 @@ import * as contracts from '@truebuild/contracts'
 import {
     assembleDocumentV2,
     buildFallbackProposalV2,
+    createDemoManual,
     documentMaterialV2,
     screenDocumentV2Schema,
     type ScreenContextInputsV2,
@@ -141,6 +142,40 @@ describe('focused Guide warm-ups under a bounded cache', () => {
             expect(store.peek(target)).toBe(adopted)
             expect(store.getCacheUsage().documentBytes).toBeLessThanOrEqual(budget)
             expect(screensV2).toHaveBeenCalledTimes(2)
+        } finally {
+            store.dispose()
+        }
+    })
+
+    it('prefetches only the focused Guide and the next one when a manual opens', async () => {
+        const demo = createDemoManual()
+        const last = demo.reviewedSteps.at(-1)!
+        const session = {
+            ...demo,
+            reviewedSteps: [...demo.reviewedSteps, { ...last, stepId: 'step-3', order: last.order + 1 }],
+        }
+        const [, current, next] = session.reviewedSteps
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>((metadata) =>
+            Promise.resolve(ok(fixture(inputsFromDocumentMetadata(metadata)), metadata.requestId)),
+        )
+        const store = new DocumentStore({
+            client: { screensV2 },
+            mode: 'full',
+            id: (): string => 'flow',
+            recordings: (): null => null,
+        })
+        const guideSteps = (): string[] =>
+            screensV2.mock.calls
+                .map(([metadata]) => inputsFromDocumentMetadata(metadata))
+                .filter((inputs) => inputs.kind === 'guide')
+                .map((inputs) => inputs.stepId!)
+        try {
+            store.prepareFlow(session, `guide:${current!.stepId}`)
+            await vi.waitFor(() =>
+                expect(guideSteps()).toEqual(expect.arrayContaining([current!.stepId, next!.stepId])),
+            )
+            await new Promise((resolve) => setTimeout(resolve, 20))
+            expect([...new Set(guideSteps())].sort()).toEqual([current!.stepId, next!.stepId].sort())
         } finally {
             store.dispose()
         }

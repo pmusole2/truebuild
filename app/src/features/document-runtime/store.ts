@@ -577,8 +577,9 @@ export class DocumentStore {
         }
     }
     /**
-     * Prepare only reachable destinations through one bounded queue. A future Guide is composed for exactly the
-     * candidate Confirm will save; its original identity becomes usable only when that actual session is observed.
+     * Prepare only reachable destinations through one bounded queue: the focused Guide and the next step's Guide, never
+     * the whole manual. A future Guide is composed for exactly the candidate Confirm will save; its original identity
+     * becomes usable only when that actual session is observed.
      * Nonready states already belong to each complete document, so no speculative busy-state model calls are needed.
      */
     prepareFlow(
@@ -608,6 +609,7 @@ export class DocumentStore {
         })
         const guides = items.filter((item) => item.inputs.kind === 'guide')
         const focused = guides.find((item) => item.key === focusKey) ?? guides[0]
+        const next = focused === undefined ? undefined : guides[guides.indexOf(focused) + 1]
         const hash = sha256Hex(screenManualJsonV2(target))
         this.focusedGuide =
             focused === undefined
@@ -645,7 +647,7 @@ export class DocumentStore {
             // Exact next-screen contexts the caller derived from real state (Home after Confirm, Add and page camera from
             // Home). They are keyed like the screen's own request, so the screen reuses them instead of regenerating.
             ...(this.mode === 'full' ? upcoming : []),
-            ...guides.filter((item) => item !== focused).map((item) => item.inputs),
+            ...(next === undefined ? [] : [next.inputs]),
         ]
         const pending = destinations.filter((inputs) => {
             const key = documentKey(inputs)

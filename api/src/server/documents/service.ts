@@ -41,6 +41,7 @@ import type { BackgroundWork, StepScreenContext } from '../screens/service'
 import { buildDocumentContext, sha256, type DocumentContext } from './context'
 import { evaluateProposal, evaluateWire, type Evaluation } from './ground'
 import { normalizeDocumentWire } from './normalize-wire'
+import { guideQualityIssues } from './guide-quality'
 import { issueShownV2, resolveShownV2, type IssuedShownV2 } from './shown'
 
 /** What a test-only synthetic generator is told about the document it is asked to compose. */
@@ -583,6 +584,19 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     logRejection(context, 'repair', evaluated.issues)
                     return failure('repair_failed')
                 }
+            }
+            const quality = guideQualityIssues(evaluated.proposal, context)
+            if (quality.length > 0) {
+                rejectedIssues = (rejectedIssues ?? 0) + quality.length
+                console.info(
+                    JSON.stringify({
+                        event: 'guide_quality_fallback',
+                        contextKey: context.bound.contextKey,
+                        stepId: context.bound.stepId,
+                        reason: quality,
+                    }),
+                )
+                return failure('invalid_output')
             }
             const seen = observed()
             const document = generated(context, evaluated.proposal, seen, false)

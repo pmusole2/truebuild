@@ -104,7 +104,7 @@ describe('streamed parse deadlines', () => {
         }
     })
 
-    it('fails a stream silent after its first visible delta with the timeout category used by the existing reading error and Try again flow', async () => {
+    it('ignores summary silence then fails a stream silent after its first output delta with the timeout category used by the existing reading error and Try again flow', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
         const parent = createParseDeadline(120_000)
         const guard = parseStreamGuard(parent)
@@ -117,6 +117,10 @@ describe('streamed parse deadlines', () => {
             stream.send('response.reasoning_summary_text.delta', { delta: 'Reviewing the pages.' })
             await vi.advanceTimersByTimeAsync(0)
             expect(guard.timing.timeToFirstSummaryMs).toBe(0)
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(guard.deadline.signal.aborted).toBe(false)
+            stream.send('response.output_text.delta', { delta: '{' })
+            await vi.advanceTimersByTimeAsync(0)
             await vi.advanceTimersByTimeAsync(30_001)
             await rejection
             expect(guard.deadline.signal.reason).toBeInstanceOf(RequestStoppedError)

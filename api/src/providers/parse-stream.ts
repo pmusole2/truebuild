@@ -70,7 +70,7 @@ export function parseStreamGuard(
             if (type === 'response.created' && timing.timeToCreatedMs === undefined) {
                 timing.timeToCreatedMs = Math.max(0, now - started)
                 // Raw reasoning may be silent for most of the attempt. Only the parent ceiling applies until
-                // the first visible summary/output delta; lifecycle events are not a reasoning heartbeat.
+                // the first output-text delta; optional summaries do not start output idle.
                 due = Number.POSITIVE_INFINITY
                 arm()
                 progress('reading')
@@ -86,10 +86,7 @@ export function parseStreamGuard(
                 timing.timeToFirstOutputMs = Math.max(0, now - started)
                 progress('output')
             }
-            if (
-                timing.timeToCreatedMs !== undefined &&
-                (timing.timeToFirstOutputMs !== undefined || timing.timeToFirstSummaryMs !== undefined)
-            ) {
+            if (timing.timeToCreatedMs !== undefined && timing.timeToFirstOutputMs !== undefined) {
                 due = now + IDLE_MS
                 arm()
             }

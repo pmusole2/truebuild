@@ -1,5 +1,8 @@
 import {
     SCREEN_KINDS_V2,
+    manualSessionSchema,
+    screenUiStateV2Schema,
+    type ScreenContextInputsV2,
     buildFallbackProposalV2,
     screenDocumentV2Schema,
     type ScreenNodeV2,
@@ -26,6 +29,8 @@ import { aiPolicyFromEnvironment } from '../ai-policy'
 import type { BackgroundWork } from '../screens/service'
 import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
+import sparseGuides from './fixtures/guide-wire-replay.json'
+import { guideQualityIssues } from './guide-quality'
 import { createDocumentService, precomputeItems, type DocumentService, type DocumentServiceOptions } from './service'
 
 afterEach(() => vi.restoreAllMocks())
@@ -722,5 +727,71 @@ describe('service: the page a check names', () => {
         }
         const after = service.resolveStepScreen(edited, 'step-1', screen) as { facts: { id: string }[] }
         expect(after.facts.map((fact) => fact.id)).not.toContain('safety:n1')
+    })
+})
+
+describe('Guide usability floor', () => {
+    it('keeps a strict-valid sparse Guide on the complete shell with its live piece catalog', async () => {
+        const row = sparseGuides.cases[0]!
+        const inputs: ScreenContextInputsV2 = {
+            kind: 'guide',
+            session: manualSessionSchema.parse(sparseGuides.session),
+            stepId: row.stepId,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: screenUiStateV2Schema.parse(row.uiState),
+            stepPieces: row.stepPieces,
+        }
+        const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const live = liveService([row.wire])
+        const document = await live.service.generate(inputs)
+        expect(document.metadata).toMatchObject({
+            source: 'fallback',
+            fallbackReason: 'invalid_output',
+            repaired: false,
+        })
+        expect(live.inputs).toHaveLength(1)
+        const context = buildDocumentContext(inputs)
+        const complete = buildFallbackProposalV2(context.material)
+        expect(guideQualityIssues(complete, context)).toEqual([])
+        const safetyOnly: ScreenProposalV2 = {
+            ...complete,
+            body: {
+                type: 'Text',
+                content: { kind: 'fact', factId: 'quality-safety' },
+                role: 'body',
+                tone: 'neutral',
+                emphasis: 'normal',
+                align: 'start',
+            },
+        }
+        const safetyContext = {
+            ...context,
+            material: {
+                ...context.material,
+                facts: [
+                    ...context.material.facts,
+                    {
+                        factId: 'quality-safety',
+                        kind: 'safety' as const,
+                        basis: 'safety-note' as const,
+                        text: 'Safety note.',
+                        sourceRefs: [],
+                    },
+                ],
+            },
+        }
+        expect(guideQualityIssues(safetyOnly, safetyContext)).toEqual(['guide_quality:instruction_text_missing'])
+        expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+        expect([document.header.title, document.header.subtitle]).toContainEqual({ kind: 'bound', key: 'step-title' })
+        // GuidePieces is native trailing chrome for both origins, keyed by this unchanged catalog.
+        expect(inputs.stepPieces).toEqual([{ pieceId: 'walking-machine-468c09a8', quantity: 1 }])
+        expect(log.mock.calls.map(([value]) => JSON.parse(String(value)))).toContainEqual(
+            expect.objectContaining({
+                event: 'guide_quality_fallback',
+                reason: expect.arrayContaining(['guide_quality:instruction_text_missing']),
+            }),
+        )
     })
 })

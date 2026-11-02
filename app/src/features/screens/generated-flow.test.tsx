@@ -216,7 +216,7 @@ describe('Home composed by the document', () => {
 })
 
 describe('Guide composed by the document', () => {
-    it('precomputes every step once after the manual is confirmed, then opens each step without a new request', async () => {
+    it('prepares the current and next steps, then warms the following step once as focus advances', async () => {
         const { server, view, controller, store } = await mount([entry('flow-manual', 'reviewed', 3)])
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
@@ -232,22 +232,28 @@ describe('Guide composed by the document', () => {
                     stepPieces: stepPiecesForStep(controller.current!.session, item.inputs.stepId),
                 },
             }))
-        await waitFor(() => expect(guides.every((item) => store.peek(item.inputs)?.status === 'ready')).toBe(true))
+        await waitFor(() =>
+            expect(guides.slice(0, 2).every((item) => store.peek(item.inputs)?.status === 'ready')).toBe(true),
+        )
         const guideRequests = (): typeof server.requests =>
             server.requests.filter((request) => request.op === 'generate' && request.kind === 'guide')
         const preparedRequests = guideRequests()
-        expect(preparedRequests.map((request) => request.stepId).sort()).toEqual(['step-1', 'step-2', 'step-3'])
+        expect(preparedRequests.map((request) => request.stepId).sort()).toEqual(['step-1', 'step-2'])
         expect(preparedRequests.every((request) => request.uiState?.busy == null)).toBe(true)
-        expect(new Set(preparedRequests.map((request) => request.contextKey)).size).toBe(3)
+        expect(new Set(preparedRequests.map((request) => request.contextKey)).size).toBe(2)
         expect(server.requests.filter((request) => request.op === 'precompute' || request.op === 'progress')).toEqual(
             [],
         )
         await act(async () => controller.step(1))
         expect(await screen.findByText(/^Step 2 of \d+$/u)).toBeTruthy()
+        await waitFor(() => expect(store.peek(guides[2]!.inputs)?.status).toBe('ready'))
+        const allPreparedRequests = guideRequests()
+        expect(allPreparedRequests.map((request) => request.stepId).sort()).toEqual(['step-1', 'step-2', 'step-3'])
+        expect(new Set(allPreparedRequests.map((request) => request.contextKey)).size).toBe(3)
         await act(async () => controller.step(2))
         expect(await screen.findByText(/^Step 3 of \d+$/u)).toBeTruthy()
         // Every prepared step keeps its exact cached identity when it becomes visible.
-        expect(guideRequests()).toEqual(preparedRequests)
+        expect(guideRequests()).toEqual(allPreparedRequests)
     })
 
     it('uses the document bar for the action and keeps the guide-primary identity', async () => {

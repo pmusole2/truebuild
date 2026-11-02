@@ -79,7 +79,7 @@ import {
 } from './model-multipart'
 import { withResolvedLayout } from './layout'
 import { SEGMENT_PROMPT_LIMIT } from '@truebuild/contracts'
-import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, type AiPolicy } from './ai-policy'
+import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, PIECES_DEADLINE_MS, type AiPolicy } from './ai-policy'
 import { PARSE_ROUTE_MARGIN_MS } from './parse-budget'
 import { readBoundedJson, InvalidBodyError } from './json-body'
 import { DuplicateQuestionError, QuestionJobs, type QuestionIdentity, type StoredResponse } from './question-jobs'
@@ -1689,7 +1689,7 @@ export function createModelHandlers(options: {
             provider,
             runtimeMode: options.runtimeMode ?? 'meta',
             work: createBackgroundWork(counter, gate),
-            deadlineMs: policy.stages['step-pages'].deadlineMs,
+            deadlineMs: PIECES_DEADLINE_MS,
         }),
         parse,
         check,

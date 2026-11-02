@@ -678,6 +678,9 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
         case 'guide':
             return [
                 ...heroImage(material),
+                // The step title is the manual's full instruction sentence; keep it readable even when optional
+                // direction details live under More and when a rejected generated page falls back to this shell.
+                ...(material.step === null ? [] : [text(bound('step-title'))]),
                 ...(material.step === null ? [] : [{ type: 'Progress', binding: 'step', label: null } as Node]),
                 ...partNodes(material),
                 ...factNodes(material, true),

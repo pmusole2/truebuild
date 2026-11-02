@@ -34,7 +34,13 @@ import {
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
-import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, type AiPolicy, type PolicyStage } from '../server/ai-policy'
+import {
+    aiPolicyFromEnvironment,
+    MAX_DEADLINE_MS,
+    PIECES_DEADLINE_MS,
+    type AiPolicy,
+    type PolicyStage,
+} from '../server/ai-policy'
 import { BudgetError } from '../server/budget'
 import { MetaTransport, usageMetrics, type ProviderMetrics, type TransportObservation } from './meta-transport'
 import { admission as requestClock } from '../server/request-clock'
@@ -1508,32 +1514,26 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 input.imagePieceIds.some((id) => !input.parts.some((part) => part.id === id))
             )
                 throw new MetaProviderError('invalid_input')
-            return execute(
-                policy.stages['step-pages'].deadlineMs,
-                signal,
-                async (deadline): Promise<ScreenGeneration> => {
-                    const images =
-                        input.images.length === 0
-                            ? []
-                            : await validateAndNormalizeImages(input.images, deadline.signal, 8)
-                    const parts = input.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
-                    // Geometry shares the production Wonder output budget; high improves background visual fidelity.
-                    return dispatchDetailed(
-                        'pieces',
-                        { requestId: input.requestId, parts, imagePieceIds: input.imagePieceIds },
-                        images,
-                        z.unknown(),
-                        deadline,
-                        'muse-wonder-1.0',
-                        false,
-                        undefined,
-                        false,
-                        'step-pages',
-                        false,
-                        'high',
-                    )
-                },
-            )
+            return execute(PIECES_DEADLINE_MS, signal, async (deadline): Promise<ScreenGeneration> => {
+                const images =
+                    input.images.length === 0 ? [] : await validateAndNormalizeImages(input.images, deadline.signal, 8)
+                const parts = input.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
+                // Geometry shares the production Wonder output budget; high improves background visual fidelity.
+                return dispatchDetailed(
+                    'pieces',
+                    { requestId: input.requestId, parts, imagePieceIds: input.imagePieceIds },
+                    images,
+                    z.unknown(),
+                    deadline,
+                    'muse-wonder-1.0',
+                    false,
+                    undefined,
+                    false,
+                    'step-pages',
+                    false,
+                    'high',
+                )
+            })
         },
 
         async generateDocument(input, signal): Promise<ScreenGeneration> {
