@@ -410,8 +410,78 @@ describe('piece registry', () => {
                 parts: session.parts.map((part, index) => (index === 0 ? { ...part, drawingBox: value } : part)),
             })
         expect(withBoxes([0.1234567, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toEqual([0.1234567, 0.2, 0.3, 0.4])
-        expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toBeUndefined()
-        expect(manualPieceInputOf(session).parts[0]?.drawingBox).toBeUndefined()
+        // An invalid box is no own drawing, so the part takes its step figure (the cited step page, whole frame).
+        expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]).toMatchObject({
+            pageId: 'demo-page-1',
+            drawingBox: [0, 0, 1, 1],
+        })
+        expect(manualPieceInputOf(session).parts[0]).toMatchObject({ pageId: 'demo-page-1', drawingBox: [0, 0, 1, 1] })
+    })
+
+    it('gives each distinct part its own drawing: a shared grouped box is nobody’s own, and a step figure fills in before none', () => {
+        const source = createDemoManual()
+        const cite = (...pageIds: string[]): { pageId: string; region: null }[] =>
+            pageIds.map((pageId) => ({ pageId, region: null }))
+        const named = (
+            value: string,
+        ): { state: 'known'; value: string; sourceRefs: { pageId: string; region: null }[] } => ({
+            state: 'known',
+            value,
+            sourceRefs: cite('page-1'),
+        })
+        const known1 = (
+            pageId: string,
+        ): { state: 'known'; value: number; sourceRefs: { pageId: string; region: null }[] } => ({
+            state: 'known',
+            value: 1,
+            sourceRefs: cite(pageId),
+        })
+        const grouped: [number, number, number, number] = [0.19, 0.385, 0.155, 0.14]
+        const session = {
+            ...source,
+            pages: ['page-1', 'page-2', 'page-3'].map((pageId) => ({
+                ...source.pages[0]!,
+                pageId,
+                assetId: `asset-${pageId}`,
+            })),
+            parts: [
+                { partId: 'blade-a', name: named('Blade A'), drawingBox: grouped },
+                { partId: 'blade-b', name: named('Blade B'), drawingBox: grouped },
+                { partId: 'battery', name: named('Battery') },
+            ],
+            reviewedSteps: [
+                {
+                    ...source.reviewedSteps[0]!,
+                    stepId: 'step-1',
+                    order: 1,
+                    parts: [
+                        { partId: 'blade-a', quantity: known1('page-2'), quantityBasis: null },
+                        { partId: 'blade-b', quantity: known1('page-2'), quantityBasis: null },
+                    ],
+                    sourceRefs: cite('page-2', 'page-3'),
+                },
+                {
+                    ...source.reviewedSteps[1]!,
+                    stepId: 'step-2',
+                    order: 2,
+                    kind: 'remove' as const,
+                    parts: [{ partId: 'battery', quantity: known1('page-3'), quantityBasis: null }],
+                    sourceRefs: cite('page-3'),
+                },
+            ],
+        }
+        const requested = manualPieceInputs(session)
+        const drawn = requested.flatMap((part) =>
+            !part.drawingBox ? [] : [`${part.pageId}|${part.drawingBox.join(',')}`],
+        )
+        expect(new Set(drawn).size).toBe(drawn.length)
+        expect(drawn).not.toContain(`page-1|${grouped.join(',')}`)
+        const byPart = new Map(requested.map((part) => [part.partId, part]))
+        // The battery has one step page, so it claims page-3 before blade-b (which could use page-2 or page-3) can.
+        expect(byPart.get('blade-a')).toMatchObject({ pageId: 'page-2', drawingBox: [0, 0, 1, 1] })
+        expect(byPart.get('battery')).toMatchObject({ pageId: 'page-3', drawingBox: [0, 0, 1, 1] })
+        // Both step pages are taken, so blade-b keeps name-only geometry rather than a repeated figure.
+        expect(byPart.get('blade-b')?.drawingBox).toBeUndefined()
     })
 
     it('maps only a step’s linked pieces and quantities, and pins only after its pieces settle', async () => {

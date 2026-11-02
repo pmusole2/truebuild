@@ -151,7 +151,7 @@ export const manualStepSchema = z
         stepId: idSchema,
         order: positiveIntegerSchema,
         title: titleSchema,
-        kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
+        kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove']).nullable().optional(),
         requirements: z
             .strictObject({
                 orientation: z.boolean(),

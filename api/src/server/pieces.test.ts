@@ -366,7 +366,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
         parts: [
             { ...part('bracket'), notPartOfThisPiece: ['pin', 'washer'] },
             { ...part('pin'), drawingBox: [-0.1, 0, 0.5, 0.5] },
-            part('washer'),
+            { ...part('washer'), drawingBox: [0.2, 0.2, 0.6, 0.6] },
         ],
         pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
     }
@@ -485,4 +485,53 @@ it('sends no crop image for a blank drawing and still asks Wonder for the name-o
     expect(result.results[0]).toMatchObject({ id: 'plate', status: 'passed', cutoutUri: null, issueCodes: [] })
     expect(generatePieces).toHaveBeenCalledTimes(1)
     expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: [], images: [], parts: [plate] })
+})
+
+it('crops no drawing box that two distinct parts share, and still crops the part with its own box', async () => {
+    const drawing = await sharp(
+        Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="white"/><path d="M10 10 H30 V30 H10 Z M10 20 H30" stroke="black" stroke-width="2" fill="none"/></svg>',
+        ),
+    )
+        .png()
+        .toBuffer()
+    const provider = createMetaProvider({
+        apiKey: 'synthetic-pieces-provider-key',
+        fetchImpl: guardModelFetch(async (): Promise<Response> =>
+            wonderResponse([spec('propeller-a'), spec('propeller-b'), spec('battery')]),
+        ),
+    })
+    const generatePieces = vi.spyOn(provider, 'generatePieces')
+    const handler = createPieceHandler({
+        auth: new SharedKeyAuth({ sharedSecret: 'pieces-test-key' }),
+        runtimeMode: 'meta',
+        provider,
+        work: createBackgroundWork(new ModelCallCounter(), new ConcurrencyGate(8)),
+        deadlineMs: 45_000,
+    })
+    const response = await handler(
+        pieceRequest(
+            {
+                requestId: 'pieces-grouped',
+                contentHash: 'd'.repeat(64),
+                parts: [
+                    part('propeller-a'),
+                    part('propeller-b'),
+                    { ...part('battery'), drawingBox: [0.2, 0.2, 0.6, 0.6] },
+                ],
+                pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
+            },
+            drawing,
+        ),
+    )
+    expect(response.status).toBe(200)
+    const result = pieceBatchResultSchema.parse(await response.json())
+    expect(result.results.map((value) => [value.id, value.cutoutUri !== null])).toEqual([
+        ['propeller-a', false],
+        ['propeller-b', false],
+        ['battery', true],
+    ])
+    expect(generatePieces).toHaveBeenCalledTimes(1)
+    expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: ['battery'] })
+    expect(generatePieces.mock.calls[0]![0].images).toHaveLength(1)
 })

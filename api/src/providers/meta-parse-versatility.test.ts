@@ -143,7 +143,8 @@ describe('parse prompt for versatile manuals', () => {
         const { provider, bodies } = queued([clean])
         await provider.parseManual(input, new AbortController().signal)
         const instructions = String(bodies[0]!.instructions)
-        for (const kind of ['assembly', 'adjust', 'connect', 'tighten', 'route']) expect(instructions).toContain(kind)
+        for (const kind of ['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove'])
+            expect(instructions).toContain(kind)
         expect(instructions).toContain('requirements')
         expect(instructions).toMatch(
             /Assembly steps always need orientation, connection and at least one visible check/u,
@@ -242,6 +243,34 @@ describe('parse validation of alternatives, quantity basis and step kinds', () =
         const { provider, fetchImpl } = queued([value])
         const result = await provider.parseManual(input, new AbortController().signal)
         expect(result.steps[0]).toMatchObject({ kind: 'tighten', visibleChecks: [] })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('parses a removal step with the tool it uses as a step part and no repair', async () => {
+        const { input, clean } = await fixture()
+        const value = withStep(clean, {
+            kind: 'remove',
+            requirements: null,
+            orientation: UNKNOWN,
+            connection: UNKNOWN,
+            visibleChecks: [],
+            parts: [
+                ...clean.steps[0]!.parts,
+                {
+                    partId: 'screwdriver',
+                    quantity: { state: 'known', value: 1, sourceRefs: CITED },
+                    quantityBasis: null,
+                },
+            ],
+        })
+        value.parts.push({
+            partId: 'screwdriver',
+            name: { state: 'known', value: 'Phillips screwdriver', sourceRefs: CITED },
+        })
+        const { provider, fetchImpl } = queued([value])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps[0]).toMatchObject({ kind: 'remove', visibleChecks: [] })
+        expect(result.steps[0]!.parts.map((part) => part.partId)).toEqual(['side-panel', 'screwdriver'])
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
@@ -351,6 +380,9 @@ describe('parse prompt and validation for carried-over quantities', () => {
         expect(instructions).toContain('user_supplied')
         expect(instructions).toMatch(/mutually exclusive or optional methods/u)
         expect(instructions).toMatch(/Set kind to assembly for placing or mounting parts/u)
+        expect(instructions).toMatch(/Set kind to remove, instead of assembly, when the step takes parts off/u)
+        expect(instructions).toMatch(/never add a tool the step does not use/u)
+        expect(instructions).toMatch(/never give two distinct parts the identical drawingBox on the same page/u)
         expect(instructions).toMatch(/Language-neutral diagrams remain valid grounding/u)
     })
 

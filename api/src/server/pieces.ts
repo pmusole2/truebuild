@@ -73,6 +73,26 @@ async function cropDrawing(part: ManualPieceInput, image: ObservationImage | und
     }
 }
 
+function drawingKey(part: ManualPieceInput): string | null {
+    return part.drawingBox && part.pageId !== null ? `${part.pageId}|${part.drawingBox.join(',')}` : null
+}
+
+/**
+ * A drawing box that two distinct parts of one batch share is no part's own figure: cropping it for either would give
+ * both the same picture. Neither keeps it, so each falls back to name-only geometry rather than a duplicate crop.
+ */
+function ownDrawingParts(parts: readonly ManualPieceInput[]): ManualPieceInput[] {
+    const counts = new Map<string, number>()
+    for (const part of parts) {
+        const key = drawingKey(part)
+        if (key !== null) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return parts.map((part) => {
+        const key = drawingKey(part)
+        return key !== null && counts.get(key)! > 1 ? { ...part, drawingBox: undefined } : part
+    })
+}
+
 /** Independently accept each requested id. A blank or broken sibling never erases a valid piece. */
 export async function generatePieceBatch(
     metadata: PieceBatchRequest,
@@ -82,7 +102,7 @@ export async function generatePieceBatch(
 ): Promise<PieceBatchResult> {
     const started = performance.now()
     const crops = new Map<string, PieceCrop>()
-    for (const part of metadata.parts) {
+    for (const part of ownDrawingParts(metadata.parts)) {
         const crop = await cropDrawing(part, part.pageId === null ? undefined : pages.get(part.pageId))
         if (crop) crops.set(part.id, crop)
     }

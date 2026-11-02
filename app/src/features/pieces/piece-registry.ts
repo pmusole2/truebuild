@@ -99,6 +99,60 @@ function stepQuantity(session: Pick<ManualSession, 'reviewedSteps'>, partId: str
     return null
 }
 
+const FULL_FIGURE: PieceDrawingBox = [0, 0, 1, 1]
+
+/** The distinct pages a part's steps cite, in step order: each is a candidate step figure for the part. */
+function stepFigurePages(session: Pick<ManualSession, 'pages' | 'reviewedSteps'>, partId: string): string[] {
+    const pageIds = new Set(session.pages.map((page) => page.pageId))
+    const pages: string[] = []
+    for (const step of session.reviewedSteps) {
+        if (!step.parts.some((part) => part.partId === partId)) continue
+        for (const ref of step.sourceRefs) {
+            if (pageIds.has(ref.pageId) && !pages.includes(ref.pageId)) pages.push(ref.pageId)
+        }
+    }
+    return pages
+}
+
+/**
+ * Each distinct part gets its own drawing. A box the part cites alone stays as written. A box two distinct parts share
+ * (a grouped inventory drawing) is no one's own figure, so it is dropped. Every part left without its own drawing then
+ * claims a step figure (one cited page, whole frame) instead of none. A figure is claimed once, so two distinct parts
+ * never receive the same picture. Parts with the fewest candidate pages claim first, so a part with one step page is not
+ * starved by a part that could use any of them; a part left with no free page keeps no drawing.
+ */
+function resolveDrawings<T extends { partId: string; pageId: string | null; drawingBox: PieceDrawingBox | undefined }>(
+    session: Pick<ManualSession, 'pages' | 'reviewedSteps'>,
+    named: T[],
+): T[] {
+    const boxKey = (part: T): string | null =>
+        part.drawingBox === undefined || part.pageId === null ? null : `${part.pageId}|${part.drawingBox.join(',')}`
+    const counts = new Map<string, number>()
+    for (const part of named) {
+        const key = boxKey(part)
+        if (key !== null) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    const ownKeys = (key: string | null): boolean => key !== null && counts.get(key) === 1
+    const figureKey = (pageId: string): string => `${pageId}|${FULL_FIGURE.join(',')}`
+    const claimed = new Set([...counts].filter(([, count]) => count === 1).map(([key]) => key))
+    const needs = named.flatMap((part, index) =>
+        ownKeys(boxKey(part)) ? [] : [{ index, pages: stepFigurePages(session, part.partId) }],
+    )
+    needs.sort((a, b) => a.pages.length - b.pages.length || a.index - b.index)
+    const figures = new Map<number, string>()
+    for (const need of needs) {
+        const pageId = need.pages.find((id) => !claimed.has(figureKey(id)))
+        if (pageId === undefined) continue
+        claimed.add(figureKey(pageId))
+        figures.set(need.index, pageId)
+    }
+    return named.map((part, index) => {
+        if (ownKeys(boxKey(part))) return part
+        const pageId = figures.get(index)
+        return pageId === undefined ? { ...part, drawingBox: undefined } : { ...part, pageId, drawingBox: FULL_FIGURE }
+    })
+}
+
 /**
  * The manual parts the generation request names, in parse order. Quantity is the printed inventory count when present,
  * otherwise the first known per-step count. Page ids are carried for the request only; they never enter the identity.
@@ -107,27 +161,30 @@ export function manualPieceInputs(
     session: Pick<ManualSession, 'pages' | 'parts' | 'reviewedSteps'>,
 ): PieceRequestPart[] {
     const pageIds = new Set(session.pages.map((page) => page.pageId))
-    const named = session.parts.flatMap((part) => {
-        if (part.name.state !== 'known') return []
-        const pageId = part.name.sourceRefs.map((ref) => ref.pageId).find((id) => pageIds.has(id)) ?? null
-        const quantity = part.inventoryQuantity ?? stepQuantity(session, part.partId)
-        const identityName = part.name.value
-        // The manual may hold names up to 200 characters; the piece contract allows 80. The display name is bounded, the fact is not.
-        const name = Array.from(identityName.trim()).slice(0, PIECE_NAME_MAX).join('')
-        const drawingBox = validDrawingBox(part.drawingBox)
-        return [
-            {
-                partId: part.partId,
-                name,
-                identityName,
-                label: part.label ?? null,
-                dimensions: part.dimensions ?? null,
-                pageId,
-                quantity,
-                drawingBox,
-            },
-        ]
-    })
+    const named = resolveDrawings(
+        session,
+        session.parts.flatMap((part) => {
+            if (part.name.state !== 'known') return []
+            const pageId = part.name.sourceRefs.map((ref) => ref.pageId).find((id) => pageIds.has(id)) ?? null
+            const quantity = part.inventoryQuantity ?? stepQuantity(session, part.partId)
+            const identityName = part.name.value
+            // The manual may hold names up to 200 characters; the piece contract allows 80. The display name is bounded, the fact is not.
+            const name = Array.from(identityName.trim()).slice(0, PIECE_NAME_MAX).join('')
+            const drawingBox = validDrawingBox(part.drawingBox)
+            return [
+                {
+                    partId: part.partId,
+                    name,
+                    identityName,
+                    label: part.label ?? null,
+                    dimensions: part.dimensions ?? null,
+                    pageId,
+                    quantity,
+                    drawingBox,
+                },
+            ]
+        }),
+    )
     const ids = stablePieceIds(named)
     return named.flatMap((part, index): PieceRequestPart[] => {
         const { identityName: _identity, drawingBox, partId, ...request } = part

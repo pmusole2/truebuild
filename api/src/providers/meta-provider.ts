@@ -686,6 +686,9 @@ const CARRIED_OVER_REQUIRED =
 /** Parse only: typed safety notes. Check/ask text is deliberately not touched (its request bytes are pinned). */
 const PARSE_SAFETY =
     'Parse safety: For every step set safetyNotes to an array. Copy each safety statement the manual prints for that step (a warning, caution, danger, prohibition, or any instruction about people, children, pets, hands, power, weight, stability, heat or sharp edges) as one entry {noteId, note}: note.value is the printed words, complete and unaltered, in the selected language, and note.sourceRefs cite the supplied page IDs that print it. Use a unique noteId per step. If a printed safety statement exists but cannot be read, emit it with note.state unknown and a specific reason; never drop it and never invent one. Use an empty array only when you read the step and its page and the manual prints no safety statement for it; use null when you could not assess the step.'
+/** Parse only: the removal kind and the tools a step uses. The shared step-kind line above stays byte-identical for check. */
+const PARSE_REMOVAL_AND_TOOLS =
+    'Parse removal and tools: Set kind to remove, instead of assembly, when the step takes parts off or disassembles existing parts (a removal or disassembly procedure). Its parts are the parts taken off; its requirements follow the non-assembly rule above; its sourceRefs cite the page that prints the procedure. Include each tool or accessory the step uses (for example a screwdriver or hex key printed or shown for that step) as a step part with its printed inventory name, cited to the inventory page, and its quantity from that step; never add a tool the step does not use.'
 const PARSE_INSTRUCTIONS =
     INSTRUCTION_LINES.flatMap((line): string[] =>
         line.startsWith('Parse carried quantities')
@@ -694,7 +697,8 @@ const PARSE_INSTRUCTIONS =
               ? [PARSE_SAFETY, line]
               : [line],
     ).join(' ') +
-    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Also give drawingBox:[x,y,w,h] in normalized 0–1 top-left page coordinates tightly enclosing that part’s drawing on the same cited page, excluding nearby labels and table borders; use null if no drawing is visible. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
+    ` ${PARSE_REMOVAL_AND_TOOLS}` +
+    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Also give drawingBox:[x,y,w,h] in normalized 0–1 top-left page coordinates tightly enclosing that part’s drawing on the same cited page, excluding nearby labels and table borders; use null if no drawing is visible. Each distinct part needs its own drawingBox: when several parts share one grouped inventory drawing, give each part a sub-box tightly enclosing only that part’s drawing inside the group, and never give two distinct parts the identical drawingBox on the same page. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
