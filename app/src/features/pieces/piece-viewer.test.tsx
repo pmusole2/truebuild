@@ -2,25 +2,46 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native'
 import { PieceViewer, PiecesGrid } from './piece-viewer'
 import { ViewerScrollView } from './viewer-scroll-lock'
 import { ThemeProvider } from '../../theme/theme'
-import { PanResponder, Platform, Text, type GestureResponderEvent, type PanResponderGestureState } from 'react-native'
+import {
+    PanResponder,
+    Platform,
+    StyleSheet,
+    Text,
+    type GestureResponderEvent,
+    type PanResponderGestureState,
+} from 'react-native'
+import * as SafeArea from 'react-native-safe-area-context'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
 import type { PieceSpec } from '@truebuild/contracts'
+import type { GLViewProps } from 'expo-gl'
 
 const mockOptionalNativeModule = jest.fn((): Record<string, never> | null => null)
+const mockScene = {
+    rotate: jest.fn(),
+    zoom: jest.fn(),
+    reset: jest.fn(),
+    draw: jest.fn(() => false),
+    dispose: jest.fn(),
+}
 jest.mock('expo', () => ({
     ...jest.requireActual('expo'),
     requireOptionalNativeModule: (): Record<string, never> | null => mockOptionalNativeModule(),
 }))
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
+)
 jest.mock('./piece-gl', () => ({
-    loadPieceGL: async (): Promise<{ default: () => React.JSX.Element }> => ({
-        default: function MockGLSurface(): React.JSX.Element {
+    loadPieceGL: async (): Promise<{ default: (props: GLViewProps) => React.JSX.Element }> => ({
+        default: function MockGLSurface(props: GLViewProps): React.JSX.Element {
             const React = jest.requireActual<typeof ReactModule>('react')
             const { View } = jest.requireActual<typeof ReactNativeModule>('react-native')
-            // External GPU boundary only: this surface deliberately never supplies a GL context.
-            return React.createElement(View, { testID: 'stalled-gl-surface' })
+            // External GPU boundary only: a test explicitly supplies a context when scene interaction is needed.
+            return React.createElement(View, { ...props, testID: 'stalled-gl-surface' })
         },
     }),
+    loadPieceScene: async (): Promise<unknown> => ({ createPieceScene: (): typeof mockScene => mockScene }),
 }))
 
 it('keeps a named 2D card when GL is unavailable and when the piece spec is invalid', async () => {
@@ -205,6 +226,11 @@ it.each(['release', 'cancel', 'unmount', 'startup timeout'] as const)(
         let view: Awaited<ReturnType<typeof render>> | undefined
         try {
             view = await render(<PageWithViewer />)
+            mockScene.rotate.mockClear()
+            if (ending !== 'startup timeout') {
+                // Only the external GPU is mocked: the real viewer creates its scene and handles the drag.
+                await act(async () => screen.getByTestId('stalled-gl-surface').props.onContextCreate({}))
+            }
             const config: PanConfig = create.mock.calls.at(-1)![0]
             // A single finger has no second touch, so the grant and move read the pinch distance as absent.
             const event = { nativeEvent: { touches: [] } } as unknown as GestureResponderEvent
@@ -219,6 +245,7 @@ it.each(['release', 'cancel', 'unmount', 'startup timeout'] as const)(
 
             // A vertical drag, the case the page used to scroll, stays with the viewer.
             await act(() => config.onPanResponderMove?.(event, movement(40)))
+            if (ending !== 'startup timeout') expect(mockScene.rotate).toHaveBeenCalledWith(0, 40 * 0.009)
             expect(config.onPanResponderTerminationRequest?.(event, movement(40))).toBe(false)
             expect(pageScrollEnabled()).toBe(false)
 
@@ -252,6 +279,7 @@ it.each(['release', 'cancel', 'unmount', 'startup timeout'] as const)(
 
 it('opens the same piece full screen from its own view, and closes from its button or the system back gesture', async () => {
     const os = jest.replaceProperty(Platform, 'OS', 'ios')
+    const insets = jest.spyOn(SafeArea, 'useSafeAreaInsets').mockReturnValue({ top: 59, bottom: 34, left: 0, right: 0 })
     mockOptionalNativeModule.mockReturnValue({})
     let view: Awaited<ReturnType<typeof render>> | undefined
     try {
@@ -266,6 +294,9 @@ it('opens the same piece full screen from its own view, and closes from its butt
             fireEvent.press(screen.getByRole('button', { name: 'Expand Drag piece 3D view' }))
         })
         expect(screen.getAllByTestId('piece-viewer-gesture-surface')).toHaveLength(2)
+        const fullscreenStyle = StyleSheet.flatten(screen.getByTestId('piece-viewer-fullscreen').props.style)
+        expect(fullscreenStyle.paddingTop).toBeGreaterThanOrEqual(59)
+        expect(fullscreenStyle.paddingBottom).toBeGreaterThanOrEqual(34)
         await act(async () => {
             fireEvent.press(screen.getByRole('button', { name: 'Close 3D view' }))
         })
@@ -280,6 +311,7 @@ it('opens the same piece full screen from its own view, and closes from its butt
         expect(screen.getAllByTestId('piece-viewer-gesture-surface')).toHaveLength(1)
     } finally {
         await view?.unmount()
+        insets.mockRestore()
         os.restore()
     }
 })

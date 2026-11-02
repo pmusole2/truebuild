@@ -23,6 +23,7 @@ import {
     View,
     type GestureResponderEvent,
 } from 'react-native'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { requireOptionalNativeModule } from 'expo'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { pieceSpecSchema, type PieceSpec } from '@truebuild/contracts'
@@ -30,7 +31,7 @@ import { Heading, Caption, Body } from '../../ui/text'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
 import type { PieceScene } from './piece-scene'
-import { loadPieceGL } from './piece-gl'
+import { loadPieceGL, loadPieceScene } from './piece-gl'
 import { lockPageScroll, unlockPageScroll } from './viewer-scroll-lock'
 
 // The normal document renderer may import this module without loading GL or Three (including on unsupported devices).
@@ -223,7 +224,6 @@ function ValidPieceViewer({
     fullscreen?: boolean
 }): ReactElement {
     const { colors } = useTheme()
-    const { height: windowHeight } = useWindowDimensions()
     const [failureReason, setFailureReason] = useState<FallbackReason | null>(null)
     const [expanded, setExpanded] = useState(false)
     const failed = failureReason !== null
@@ -305,7 +305,7 @@ function ValidPieceViewer({
             startupDeadline.current = performance.now() + 5_000
             watchStartup()
             try {
-                const { createPieceScene } = await import('./piece-scene')
+                const { createPieceScene } = await loadPieceScene()
                 if (!mounted.current || unavailable.current || epoch !== creationEpoch.current) return
                 const created = createPieceScene(gl, piece, colors.surfaceSunken)
                 if (!mounted.current || unavailable.current || epoch !== creationEpoch.current) {
@@ -447,27 +447,65 @@ function ValidPieceViewer({
                     animationType="slide"
                     onRequestClose={(): void => setExpanded(false)}
                 >
-                    <View
-                        testID="piece-viewer-fullscreen"
-                        style={[styles.fullscreen, { backgroundColor: colors.canvas }]}
-                    >
-                        <ViewerButton
-                            label="Close"
-                            accessibilityLabel="Close 3D view"
-                            testID="piece-viewer-close"
-                            onPress={(): void => setExpanded(false)}
-                        />
-                        <ValidPieceViewer
+                    <SafeAreaProvider>
+                        <FullscreenPieceViewer
                             piece={piece}
-                            height={Math.max(240, windowHeight - 160)}
                             showName={showName}
                             fallback={fallback}
                             onFrame={onFrame}
-                            fullscreen
+                            onClose={(): void => setExpanded(false)}
                         />
-                    </View>
+                    </SafeAreaProvider>
                 </Modal>
             )}
+        </View>
+    )
+}
+
+function FullscreenPieceViewer({
+    piece,
+    showName,
+    fallback,
+    onFrame,
+    onClose,
+}: {
+    piece: PieceSpec
+    showName: boolean
+    fallback: ReactElement
+    onFrame?: (timestampMs: number) => void
+    onClose: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const { height } = useWindowDimensions()
+    const insets = useSafeAreaInsets()
+    return (
+        <View
+            testID="piece-viewer-fullscreen"
+            style={[
+                styles.fullscreen,
+                {
+                    backgroundColor: colors.canvas,
+                    paddingTop: insets.top + space.md,
+                    paddingBottom: insets.bottom + space.md,
+                    paddingLeft: insets.left + space.md,
+                    paddingRight: insets.right + space.md,
+                },
+            ]}
+        >
+            <ViewerButton
+                label="Close"
+                accessibilityLabel="Close 3D view"
+                testID="piece-viewer-close"
+                onPress={onClose}
+            />
+            <ValidPieceViewer
+                piece={piece}
+                height={Math.max(160, height - insets.top - insets.bottom - 200)}
+                showName={showName}
+                fallback={fallback}
+                onFrame={onFrame}
+                fullscreen
+            />
         </View>
     )
 }
