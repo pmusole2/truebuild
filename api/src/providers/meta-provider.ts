@@ -689,6 +689,9 @@ const PARSE_SAFETY =
 /** Parse only: the removal kind and the tools a step uses. The shared step-kind line above stays byte-identical for check. */
 const PARSE_REMOVAL_AND_TOOLS =
     'Parse removal and tools: Set kind to remove, instead of assembly, when the step takes parts off or disassembles existing parts (a removal or disassembly procedure). Its parts are the parts taken off; its requirements follow the non-assembly rule above; its sourceRefs cite the page that prints the procedure. Include each tool or accessory the step uses (for example a screwdriver or hex key printed or shown for that step) as a step part with its printed inventory name, cited to the inventory page, and its quantity from that step; never add a tool the step does not use.'
+/** Preserve source-labelled variants and the host actually used by a procedure; parse only. */
+const PARSE_PART_IDENTITIES =
+    'Parse inventory identities: Keep separate registry entries for distinct printed inventory labels or variants, even when they share one caption or grouped drawing. A group labelled A*2 B*2 describes two variants with two of each, not one generic four-piece part; retain each label in its name and label field. Link the variants the procedure actually uses, not an umbrella duplicate such as a generic accessory when it refers to those same labelled pieces. For assembly, replacement and removal, include the depicted host or base onto which a part is installed or from which it is removed as a step part when the supplied drawing clearly shows it being used. Use its source-grounded inventory name and printed or clearly depicted quantity; reuse its existing ID and carried quantity in later steps. Never invent an unseen host, a variant, or a quantity.'
 const PARSE_INSTRUCTIONS =
     INSTRUCTION_LINES.flatMap((line): string[] =>
         line.startsWith('Parse carried quantities')
@@ -697,7 +700,7 @@ const PARSE_INSTRUCTIONS =
               ? [PARSE_SAFETY, line]
               : [line],
     ).join(' ') +
-    ` ${PARSE_REMOVAL_AND_TOOLS}` +
+    ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES}` +
     ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. Exclude other items, labels and borders; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; cite the whole page only when no tighter source region can be identified. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */

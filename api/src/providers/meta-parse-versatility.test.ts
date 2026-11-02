@@ -274,6 +274,32 @@ describe('parse validation of alternatives, quantity basis and step kinds', () =
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
+    it('keeps separately labelled variants and the depicted host instead of one umbrella part', async () => {
+        const { input, clean } = await fixture()
+        const variants = ['A', 'B'].map((label, index) => ({
+            partId: `blade-${label.toLowerCase()}`,
+            name: { state: 'known' as const, value: `Blade ${label}`, sourceRefs: CITED },
+            label,
+            drawingBox: [0.1 + index * 0.5, 0.2, 0.2, 0.3] as [number, number, number, number],
+        }))
+        clean.parts.push(...variants)
+        clean.steps[0]!.parts.push(
+            ...variants.map((part) => ({
+                partId: part.partId,
+                quantity: { state: 'known' as const, value: 2, sourceRefs: CITED },
+                quantityBasis: null,
+            })),
+        )
+        const { provider, bodies } = queued([clean])
+        const result = await provider.parseManual(input, new AbortController().signal)
+        expect(result.steps[0]!.parts.map((part) => part.partId)).toEqual(['side-panel', 'blade-a', 'blade-b'])
+        expect(result.parts[1]!.drawingBox).not.toEqual(result.parts[2]!.drawingBox)
+        expect(String(bodies[0]!.instructions)).toContain(
+            'Keep separate registry entries for distinct printed inventory labels or variants',
+        )
+        expect(String(bodies[0]!.instructions)).toContain('include the depicted host or base')
+    })
+
     it('does not waive the same missing evidence for an assembly step', async () => {
         const { input, clean } = await fixture()
         const value = withStep(clean, {
