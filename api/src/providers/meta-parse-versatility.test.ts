@@ -267,8 +267,9 @@ describe('parse validation of alternatives, quantity basis and step kinds', () =
             partId: 'screwdriver',
             name: { state: 'known', value: 'Phillips screwdriver', sourceRefs: CITED },
         })
-        const { provider, fetchImpl } = queued([value])
+        const { provider, fetchImpl, bodies } = queued([value])
         const result = await provider.parseManual(input, new AbortController().signal)
+        expect(String(bodies[0]!.instructions)).toContain('separate ordered remove and assembly steps')
         expect(result.steps[0]).toMatchObject({ kind: 'remove', visibleChecks: [] })
         expect(result.steps[0]!.parts.map((part) => part.partId)).toEqual(['side-panel', 'screwdriver'])
         expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -409,6 +410,7 @@ describe('parse prompt and validation for carried-over quantities', () => {
         expect(instructions).toMatch(/Set kind to remove, instead of assembly, when the step takes parts off/u)
         expect(instructions).toMatch(/never add a tool the step does not use/u)
         expect(instructions).toMatch(/never give two distinct parts the identical drawingBox on the same page/u)
+        expect(instructions).toContain('one complete physical outline, not a row of quantity copies')
         expect(instructions).toMatch(/prefer its own figure in a relevant step drawing/u)
         expect(instructions).toMatch(/FIRST in name.sourceRefs/u)
         expect(instructions).toMatch(/Language-neutral diagrams remain valid grounding/u)
