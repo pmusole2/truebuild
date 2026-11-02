@@ -213,6 +213,41 @@ it('preserves a valid detached thin structural member without guessing whether i
     expect(result.results[0]).toMatchObject({ status: 'passed', piece: { parts }, issueCodes: [] })
 })
 
+it('preserves a thin concave extrude exactly and drops only its invalid outline sibling', async () => {
+    const extrude = {
+        type: 'extrude',
+        outline: [
+            [0, 0],
+            [3, 0],
+            [3, 0.4],
+            [0.4, 0.4],
+            [0.4, 2],
+            [0, 2],
+        ],
+        depth: 0.04,
+        bevel: 0,
+        position: [1, -2, 0.5],
+        rotation: [0.2, -0.3, 0.4],
+    }
+    const invalid = {
+        ...extrude,
+        outline: [
+            [0, 0],
+            [2, 2],
+            [0, 2],
+            [2, 0],
+        ],
+    }
+    for (const parts of [[extrude], [extrude, invalid]]) {
+        const candidate = rawPiece('thin-bracket', parts)
+        const original = structuredClone(candidate)
+        const result = (await composePiece('thin-bracket', candidate)).results[0]!
+        expect(result).toMatchObject({ status: 'passed', issueCodes: [] })
+        expect(result.piece?.parts).toEqual([extrude])
+        expect(candidate).toEqual(original)
+    }
+})
+
 it('removes consecutive outline and profile duplicates before strict validation without closing or repairing invalid paths', async () => {
     const lathe = {
         type: 'lathe',
@@ -378,6 +413,9 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
             'Preserve integral shafts, stems, pegs and other connected functional structural members',
         ),
     )
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use extrude for flat outlines'))
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use round primitives for round members'))
+    expect(bodies[0]).toHaveProperty('instructions', expect.not.stringContaining('Fold small surface lobes'))
     const failed = first.results[1]!
     const repaired = await handler(
         pieceRequest(

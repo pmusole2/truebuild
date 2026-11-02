@@ -77,4 +77,26 @@ export const VIEWER_FIXTURE_PIECES: readonly PieceSpec[] = [
             },
         ],
     },
+    {
+        id: 'fixture-thin-outline-bracket',
+        name: 'Thin outline bracket',
+        color: '#7964A3',
+        parts: [
+            {
+                type: 'extrude',
+                outline: [
+                    [0, 0],
+                    [3, 0],
+                    [3, 0.4],
+                    [0.4, 0.4],
+                    [0.4, 2],
+                    [0, 2],
+                ],
+                depth: 0.04,
+                bevel: 0,
+                position: [0, 0, 0],
+                rotation: [0, 0, 0],
+            },
+        ],
+    },
 ]

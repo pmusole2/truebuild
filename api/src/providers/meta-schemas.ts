@@ -7,6 +7,7 @@ import {
     providerScreenProposalSchema,
     questionResultSchema,
     sourceRefSchema,
+    PIECE_SPEC_LIMITS,
     pieceSpecSchema,
 } from '@truebuild/contracts'
 import { z } from 'zod'
@@ -335,15 +336,25 @@ export function assertStrictSchema(schema: Schema): void {
     if (properties > 5_000 || strings > 120_000 || enums > 1_000) throw new Error('invalid_provider_schema')
 }
 
-// Geometry inference uses the six primitives named by the active prompt. The shared piece contract still accepts
-// lathe/extrude so cached registries and viewer fixtures remain renderable.
-const [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart] =
+// Geometry inference uses the six primitives and extrude named by the active prompt. Reuse the shared part bounds and
+// refinements; legacy lathe geometry remains valid in cached registries and viewer fixtures.
+const [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart, , extrudePart] =
     pieceSpecSchema.shape.parts.element.options
 const requestedPieceSchema = pieceSpecSchema.extend({
     parts: z
-        .array(z.discriminatedUnion('type', [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart]))
+        .array(
+            z.discriminatedUnion('type', [
+                boxPart,
+                cylinderPart,
+                conePart,
+                spherePart,
+                torusPart,
+                capsulePart,
+                extrudePart,
+            ]),
+        )
         .min(1)
-        .max(40),
+        .max(PIECE_SPEC_LIMITS.parts),
 })
 
 export const metaOutputSchemas = {

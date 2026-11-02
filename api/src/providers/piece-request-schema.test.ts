@@ -18,11 +18,11 @@ it('accepts optional bounded inventory exclusions as data while rejecting malfor
         expect(manualPieceInputSchema.safeParse({ ...part, notPartOfThisPiece }).success).toBe(false)
 })
 
-it('requests only the six primitives without descriptions while the shared contract still accepts outline geometry', () => {
-    const types = ['box', 'cylinder', 'cone', 'sphere', 'torus', 'capsule']
+it('requests bounded extrudes and the six primitives without descriptions while retaining legacy lathe support', () => {
+    const types = ['box', 'cylinder', 'cone', 'sphere', 'torus', 'capsule', 'extrude']
     expect(metaOutputSchemas.pieces).toHaveProperty('required', ['pieces'])
     expect(metaOutputSchemas.pieces).not.toHaveProperty('properties.descriptions')
-    expect(metaOutputSchemas.pieces).toHaveProperty('properties.pieces.items.properties.parts.items.anyOf.length', 6)
+    expect(metaOutputSchemas.pieces).toHaveProperty('properties.pieces.items.properties.parts.items.anyOf.length', 7)
     expect(metaOutputSchemas.pieces).toMatchObject({
         properties: {
             pieces: {
@@ -38,6 +38,13 @@ it('requests only the six primitives without descriptions while the shared contr
             },
         },
     })
+    expect(metaOutputSchemas.pieces).toHaveProperty(
+        'properties.pieces.items.properties.parts.items.anyOf.6.properties',
+        expect.objectContaining({
+            outline: expect.objectContaining({ type: 'array', minItems: 3, maxItems: PIECE_SPEC_LIMITS.outlinePoints }),
+            depth: { type: 'number', minimum: PIECE_SPEC_LIMITS.minDimension, maximum: PIECE_SPEC_LIMITS.extent },
+        }),
+    )
     const placement = { position: [0, 0, 0], rotation: [0, 0, 0] }
     for (const part of [
         {
