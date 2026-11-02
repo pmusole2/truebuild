@@ -36,6 +36,8 @@ export const manualPieceInputSchema = z.strictObject({
     notPartOfThisPiece: z.array(z.string().trim().min(1).max(80)).max(PIECE_SPEC_LIMITS.pieces).optional(),
     pageId: z.string().min(1).max(128).nullable(),
     drawingBox: optionalPieceDrawingBoxSchema,
+    /** Broader cited step figure used as context only when no own drawing is available. */
+    figureBox: optionalPieceDrawingBoxSchema,
     cutoutUri: pieceCutoutSchema.nullable().optional(),
     repair: z.strictObject({ issueCodes: z.array(issueCode).min(1).max(40) }).optional(),
 })

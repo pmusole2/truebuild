@@ -487,7 +487,7 @@ it('sends no crop image for a blank drawing and still asks Wonder for the name-o
     expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: [], images: [], parts: [plate] })
 })
 
-it('crops no drawing box that two distinct parts share, and still crops the part with its own box', async () => {
+it('drops shared own-box claims and reused cutouts while accepting explicit broader figure context', async () => {
     const drawing = await sharp(
         Buffer.from(
             '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="white"/><path d="M10 10 H30 V30 H10 Z M10 20 H30" stroke="black" stroke-width="2" fill="none"/></svg>',
@@ -515,9 +515,9 @@ it('crops no drawing box that two distinct parts share, and still crops the part
                 requestId: 'pieces-grouped',
                 contentHash: 'd'.repeat(64),
                 parts: [
-                    part('propeller-a'),
-                    part('propeller-b'),
-                    { ...part('battery'), drawingBox: [0.2, 0.2, 0.6, 0.6] },
+                    { ...part('propeller-a'), cutoutUri: `data:image/png;base64,${drawing.toString('base64')}` },
+                    { ...part('propeller-b'), cutoutUri: `data:image/png;base64,${drawing.toString('base64')}` },
+                    { ...part('battery'), drawingBox: undefined, figureBox: [0.2, 0.2, 0.6, 0.6] },
                 ],
                 pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
             },

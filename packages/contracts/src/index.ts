@@ -80,7 +80,7 @@ const manualPartSchema = z.strictObject({
     label: z.string().trim().min(1).max(80).nullable().optional(),
     dimensions: z.string().trim().min(1).max(300).nullable().optional(),
     inventoryQuantity: z.number().int().positive().max(100_000).nullable().optional(),
-    /** Drawing on the name's cited inventory page, not a text/table-cell rectangle. */
+    /** Own drawing on the first name citation's page; other name citations retain printed inventory evidence. */
     drawingBox: optionalPieceDrawingBoxSchema,
 })
 const partRequirementSchema = z

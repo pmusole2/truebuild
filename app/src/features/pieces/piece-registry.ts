@@ -99,57 +99,32 @@ function stepQuantity(session: Pick<ManualSession, 'reviewedSteps'>, partId: str
     return null
 }
 
-const FULL_FIGURE: PieceDrawingBox = [0, 0, 1, 1]
-
-/** The distinct pages a part's steps cite, in step order: each is a candidate step figure for the part. */
-function stepFigurePages(session: Pick<ManualSession, 'pages' | 'reviewedSteps'>, partId: string): string[] {
-    const pageIds = new Set(session.pages.map((page) => page.pageId))
-    const pages: string[] = []
-    for (const step of session.reviewedSteps) {
-        if (!step.parts.some((part) => part.partId === partId)) continue
-        for (const ref of step.sourceRefs) {
-            if (pageIds.has(ref.pageId) && !pages.includes(ref.pageId)) pages.push(ref.pageId)
-        }
-    }
-    return pages
-}
-
-/**
- * Each distinct part gets its own drawing. A box the part cites alone stays as written. A box two distinct parts share
- * (a grouped inventory drawing) is no one's own figure, so it is dropped. Every part left without its own drawing then
- * claims a step figure (one cited page, whole frame) instead of none. A figure is claimed once, so two distinct parts
- * never receive the same picture. Parts with the fewest candidate pages claim first, so a part with one step page is not
- * starved by a part that could use any of them; a part left with no free page keeps no drawing.
- */
+/** Keep precise own drawings separate from the broader cited step figure used only as context. */
 function resolveDrawings<T extends { partId: string; pageId: string | null; drawingBox: PieceDrawingBox | undefined }>(
     session: Pick<ManualSession, 'pages' | 'reviewedSteps'>,
     named: T[],
-): T[] {
-    const boxKey = (part: T): string | null =>
-        part.drawingBox === undefined || part.pageId === null ? null : `${part.pageId}|${part.drawingBox.join(',')}`
+): (T & { figureBox?: PieceDrawingBox })[] {
+    const pageIds = new Set(session.pages.map((page) => page.pageId))
+    const keyOf = (part: T): string | null =>
+        part.drawingBox && part.pageId !== null ? `${part.pageId}|${part.drawingBox.join(',')}` : null
     const counts = new Map<string, number>()
     for (const part of named) {
-        const key = boxKey(part)
+        const key = keyOf(part)
         if (key !== null) counts.set(key, (counts.get(key) ?? 0) + 1)
     }
-    const ownKeys = (key: string | null): boolean => key !== null && counts.get(key) === 1
-    const figureKey = (pageId: string): string => `${pageId}|${FULL_FIGURE.join(',')}`
-    const claimed = new Set([...counts].filter(([, count]) => count === 1).map(([key]) => key))
-    const needs = named.flatMap((part, index) =>
-        ownKeys(boxKey(part)) ? [] : [{ index, pages: stepFigurePages(session, part.partId) }],
-    )
-    needs.sort((a, b) => a.pages.length - b.pages.length || a.index - b.index)
-    const figures = new Map<number, string>()
-    for (const need of needs) {
-        const pageId = need.pages.find((id) => !claimed.has(figureKey(id)))
-        if (pageId === undefined) continue
-        claimed.add(figureKey(pageId))
-        figures.set(need.index, pageId)
-    }
-    return named.map((part, index) => {
-        if (ownKeys(boxKey(part))) return part
-        const pageId = figures.get(index)
-        return pageId === undefined ? { ...part, drawingBox: undefined } : { ...part, pageId, drawingBox: FULL_FIGURE }
+    return named.map((part) => {
+        const key = keyOf(part)
+        if (key !== null && counts.get(key) === 1) return part
+        const refs = session.reviewedSteps
+            .filter((step) => step.parts.some((required) => required.partId === part.partId))
+            .flatMap((step) => step.sourceRefs)
+            .filter((ref) => pageIds.has(ref.pageId))
+        // Prefer a source region over a whole-page citation. A shared procedure figure is context, never an own box.
+        const ref = refs.find((candidate) => candidate.region !== null) ?? refs[0]
+        if (ref === undefined) return { ...part, drawingBox: undefined }
+        const r = ref.region
+        const figureBox = validDrawingBox(r === null ? [0, 0, 1, 1] : [r.x, r.y, r.width, r.height])
+        return { ...part, drawingBox: undefined, pageId: ref.pageId, ...(figureBox ? { figureBox } : {}) }
     })
 }
 
@@ -254,11 +229,16 @@ export function manualPieceContentHash(
             manual.pages.map((page) => [page.contentHash, page.width, page.height, page.mimeType]),
             promptVersion,
             PIECE_CROP_VERSION,
-            manual.parts.map((part) =>
-                part.drawingBox === undefined || part.drawingBox === null
+            manual.parts.map((part) => {
+                const box = part.drawingBox ?? part.figureBox
+                return box == null
                     ? null
-                    : [part.drawingBox, part.pageId === null ? null : (citedContent.get(part.pageId) ?? null)],
-            ),
+                    : [
+                          part.drawingBox ? 'part' : 'figure',
+                          box,
+                          part.pageId === null ? null : (citedContent.get(part.pageId) ?? null),
+                      ]
+            }),
         ]),
     )
 }

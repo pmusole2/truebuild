@@ -383,6 +383,8 @@ describe('parse prompt and validation for carried-over quantities', () => {
         expect(instructions).toMatch(/Set kind to remove, instead of assembly, when the step takes parts off/u)
         expect(instructions).toMatch(/never add a tool the step does not use/u)
         expect(instructions).toMatch(/never give two distinct parts the identical drawingBox on the same page/u)
+        expect(instructions).toMatch(/prefer its own figure in a relevant step drawing/u)
+        expect(instructions).toMatch(/FIRST in name.sourceRefs/u)
         expect(instructions).toMatch(/Language-neutral diagrams remain valid grounding/u)
     })
 

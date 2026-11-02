@@ -399,6 +399,21 @@ describe('piece registry', () => {
         expect(manualPieceContentHash(manual, PIECE_GEOMETRY_PROMPT_VERSION - 1)).not.toBe(hash)
         expect(manualPieceContentHash(citing('page-1', [0.1, 0.2, 0.3, 0.5]))).not.toBe(boxedHash)
         expect(manualPieceContentHash(citing('page-2'))).not.toBe(boxedHash)
+        const originalFigure = citing('page-1')
+        const first = originalFigure.parts[0]!
+        const figure = {
+            ...originalFigure,
+            parts: [{ ...first, drawingBox: undefined, figureBox: first.drawingBox }, ...originalFigure.parts.slice(1)],
+        }
+        expect(manualPieceContentHash(figure)).not.toBe(boxedHash)
+        const changedFigure = {
+            ...figure,
+            parts: [
+                { ...figure.parts[0]!, figureBox: [0.2, 0.2, 0.3, 0.4] as [number, number, number, number] },
+                ...figure.parts.slice(1),
+            ],
+        }
+        expect(manualPieceContentHash(changedFigure)).not.toBe(manualPieceContentHash(figure))
         expect(manualPieceContentHash(citing('page-1', undefined, [page, twin]))).toBe(
             manualPieceContentHash(citing('page-3', undefined, [page, twin])),
         )
@@ -413,12 +428,12 @@ describe('piece registry', () => {
         // An invalid box is no own drawing, so the part takes its step figure (the cited step page, whole frame).
         expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]).toMatchObject({
             pageId: 'demo-page-1',
-            drawingBox: [0, 0, 1, 1],
+            figureBox: [0, 0, 1, 1],
         })
-        expect(manualPieceInputOf(session).parts[0]).toMatchObject({ pageId: 'demo-page-1', drawingBox: [0, 0, 1, 1] })
+        expect(manualPieceInputOf(session).parts[0]).toMatchObject({ pageId: 'demo-page-1', figureBox: [0, 0, 1, 1] })
     })
 
-    it('gives each distinct part its own drawing: a shared grouped box is nobody’s own, and a step figure fills in before none', () => {
+    it('binds own sub-boxes to their drawing page and gives every missing part cited figure context without claiming it as its own drawing', () => {
         const source = createDemoManual()
         const cite = (...pageIds: string[]): { pageId: string; region: null }[] =>
             pageIds.map((pageId) => ({ pageId, region: null }))
@@ -471,17 +486,40 @@ describe('piece registry', () => {
             ],
         }
         const requested = manualPieceInputs(session)
-        const drawn = requested.flatMap((part) =>
-            !part.drawingBox ? [] : [`${part.pageId}|${part.drawingBox.join(',')}`],
-        )
-        expect(new Set(drawn).size).toBe(drawn.length)
-        expect(drawn).not.toContain(`page-1|${grouped.join(',')}`)
         const byPart = new Map(requested.map((part) => [part.partId, part]))
-        // The battery has one step page, so it claims page-3 before blade-b (which could use page-2 or page-3) can.
-        expect(byPart.get('blade-a')).toMatchObject({ pageId: 'page-2', drawingBox: [0, 0, 1, 1] })
-        expect(byPart.get('battery')).toMatchObject({ pageId: 'page-3', drawingBox: [0, 0, 1, 1] })
-        // Both step pages are taken, so blade-b keeps name-only geometry rather than a repeated figure.
-        expect(byPart.get('blade-b')?.drawingBox).toBeUndefined()
+        for (const id of ['blade-a', 'blade-b']) {
+            expect(byPart.get(id)).toMatchObject({ pageId: 'page-2', figureBox: [0, 0, 1, 1] })
+            expect(byPart.get(id)?.drawingBox).toBeUndefined()
+        }
+        expect(byPart.get('battery')).toMatchObject({ pageId: 'page-3', figureBox: [0, 0, 1, 1] })
+        const boxes: [number, number, number, number][] = [
+            [0.1, 0.2, 0.2, 0.3],
+            [0.6, 0.2, 0.2, 0.3],
+        ]
+        const own = manualPieceInputs({
+            ...session,
+            parts: session.parts.map((part, index) =>
+                index < 2
+                    ? {
+                          ...part,
+                          name: { ...part.name, sourceRefs: cite('page-2', 'page-1') },
+                          drawingBox: boxes[index],
+                      }
+                    : part,
+            ),
+        })
+        expect(own.slice(0, 2).map((part) => ({ pageId: part.pageId, box: part.drawingBox }))).toEqual(
+            boxes.map((box) => ({ pageId: 'page-2', box })),
+        )
+        const region = { x: 0.2, y: 0.3, width: 0.5, height: 0.4 }
+        const regional = manualPieceInputs({
+            ...session,
+            reviewedSteps: session.reviewedSteps.map((step) => ({
+                ...step,
+                sourceRefs: [{ pageId: 'page-3', region }],
+            })),
+        })
+        expect(regional.every((part) => part.figureBox?.join(',') === '0.2,0.3,0.5,0.4')).toBe(true)
     })
 
     it('maps only a step’s linked pieces and quantities, and pins only after its pieces settle', async () => {

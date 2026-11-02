@@ -64,9 +64,10 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
 
 async function cropDrawing(part: ManualPieceInput, image: ObservationImage | undefined): Promise<PieceCrop | null> {
     if (part.cutoutUri) return readCrop(part.cutoutUri)
-    if (!image || !part.drawingBox) return null
+    const box = part.drawingBox ?? part.figureBox
+    if (!image || !box) return null
     try {
-        const crop = await refinePieceCrop(image, part.drawingBox)
+        const crop = await refinePieceCrop(image, box)
         return crop && crop.uri.length <= 360_000 ? crop : null
     } catch {
         return null
@@ -79,7 +80,7 @@ function drawingKey(part: ManualPieceInput): string | null {
 
 /**
  * A drawing box that two distinct parts of one batch share is no part's own figure: cropping it for either would give
- * both the same picture. Neither keeps it, so each falls back to name-only geometry rather than a duplicate crop.
+ * both the same claimed own drawing. Drop that claim and any reused cutout; an explicit step figure remains context.
  */
 function ownDrawingParts(parts: readonly ManualPieceInput[]): ManualPieceInput[] {
     const counts = new Map<string, number>()
@@ -89,7 +90,7 @@ function ownDrawingParts(parts: readonly ManualPieceInput[]): ManualPieceInput[]
     }
     return parts.map((part) => {
         const key = drawingKey(part)
-        return key !== null && counts.get(key)! > 1 ? { ...part, drawingBox: undefined } : part
+        return key !== null && counts.get(key)! > 1 ? { ...part, drawingBox: undefined, cutoutUri: undefined } : part
     })
 }
 
