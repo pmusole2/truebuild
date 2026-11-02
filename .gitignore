@@ -128,6 +128,9 @@ logs/
 *.dng
 *.raw
 
+# Expo's required app icon must also be included in EAS archives.
+!/app/assets/icon.png
+
 # Raw manual PDFs and audio captures
 *.pdf
 *.m4a
