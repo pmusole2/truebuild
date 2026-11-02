@@ -14,7 +14,6 @@ import {
     PanResponder,
     Platform,
     Pressable,
-    ScrollView,
     StyleSheet,
     useWindowDimensions,
     View,
@@ -64,6 +63,7 @@ import { useJudge } from '../screens/judge-context'
 import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
 import { PieceViewer, PiecesGrid } from '../pieces/piece-viewer'
+import { ViewerScrollView } from '../pieces/viewer-scroll-lock'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
 import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
@@ -1491,7 +1491,7 @@ function NodeContent({
             )
         case 'Scroll':
             return (
-                <ScrollView
+                <ViewerScrollView
                     ref={path === `${environment.prefix}body` ? environment.rootScroll : undefined}
                     nativeID={mark}
                     horizontal={node.axis === 'horizontal'}
@@ -1517,7 +1517,7 @@ function NodeContent({
                 >
                     {children}
                     {path === `${environment.prefix}body` ? environment.trailing : null}
-                </ScrollView>
+                </ViewerScrollView>
             )
         case 'Divider':
             return (
@@ -2134,7 +2134,7 @@ export function NativeDocumentRenderer({
                     {selected.variant.body.type === 'Scroll' ? (
                         <Node node={selected.variant.body} environment={environment} path={`${selected.prefix}body`} />
                     ) : (
-                        <ScrollView
+                        <ViewerScrollView
                             ref={rootScroll}
                             keyboardShouldPersistTaps="handled"
                             nestedScrollEnabled
@@ -2153,7 +2153,7 @@ export function NativeDocumentRenderer({
                                 path={`${selected.prefix}body`}
                             />
                             {environment.trailing}
-                        </ScrollView>
+                        </ViewerScrollView>
                     )}
                 </Animated.View>
                 {essentialControls}

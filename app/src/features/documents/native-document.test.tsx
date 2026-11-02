@@ -2,7 +2,16 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react-n
 import { StrictMode, useEffect, type ReactElement } from 'react'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
-import { Dimensions, PanResponder, Platform, ScrollView, StyleSheet, View } from 'react-native'
+import {
+    Dimensions,
+    PanResponder,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    View,
+    type GestureResponderEvent,
+    type PanResponderGestureState,
+} from 'react-native'
 import type { TestInstance } from 'test-renderer'
 import {
     assembleDocumentV2,
@@ -1533,7 +1542,7 @@ it('shows each resolved Guide pill once across nested containers without droppin
     }
 })
 
-it('shows a fallback Guide piece once: its linked spec gets a PieceViewer, with one name and one count', async () => {
+it('shows a fallback Guide piece once, and a drag on its 3D view holds the page body still', async () => {
     const { inputs, bindings, controller } = await setup()
     const linkedPart = bindings.session!.parts[0]!
     const pieceId = pieceIdsByPartId(bindings.session!).get(linkedPart.partId)!
@@ -1550,6 +1559,7 @@ it('shows a fallback Guide piece once: its linked spec gets a PieceViewer, with 
         pieces: [{ id: pieceId, name, color: '#5A7CA5', parts: [part] }],
         stepPieces: [{ pieceId, name, quantity: 2, state: 'pending' }],
     }
+    const create = jest.spyOn(PanResponder, 'create')
     const view = await render(
         wrap(<DocumentRenderer document={compose(inputs, [], 'fallback')} bindings={guideBindings} />),
     )
@@ -1560,8 +1570,31 @@ it('shows a fallback Guide piece once: its linked spec gets a PieceViewer, with 
         expect(screen.getAllByText(name)).toHaveLength(1)
         expect(screen.getAllByText(/^×\s*2$/u)).toHaveLength(1)
         expect(within(card).getByTestId('guide-piece-gl-surface')).toBeTruthy()
+        // The guide's 3D view sits in the page body, so its single-finger drag must hold that scroller until release.
+        const event = { nativeEvent: { touches: [] } } as unknown as GestureResponderEvent
+        const touch: PanResponderGestureState = {
+            stateID: 1,
+            moveX: 0,
+            moveY: 0,
+            x0: 0,
+            y0: 0,
+            dx: 0,
+            dy: 0,
+            vx: 0,
+            vy: 0,
+            numberActiveTouches: 1,
+        }
+        const drag = create.mock.calls
+            .map(([candidate]) => candidate)
+            .find((candidate) => candidate.onStartShouldSetPanResponder?.(event, touch) === true)!
+        expect(bodyScroller().props.scrollEnabled).toBe(true)
+        await act(() => drag.onPanResponderGrant?.(event, touch))
+        expect(bodyScroller().props.scrollEnabled).toBe(false)
+        await act(() => drag.onPanResponderRelease?.(event, touch))
+        expect(bodyScroller().props.scrollEnabled).toBe(true)
     } finally {
         await view.unmount()
         controller.dispose()
+        create.mockRestore()
     }
 })

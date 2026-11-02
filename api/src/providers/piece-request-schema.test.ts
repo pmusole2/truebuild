@@ -1,6 +1,22 @@
 import { expect, it } from 'vitest'
-import { pieceSpecSchema } from '@truebuild/contracts'
+import { manualPieceInputSchema, PIECE_SPEC_LIMITS, pieceSpecSchema } from '@truebuild/contracts'
 import { metaOutputSchemas } from './meta-schemas'
+
+it('accepts optional bounded inventory exclusions as data while rejecting malformed or oversized lists', () => {
+    const part = { id: 'panel', name: 'Panel', quantity: 1, label: null, dimensions: null, pageId: null }
+    expect(manualPieceInputSchema.safeParse(part).success).toBe(true)
+    expect(manualPieceInputSchema.parse({ ...part, notPartOfThisPiece: [' Fastener '] })).toHaveProperty(
+        'notPartOfThisPiece',
+        ['Fastener'],
+    )
+    for (const notPartOfThisPiece of [
+        [''],
+        ['a'.repeat(81)],
+        Array.from({ length: PIECE_SPEC_LIMITS.pieces + 1 }, () => 'Other piece'),
+        'Other piece',
+    ])
+        expect(manualPieceInputSchema.safeParse({ ...part, notPartOfThisPiece }).success).toBe(false)
+})
 
 it('requests only the six primitives without descriptions while the shared contract still accepts outline geometry', () => {
     const types = ['box', 'cylinder', 'cone', 'sphere', 'torus', 'capsule']

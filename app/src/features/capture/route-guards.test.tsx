@@ -3,10 +3,12 @@
 import { resolve } from 'node:path'
 import type * as ReactModule from 'react'
 import { router } from 'expo-router'
+import * as ImagePicker from 'expo-image-picker'
 import { act, cleanup, fireEvent, screen, waitFor, within, type RenderResult } from '@testing-library/react-native'
 import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
+import { MediaRejectedError } from '../../media/media-errors'
 import { CaptureController } from './controller'
 import { createController } from './controller-factory'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
@@ -136,6 +138,62 @@ afterEach(async () => {
     await cleanup()
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
+})
+
+it.each([
+    ['unsupported', false, 'Use a JPEG, PNG or WebP photo.'],
+    ['unreadable', true, 'This photo will not open. Save it again as JPEG, PNG or WebP.'],
+] as const)(
+    'shows a rejected %s import on Add and retries the photo picker once',
+    async (failure, hasPages, message) => {
+        const item = entry('guard-manual', 'unparsed')
+        if (!hasPages) item.session.pages = []
+        const controller = await runtime([item])
+        const view = await mount()
+        await act(async () => controller.open('guard-manual'))
+        await act(async () => router.push('/add'))
+        await waitFor(() => expect(view.getPathname()).toBe('/add'))
+        await act(async () => {
+            await controller.importPages(async () => {
+                throw new MediaRejectedError(failure)
+            })
+        })
+        expect(await screen.findByText(message)).toBeTruthy()
+        expect(controller.getSnapshot().pending).toBeNull()
+        jest.spyOn(ImagePicker, 'requestMediaLibraryPermissionsAsync').mockResolvedValue({
+            status: ImagePicker.PermissionStatus.GRANTED,
+            granted: true,
+            canAskAgain: true,
+            expires: 'never',
+            accessPrivileges: 'all',
+        })
+        const picker = jest
+            .spyOn(ImagePicker, 'launchImageLibraryAsync')
+            .mockResolvedValue({ canceled: true, assets: null })
+        await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
+        await waitFor(() => expect(picker).toHaveBeenCalledTimes(1))
+        expect(view.getPathname()).toBe('/add')
+    },
+)
+
+it('retries storage recovery on Add after an import save failure instead of reopening the picker', async () => {
+    const controller = await runtime([entry('guard-manual', 'unparsed')])
+    const view = await mount()
+    await act(async () => controller.open('guard-manual'))
+    await act(async () => router.push('/add'))
+    await waitFor(() => expect(view.getPathname()).toBe('/add'))
+    jest.spyOn(LibraryStorage.prototype, 'save').mockRejectedValueOnce(new Error('Synthetic write failure'))
+    await act(async () => controller.importPages(async () => [source]))
+    expect(controller.getSnapshot().storageReadOnly).toBe(true)
+    expect(
+        await screen.findByText('We could not save on this device. Your earlier work is safe. Try again.'),
+    ).toBeTruthy()
+    const restore = jest.spyOn(controller, 'restore')
+    const picker = jest.spyOn(ImagePicker, 'launchImageLibraryAsync')
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(restore).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(false))
+    expect(picker).not.toHaveBeenCalled()
 })
 
 it.each([

@@ -471,11 +471,21 @@ async function dispatchBatch(
     pageUris: Readonly<Record<string, string>>,
     requestId: string,
 ): Promise<ReadonlyMap<string, Outcome> | null> {
-    const parts: ManualPieceInput[] = batch.map((entry) =>
-        repairIds.includes(entry.part.id)
-            ? { ...geometryPart(entry.part), cutoutUri: entry.cutoutUri, repair: { issueCodes: entry.issueCodes } }
-            : geometryPart(entry.part),
-    )
+    const parts: ManualPieceInput[] = batch.map((entry) => {
+        const part = {
+            ...geometryPart(entry.part),
+            notPartOfThisPiece: [
+                ...new Set(
+                    manual.parts
+                        .filter((other) => other.id !== entry.part.id && other.name !== entry.part.name)
+                        .map((other) => other.name),
+                ),
+            ].slice(0, MAX_PARTS),
+        }
+        return repairIds.includes(entry.part.id)
+            ? { ...part, cutoutUri: entry.cutoutUri, repair: { issueCodes: entry.issueCodes } }
+            : part
+    })
     const pageIds = new Set(parts.flatMap((part) => (part.pageId === null ? [] : [part.pageId])))
     const pages = manual.pages.filter((page) => pageIds.has(page.pageId))
     const request: PieceBatchRequest = {

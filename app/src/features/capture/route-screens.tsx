@@ -155,14 +155,16 @@ function useChoosePages(entry: LibraryEntry | undefined): (replaceIndex?: number
 export function AddRoute(): ReactElement {
     const { state, entry } = useWorkflow()
     const choosePages = useChoosePages(entry)
+    const importFailed = state.pending === null && state.notice !== null && isProblemNotice(state.notice)
     if (!state.loading && entry === undefined) return <Redirect href="/" />
     return (
         <>
             <Stack.Screen options={{ headerShown: false }} />
             <CoachRoute screen="pages">
                 <DocumentSurface
-                    kind={entry?.session.pages.length === 0 ? 'add' : 'pages'}
+                    kind={importFailed ? 'error' : entry?.session.pages.length === 0 ? 'add' : 'pages'}
                     choosePages={(): void => choosePages()}
+                    retry={importFailed && !state.storageReadOnly ? (): void => choosePages() : undefined}
                 />
             </CoachRoute>
         </>

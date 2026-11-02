@@ -1517,7 +1517,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             return execute(PIECES_DEADLINE_MS, signal, async (deadline): Promise<ScreenGeneration> => {
                 const images =
                     input.images.length === 0 ? [] : await validateAndNormalizeImages(input.images, deadline.signal, 8)
-                const parts = input.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
+                const parts = parsed.data.parts.map(({ cutoutUri: _cutoutUri, ...part }) => part)
                 // Geometry shares the production Wonder output budget; high improves background visual fidelity.
                 return dispatchDetailed(
                     'pieces',
