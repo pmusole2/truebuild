@@ -64,6 +64,7 @@ import { useJudge } from '../screens/judge-context'
 import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
 import { PieceViewer, PiecesGrid } from '../pieces/piece-viewer'
+import { pieceIdsByPartId } from '../pieces/piece-registry'
 import type { FrameBindings } from './types'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
@@ -1186,6 +1187,13 @@ function Coverage(): ReactElement {
     )
 }
 
+/** Guide cards own the visible name/count; parsed part ids and registry ids are different namespaces. */
+function guideCardIncludesPart(document: ScreenDocumentV2, bindings: FrameBindings, partId: string): boolean {
+    if (document.kind !== 'guide' || bindings.session === undefined) return false
+    const pieceId = pieceIdsByPartId(bindings.session).get(partId)
+    return pieceId !== undefined && (bindings.stepPieces ?? []).some((item) => item.pieceId === pieceId)
+}
+
 /**
  * One known part in the catalog. A picture is drawn only from the part's own cited figure region; a part cited
  * without a region never borrows the whole manual page as its thumbnail. Its name and count stay, with its own
@@ -1213,6 +1221,7 @@ function PieceTile({
     if (part === undefined) return null
     const session = bindings.session
     const grounded = refs.find((ref) => ref.region != null)
+    const cardOwnsLabel = guideCardIncludesPart(document, bindings, part.partId)
     const label = part.name.state === 'known' ? part.name.value : 'Part'
     return (
         <View nativeID={marked(environment, path)} testID={`part-tile-${node.partId}`} style={styles.stack}>
@@ -1225,8 +1234,8 @@ function PieceTile({
                     testID={`part-hero-${node.partId}`}
                 />
             )}
-            <StatusTag label={label} />
-            {node.showQuantity
+            {cardOwnsLabel ? null : <StatusTag label={label} />}
+            {node.showQuantity && !cardOwnsLabel
                 ? facts?.steps
                       .find((step) => step.stepId === document.bound.stepId)
                       ?.parts.filter((item) => item.partId === part.partId && item.quantity.state === 'known')

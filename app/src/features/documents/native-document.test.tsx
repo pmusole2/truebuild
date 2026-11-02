@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { StrictMode, useEffect, type ReactElement } from 'react'
+import type * as ReactModule from 'react'
+import type * as ReactNativeModule from 'react-native'
 import { Dimensions, PanResponder, Platform, ScrollView, StyleSheet, View } from 'react-native'
 import type { TestInstance } from 'test-renderer'
 import {
@@ -13,6 +15,7 @@ import {
     type ScreenContextInputsV2,
     type ScreenNodeV2,
 } from '@truebuild/contracts'
+import { pieceIdsByPartId } from '../pieces/piece-registry'
 import { partSourceRefs } from '../screens/part-source'
 import { captureUiState } from '../screens/ui-state'
 import { ThemeProvider } from '../../theme/theme'
@@ -27,6 +30,16 @@ import { resolveCameraCapture } from '../capture/essential-controls'
 import { parseNativeMeterMarkers } from '../../ui/native-meter-markers'
 import { recordedDocumentForTest } from './recorded/test-support'
 import { recordedDocument } from '../document-runtime/recorded-runtime'
+
+jest.mock('../pieces/piece-gl', () => ({
+    loadPieceGL: async (): Promise<{ default: () => ReactElement }> => ({
+        default: function TestGLSurface(): ReactElement {
+            const React = jest.requireActual<typeof ReactModule>('react')
+            const { View } = jest.requireActual<typeof ReactNativeModule>('react-native')
+            return React.createElement(View, { testID: 'guide-piece-gl-surface' })
+        },
+    }),
+}))
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -1463,6 +1476,39 @@ it('shows each resolved Guide pill once across nested containers without droppin
             </StrictMode>,
         )
         expect(view.getAllByText('More')).toHaveLength(1)
+    } finally {
+        await view.unmount()
+        controller.dispose()
+    }
+})
+
+it('shows a fallback Guide piece once: its linked spec gets a PieceViewer, with one name and one count', async () => {
+    const { inputs, bindings, controller } = await setup()
+    const linkedPart = bindings.session!.parts[0]!
+    const pieceId = pieceIdsByPartId(bindings.session!).get(linkedPart.partId)!
+    const name = linkedPart.name.state === 'known' ? linkedPart.name.value : 'Part'
+    expect(pieceId).not.toBe(linkedPart.partId)
+    const part = {
+        type: 'box' as const,
+        dimensions: { width: 1, height: 1, depth: 1 },
+        position: [0, 0, 0] as [number, number, number],
+        rotation: [0, 0, 0] as [number, number, number],
+    }
+    const guideBindings: FrameBindings = {
+        ...bindings,
+        pieces: [{ id: pieceId, name, color: '#5A7CA5', parts: [part] }],
+        stepPieces: [{ pieceId, name, quantity: 2, state: 'pending' }],
+    }
+    const view = await render(
+        wrap(<DocumentRenderer document={compose(inputs, [], 'fallback')} bindings={guideBindings} />),
+    )
+    try {
+        const card = screen.getByTestId(`piece-card-${pieceId}`)
+        expect(within(card).queryByTestId('piece-viewer-fallback')).toBeNull()
+        expect(screen.queryByTestId(`piece-placeholder-${pieceId}`)).toBeNull()
+        expect(screen.getAllByText(name)).toHaveLength(1)
+        expect(screen.getAllByText(/^×\s*2$/u)).toHaveLength(1)
+        expect(within(card).getByTestId('guide-piece-gl-surface')).toBeTruthy()
     } finally {
         await view.unmount()
         controller.dispose()

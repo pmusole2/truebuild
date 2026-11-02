@@ -260,6 +260,122 @@ describe('piece registry', () => {
         expect(peak).toBe(2)
     })
 
+    it('starts the opening-step batch and disjoint remaining pieces before either batch settles', async () => {
+        const storage = memoryStorage()
+        const calls: { ids: string[]; marked: boolean }[] = []
+        const releases = new Map<string, () => void>()
+        let releaseAll = false
+        const selectedManual = { ...manual, parts: manual.parts.slice(0, 5) }
+        const selectedHash = manualPieceContentHash(selectedManual)
+        const registry = new PieceRegistry({
+            storage,
+            newId: (): string => 'parallel-opening',
+            generate: async ({ request }): Promise<PieceBatchResult> => {
+                const ids = request.parts.map((part) => part.id)
+                const manifest = JSON.parse(
+                    storage.values.get(`truebuild/pieces/v1/${selectedHash}/manifest`) ?? 'null',
+                ) as { batches: { state: string; ids: string[] }[] } | null
+                calls.push({
+                    ids,
+                    marked:
+                        manifest?.batches.some(
+                            (batch) => batch.state === 'dispatching' && batch.ids.join() === ids.join(),
+                        ) === true,
+                })
+                if (!releaseAll) await new Promise<void>((resolve) => releases.set(ids[0]!, resolve))
+                return {
+                    contentHash: request.contentHash,
+                    results: request.parts.map((part) => ({
+                        id: part.id,
+                        name: part.name,
+                        status: 'passed',
+                        piece: piece(part.id, part.name),
+                        cutoutUri: null,
+                        issueCodes: [],
+                    })),
+                    model: 'muse-wonder-1.0',
+                    effort: 'high',
+                    durationMs: 1,
+                }
+            },
+        })
+        const running = registry.prepare(selectedManual, async () => pageUris, ['part-0'])
+        try {
+            await vi.waitFor(() => expect(calls).toHaveLength(2))
+            expect(calls.map((call) => call.ids)).toEqual([['part-0'], ['part-1', 'part-2', 'part-3', 'part-4']])
+            expect(calls.every((call) => call.marked)).toBe(true)
+            expect(new Set(calls.flatMap((call) => call.ids)).size).toBe(5)
+            releases.get('part-0')!()
+            await vi.waitFor(() => expect(registry.getSnapshot().pieces.map((item) => item.id)).toEqual(['part-0']))
+            expect(registry.getSnapshot().status).toBe('pending')
+            expect(calls).toHaveLength(2)
+        } finally {
+            releaseAll = true
+            for (const release of releases.values()) release()
+            await running
+        }
+        expect(registry.getSnapshot().pieces).toHaveLength(5)
+        expect(calls).toHaveLength(2)
+
+        for (const failure of ['unknown', 'listener'] as const) {
+            const isolatedStorage = memoryStorage()
+            let sends = 0
+            const isolated = new PieceRegistry({
+                storage: isolatedStorage,
+                newId: (): string => `settlement-${failure}`,
+                generate: async ({ request }): Promise<PieceBatchResult | null> => {
+                    sends++
+                    if (request.parts[0]?.id === 'part-0' && failure === 'unknown') return null
+                    return {
+                        contentHash: request.contentHash,
+                        model: 'muse-wonder-1.0',
+                        effort: 'high',
+                        durationMs: 1,
+                        results: request.parts.map((part) => ({
+                            id: part.id,
+                            name: part.name,
+                            status: 'passed',
+                            piece: piece(part.id, part.name),
+                            cutoutUri: null,
+                            issueCodes: [],
+                        })),
+                    }
+                },
+            })
+            const unsubscribe = isolated.subscribe(() => {
+                if (failure === 'listener' && isolated.getSnapshot().pieces.some((item) => item.id === 'part-0')) {
+                    unsubscribe()
+                    throw new Error('display subscriber failed')
+                }
+            })
+            await isolated.prepare(selectedManual, async () => pageUris, ['part-0'])
+            unsubscribe()
+            expect(sends).toBe(2)
+            expect(isolated.getSnapshot().status).toBe('incomplete')
+            let repeatSends = 0
+            const restored = new PieceRegistry({
+                storage: isolatedStorage,
+                newId: (): string => 'must-not-dispatch',
+                generate: async (): Promise<never> => {
+                    repeatSends++
+                    throw new Error('must not repay')
+                },
+            })
+            await restored.prepare(selectedManual, async () => pageUris, ['part-0'])
+            expect(repeatSends).toBe(0)
+            expect(restored.getSnapshot().status).toBe('incomplete')
+            expect(restored.getSnapshot().pieces.map((item) => item.id)).toEqual(
+                failure === 'unknown'
+                    ? ['part-1', 'part-2', 'part-3', 'part-4']
+                    : selectedManual.parts.map((part) => part.id),
+            )
+            const manifest = JSON.parse(
+                isolatedStorage.values.get(`truebuild/pieces/v1/${selectedHash}/manifest`) ?? 'null',
+            ) as { batches: { state: string; ids: string[] }[] }
+            expect(manifest.batches.find((batch) => batch.ids[0] === 'part-1')?.state).toBe('settled')
+        }
+    })
+
     it('keys the cache by prompt version and each box with its cited page content, and keeps only a valid box as written', () => {
         const second = { ...page, pageId: 'page-2', contentHash: 'c'.repeat(64) }
         const twin = { ...page, pageId: 'page-3' }

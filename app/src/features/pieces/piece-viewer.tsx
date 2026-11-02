@@ -74,7 +74,17 @@ function availableGL(): boolean {
     }
 }
 
-function PieceCard({ name, imageUri, height }: { name: string; imageUri?: string; height: number }): ReactElement {
+function PieceCard({
+    name,
+    imageUri,
+    height,
+    showName = true,
+}: {
+    name: string
+    imageUri?: string
+    height: number
+    showName?: boolean
+}): ReactElement {
     const { colors } = useTheme()
     return (
         <View
@@ -90,7 +100,7 @@ function PieceCard({ name, imageUri, height }: { name: string; imageUri?: string
                     accessibilityLabel={name}
                 />
             )}
-            <Heading>{name}</Heading>
+            {showName ? <Heading>{name}</Heading> : null}
         </View>
     )
 }
@@ -115,15 +125,30 @@ type ViewerProps = {
     readonly piece: unknown
     readonly fallbackImageUri?: string
     readonly height?: number
+    /** A guide card already prints the name beside its quantity; the accessible label still names the piece. */
+    readonly showName?: boolean
     /** Render completion samples, used by the explicit fixture route; never starts an animation loop. */
     readonly onFrame?: (timestampMs: number) => void
 }
 
 /** A malformed or unsupported 3D spec has the same quiet 2D card as a device without GL. */
-export function PieceViewer({ piece, fallbackImageUri, height = 320, onFrame }: ViewerProps): ReactElement {
+export function PieceViewer({
+    piece,
+    fallbackImageUri,
+    height = 320,
+    showName = true,
+    onFrame,
+}: ViewerProps): ReactElement {
     const parsed = useMemo(() => validatedPiece(piece), [piece])
     const size = Number.isFinite(height) ? Math.max(160, Math.min(640, height)) : 320
-    const fallback = <PieceCard name={parsed?.name ?? fallbackName(piece)} imageUri={fallbackImageUri} height={size} />
+    const fallback = (
+        <PieceCard
+            name={parsed?.name ?? fallbackName(piece)}
+            imageUri={fallbackImageUri}
+            height={size}
+            showName={showName}
+        />
+    )
     const glAvailable = parsed !== null && availableGL()
     useFallbackLog(parsed?.id ?? null, parsed === null ? 'invalid_spec' : glAvailable ? null : 'gl_unavailable')
     if (parsed === null || !glAvailable) return fallback
@@ -132,6 +157,7 @@ export function PieceViewer({ piece, fallbackImageUri, height = 320, onFrame }: 
             key={JSON.stringify(parsed)}
             piece={parsed}
             height={size}
+            showName={showName}
             fallback={fallback}
             onFrame={onFrame}
         />
@@ -146,11 +172,13 @@ function fingerDistance(event: GestureResponderEvent): number | null {
 function ValidPieceViewer({
     piece,
     height,
+    showName,
     fallback,
     onFrame,
 }: {
     piece: PieceSpec
     height: number
+    showName: boolean
     fallback: ReactElement
     onFrame?: (timestampMs: number) => void
 }): ReactElement {
@@ -320,7 +348,7 @@ function ValidPieceViewer({
     const webEvents = Platform.OS === 'web' ? { onContextLost: (): void => fail('context_lost') } : {}
     return (
         <View style={styles.viewer} testID="piece-viewer">
-            <Heading>{piece.name}</Heading>
+            {showName ? <Heading>{piece.name}</Heading> : null}
             <View
                 ref={host}
                 testID="piece-viewer-gesture-surface"
@@ -445,9 +473,21 @@ function GuidePieceCard({
                 )}
             </View>
             {row.spec === undefined ? (
-                <PiecePlaceholder pieceId={row.pieceId} name={row.name} state={row.state} imageUri={cutout} />
+                <PiecePlaceholder
+                    pieceId={row.pieceId}
+                    name={row.name}
+                    state={row.state}
+                    imageUri={cutout}
+                    showName={false}
+                />
             ) : (
-                <PieceViewer piece={row.spec} fallbackImageUri={cutout} height={240} onFrame={pieceFrame} />
+                <PieceViewer
+                    piece={row.spec}
+                    fallbackImageUri={cutout}
+                    height={240}
+                    showName={false}
+                    onFrame={pieceFrame}
+                />
             )}
             {ready ? <View testID={`piece-viewer-ready-${row.pieceId}`} style={styles.marker} /> : null}
         </View>
@@ -459,11 +499,13 @@ function PiecePlaceholder({
     name,
     state,
     imageUri,
+    showName = true,
 }: {
     pieceId: string
     name: string
     state?: PieceGridItem['state']
     imageUri?: string
+    showName?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     return (
@@ -480,7 +522,7 @@ function PiecePlaceholder({
                     accessibilityLabel={name}
                 />
             )}
-            <Heading>{name}</Heading>
+            {showName ? <Heading>{name}</Heading> : null}
             <Caption>{state === 'unavailable' ? '3D view unavailable' : 'Preparing 3D view'}</Caption>
         </View>
     )

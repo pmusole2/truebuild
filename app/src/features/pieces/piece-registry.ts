@@ -432,19 +432,19 @@ async function restoredSnapshot(storage: KeyValueStorage, manifest: Manifest): P
     return snapshotOf(manifest.status === 'done' ? 'ready' : 'incomplete', manifest.contentHash, entries, timing)
 }
 
-/** The opening step gets singleton batches first; afterward, repairs and fresh parts share the normal bounded waves. */
+/** Opening-step pieces have their own batch while disjoint remaining pieces use the other slot immediately. */
 function takeWave(entries: readonly Entry[], priorityPieceIds: readonly string[]): Entry[][] {
     const pending = entries.filter((entry) => entry.state === 'pending')
-    for (const id of priorityPieceIds) {
-        const firstStepPiece = pending.find((entry) => entry.part.id === id)
-        if (firstStepPiece !== undefined) return [[firstStepPiece]]
-    }
-    const queue = [
-        ...pending.filter((entry) => entry.attempts === 1),
-        ...pending.filter((entry) => entry.attempts === 0),
-    ]
+    const priority = new Set(priorityPieceIds)
+    const opening = pending.filter((entry) => priority.has(entry.part.id))
+    const remaining = pending.filter((entry) => !priority.has(entry.part.id))
     const wave: Entry[][] = []
-    for (let slot = 0; slot < PIECE_CONCURRENCY && queue.length > 0; slot++)
+    if (opening.length > 0) wave.push(opening.slice(0, PIECE_BATCH_LIMIT))
+    const queue = [
+        ...remaining.filter((entry) => entry.attempts === 1),
+        ...remaining.filter((entry) => entry.attempts === 0),
+    ]
+    for (let slot = wave.length; slot < PIECE_CONCURRENCY && queue.length > 0; slot++)
         wave.push(queue.splice(0, PIECE_BATCH_LIMIT))
     return wave
 }
@@ -713,9 +713,13 @@ export class PieceRegistry {
                 run.status = 'halted'
                 break
             }
-            const outcomes = await Promise.all(
-                stored.map(({ batch, repairIds }) =>
-                    dispatchBatch(
+            let unknown = false
+            let persisted = true
+            // Responses may arrive together, but each durable settlement and publish has one writer.
+            let settlements = Promise.resolve()
+            await Promise.all(
+                stored.map(async ({ batch, repairIds, mark }) => {
+                    const outcome = await dispatchBatch(
                         (input) => this.generateWithSlot(generate, input),
                         manual,
                         hash,
@@ -723,32 +727,42 @@ export class PieceRegistry {
                         repairIds,
                         pageUris,
                         this.ports.newId(),
-                    ),
-                ),
+                    )
+                    let durable = false
+                    const settlement = settlements
+                        .then(async () => {
+                            if (outcome === null) {
+                                mark.state = 'unknown'
+                                unknown = true
+                            } else {
+                                mark.state = 'settled'
+                                if (settleBatch(batch, outcome)) {
+                                    mark.state = 'unknown'
+                                    unknown = true
+                                }
+                            }
+                            for (const entry of batch) {
+                                if (entry.cutoutUri !== null) await ledger.save(entry.part.id, entry.cutoutUri)
+                            }
+                            if (!(await persist())) persisted = false
+                            else durable = true
+                            // The opening step appears as soon as its own call settles, even while its sibling runs.
+                            if (persisted) this.publish(hash, snapshotOf('pending', hash, run.entries, run.timing))
+                        })
+                        .catch(() => {
+                            // A failed subscriber or settlement must not discard a sibling that has already been paid for.
+                            // Its dispatch marker remains fail-closed, and this run sends no further waves.
+                            unknown = true
+                            if (!durable) mark.state = 'unknown'
+                        })
+                    settlements = settlement
+                    await settlement
+                }),
             )
-            let unknown = false
-            stored.forEach(({ mark, batch }, index) => {
-                const outcome = outcomes[index]
-                if (outcome === null || outcome === undefined) {
-                    mark.state = 'unknown'
-                    unknown = true
-                    return
-                }
-                mark.state = 'settled'
-                if (settleBatch(batch, outcome)) {
-                    mark.state = 'unknown'
-                    unknown = true
-                }
-            })
-            for (const entry of run.entries) {
-                if (entry.cutoutUri !== null) await ledger.save(entry.part.id, entry.cutoutUri)
-            }
-            if (unknown || !(await persist())) {
+            if (unknown || !persisted) {
                 run.status = 'halted'
                 break
             }
-            // A valid step need not wait for another step's repair batch before its geometry becomes visible.
-            this.publish(hash, snapshotOf('pending', hash, run.entries, run.timing))
         }
         if (run.status === 'done') await persist()
         return snapshotOf(run.status === 'done' ? 'ready' : 'incomplete', hash, run.entries, run.timing)
