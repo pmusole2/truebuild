@@ -83,6 +83,16 @@ function encode(bytes: Uint8Array): string {
 function keyOf(asset: StoredAsset, index: number): string {
     return `${PREFIX}bytes/${asset.id}/${asset.hash}/${index}`
 }
+function assetKey(asset: StoredAsset): string {
+    return `${asset.id}/${asset.hash}`
+}
+function containsChunk(asset: StoredAsset, key: string): boolean {
+    const prefix = `${PREFIX}bytes/${assetKey(asset)}/`
+    if (!key.startsWith(prefix)) return false
+    const suffix = key.slice(prefix.length)
+    const index = Number(suffix)
+    return Number.isInteger(index) && index >= 0 && index < asset.chunks && String(index) === suffix
+}
 function pagesOf(entry: LibraryEntry): ManualPage[] {
     return [...entry.session.pages, ...(entry.capture === null ? [] : [entry.capture.page])]
 }
@@ -100,6 +110,8 @@ export class LibraryStorage {
     private writable = false
     private retainedEntries: LibraryEntry[] = []
     private queue: Promise<void> = Promise.resolve()
+    private readonly reads = new Map<string, { asset: StoredAsset; count: number }>()
+    private cleanupQueued = false
     constructor(
         private readonly kv: KeyValueStorage,
         private readonly digest: Digest,
@@ -152,21 +164,34 @@ export class LibraryStorage {
     }
 
     async readAsset(page: Pick<ManualPage, 'assetId' | 'contentHash'>): Promise<Uint8Array<ArrayBuffer>> {
+        let leased: StoredAsset | undefined
         try {
-            return await this.readVerifiedAsset(page)
+            const asset = this.assets.find(
+                (candidate) => candidate.id === page.assetId && candidate.hash === page.contentHash,
+            )
+            if (asset === undefined) throw new DamagedLocalAssetError('Missing local image')
+            const key = assetKey(asset)
+            const read = this.reads.get(key)
+            if (read === undefined) this.reads.set(key, { asset, count: 1 })
+            else read.count++
+            leased = asset
+            return await this.readVerifiedAsset(asset)
         } catch (error: unknown) {
             this.writable = false
             throw error
+        } finally {
+            if (leased !== undefined) {
+                const key = assetKey(leased)
+                const read = this.reads.get(key)!
+                if (--read.count === 0) {
+                    this.reads.delete(key)
+                    if (!this.assets.some((asset) => assetKey(asset) === key)) this.deferCleanup()
+                }
+            }
         }
     }
 
-    private async readVerifiedAsset(
-        page: Pick<ManualPage, 'assetId' | 'contentHash'>,
-    ): Promise<Uint8Array<ArrayBuffer>> {
-        const asset = this.assets.find((a) => a.id === page.assetId && a.hash === page.contentHash)
-        if (asset === undefined) {
-            throw new DamagedLocalAssetError('Missing local image')
-        }
+    private async readVerifiedAsset(asset: StoredAsset): Promise<Uint8Array<ArrayBuffer>> {
         let encoded = ''
         for (let i = 0; i < asset.chunks; i++) {
             const chunk = await this.kv.getItem(keyOf(asset, i))
@@ -271,9 +296,26 @@ export class LibraryStorage {
     private async cleanup(assets: readonly StoredAsset[]): Promise<void> {
         const keep = new Set(assets.flatMap((a) => Array.from({ length: a.chunks }, (_, i) => keyOf(a, i))))
         for (const key of await this.kv.getAllKeys()) {
-            if (key.startsWith(`${PREFIX}bytes/`) && !keep.has(key)) {
+            if (!this.writable) return
+            // Recheck current registry and read leases at removal, including leases acquired during KV awaits.
+            const protectedChunk =
+                this.assets.some((asset) => containsChunk(asset, key)) ||
+                [...this.reads.values()].some((read) => containsChunk(read.asset, key))
+            if (key.startsWith(`${PREFIX}bytes/`) && !keep.has(key) && !protectedChunk) {
                 await this.kv.removeItem(key)
             }
         }
+    }
+
+    private deferCleanup(): void {
+        if (this.cleanupQueued) return
+        this.cleanupQueued = true
+        // Never await this from a read: restore/commit can await that read while already owning the save queue.
+        const cleanup = this.queue.then(async (): Promise<void> => {
+            this.cleanupQueued = false
+            if (this.writable) await this.cleanup(this.assets)
+        })
+        // Cleanup is best effort after a durable manifest; future commits also reclaim abandoned chunks.
+        this.queue = cleanup.catch((): void => undefined)
     }
 }

@@ -1,0 +1,14 @@
+{
+    "recorded-question-layout-sol-v1": {
+        "rawSha256": "08e90ee2d41ca22ddc9200d3cab7927c16ed188096c7d5061b42e5568bae7e3d",
+        "templateSha256": "8c70d58480215186390538d6046fae515af59f88894318a13e4b81eacf89b6f1"
+    },
+    "recorded-answer-layout-sol-v1": {
+        "rawSha256": "f83f6768f8b2117cee252f7931ac8645e5711a26c0e60943cd08141400033ae8",
+        "templateSha256": "6ce5f5a74bbcd86636ce2662c31d8dbb1a49b2bb0cf222edb09277c2c4b84a4d"
+    },
+    "recorded-result-layout-sol-v1": {
+        "rawSha256": "a9d0cf34dceac70a00385479413c7ea03014db6258e4dd5f836bbc6dca99ee10",
+        "templateSha256": "2fc3f5744ca7a7137a97bd0a799d4fcd4f6be5dff89bf2470f4dee399732c9e6"
+    }
+}

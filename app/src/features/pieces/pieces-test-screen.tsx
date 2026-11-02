@@ -1,0 +1,102 @@
+import { Stack as RouterStack } from 'expo-router'
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { Image, View } from 'react-native'
+import { useOptionalWorkflow } from '../capture/workflow-context'
+import { Card, Screen, Stack } from '../../ui/surface'
+import { Body, Caption, Heading, Title } from '../../ui/text'
+import { PieceViewer, PiecesGrid } from './piece-viewer'
+import { manualPieceContentHash, manualPieceInputOf } from './piece-registry'
+import { createPieces } from './piece-runtime'
+
+const clock = (ms: number | null | undefined): string => (ms == null ? '—' : new Date(ms).toISOString().slice(11, 23))
+const elapsed = (from: number | null | undefined, to: number | null | undefined): string =>
+    from == null || to == null ? '' : ` · ${Math.max(0, to - from)} ms from request`
+
+/**
+ * Development-only view of the live piece registry: the snapshot the workflow actually holds for the selected manual.
+ * It imports only the real registry and viewer, never the viewer fixtures, so its data is what the app persisted.
+ */
+export default function PiecesTestScreen(): ReactElement {
+    const workflow = useOptionalWorkflow()
+    // A direct development URL reloads the workflow without a selection. Read its saved manual, never generate it.
+    const [saved] = useState(() => createPieces({ readOnly: true }))
+    const stored = useSyncExternalStore(saved.subscribe, saved.getSnapshot, saved.getSnapshot)
+    const active = workflow?.piecesSnapshot
+    const session =
+        workflow?.entry?.session ??
+        workflow?.state.entries.find(
+            (entry) => manualPieceContentHash(manualPieceInputOf(entry.session)) === active?.contentHash,
+        )?.session ??
+        workflow?.state.entries.find((entry) => entry.session.parts.length > 0)?.session
+    useEffect(() => {
+        if (session !== undefined) void saved.prepare(manualPieceInputOf(session), async () => ({}))
+    }, [saved, session])
+    const snapshot =
+        active?.contentHash === (session === undefined ? null : manualPieceContentHash(manualPieceInputOf(session)))
+            ? active
+            : stored
+    const rows = [
+        ...(snapshot?.pieces ?? []).map((piece) => ({
+            id: piece.id,
+            name: piece.name,
+            status: 'ready',
+            issues: '',
+            cutout: snapshot?.cutouts[piece.id],
+        })),
+        ...(snapshot?.cards ?? []).map((card) => ({
+            id: card.id,
+            name: card.name,
+            status: card.state,
+            issues: card.issueCodes.join(', '),
+            cutout: snapshot?.cardCutouts[card.id],
+        })),
+    ]
+    return (
+        <>
+            <RouterStack.Screen options={{ headerShown: false }} />
+            <Screen testID="pieces-test" header="hidden">
+                <Stack gap="md">
+                    <Caption>Development · live registry</Caption>
+                    <Title>Manual pieces</Title>
+                    <View testID="pieces-test-status">
+                        <Body>{`Status ${snapshot?.status ?? 'unavailable'} · ${snapshot?.pieces.length ?? 0} ready · ${snapshot?.cards.length ?? 0} not ready`}</Body>
+                    </View>
+                    <Caption>{`Manual ${session?.manualId ?? 'none selected'} · content ${snapshot?.contentHash?.slice(0, 12) ?? 'none'}`}</Caption>
+                    <View testID="pieces-test-timing">
+                        <Caption>{`Requested ${clock(snapshot?.timing.requestedAt)} · Started ${clock(snapshot?.timing.startedAt)} · Ready ${clock(snapshot?.timing.readyAt)}${elapsed(snapshot?.timing.requestedAt, snapshot?.timing.readyAt)}`}</Caption>
+                    </View>
+                    {rows.map((row) => {
+                        const piece = snapshot?.pieces.find((item) => item.id === row.id)
+                        return (
+                            <Card key={row.id}>
+                                <View testID={`pieces-test-row-${row.id}`} style={{ gap: 6 }}>
+                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                        <View style={{ flex: 1 }}>
+                                            {row.cutout === undefined ? (
+                                                <Heading>{row.name}</Heading>
+                                            ) : (
+                                                <Image
+                                                    source={{ uri: row.cutout }}
+                                                    resizeMode="contain"
+                                                    accessibilityLabel={row.name}
+                                                    style={{ width: '100%', height: 240 }}
+                                                />
+                                            )}
+                                        </View>
+                                        {piece === undefined ? null : (
+                                            <View style={{ flex: 1 }}>
+                                                <PieceViewer piece={piece} fallbackImageUri={row.cutout} height={240} />
+                                            </View>
+                                        )}
+                                    </View>
+                                    <Body>{`${row.name} · ${row.status}${row.issues === '' ? '' : ` · ${row.issues}`}`}</Body>
+                                </View>
+                            </Card>
+                        )
+                    })}
+                    <PiecesGrid pieces={snapshot?.pieces ?? []} cutouts={snapshot?.cutouts} />
+                </Stack>
+            </Screen>
+        </>
+    )
+}

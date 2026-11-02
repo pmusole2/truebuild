@@ -12,7 +12,7 @@ export default defineConfig({
         { name: 'capture-chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 } } },
     ],
     webServer: {
-        command: 'EXPO_NO_DOTENV=1 EXPO_OFFLINE=1 npx expo start --web --localhost --port 8181',
+        command: 'EXPO_NO_DOTENV=1 npx expo start --web --localhost --port 8181',
         cwd: __dirname,
         url: 'http://localhost:8181',
         reuseExistingServer: false,

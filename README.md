@@ -33,7 +33,7 @@ npm run start:api
 ngrok http 3001
 
 # Terminal 3: substitute that HTTPS URL and the matching public app shared key.
-EXPO_NO_DOTENV=1 EXPO_OFFLINE=0 \
+EXPO_NO_DOTENV=1 \
 EXPO_PUBLIC_API_BASE_URL=https://YOUR-NGROK-HOST \
 EXPO_PUBLIC_API_SECRET=YOUR-APP-SHARED-KEY \
 EXPO_PUBLIC_PROVIDER_MODE=meta \

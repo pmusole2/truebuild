@@ -1,8 +1,14 @@
+import { asRequestedMetaResponse } from '../test-support/meta-stream'
 import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
-import { createDemoManual, type CheckResult, type SegmentEvent } from '@truebuild/contracts'
-import { modelCheckMetadataSchema, type ModelCheckMetadata } from '@truebuild/contracts/model'
+import { createDemoManual, type CheckResult, type ParsedManual, type SegmentEvent } from '@truebuild/contracts'
+import {
+    modelCheckMetadataSchema,
+    MAX_PARSE_PAGES,
+    PARSE_SPLIT_MESSAGE,
+    type ModelCheckMetadata,
+} from '@truebuild/contracts/model'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,7 +16,8 @@ import { createMetaProvider, type MetaProvider } from '../providers/meta-provide
 import { createSamProvider, type SamProvider } from '../providers/sam'
 import { SharedKeyAuth } from './auth'
 import { ModelCallCounter } from './budget'
-import { createModelHandlers, guardModelFetch, modelOptions } from './model-service'
+import { createModelHandlers, guardModelFetch, modelOptions, runModelParseRepair } from './model-service'
+import { createRuntimeFromEnvironment } from './model-runtime'
 
 const servers: Server[] = []
 afterEach(async (): Promise<void> => {
@@ -334,26 +341,42 @@ describe('protected model composition', (): void => {
         expect(networkCalls).toBe(0)
     })
 
-    it('refuses missing effect context and a second dispatch in the same admitted context', async (): Promise<void> => {
-        const state = await setup()
-        let calls = 0
-        const guarded = guardModelFetch(async (): Promise<Response> => {
-            calls += 1
-            return new Response('{}')
-        })
-        await expect(guarded('https://api.meta.ai/v1/responses', { method: 'POST' })).rejects.toThrow('unauthorized')
-        const handlers = createModelHandlers({
-            ...state,
-            samProvider: null,
-            provider: provider(async (): Promise<CheckResult> => {
-                await guarded('https://api.meta.ai/v1/responses', { method: 'POST' })
-                await guarded('https://api.meta.ai/v1/responses', { method: 'POST' })
-                return checked
-            }),
-        })
-        expect((await handlers.check(request(state))).status).not.toBe(200)
-        expect(calls).toBe(1)
-    })
+    it.each([200, 429, 500, 503])(
+        'refuses missing effect context and a second dispatch after HTTP %i',
+        async (status): Promise<void> => {
+            const state = await setup()
+            let calls = 0
+            const guarded = guardModelFetch(async (): Promise<Response> => {
+                calls += 1
+                return new Response('{}', { status })
+            })
+            await expect(guarded('https://api.meta.ai/v1/responses', { method: 'POST' })).rejects.toThrow(
+                'unauthorized',
+            )
+            const handlers = createModelHandlers({
+                ...state,
+                samProvider: null,
+                provider: provider(async (): Promise<CheckResult> => {
+                    if (status === 200) {
+                        for (const body of [new Uint8Array([1]), new Blob(['one'])]) {
+                            await expect(
+                                guarded('https://api.meta.ai/v1/responses', { method: 'POST', body }),
+                            ).rejects.toThrow('invalid_input')
+                        }
+                        await expect(
+                            guarded(new Request('https://api.meta.ai/v1/responses', { method: 'POST', body: 'one' })),
+                        ).rejects.toThrow('invalid_input')
+                    }
+                    await guarded('https://api.meta.ai/v1/responses', { method: 'POST' })
+                    await guarded('https://api.meta.ai/v1/responses', { method: 'POST' })
+                    return checked
+                }),
+            })
+            expect((await handlers.check(request(state))).status).toBe(409)
+            expect(calls).toBe(1)
+            expect(state.counter.used).toBe(1)
+        },
+    )
 
     it('keeps ALS effect authority through generator consumption and delivers exactly one streamed terminal', async (): Promise<void> => {
         const state = await setup()
@@ -429,7 +452,7 @@ describe('protected model composition', (): void => {
             headers: template.headers,
             body: new ReadableStream<Uint8Array>({
                 pull(controller): void {
-                    now = 9_000
+                    now = 13_000
                     controller.enqueue(bytes)
                 },
                 cancel(): void {
@@ -453,6 +476,7 @@ describe('protected model composition', (): void => {
                 response.end(
                     JSON.stringify({
                         status: 'completed',
+                        model: 'muse-spark-1.3',
                         output: [
                             {
                                 type: 'message',
@@ -572,7 +596,7 @@ describe('protected model composition', (): void => {
     })
 })
 
-describe('per-attempt accounting for documented status retries', () => {
+describe('per-attempt accounting for pre-response network retries', () => {
     it.each([1, 2])('counts every attempt and refuses exhausted retry with cap %i', async (limit) => {
         const state = await setup()
         state.counter = new ModelCallCounter(limit)
@@ -581,36 +605,36 @@ describe('per-attempt accounting for documented status retries', () => {
             apiKey: 'synthetic',
             fetchImpl: guardModelFetch(async () => {
                 calls++
-                return calls === 1
-                    ? new Response('private', { status: 429 })
-                    : Response.json({
-                          status: 'completed',
-                          output: [
-                              {
-                                  type: 'message',
-                                  role: 'assistant',
-                                  status: 'completed',
-                                  content: [
-                                      {
-                                          type: 'output_text',
-                                          text: JSON.stringify({
-                                              ...checked,
-                                              orientationAssessment: 'correct',
-                                              partsAssessment: 'matches',
-                                              connectionAssessment: 'matches',
-                                              checks: [
-                                                  {
-                                                      checkId: 'groove-inward',
-                                                      assessment: 'matches',
-                                                      sourceRefs: checked.sourceRefs,
-                                                  },
-                                              ],
-                                          }),
-                                      },
-                                  ],
-                              },
-                          ],
-                      })
+                if (calls === 1) throw new TypeError('fetch failed')
+                return Response.json({
+                    status: 'completed',
+                    model: 'muse-spark-1.3',
+                    output: [
+                        {
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'completed',
+                            content: [
+                                {
+                                    type: 'output_text',
+                                    text: JSON.stringify({
+                                        ...checked,
+                                        orientationAssessment: 'correct',
+                                        partsAssessment: 'matches',
+                                        connectionAssessment: 'matches',
+                                        checks: [
+                                            {
+                                                checkId: 'groove-inward',
+                                                assessment: 'matches',
+                                                sourceRefs: checked.sourceRefs,
+                                            },
+                                        ],
+                                    }),
+                                },
+                            ],
+                        },
+                    ],
+                })
             }),
         })
         const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
@@ -622,7 +646,7 @@ describe('per-attempt accounting for documented status retries', () => {
     })
 })
 
-it.each([1, 2])('counts SAM status retries against the shared attempt cap %i', async (limit) => {
+it.each([1, 2])('counts the one SAM pre-response network retry against the shared attempt cap %i', async (limit) => {
     const state = await setup()
     state.counter = new ModelCallCounter(limit)
     let calls = 0
@@ -631,7 +655,7 @@ it.each([1, 2])('counts SAM status retries against the shared attempt cap %i', a
         fetchImpl: guardModelFetch(async (_url, init) => {
             expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'sam-3.1', stream: true })
             calls++
-            if (calls === 1) return new Response('private upstream error', { status: 429 })
+            if (calls === 1) throw new TypeError('fetch failed')
             return new Response(
                 'data: {"type":"response.output_text.done","item_id":"m","output_index":0,"content_index":0,"text":""}\n\ndata: {"type":"response.completed"}\n\n',
                 { headers: { 'content-type': 'text/event-stream' } },
@@ -806,6 +830,8 @@ describe('separate authenticated second opinion', () => {
                     secondOpinionModel: 'muse-wonder-1.0',
                 })
                 const primary = await (await handlers.check(request(state))).json()
+                // The primary request has its own outcome line; this case is about the second opinion's one line.
+                log.mockClear()
                 const response = await handlers.secondOpinion(
                     secondaryRequest(state, primary.value.secondOpinion.token),
                 )
@@ -1004,4 +1030,515 @@ it('binds tickets to their runtime and retains primary uncertainty after absolut
     } finally {
         clock.mockRestore()
     }
+})
+
+const META_URL = 'https://api.meta.ai/v1/responses'
+
+function parsed(): ParsedManual {
+    return createDemoManual().rawExtraction!
+}
+
+/** Same clean extraction with one factual unknown, so the provider is allowed exactly one repair. */
+function unresolvedParsed(): ParsedManual {
+    const value = parsed()
+    return {
+        ...value,
+        parts: [{ ...value.parts[0]!, name: { state: 'unknown', reason: 'Name unreadable.' } }, value.parts[1]!],
+    }
+}
+
+function completed(value: unknown): unknown {
+    return {
+        status: 'completed',
+        model: 'muse-spark-1.3',
+        output: [
+            {
+                type: 'message',
+                role: 'assistant',
+                status: 'completed',
+                content: [{ type: 'output_text', text: JSON.stringify(value) }],
+            },
+        ],
+    }
+}
+
+function parseRequest(state: Awaited<ReturnType<typeof setup>>, signal?: AbortSignal): Request {
+    const form = new FormData()
+    form.set(
+        'metadata',
+        JSON.stringify({
+            mode: 'model',
+            requestId: 'parse-1',
+            binding: {
+                kind: 'manual',
+                manualId: state.metadata.session.manualId,
+                revision: state.metadata.session.revision,
+            },
+            pages: state.metadata.session.pages,
+        }),
+    )
+    form.set('source-0', new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'source.png')
+    return new Request('http://127.0.0.1:3001/api/manuals/parse', {
+        method: 'POST',
+        headers: { 'x-truebuild-key': state.key, origin: 'http://localhost:8081' },
+        body: form,
+        signal,
+    })
+}
+
+/** Records the provider-visible signal and lets a test decide the moment the parse settles. */
+function gatedParse(): {
+    entered: Promise<void>
+    signals: AbortSignal[]
+    parseManual: MetaProvider['parseManual']
+    release: (value: ParsedManual) => void
+} {
+    const signals: AbortSignal[] = []
+    let markEntered = (): void => {}
+    let finish = (_value: ParsedManual): void => {}
+    const entered = new Promise<void>((resolve): void => {
+        markEntered = resolve
+    })
+    return {
+        entered,
+        signals,
+        parseManual: (_input, signal): Promise<ParsedManual> => {
+            signals.push(signal)
+            markEntered()
+            return new Promise<ParsedManual>((resolve): void => {
+                finish = resolve
+            })
+        },
+        release: (value): void => finish(value),
+    }
+}
+
+/** Reports the refusal reason so a test can assert the exact trusted-boundary decision. */
+async function outcome(run: () => Promise<unknown>): Promise<string> {
+    try {
+        await run()
+        return 'accepted'
+    } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+    }
+}
+
+describe('one-use parse repair grant', (): void => {
+    it('refuses the runner outside any admitted effect context', async (): Promise<void> => {
+        let work = 0
+        expect(await outcome(() => runModelParseRepair(async () => (work += 1)))).toBe('unauthorized')
+        expect(work).toBe(0)
+    })
+
+    it.each([
+        { label: 'before any dispatch', status: null },
+        { label: 'after a 429 first response', status: 429 },
+        { label: 'after a 500 first response', status: 500 },
+        { label: 'after a 503 first response', status: 503 },
+    ])('denies repair $label without spending budget', async ({ status }): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(3)
+        const guarded = guardModelFetch(async (): Promise<Response> => new Response('{}', { status: status ?? 200 }))
+        let work = 0
+        let refusal = ''
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async (): Promise<CheckResult> => checked),
+                parseManual: async (): Promise<ParsedManual> => {
+                    if (status !== null) await guarded(META_URL, { method: 'POST', body: 'first' })
+                    refusal = await outcome(() => runModelParseRepair(async () => (work += 1)))
+                    return parsed()
+                },
+            },
+        })
+        expect((await handlers.parse(parseRequest(state))).status).toBe(200)
+        expect(refusal).toBe('unauthorized')
+        expect(work).toBe(0)
+        expect(state.counter.used).toBe(1)
+    })
+
+    it('refuses the parse-only grant from a check route context', async (): Promise<void> => {
+        const state = await setup()
+        const guarded = guardModelFetch(async (): Promise<Response> => new Response('{}', { status: 200 }))
+        let refusal = ''
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: provider(async (): Promise<CheckResult> => {
+                await guarded(META_URL, { method: 'POST', body: 'check' })
+                refusal = await outcome(() => runModelParseRepair(async () => 'repair'))
+                return checked
+            }),
+        })
+        await handlers.check(request(state))
+        expect(refusal).toBe('unauthorized')
+    })
+
+    it('grants one fresh child dispatch after a first 200 and refuses reuse, recursion and child replay', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(2)
+        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => new Response('{}', { status: 200 }))
+        const guarded = guardModelFetch(outbound)
+        const refusals: string[] = []
+        let repaired = ''
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async (): Promise<CheckResult> => checked),
+                parseManual: async (): Promise<ParsedManual> => {
+                    await guarded(META_URL, { method: 'POST', body: 'first' })
+                    repaired = await runModelParseRepair(async (): Promise<string> => {
+                        refusals.push(await outcome(() => runModelParseRepair(async () => 'nested')))
+                        await guarded(META_URL, { method: 'POST', body: 'second' })
+                        refusals.push(await outcome(() => guarded(META_URL, { method: 'POST', body: 'third' })))
+                        return 'repaired'
+                    })
+                    refusals.push(await outcome(() => runModelParseRepair(async () => 'reuse')))
+                    return parsed()
+                },
+            },
+        })
+        expect((await handlers.parse(parseRequest(state))).status).toBe(200)
+        expect(repaired).toBe('repaired')
+        expect(refusals).toEqual(['unauthorized', 'duplicate_request', 'unauthorized'])
+        expect(outbound).toHaveBeenCalledTimes(2)
+        expect(state.counter.used).toBe(2)
+    })
+
+    it('keeps an ordinary parse to one changed-body dispatch and refuses foreign routes', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(2)
+        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => new Response('{}', { status: 200 }))
+        const guarded = guardModelFetch(outbound)
+        const refusals: string[] = []
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async (): Promise<CheckResult> => checked),
+                parseManual: async (): Promise<ParsedManual> => {
+                    await guarded(META_URL, { method: 'POST', body: 'first' })
+                    refusals.push(await outcome(() => guarded(META_URL, { method: 'POST', body: 'changed' })))
+                    refusals.push(await outcome(() => guarded('https://api.meta.ai/v1/other', { method: 'POST' })))
+                    return parsed()
+                },
+            },
+        })
+        expect((await handlers.parse(parseRequest(state))).status).toBe(200)
+        expect(refusals).toEqual(['duplicate_request', 'unauthorized'])
+        expect(outbound).toHaveBeenCalledTimes(1)
+        expect(state.counter.used).toBe(1)
+    })
+
+    it('keeps the first parse and never dispatches when the repair budget is exhausted', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(1)
+        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => new Response('{}', { status: 200 }))
+        const guarded = guardModelFetch(outbound)
+        let refusal = ''
+        let work = 0
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async (): Promise<CheckResult> => checked),
+                parseManual: async (): Promise<ParsedManual> => {
+                    await guarded(META_URL, { method: 'POST', body: 'first' })
+                    refusal = await outcome(() => runModelParseRepair(async () => (work += 1)))
+                    return parsed()
+                },
+            },
+        })
+        expect((await handlers.parse(parseRequest(state))).status).toBe(200)
+        expect(refusal).toBe('budget_exhausted')
+        expect(work).toBe(0)
+        expect(outbound).toHaveBeenCalledTimes(1)
+        expect(state.counter.used).toBe(1)
+    })
+
+    it('disables the grant after the parent caller cancels', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(3)
+        const cancel = new AbortController()
+        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => new Response('{}', { status: 200 }))
+        const guarded = guardModelFetch(outbound)
+        let refusal = ''
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async (): Promise<CheckResult> => checked),
+                parseManual: async (): Promise<ParsedManual> => {
+                    await guarded(META_URL, { method: 'POST', body: 'first' })
+                    cancel.abort()
+                    refusal = await outcome(() => runModelParseRepair(async () => 'repair'))
+                    return parsed()
+                },
+            },
+        })
+        expect((await handlers.parse(parseRequest(state, cancel.signal))).status).toBe(502)
+        expect(refusal).toBe('cancelled')
+        expect(outbound).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('parse route timing with the default one-hundred-and-seventy second budget', (): void => {
+    it('accepts a one-hundred-and-twenty-second parse inside the route budget', async (): Promise<void> => {
+        const state = await setup()
+        const gate = gatedParse()
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: { ...provider(async (): Promise<CheckResult> => checked), parseManual: gate.parseManual },
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        try {
+            const pending = handlers.parse(parseRequest(state))
+            await gate.entered
+            await vi.advanceTimersByTimeAsync(120_000)
+            gate.release(parsed())
+            expect((await pending).status).toBe(200)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('times out a hung parse at exactly the one-hundred-and-seventy second route budget', async (): Promise<void> => {
+        const state = await setup()
+        const gate = gatedParse()
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: { ...provider(async (): Promise<CheckResult> => checked), parseManual: gate.parseManual },
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        try {
+            const pending = handlers.parse(parseRequest(state))
+            await gate.entered
+            await vi.advanceTimersByTimeAsync(169_999)
+            let settled = false
+            void pending.then((): void => {
+                settled = true
+            })
+            await Promise.resolve()
+            expect(settled).toBe(false)
+
+            await vi.advanceTimersByTimeAsync(1)
+            const response = await pending
+            expect(response.status).toBe(504)
+            expect(await response.json()).toMatchObject({ code: 'timeout' })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('still cancels the provider when the caller disconnects inside the route budget', async (): Promise<void> => {
+        const state = await setup()
+        const gate = gatedParse()
+        const cancel = new AbortController()
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: { ...provider(async (): Promise<CheckResult> => checked), parseManual: gate.parseManual },
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        try {
+            const pending = handlers.parse(parseRequest(state, cancel.signal))
+            await gate.entered
+            await vi.advanceTimersByTimeAsync(10_000)
+            cancel.abort()
+            const response = await pending
+            expect(response.status).toBe(502)
+            expect(await response.json()).toMatchObject({ code: 'provider_error' })
+            expect(gate.signals[0]?.aborted).toBe(true)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+})
+
+describe('Meta provider parse repair through the guarded transport', (): void => {
+    it('wires the one-use repair grant through the configured runtime', async (): Promise<void> => {
+        const state = await setup()
+        const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
+            if (outbound.mock.calls.length === 1) throw new TypeError('fetch failed')
+            return asRequestedMetaResponse(
+                Response.json(completed(outbound.mock.calls.length === 2 ? unresolvedParsed() : parsed())),
+                init,
+            )
+        })
+        vi.spyOn(console, 'info').mockImplementation((): void => {})
+        const runtime = createRuntimeFromEnvironment(
+            {
+                PROVIDER_MODE: 'meta',
+                MODEL_API_KEY: '<synthetic>',
+                API_SHARED_SECRET: state.key,
+                MODEL_CALL_LIMIT_PER_DAY: '3',
+            },
+            outbound,
+        )
+        const response = await runtime.model.parse(parseRequest(state))
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            status: 'ok',
+            value: { parts: parsed().parts, steps: parsed().steps },
+        })
+        expect(outbound).toHaveBeenCalledTimes(3)
+        expect(runtime.counter.used).toBe(3)
+    })
+
+    it('spends one changed repair after an unknown critical fact and returns the clean repaired parse', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(2)
+        const bodies: string[] = []
+        const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
+            bodies.push(String(init?.body))
+            return asRequestedMetaResponse(
+                Response.json(completed(bodies.length === 1 ? unresolvedParsed() : parsed())),
+                init,
+            )
+        })
+        const actual = createMetaProvider({
+            apiKey: 'synthetic-test-key',
+            fetchImpl: guardModelFetch(outbound),
+            runParseRepair: runModelParseRepair,
+        })
+        const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
+        const response = await handlers.parse(parseRequest(state))
+        expect(response.status).toBe(200)
+        expect(outbound).toHaveBeenCalledTimes(2)
+        expect(state.counter.used).toBe(2)
+        expect(bodies[0]).not.toBe(bodies[1])
+        expect(await response.json()).toMatchObject({
+            status: 'ok',
+            requestId: 'parse-1',
+            binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+            value: { parts: parsed().parts, steps: parsed().steps, unknowns: [] },
+        })
+    })
+
+    it('keeps the first real parse with the budget at one and sends no second request', async (): Promise<void> => {
+        const state = await setup()
+        state.counter = new ModelCallCounter(1)
+        const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> =>
+            asRequestedMetaResponse(Response.json(completed(unresolvedParsed())), init),
+        )
+        const actual = createMetaProvider({
+            apiKey: 'synthetic-test-key',
+            fetchImpl: guardModelFetch(outbound),
+            runParseRepair: runModelParseRepair,
+        })
+        const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
+        const response = await handlers.parse(parseRequest(state))
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            value: { parts: [{ partId: 'side-panel', name: { state: 'unknown' } }, expect.anything()] },
+        })
+        expect(outbound).toHaveBeenCalledTimes(1)
+        expect(state.counter.used).toBe(1)
+    })
+})
+
+describe('parse page limit and language at the route boundary', (): void => {
+    async function pagedRequest(
+        state: Awaited<ReturnType<typeof setup>>,
+        pageCount: number,
+        extra: Record<string, unknown> = {},
+    ): Promise<Request> {
+        const form = new FormData()
+        const pages = Array.from({ length: pageCount }, (_unused, index) => ({
+            ...state.metadata.session.pages[0]!,
+            ...(index === 0 ? {} : { pageId: `page-${index + 1}`, assetId: `asset-${index + 1}` }),
+        }))
+        form.set(
+            'metadata',
+            JSON.stringify({
+                mode: 'model',
+                requestId: 'parse-paged',
+                binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+                pages,
+                ...extra,
+            }),
+        )
+        pages.forEach((_page, index): void => {
+            form.set(`source-${index}`, new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'source.png')
+        })
+        return new Request('http://127.0.0.1:3001/api/manuals/parse', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': state.key, origin: 'http://localhost:8081' },
+            body: form,
+        })
+    }
+
+    it.each([9, 22])(
+        'rejects %i pages with a bound split message before claiming budget',
+        async (count): Promise<void> => {
+            const state = await setup()
+            const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => Response.json(completed(parsed())))
+            const actual = createMetaProvider({
+                apiKey: 'synthetic-test-key',
+                fetchImpl: guardModelFetch(outbound),
+                runParseRepair: runModelParseRepair,
+            })
+            const handlers = createModelHandlers({ ...state, provider: actual, samProvider: null })
+            const response = await handlers.parse(await pagedRequest(state, count))
+            expect(response.status).toBe(400)
+            expect(await response.json()).toMatchObject({
+                status: 'unavailable',
+                code: 'invalid_input',
+                retryable: false,
+                message: PARSE_SPLIT_MESSAGE,
+                requestId: 'parse-paged',
+                binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+            })
+            expect(MAX_PARSE_PAGES).toBe(8)
+            expect(PARSE_SPLIT_MESSAGE).toContain('8 pages')
+            expect(state.counter.used).toBe(0)
+            expect(outbound).not.toHaveBeenCalled()
+        },
+    )
+
+    it('does not add the split message to other invalid bodies', async (): Promise<void> => {
+        const state = await setup()
+        const handlers = createModelHandlers({
+            ...state,
+            provider: provider(async (): Promise<CheckResult> => checked),
+            samProvider: null,
+        })
+        const response = await handlers.parse(await pagedRequest(state, 1, { language: 'not a language' }))
+        expect(response.status).toBe(400)
+        expect(await response.json()).not.toHaveProperty('message')
+        expect(state.counter.used).toBe(0)
+    })
+
+    it('admits exactly eight pages and carries the selected language to the provider', async (): Promise<void> => {
+        const state = await setup()
+        let seen: { pages: number; language?: string } | undefined
+        const testProvider = provider(async (): Promise<CheckResult> => checked)
+        testProvider.parseManual = async (value): Promise<ParsedManual> => {
+            seen = { pages: value.pages.length, language: value.language }
+            return parsed()
+        }
+        const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
+        const response = await handlers.parse(await pagedRequest(state, 8, { language: 'es' }))
+        expect(response.status).toBe(200)
+        expect(seen).toEqual({ pages: 8, language: 'es' })
+        expect(state.counter.used).toBe(1)
+    })
+
+    it('leaves language absent for the provider default when the client sends none', async (): Promise<void> => {
+        const state = await setup()
+        let seen: string | undefined = 'unset'
+        const testProvider = provider(async (): Promise<CheckResult> => checked)
+        testProvider.parseManual = async (value): Promise<ParsedManual> => {
+            seen = value.language
+            return parsed()
+        }
+        const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
+        expect((await handlers.parse(await pagedRequest(state, 1))).status).toBe(200)
+        expect(seen).toBeUndefined()
+    })
 })

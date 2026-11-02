@@ -17,18 +17,18 @@ describe('typography primitives', () => {
         expect(screen.queryByRole('header', { name: 'Seat the divider' })).toBeNull()
     })
 
-    it('reading text and labels scale to 200 percent of the system size', async () => {
+    it('reading text and labels scale to 300 percent of the system size', async () => {
         await render(
             <>
                 <Body>Groove faces inward</Body>
                 <Label>Part 1 of 2</Label>
             </>,
         )
-        expect(screen.getByText('Groove faces inward')).toHaveProp('maxFontSizeMultiplier', 2)
-        expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 2)
+        expect(screen.getByText('Groove faces inward')).toHaveProp('maxFontSizeMultiplier', 0)
+        expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 0)
     })
 
-    it('captions and labels are muted, and labels stay uppercase in the mono stamp style', async () => {
+    it('captions and labels are muted, and labels retain their uppercase hierarchy', async () => {
         await render(
             <>
                 <Caption>Simulated photo</Caption>

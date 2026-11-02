@@ -3,8 +3,8 @@ import { randomUUID } from 'expo-crypto'
 import type { ImageBytes } from './model-client'
 
 const owned = new WeakMap<FormData, File[]>()
-/** React Native multipart consumes local URI parts; it cannot construct Blob from typed-array bytes.
- * The platform-specific append extension is invoked here only; no wire/client contract changes.
+/** Expo's native multipart converter reads cached files through bytes().
+ * Keep explicit wire filenames/MIME types and temp-file ownership until fetch settles.
  */
 export function appendMultipartImage(form: FormData, name: string, image: ImageBytes, filename: string): void {
     const file = new File(Paths.cache, `truebuild-upload-${randomUUID()}-${filename}`)
@@ -12,7 +12,10 @@ export function appendMultipartImage(form: FormData, name: string, image: ImageB
     files.push(file)
     owned.set(form, files)
     file.writeSync(image.bytes)
-    Reflect.apply(form.append, form, [name, { uri: file.uri, name: filename, type: image.mimeType }])
+    Reflect.apply(form.append, form, [
+        name,
+        { uri: file.uri, name: filename, type: image.mimeType, bytes: file.bytes.bind(file) },
+    ])
 }
 export function releaseMultipartImages(form: FormData): void {
     for (const file of owned.get(form) ?? []) {

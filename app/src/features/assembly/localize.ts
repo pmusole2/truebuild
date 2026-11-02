@@ -5,7 +5,7 @@ import { observationForSegmentation, type Observation } from './observation'
 import { observationImage, stoppedResult } from './model-check'
 
 export type LocateRequest = {
-    readonly client: ModelApiClient
+    readonly client: Pick<ModelApiClient, 'segments'>
     readonly requestId: string
     readonly binding: CaptureBinding
     readonly prompt: string

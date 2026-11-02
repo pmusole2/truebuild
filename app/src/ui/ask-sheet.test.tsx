@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react-native'
 import { Text } from 'react-native'
 import { AskSheet, type AskPart } from './ask-sheet'
 
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
+
 const PARTS: readonly AskPart[] = [
     { id: 'side-panel', label: 'Side panel' },
     { id: 'divider', label: 'Divider shelf' },
@@ -26,6 +28,45 @@ function renderAsk(overrides: Partial<Parameters<typeof AskSheet>[0]> = {}): Ret
 }
 
 describe('AskSheet', () => {
+    it('announces a slow answer in the visible composer while keeping Send disabled', async () => {
+        const onSubmit = jest.fn()
+        await renderAsk({ busy: true, stillThinking: true, onSubmit })
+        expect(screen.getByText('Still thinking…')).toBeTruthy()
+        const status = screen.getByLabelText('Still thinking…')
+        expect(status.props.accessibilityLiveRegion).toBe('polite')
+        expect(status.props.nativeID).toBe('truebuild-render-origin:shell')
+        await fireEvent.press(screen.getByRole('button', { name: 'Send question' }))
+        expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it.each(['Ask', 'Ask about this step', 'Send'])(
+        'includes the visible %s action in its accessible name',
+        async (submitLabel) => {
+            const onSubmit = jest.fn()
+            await renderAsk({ submitLabel, onSubmit })
+            const submit = screen.getByRole('button', { name: submitLabel })
+            expect(screen.getByText(submitLabel)).toBeTruthy()
+            expect(
+                screen.getByText(
+                    `Type a question, or use your keyboard’s dictation. Questions are sent only when you press ${submitLabel}.`,
+                ),
+            ).toBeTruthy()
+            await fireEvent.press(submit)
+            expect(onSubmit).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it('keeps the original default caption and hides the slow status when idle', async () => {
+        await renderAsk({ stillThinking: true, busy: false })
+        expect(
+            screen.getByText(
+                'Type a question, or use your keyboard’s dictation. Questions are sent only when you press Send.',
+            ),
+        ).toBeTruthy()
+        expect(screen.queryByText('Still thinking…')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Send question' })).not.toBeDisabled()
+    })
+
     it('reports the chosen part, never a whole-step target', async () => {
         const onSelectPart = jest.fn()
         await renderAsk({ onSelectPart, selectedPartId: null })

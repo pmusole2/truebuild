@@ -1,0 +1,264 @@
+import { createDemoManual, layoutSchema, type ManualStep } from '@truebuild/contracts'
+import { describe, expect, it } from 'vitest'
+
+import { stepFixtures } from '../test-support/step-fixtures'
+import { fallbackLayout, resolveLayout, withResolvedLayout, type LayoutContext } from './layout'
+
+// Synthetic demo manual and hand-written proposals: unit data only, not recorded or live model output.
+const session = createDemoManual()
+const step1 = session.reviewedSteps[0]!
+const step2 = session.reviewedSteps[1]!
+const context = (step: ManualStep = step1, decision: LayoutContext['decision'] = 'refuse'): LayoutContext => ({
+    step,
+    decision,
+    pageIds: ['demo-page-1'],
+})
+const proposal = (...components: unknown[]): unknown => ({ components })
+
+describe('layout reference resolution against the current step', (): void => {
+    it('keeps a fully valid proposal in its proposed order and marks it as model-proposed', (): void => {
+        const components = [
+            { type: 'orientation', partId: 'side-panel' },
+            { type: 'part_grid', partIds: ['side-panel'] },
+            { type: 'visible_checks', checkIds: ['groove-inward'] },
+            { type: 'source_diagram', sourceRefIndexes: [0] },
+            { type: 'connection', partIds: ['side-panel'] },
+            { type: 'recovery', actionIds: ['turn-panel'] },
+        ]
+        expect(resolveLayout({ components }, context())).toEqual({ source: 'model', components })
+    })
+
+    it.each([
+        ['a part from another step', proposal({ type: 'part_grid', partIds: ['divider'] })],
+        ['an orientation of another part', proposal({ type: 'orientation', partId: 'divider' })],
+        ['a connection part outside the step', proposal({ type: 'connection', partIds: ['side-panel', 'divider'] })],
+        ['an unknown check', proposal({ type: 'visible_checks', checkIds: ['divider-seated'] })],
+        ['an out-of-range diagram index', proposal({ type: 'source_diagram', sourceRefIndexes: [1] })],
+        ['an unknown recovery action', proposal({ type: 'recovery', actionIds: ['reseat-divider'] })],
+        [
+            'a valid and an invalid component together',
+            proposal({ type: 'part_grid', partIds: ['side-panel'] }, { type: 'recovery', actionIds: ['x'] }),
+        ],
+        ['an unknown component', proposal({ type: 'banner' })],
+        ['extra keys', { components: [{ type: 'part_grid', partIds: ['side-panel'] }], css: 'x' }],
+        [
+            'an oversized list',
+            proposal(...Array.from({ length: 9 }, () => ({ type: 'part_grid', partIds: ['side-panel'] }))),
+        ],
+    ])('replaces %s with the deterministic step fallback', (_name, bad): void => {
+        expect(resolveLayout(bad, context())).toEqual(fallbackLayout(context()))
+    })
+
+    it('falls back when the proposal is missing, null, or not an object', (): void => {
+        for (const missing of [undefined, null, 'text', 3, []]) {
+            expect(resolveLayout(missing, context())).toEqual(fallbackLayout(context()))
+        }
+    })
+
+    it("uses another step's ids only when that step is the current one", (): void => {
+        const divider = proposal({ type: 'part_grid', partIds: ['divider'] })
+        expect(resolveLayout(divider, context(step1)).source).toBe('fallback')
+        expect(resolveLayout(divider, context(step2)).source).toBe('model')
+    })
+
+    it('allows recovery only for a refusal with a human-reviewed correction', (): void => {
+        const recovery = proposal({ type: 'recovery', actionIds: ['turn-panel'] })
+        expect(resolveLayout(recovery, context(step1, 'refuse')).source).toBe('model')
+        for (const decision of ['pass', 'cannot_verify', undefined] as const) {
+            expect(resolveLayout(recovery, { ...context(step1), decision }).source).toBe('fallback')
+        }
+        const unreviewed = { ...step1, correction: { ...step1.correction!, reviewed: false } }
+        expect(resolveLayout(recovery, context(unreviewed, 'refuse')).source).toBe('fallback')
+        expect(resolveLayout(recovery, context({ ...step1, correction: null }, 'refuse')).source).toBe('fallback')
+    })
+
+    it('rejects diagram indexes whose page was not supplied and unknown orientation or connection facts', (): void => {
+        const diagram = proposal({ type: 'source_diagram', sourceRefIndexes: [0] })
+        expect(resolveLayout(diagram, { ...context(), pageIds: ['other-page'] }).source).toBe('fallback')
+        const unknown = { state: 'unknown', reason: 'Synthetic unknown' } as const
+        const unresolved = { ...step1, orientation: unknown, connection: unknown }
+        expect(resolveLayout(proposal({ type: 'orientation', partId: 'side-panel' }), context(unresolved)).source).toBe(
+            'fallback',
+        )
+        expect(
+            resolveLayout(proposal({ type: 'connection', partIds: ['side-panel'] }), context(unresolved)).source,
+        ).toBe('fallback')
+    })
+})
+
+describe('deterministic fallback from validated step data', (): void => {
+    it('derives ordered references that the public schema accepts', (): void => {
+        const layout = fallbackLayout(context(step1, 'refuse'))
+        expect(layout).toEqual({
+            source: 'fallback',
+            components: [
+                { type: 'part_grid', partIds: ['side-panel'] },
+                { type: 'orientation', partId: 'side-panel' },
+                { type: 'connection', partIds: ['side-panel'] },
+                { type: 'visible_checks', checkIds: ['groove-inward'] },
+                { type: 'source_diagram', sourceRefIndexes: [0] },
+                { type: 'recovery', actionIds: ['turn-panel'] },
+            ],
+        })
+        expect(layoutSchema.safeParse(layout).success).toBe(true)
+        expect(fallbackLayout(context(step1, 'refuse'))).toEqual(layout)
+    })
+
+    it('omits recovery without a refusal, omits unknown facts, and bounds oversized steps', (): void => {
+        expect(fallbackLayout(context(step1, 'pass')).components.map((c) => c.type)).not.toContain('recovery')
+        const unknown = { state: 'unknown', reason: 'Synthetic unknown' } as const
+        const sparse = { ...step1, orientation: unknown, connection: unknown, visibleChecks: [], sourceRefs: [] }
+        expect(fallbackLayout(context(sparse, 'pass'))).toEqual({
+            source: 'fallback',
+            components: [{ type: 'part_grid', partIds: ['side-panel'] }],
+        })
+        const many = Array.from({ length: 12 }, (_, i) => ({ ...step1.parts[0]!, partId: `part-${i}` }))
+        const grid = fallbackLayout(context({ ...step1, parts: many, orientation: unknown }, 'pass')).components[0]
+        expect(grid).toEqual({ type: 'part_grid', partIds: many.slice(0, 8).map((part) => part.partId) })
+        expect(fallbackLayout(context({ ...sparse, parts: [] }, 'pass'))).toEqual({
+            source: 'fallback',
+            components: [],
+        })
+    })
+})
+
+describe('applying the flag at the result boundary', (): void => {
+    const input = { session, binding: { stepId: 'step-1' }, sourceImages: [{ page: session.pages[0]! }] }
+    const verdict = { decision: 'cannot_verify' as const, reason: 'Synthetic', sourceRefs: [], missingEvidence: [] }
+
+    it('removes any proposal when disabled without touching the verdict', (): void => {
+        const result = { ...verdict, layout: { components: [{ type: 'part_grid' as const, partIds: ['side-panel'] }] } }
+        const applied = withResolvedLayout(result, input, false)
+        expect(applied).toEqual(verdict)
+        expect(applied).not.toHaveProperty('layout')
+    })
+
+    it('resolves or falls back when enabled and keeps every other field', (): void => {
+        const proposed = { components: [{ type: 'part_grid' as const, partIds: ['side-panel'] }] }
+        expect(withResolvedLayout({ ...verdict, layout: proposed }, input, true)).toEqual({
+            ...verdict,
+            layout: { source: 'model', ...proposed },
+        })
+        const missing = withResolvedLayout(verdict, input, true)
+        expect(missing).toMatchObject({ ...verdict, layout: { source: 'fallback' } })
+    })
+
+    it('leaves the result without a layout when the bound step is not in the session', (): void => {
+        expect(withResolvedLayout(verdict, { ...input, binding: { stepId: 'step-9' } }, true)).toEqual(verdict)
+    })
+})
+
+describe.each(stepFixtures())('next-part and target regions on the $name manual', (fixture): void => {
+    const input = {
+        session: fixture.session,
+        binding: { stepId: fixture.stepId },
+        sourceImages: fixture.session.pages.map((page) => ({ page })),
+    }
+    const verdict = { decision: 'cannot_verify' as const, reason: 'Synthetic', sourceRefs: [], missingEvidence: [] }
+    const box = { x: 0.1, y: 0.2, width: 0.3, height: 0.2 }
+    const next = { partId: fixture.partId, region: box }
+    const target = { partId: fixture.partId, region: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 } }
+
+    it('keeps valid regions of real current-step parts untouched when enabled', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, true)
+        expect(applied).toMatchObject({ ...verdict, nextPartRegion: next, targetRegion: target })
+    })
+
+    it('keeps absence absent: nothing is synthesized from step data', (): void => {
+        const applied = withResolvedLayout(verdict, input, true)
+        expect(applied).not.toHaveProperty('nextPartRegion')
+        expect(applied).not.toHaveProperty('targetRegion')
+    })
+
+    it.each([
+        ['an unknown part id', (): unknown => ({ partId: 'invented-part', region: box })],
+        ['a manual part outside the current step', (): unknown => ({ partId: fixture.otherPartId, region: box })],
+        [
+            'an out-of-bounds box',
+            (): unknown => ({ partId: fixture.partId, region: { x: 0.9, y: 0.1, width: 0.5, height: 0.2 } }),
+        ],
+        [
+            'a zero-area box',
+            (): unknown => ({ partId: fixture.partId, region: { x: 0.2, y: 0.2, width: 0, height: 0.2 } }),
+        ],
+        ['an extra key', (): unknown => ({ ...next, label: 'x' })],
+    ])('drops a region with %s and preserves the verdict and the valid sibling', (_label, bad): void => {
+        const applied = withResolvedLayout(
+            { ...verdict, nextPartRegion: bad(), targetRegion: target } as never,
+            input,
+            true,
+        )
+        expect(applied).not.toHaveProperty('nextPartRegion')
+        expect(applied).toMatchObject({ ...verdict, targetRegion: target })
+    })
+
+    it('removes both regions when the flag is off, matching the pre-change response exactly', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, false)
+        expect(applied).toEqual(verdict)
+    })
+
+    it('removes regions when the bound step is not in the session', (): void => {
+        const applied = withResolvedLayout(
+            { ...verdict, nextPartRegion: next },
+            { ...input, binding: { stepId: 'missing-step' } },
+            true,
+        )
+        expect(applied).toEqual(verdict)
+    })
+})
+
+// Two DIFFERENT parts that both really belong to the same step: each region is valid alone, only the pairing is false.
+describe.each([
+    {
+        name: 'divider shelf step-2',
+        fixture: stepFixtures()[0]!,
+        stepId: 'step-2',
+        first: 'side-panel',
+        second: 'divider',
+    },
+    {
+        name: 'treadmill monitor arm arm-step-2',
+        fixture: stepFixtures()[1]!,
+        stepId: 'arm-step-2',
+        first: 'monitor-arm',
+        second: 'post-bracket',
+    },
+])('next-part and target for different real parts of one step: $name', ({ fixture, stepId, first, second }): void => {
+    const input = {
+        session: fixture.session,
+        binding: { stepId },
+        sourceImages: fixture.session.pages.map((page) => ({ page })),
+    }
+    const verdict = { decision: 'cannot_verify' as const, reason: 'Synthetic', sourceRefs: [], missingEvidence: [] }
+    const next = { partId: first, region: { x: 0.1, y: 0.2, width: 0.3, height: 0.2 } }
+    const target = { partId: second, region: { x: 0.5, y: 0.5, width: 0.2, height: 0.2 } }
+
+    it('uses two real current-step part ids', (): void => {
+        const step = fixture.session.reviewedSteps.find((candidate) => candidate.stepId === stepId)!
+        const real = step.parts.map((part) => part.partId)
+        expect(real).toEqual(expect.arrayContaining([first, second]))
+        expect(first).not.toBe(second)
+    })
+
+    it('omits the disagreeing target and keeps the independently valid next part', (): void => {
+        const applied = withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: target }, input, true)
+        expect(applied).toMatchObject({ ...verdict, nextPartRegion: next })
+        expect(applied).not.toHaveProperty('targetRegion')
+    })
+
+    it('keeps either region alone and a same-part pair untouched', (): void => {
+        expect(withResolvedLayout({ ...verdict, targetRegion: target }, input, true)).toMatchObject({
+            targetRegion: target,
+        })
+        expect(withResolvedLayout({ ...verdict, nextPartRegion: next }, input, true)).toMatchObject({
+            nextPartRegion: next,
+        })
+        const same = { ...target, partId: first }
+        expect(withResolvedLayout({ ...verdict, nextPartRegion: next, targetRegion: same }, input, true)).toMatchObject(
+            {
+                nextPartRegion: next,
+                targetRegion: same,
+            },
+        )
+    })
+})

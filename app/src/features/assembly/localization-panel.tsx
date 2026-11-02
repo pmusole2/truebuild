@@ -16,7 +16,7 @@ const UNAVAILABLE_LOCATE: Record<string, string> = {
     unconfigured: 'Locating parts is not configured on the connected backend. No model was called.',
     unauthorized: 'The backend rejected the shared key (x-truebuild-key). Check EXPO_PUBLIC_API_SECRET.',
     timeout: 'Locating timed out. Nothing was shown; try again.',
-    budget_exhausted: 'The check budget is used up. Nothing was located.',
+    budget_exhausted: 'Too many builds right now, try again later.',
     invalid_input:
         'Use a short noun phrase such as “side panel”. Words like “and”, “or”, “not” or questions are refused.',
 }

@@ -1,0 +1,17 @@
+{
+    "kind": "more",
+    "session": null,
+    "stepId": null,
+    "captureId": null,
+    "result": null,
+    "failure": null,
+    "uiState": {
+        "sections": ["how-it-works", "settings", "tips", "about-this-check"],
+        "language": {
+            "options": ["en", "es", "fr", "de", "pt-BR"]
+        },
+        "settings": {
+            "storage": true
+        }
+    }
+}

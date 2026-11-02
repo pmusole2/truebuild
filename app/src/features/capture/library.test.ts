@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createDemoManual } from '@truebuild/contracts'
+import { ModelApiClient } from '../../api/model-client'
+import { CaptureController } from './controller'
 import { LibraryStorage, type KeyValueStorage } from './library'
 
 function memory(): KeyValueStorage & { data: Map<string, string> } {
@@ -21,6 +23,14 @@ const digest = async (bytes: Uint8Array): Promise<string> => {
     return [...new Uint8Array(hash)].map((n) => n.toString(16).padStart(2, '0')).join('')
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => {
+        resolve = done
+    })
+    return { promise, resolve }
+}
+
 async function entry(): Promise<Parameters<LibraryStorage['save']>[0][number]> {
     const session = createDemoManual()
     const bytes = new Uint8Array([1, 4, 9])
@@ -29,6 +39,92 @@ async function entry(): Promise<Parameters<LibraryStorage['save']>[0][number]> {
 }
 
 describe('durable manual library', () => {
+    it('retains a retired asset until every pending verified read settles, then removes its chunks', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        const bytes = new Uint8Array([1, 4, 9])
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+        const chunk = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+        const get = kv.getItem.bind(kv)
+        const gates = [deferred(), deferred()]
+        let entered = 0
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunk && entered < gates.length) await gates[entered++]!.promise
+            return get(key)
+        })
+        const first = store.readAsset(manual.session.pages[0]!)
+        const second = store.readAsset(manual.session.pages[0]!)
+        try {
+            expect(entered).toBe(2)
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            gates[0]!.resolve()
+            await expect(first).resolves.toEqual(bytes)
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            gates[1]!.resolve()
+            await expect(second).resolves.toEqual(bytes)
+            await vi.waitFor(() => expect(kv.data.has(chunk)).toBe(false))
+            await expect(store.save([])).resolves.toBeUndefined()
+            expect((await new LibraryStorage(kv, digest).restore()).readOnly).toBe(false)
+        } finally {
+            for (const gate of gates) gate.resolve()
+            await Promise.allSettled([first, second])
+        }
+    })
+
+    it('queues released-lease cleanup behind a re-reference commit and rechecks the current registry', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        const bytes = new Uint8Array([1, 4, 9])
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+        const chunk = [...kv.data.keys()].find((key) => key.includes('/bytes/'))!
+        const get = kv.getItem.bind(kv)
+        const set = kv.setItem.bind(kv)
+        const readGate = deferred()
+        const writeGate = deferred()
+        const writingManifest = deferred()
+        vi.spyOn(kv, 'getItem').mockImplementation(async (key) => {
+            if (key === chunk) await readGate.promise
+            return get(key)
+        })
+        const reading = store.readAsset(manual.session.pages[0]!)
+        let rereferencing: Promise<void> | undefined
+        const remove = vi.spyOn(kv, 'removeItem')
+        try {
+            await store.save([])
+            expect(kv.data.has(chunk)).toBe(true)
+            vi.spyOn(kv, 'setItem').mockImplementation(async (key, value) => {
+                if (key === 'truebuild/library/v1') {
+                    writingManifest.resolve()
+                    await writeGate.promise
+                }
+                await set(key, value)
+            })
+            rereferencing = store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes }])
+            await writingManifest.promise
+            readGate.resolve()
+            // A read must settle without awaiting cleanup queued behind this blocked commit.
+            await expect(reading).resolves.toEqual(bytes)
+            expect(kv.data.has(chunk)).toBe(true)
+            expect(remove).not.toHaveBeenCalledWith(chunk)
+            writeGate.resolve()
+            await rereferencing
+            await store.save([manual])
+            expect(remove).not.toHaveBeenCalledWith(chunk)
+            await expect(store.readAsset(manual.session.pages[0]!)).resolves.toEqual(bytes)
+            const restored = await new LibraryStorage(kv, digest).restore()
+            expect(restored.readOnly).toBe(false)
+            expect(restored.entries).toEqual([manual])
+        } finally {
+            readGate.resolve()
+            writeGate.resolve()
+            await Promise.allSettled([reading, ...(rereferencing === undefined ? [] : [rereferencing])])
+        }
+    })
+
     it('starts empty and restores usable bytes with metadata after a new storage instance', async () => {
         const kv = memory()
         const first = new LibraryStorage(kv, digest)
@@ -38,6 +134,63 @@ describe('durable manual library', () => {
         const second = new LibraryStorage(kv, digest)
         expect((await second.restore()).entries).toEqual([manual])
         expect(await second.readAsset(manual.session.pages[0]!)).toEqual(new Uint8Array([1, 4, 9]))
+    })
+
+    it('round-trips explicitly accepted step facts from a legacy session with preserved raw evidence', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        // Sessions saved before extraction-page custody/provenance have neither optional field.
+        expect(manual.session.extractionSourcePageIds).toBeUndefined()
+        expect(manual.session.rawExtraction?.model).toBeUndefined()
+        manual.session.reviewStatus = 'unreviewed'
+        manual.session.reviewedSteps[0]!.orientation = { state: 'unknown', reason: 'Arrow is unreadable.' }
+        manual.session.reviewedSteps[0]!.visibleChecks = []
+        manual.session.rawExtraction!.steps[0]!.orientation = { state: 'unknown', reason: 'Arrow is unreadable.' }
+        manual.session.rawExtraction!.steps[0]!.visibleChecks = []
+        const raw = structuredClone(manual.session.rawExtraction)
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }])
+        let id = 0
+        const controller = new CaptureController({
+            storage: store,
+            client: new ModelApiClient({
+                baseUrl: 'http://127.0.0.1:3001',
+                secret: '',
+                fetch: async (): Promise<never> => {
+                    throw new Error('No model requests belong to local fact acceptance.')
+                },
+            }),
+            normalize: async (): Promise<never> => {
+                throw new Error('No image normalization belongs to fact acceptance.')
+            },
+            digest,
+            id: (): string => `accepted-${++id}`,
+        })
+        try {
+            await controller.restore()
+            await controller.open(manual.session.manualId)
+            expect(
+                await controller.acceptStepFacts(
+                    {
+                        kind: 'manual',
+                        manualId: manual.session.manualId,
+                        revision: manual.session.revision,
+                    },
+                    'step-1',
+                    {
+                        orientation: { partId: 'side-panel', description: 'Groove faces inward.' },
+                        visibleChecks: ['Groove is visible.', 'Panel stands upright.'],
+                    },
+                ),
+            ).toBe(true)
+            const restored = await new LibraryStorage(kv, digest).restore()
+            expect(restored.readOnly).toBe(false)
+            expect(restored.entries[0]).toEqual(controller.current)
+            expect(restored.entries[0]!.session.rawExtraction).toEqual(raw)
+            expect(restored.entries[0]!.session.reviewStatus).toBe('unreviewed')
+        } finally {
+            controller.dispose()
+        }
     })
 
     it('chunks a large image and cleans removed assets only after a durable manifest commit', async () => {

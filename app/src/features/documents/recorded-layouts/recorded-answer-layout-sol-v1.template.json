@@ -1,0 +1,1159 @@
+{
+    "version": 1,
+    "fixtureId": "recorded-answer-layout-sol-v1",
+    "kind": "answer",
+    "ready": {
+        "header": {
+            "title": {
+                "kind": "literal",
+                "text": "Answer"
+            },
+            "subtitle": {
+                "kind": "bound",
+                "key": "step-title"
+            },
+            "back": {
+                "label": "Back",
+                "icon": "chevronLeft",
+                "intent": {
+                    "intent": "navigate",
+                    "target": "back"
+                }
+            },
+            "actions": [
+                {
+                    "label": "More",
+                    "icon": "more",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "more"
+                    }
+                }
+            ]
+        },
+        "body": {
+            "type": "Scroll",
+            "axis": "vertical",
+            "children": [
+                {
+                    "type": "Stack",
+                    "gap": "lg",
+                    "align": "stretch",
+                    "children": [
+                        {
+                            "type": "Image",
+                            "source": {
+                                "kind": "capture"
+                            },
+                            "fit": "contain",
+                            "ratio": "hero",
+                            "caption": null
+                        },
+                        {
+                            "type": "ResultCard",
+                            "variant": "card",
+                            "showReason": true,
+                            "showRegions": true
+                        },
+                        {
+                            "type": "RepeatFacts",
+                            "source": "verdict",
+                            "group": null,
+                            "row": {
+                                "type": "Stack",
+                                "gap": "none",
+                                "align": "stretch",
+                                "children": [
+                                    {
+                                        "type": "FactCitations",
+                                        "display": "chip",
+                                        "label": null,
+                                        "chunk": 20
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "type": "WhenFacts",
+                            "source": "safety",
+                            "children": [
+                                {
+                                    "type": "Section",
+                                    "title": {
+                                        "kind": "literal",
+                                        "text": "Safety"
+                                    },
+                                    "collapsible": false,
+                                    "initiallyOpen": true,
+                                    "children": [
+                                        {
+                                            "type": "RepeatFacts",
+                                            "source": "safety",
+                                            "group": {
+                                                "size": 12,
+                                                "container": {
+                                                    "type": "Card",
+                                                    "surface": "tinted",
+                                                    "tone": "caution",
+                                                    "padding": "md"
+                                                }
+                                            },
+                                            "row": {
+                                                "type": "Stack",
+                                                "gap": "xs",
+                                                "align": "stretch",
+                                                "children": [
+                                                    {
+                                                        "type": "FactText",
+                                                        "role": "body",
+                                                        "emphasis": "strong",
+                                                        "tone": "caution",
+                                                        "align": "start"
+                                                    },
+                                                    {
+                                                        "type": "FactCitations",
+                                                        "display": "chip",
+                                                        "label": null,
+                                                        "chunk": 20
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "WhenFacts",
+                            "source": "directions",
+                            "children": [
+                                {
+                                    "type": "Section",
+                                    "title": {
+                                        "kind": "literal",
+                                        "text": "Directions"
+                                    },
+                                    "collapsible": false,
+                                    "initiallyOpen": true,
+                                    "children": [
+                                        {
+                                            "type": "RepeatFacts",
+                                            "source": "directions",
+                                            "group": {
+                                                "size": 12,
+                                                "container": {
+                                                    "type": "Stack",
+                                                    "gap": "md",
+                                                    "align": "stretch"
+                                                }
+                                            },
+                                            "row": {
+                                                "type": "Stack",
+                                                "gap": "xs",
+                                                "align": "stretch",
+                                                "children": [
+                                                    {
+                                                        "type": "FactText",
+                                                        "role": "body",
+                                                        "emphasis": "normal",
+                                                        "tone": "neutral",
+                                                        "align": "start"
+                                                    },
+                                                    {
+                                                        "type": "FactCitations",
+                                                        "display": "chip",
+                                                        "label": null,
+                                                        "chunk": 20
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "WhenFacts",
+                            "source": "details",
+                            "children": [
+                                {
+                                    "type": "Section",
+                                    "title": {
+                                        "kind": "literal",
+                                        "text": "Details"
+                                    },
+                                    "collapsible": true,
+                                    "initiallyOpen": false,
+                                    "children": [
+                                        {
+                                            "type": "RepeatFacts",
+                                            "source": "details",
+                                            "group": {
+                                                "size": 12,
+                                                "container": {
+                                                    "type": "Stack",
+                                                    "gap": "md",
+                                                    "align": "stretch"
+                                                }
+                                            },
+                                            "row": {
+                                                "type": "Stack",
+                                                "gap": "xs",
+                                                "align": "stretch",
+                                                "children": [
+                                                    {
+                                                        "type": "FactText",
+                                                        "role": "body",
+                                                        "emphasis": "normal",
+                                                        "tone": "neutral",
+                                                        "align": "start"
+                                                    },
+                                                    {
+                                                        "type": "FactCitations",
+                                                        "display": "chip",
+                                                        "label": null,
+                                                        "chunk": 20
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "bar": {
+            "primary": {
+                "type": "PrimaryAction",
+                "label": "Back to the guide",
+                "icon": "chevronLeft",
+                "intent": {
+                    "intent": "navigate",
+                    "target": "guide"
+                }
+            },
+            "secondary": {
+                "type": "SecondaryAction",
+                "label": "Ask another",
+                "icon": "help",
+                "intent": {
+                    "intent": "ask",
+                    "target": "about-step"
+                }
+            }
+        }
+    },
+    "states": {
+        "busy": {
+            "header": {
+                "title": {
+                    "kind": "state",
+                    "part": "heading"
+                },
+                "subtitle": {
+                    "kind": "bound",
+                    "key": "step-title"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": [
+                    {
+                        "label": "More",
+                        "icon": "more",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "more"
+                        }
+                    }
+                ]
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "lg",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Image",
+                                "source": {
+                                    "kind": "capture"
+                                },
+                                "fit": "contain",
+                                "ratio": "hero",
+                                "caption": null
+                            },
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "state",
+                                    "part": "detail"
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "safety",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Safety"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "safety",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Card",
+                                                        "surface": "tinted",
+                                                        "tone": "caution",
+                                                        "padding": "md"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "strong",
+                                                            "tone": "caution",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "directions",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Directions"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "directions",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "details",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Details"
+                                        },
+                                        "collapsible": true,
+                                        "initiallyOpen": false,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "details",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Please wait",
+                    "icon": null,
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "guide"
+                    }
+                },
+                "secondary": null
+            }
+        },
+        "pending": {
+            "header": {
+                "title": {
+                    "kind": "state",
+                    "part": "heading"
+                },
+                "subtitle": {
+                    "kind": "bound",
+                    "key": "step-title"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": [
+                    {
+                        "label": "More",
+                        "icon": "more",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "more"
+                        }
+                    }
+                ]
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "lg",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Image",
+                                "source": {
+                                    "kind": "capture"
+                                },
+                                "fit": "contain",
+                                "ratio": "hero",
+                                "caption": null
+                            },
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "state",
+                                    "part": "detail"
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "safety",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Safety"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "safety",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Card",
+                                                        "surface": "tinted",
+                                                        "tone": "caution",
+                                                        "padding": "md"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "strong",
+                                                            "tone": "caution",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "directions",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Directions"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "directions",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "details",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Details"
+                                        },
+                                        "collapsible": true,
+                                        "initiallyOpen": false,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "details",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Please wait",
+                    "icon": null,
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "guide"
+                    }
+                },
+                "secondary": null
+            }
+        },
+        "error": {
+            "header": {
+                "title": {
+                    "kind": "state",
+                    "part": "heading"
+                },
+                "subtitle": {
+                    "kind": "bound",
+                    "key": "step-title"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": [
+                    {
+                        "label": "More",
+                        "icon": "more",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "more"
+                        }
+                    }
+                ]
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "lg",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Image",
+                                "source": {
+                                    "kind": "capture"
+                                },
+                                "fit": "contain",
+                                "ratio": "hero",
+                                "caption": null
+                            },
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "state",
+                                    "part": "detail"
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "safety",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Safety"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "safety",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Card",
+                                                        "surface": "tinted",
+                                                        "tone": "caution",
+                                                        "padding": "md"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "strong",
+                                                            "tone": "caution",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "directions",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Directions"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "directions",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "details",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Details"
+                                        },
+                                        "collapsible": true,
+                                        "initiallyOpen": false,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "details",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Back to the guide",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "guide"
+                    }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "home"
+                    }
+                }
+            }
+        },
+        "recovery": {
+            "header": {
+                "title": {
+                    "kind": "state",
+                    "part": "heading"
+                },
+                "subtitle": {
+                    "kind": "bound",
+                    "key": "step-title"
+                },
+                "back": {
+                    "label": "Back",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "back"
+                    }
+                },
+                "actions": [
+                    {
+                        "label": "More",
+                        "icon": "more",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "more"
+                        }
+                    }
+                ]
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "lg",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Image",
+                                "source": {
+                                    "kind": "capture"
+                                },
+                                "fit": "contain",
+                                "ratio": "hero",
+                                "caption": null
+                            },
+                            {
+                                "type": "Text",
+                                "content": {
+                                    "kind": "state",
+                                    "part": "detail"
+                                },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "safety",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Safety"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "safety",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Card",
+                                                        "surface": "tinted",
+                                                        "tone": "caution",
+                                                        "padding": "md"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "strong",
+                                                            "tone": "caution",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "directions",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Directions"
+                                        },
+                                        "collapsible": false,
+                                        "initiallyOpen": true,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "directions",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "WhenFacts",
+                                "source": "details",
+                                "children": [
+                                    {
+                                        "type": "Section",
+                                        "title": {
+                                            "kind": "literal",
+                                            "text": "Details"
+                                        },
+                                        "collapsible": true,
+                                        "initiallyOpen": false,
+                                        "children": [
+                                            {
+                                                "type": "RepeatFacts",
+                                                "source": "details",
+                                                "group": {
+                                                    "size": 12,
+                                                    "container": {
+                                                        "type": "Stack",
+                                                        "gap": "md",
+                                                        "align": "stretch"
+                                                    }
+                                                },
+                                                "row": {
+                                                    "type": "Stack",
+                                                    "gap": "xs",
+                                                    "align": "stretch",
+                                                    "children": [
+                                                        {
+                                                            "type": "FactText",
+                                                            "role": "body",
+                                                            "emphasis": "normal",
+                                                            "tone": "neutral",
+                                                            "align": "start"
+                                                        },
+                                                        {
+                                                            "type": "FactCitations",
+                                                            "display": "chip",
+                                                            "label": null,
+                                                            "chunk": 20
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Back to the guide",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "guide"
+                    }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": {
+                        "intent": "navigate",
+                        "target": "home"
+                    }
+                }
+            }
+        }
+    }
+}

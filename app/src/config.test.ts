@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { developmentHost, resolveProviderMode } from './config'
+import { developmentHost, resolveGenerativeUi, resolveProviderMode } from './config'
 import { parseBaseUrl } from './api/transport'
 
 const originalNodeEnv = process.env.NODE_ENV
@@ -20,6 +20,16 @@ describe('production API origin rule', () => {
         process.env.NODE_ENV = 'production'
         expect(() => parseBaseUrl('http://192.168.1.20:3001')).toThrow(/https origin/)
         expect(() => parseBaseUrl('http://127.0.0.1:3001')).toThrow(/https origin/)
+        for (const url of [
+            'https://localhost',
+            'https://127.0.0.1',
+            'https://[::1]',
+            'https://[::]',
+            'https://[::ffff:127.0.0.1]',
+            'https://app.localhost',
+        ]) {
+            expect(() => parseBaseUrl(url)).toThrow(/https origin/)
+        }
         expect(parseBaseUrl('https://api.example.com')).toBe('https://api.example.com')
     })
 
@@ -49,5 +59,20 @@ describe('development host badge', () => {
             'api.example.com',
         )
         expect(developmentHost('invalid')).toBe('unconfigured')
+    })
+})
+
+describe('generative UI mode', () => {
+    it('defaults to full and accepts exactly off, steps and full', () => {
+        expect(resolveGenerativeUi(undefined)).toBe('full')
+        expect(resolveGenerativeUi('full')).toBe('full')
+        expect(resolveGenerativeUi('steps')).toBe('steps')
+        expect(resolveGenerativeUi('off')).toBe('off')
+    })
+
+    it('fails closed on anything else', () => {
+        for (const value of ['', 'on', 'FULL', 'true', 'guide']) {
+            expect(() => resolveGenerativeUi(value)).toThrow(/"off", "steps" or "full"/)
+        }
     })
 })

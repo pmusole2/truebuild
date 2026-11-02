@@ -18,14 +18,20 @@ import { Notice, StatusTag, VerdictTag } from '../status'
 import { Card, Screen, Stack } from '../surface'
 import { Body, Callout, Caption, Heading, Label, Title } from '../text'
 import { SkeletonLines } from '../skeleton'
+import { guidanceNotes, partGuidance } from '../../features/capture/part-regions'
+import { PartGuidanceOverlay } from '../../features/capture/result-panels'
 import {
     INSTRUCTION_EXAMPLE,
     PART_EXAMPLES,
+    PART_GUIDANCE_EXAMPLE,
+    PART_GUIDANCE_NAMES,
     PREVIEW_BANNER,
     SAMPLE_REGION,
     STEP_EXAMPLES,
     VERDICT_EXAMPLES,
 } from './examples'
+
+const PART_GUIDANCE = partGuidance(PART_GUIDANCE_EXAMPLE, PART_GUIDANCE_NAMES)
 
 const BUTTON_VARIANTS: readonly ButtonVariant[] = ['primary', 'accent', 'secondary', 'quiet', 'danger']
 const ICON_NAMES: readonly IconName[] = [
@@ -135,6 +141,10 @@ function Preview(): ReactElement {
             </PreviewSection>
 
             <PreviewSection title="Cards">
+                <Card tone="result">
+                    <Heading>Result card</Heading>
+                    <Caption>The hero tone: a raised, lifted fill with no outline.</Caption>
+                </Card>
                 <ThumbnailCard title="Side panel photo" caption="Step 1" selected={true} onPress={noopPreview} />
                 <ThumbnailCard title="Unphotographed step" onPress={noopPreview} />
                 <ManualCard title="Side divider" summary="6 pages · 2 steps" onPress={noopPreview} />
@@ -242,6 +252,27 @@ function Preview(): ReactElement {
                         mediaSize: { width: 3, height: 4 },
                         regions: [SAMPLE_REGION],
                     }}
+                />
+                <Caption>
+                    Part guidance: dashed next part, solid target and one arrow, only when both were located for the
+                    same part. Mocked geometry.
+                </Caption>
+                <ComparisonFrame
+                    diagram={{
+                        caption: 'Manual diagram',
+                        media: <Caption>Placeholder diagram</Caption>,
+                        mediaSize: { width: 4, height: 3 },
+                    }}
+                    photo={{
+                        caption: 'Your photo (mocked guidance)',
+                        media: <Caption>Placeholder photo</Caption>,
+                        mediaSize: { width: 4, height: 3 },
+                        overlay: (displayed): ReactElement => (
+                            <PartGuidanceOverlay guidance={PART_GUIDANCE} displayed={displayed} />
+                        ),
+                        notes: guidanceNotes(PART_GUIDANCE),
+                    }}
+                    layout="column"
                 />
                 <Caption>Refusal layout: side by side at phone width, stacked under large text.</Caption>
                 <ComparisonFrame

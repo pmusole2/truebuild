@@ -1,0 +1,200 @@
+{
+    "header": {
+        "title": { "kind": "literal", "text": "About this check" },
+        "subtitle": null,
+        "back": null,
+        "actions": []
+    },
+    "body": {
+        "type": "Scroll",
+        "axis": "vertical",
+        "children": [
+            {
+                "type": "Stack",
+                "gap": "md",
+                "align": "stretch",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "See how this check was made." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "neutral",
+                        "align": "start"
+                    },
+                    {
+                        "type": "Toggle",
+                        "binding": "built-view",
+                        "label": { "kind": "literal", "text": "Show how Meta AI built this" }
+                    },
+                    { "type": "JudgePanel", "panel": "built-view" },
+                    { "type": "JudgePanel", "panel": "stages" },
+                    { "type": "JudgePanel", "panel": "about-check" }
+                ]
+            }
+        ]
+    },
+    "bar": {
+        "primary": {
+            "type": "PrimaryAction",
+            "label": "Close",
+            "icon": "chevronLeft",
+            "intent": { "intent": "navigate", "target": "back" }
+        },
+        "secondary": null
+    },
+    "overlays": [],
+    "states": {
+        "busy": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "About this check" },
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            { "type": "Progress", "binding": "build", "label": null },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "pending": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "About this check" },
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            },
+                            { "type": "Progress", "binding": "build", "label": null }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "empty": null,
+        "error": {
+            "header": {
+                "title": { "kind": "literal", "text": "Something went wrong" },
+                "subtitle": null,
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Try again in a moment." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "caution",
+                        "align": "start"
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                }
+            },
+            "overlays": []
+        },
+        "recovery": {
+            "header": {
+                "title": { "kind": "literal", "text": "Let us get you back on track" },
+                "subtitle": null,
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Try again, or go back home." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "neutral",
+                        "align": "start"
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "confirming": null
+    }
+}

@@ -52,3 +52,11 @@ export const SAMPLE_REGION: { readonly id: string; readonly label: string; reado
     label: 'Example region',
     box: { x: 0.12, y: 0.22, width: 0.36, height: 0.4 },
 }
+
+// Mocked part guidance for the comparison example. Placeholder geometry only: no model located anything here.
+export const PART_GUIDANCE_EXAMPLE = {
+    nextPartRegion: { partId: 'divider', region: { x: 0.08, y: 0.55, width: 0.32, height: 0.3 } },
+    targetRegion: { partId: 'divider', region: { x: 0.55, y: 0.2, width: 0.34, height: 0.3 } },
+} as const
+
+export const PART_GUIDANCE_NAMES: ReadonlyMap<string, string> = new Map([['divider', 'Divider shelf']])

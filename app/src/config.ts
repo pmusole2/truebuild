@@ -1,8 +1,19 @@
+import { isDevelopmentBuild } from './api/transport'
+
 /**
  * Build-time public configuration. EXPO_PUBLIC_* values are visible in the app bundle: they are never Meta credentials.
  * Meta is the default. Fixture mode is reserved for explicit automated/offline tooling.
  */
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:3001'
+const DEVELOPMENT_API_BASE_URL = 'http://127.0.0.1:3001'
+
+/** Loopback is a development-only default. A release build must name its HTTPS origin; it never falls back to loopback. */
+function resolveApiBaseUrl(value: string | undefined): string {
+    if (value !== undefined) return value
+    if (isDevelopmentBuild()) return DEVELOPMENT_API_BASE_URL
+    throw new Error('EXPO_PUBLIC_API_BASE_URL must be set for release builds')
+}
+
+export const API_BASE_URL = resolveApiBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL)
 
 /** Public demo-only shared key sent as x-truebuild-key. Synthetic and visible in the bundle, never a real credential. */
 export const API_SECRET = process.env.EXPO_PUBLIC_API_SECRET ?? ''
@@ -33,3 +44,22 @@ export function developmentHost(baseUrl: string): string {
         return 'unconfigured'
     }
 }
+
+export type GenerativeUiMode = 'off' | 'steps' | 'full'
+
+/**
+ * Public generative-UI selection; it must agree with the backend GENERATIVE_UI. Every mode uses complete v2 documents.
+ * `off` composes local fallback documents, `steps` generates Guide documents, and `full` (the default) generates all kinds. Anything
+ * else is a configuration error and never silently enables or disables generation.
+ */
+export function resolveGenerativeUi(value: string | undefined): GenerativeUiMode {
+    if (value === undefined || value === 'full') {
+        return 'full'
+    }
+    if (value === 'off' || value === 'steps') {
+        return value
+    }
+    throw new Error('EXPO_PUBLIC_GENERATIVE_UI must be "off", "steps" or "full"')
+}
+
+export const GENERATIVE_UI: GenerativeUiMode = resolveGenerativeUi(process.env.EXPO_PUBLIC_GENERATIVE_UI)

@@ -1,0 +1,104 @@
+import { render, screen } from '@testing-library/react-native'
+import type { ReactElement } from 'react'
+import Svg from 'react-native-svg'
+import { FeedbackProvider } from '../../ui/feedback'
+import { spies } from '../../ui/test-support/reanimated-mock'
+import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
+import { plainReason } from './plain-copy'
+import { AnswerPanel, CheckHighlight, CheckPanel } from './result-panels'
+
+jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
+beforeEach(() => {
+    spies.withTiming.mockClear()
+    spies.cancelAnimation.mockClear()
+})
+
+it.each([
+    ['guide-pass', 'success'],
+    ['guide-refuse', 'warning'],
+    ['guide-cannot-verify', 'warning'],
+] as const)('gives one %s notification and stays quiet on metadata-only rerenders', async (fixtureId, kind) => {
+    const { state, entry } = workflowPreviewFixture(fixtureId)
+    const trigger = jest.fn()
+    const view = (notes: string[]): ReactElement => (
+        <FeedbackProvider reduceMotion haptics={{ trigger }}>
+            <CheckPanel
+                check={{ ...state.check!, modelNotes: notes }}
+                session={entry.session}
+                pageUris={state.pageUris}
+            />
+        </FeedbackProvider>
+    )
+    const { rerender } = await render(view([]))
+    expect(trigger).toHaveBeenCalledWith(kind)
+    await rerender(view(['Provider metadata, same outcome.']))
+    expect(trigger).toHaveBeenCalledTimes(1)
+    expect(screen.getByText(plainReason(state.check!.reason))).toBeTruthy()
+})
+
+it('announces a new answer with neutral selection feedback and no verdict', async () => {
+    const { state, entry } = workflowPreviewFixture('guide-answer')
+    const trigger = jest.fn()
+    await render(
+        <FeedbackProvider reduceMotion haptics={{ trigger }}>
+            <AnswerPanel answer={state.answer!} session={entry.session} pageUris={state.pageUris} />
+        </FeedbackProvider>,
+    )
+    expect(trigger).toHaveBeenCalledWith('selection')
+    for (const label of ['Looks right', 'Not yet', 'Can’t tell']) expect(screen.queryByText(label)).toBeNull()
+    expect(screen.getByText('Answer')).toBeTruthy()
+    expect(screen.getByText('Answer to your question from the manual pages. It is not a step check.')).toBeTruthy()
+    // It leads like a result but carries no accent bar, so no pass, refuse or caution colour can be read into it.
+    expect(screen.queryByTestId('card-bar', { includeHiddenElements: true })).toBeNull()
+})
+
+it('notifies again when a later capture displays the same result text after the prior result was cleared', async () => {
+    const { state, entry } = workflowPreviewFixture('guide-pass')
+    const trigger = jest.fn()
+    const view = (visible: boolean): ReactElement => (
+        <FeedbackProvider reduceMotion haptics={{ trigger }}>
+            {visible ? <CheckPanel check={state.check!} session={entry.session} pageUris={state.pageUris} /> : null}
+        </FeedbackProvider>
+    )
+    const { rerender } = await render(view(true))
+    expect(trigger).toHaveBeenCalledTimes(1)
+    await rerender(view(false))
+    expect(trigger).toHaveBeenCalledTimes(1)
+    await rerender(view(true))
+    expect(trigger).toHaveBeenCalledTimes(2)
+})
+
+it.each([false, true])('shows the result sentence at once with no text motion (reduced=%s)', async (reduceMotion) => {
+    const { state, entry } = workflowPreviewFixture('guide-refuse')
+    await render(
+        <FeedbackProvider reduceMotion={reduceMotion}>
+            <CheckPanel check={state.check!} session={entry.session} pageUris={state.pageUris} />
+        </FeedbackProvider>,
+    )
+    expect(spies.withTiming).not.toHaveBeenCalled()
+    expect(spies.withSpring).not.toHaveBeenCalled()
+})
+
+it('does not replay notification feedback when the motion preference changes', async () => {
+    const { state, entry } = workflowPreviewFixture('guide-refuse')
+    const trigger = jest.fn()
+    const view = (reduceMotion: boolean): ReactElement => (
+        <FeedbackProvider reduceMotion={reduceMotion} haptics={{ trigger }}>
+            <CheckPanel check={state.check!} session={entry.session} pageUris={state.pageUris} />
+        </FeedbackProvider>
+    )
+    const { rerender } = await render(view(false))
+    await rerender(view(true))
+    expect(trigger).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the grounded highlight on the exact rect it is given', async () => {
+    await render(
+        <FeedbackProvider reduceMotion>
+            <Svg width={300} height={200}>
+                <CheckHighlight rect={{ x: 5, y: 6, width: 70, height: 40 }} />
+            </Svg>
+        </FeedbackProvider>,
+    )
+    expect(screen.getByTestId('grounded-outline-line').props).toMatchObject({ x: 5, y: 6, width: 70, height: 40 })
+})

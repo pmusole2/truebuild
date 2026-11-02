@@ -1,6 +1,6 @@
 import { createDemoManual, type ManualSession } from '@truebuild/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ModelApiClient, type ModelFetch } from '../../api/model-client'
+import { MODEL_CHECK_TIMEOUT_MS, ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { askModelQuestion, citedPageIds, runModelCheck, type ModelCheckRequest } from './model-check'
 import type { ApiResult, CheckResult, QuestionResult } from '@truebuild/contracts'
 import type { SourcePageAsset } from './model-check'
@@ -105,8 +105,8 @@ describe('complete model action deadline', () => {
         vi.restoreAllMocks()
     })
 
-    it.each(['check', 'question'] as const)(
-        'includes seven seconds of source loading in the eight-second %s budget',
+    it.each(['check'] as const)(
+        'includes seven seconds of source loading in the twelve-second %s budget',
         async (action) => {
             vi.useFakeTimers()
             let releaseSource: (asset: SourcePageAsset) => void = (): void => undefined
@@ -142,7 +142,7 @@ describe('complete model action deadline', () => {
             releaseSource({ assetId: 'demo-asset-1', mimeType: 'image/png', bytes: new Uint8Array([4, 5, 6]) })
             await vi.advanceTimersByTimeAsync(0)
             expect(fetch).toHaveBeenCalledTimes(1)
-            await vi.advanceTimersByTimeAsync(1001)
+            await vi.advanceTimersByTimeAsync(MODEL_CHECK_TIMEOUT_MS - 7000 + 1)
 
             expect(settled).toMatchObject([{ status: 'unavailable', code: 'timeout', retryable: true }])
             let cancelled = false
@@ -168,12 +168,127 @@ describe('complete model action deadline', () => {
         const session = createDemoManual()
         const result = await runModelCheck(
             request(session, clientWith(fetch), async (): Promise<SourcePageAsset> => {
-                now += 8001
+                now += MODEL_CHECK_TIMEOUT_MS + 1
                 return { assetId: 'demo-asset-1', mimeType: 'image/png', bytes: new Uint8Array([4, 5, 6]) }
             }),
         )
 
         expect(result).toMatchObject({ status: 'unavailable', code: 'timeout' })
         expect(fetch).not.toHaveBeenCalled()
+    })
+})
+
+describe('slow question job', () => {
+    afterEach((): void => {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+        vi.restoreAllMocks()
+    })
+
+    const asked = (base: ModelCheckRequest): Parameters<typeof askModelQuestion>[0] => ({
+        ...base,
+        question: 'Which way?',
+        target: { kind: 'part', partId: 'side-panel' },
+    })
+    const source = async (): Promise<SourcePageAsset> => ({
+        assetId: 'demo-asset-1',
+        mimeType: 'image/png',
+        bytes: new Uint8Array([4, 5, 6]),
+    })
+    const pendingBody = (base: ModelCheckRequest, expiresInMs = 60_000): Response =>
+        Response.json(
+            {
+                status: 'pending',
+                requestId: base.requestId,
+                binding: base.binding,
+                ticket: 'ticket-1',
+                retryAfterMs: 1500,
+                expiresInMs,
+            },
+            { status: 202 },
+        )
+    const answered = (base: ModelCheckRequest): Response =>
+        Response.json({
+            status: 'ok',
+            mode: 'model',
+            requestId: base.requestId,
+            binding: base.binding,
+            value: {
+                answer: 'It faces inward.',
+                sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                missingEvidence: [],
+            },
+        })
+
+    it('lets the first request outlive the old eight-second ceiling, then follows the ticket without resending the photo', async () => {
+        vi.useFakeTimers()
+        const urls: string[] = []
+        const base = request(createDemoManual(), clientWith(vi.fn()), source)
+        const fetch = vi.fn<ModelFetch>(async (url) => {
+            urls.push(new URL(url).pathname)
+            if (url.endsWith('/api/questions')) {
+                await new Promise((resolve) => setTimeout(resolve, 9_000))
+                return pendingBody(base)
+            }
+            return urls.filter((path) => path === '/api/questions/result').length < 2
+                ? pendingBody(base)
+                : answered(base)
+        })
+        const work = askModelQuestion(asked({ ...base, client: clientWith(fetch) }))
+        await vi.advanceTimersByTimeAsync(9_000)
+        await vi.advanceTimersByTimeAsync(3_100)
+        await vi.advanceTimersByTimeAsync(3_100)
+        const result = await work
+        expect(result).toMatchObject({ status: 'ok', value: { answer: 'It faces inward.' } })
+        expect(urls).toEqual(['/api/questions', '/api/questions/result', '/api/questions/result'])
+    })
+
+    it('stops the server job and reports a stop when the caller cancels while waiting', async () => {
+        vi.useFakeTimers()
+        const controller = new AbortController()
+        const urls: string[] = []
+        const base = request(createDemoManual(), clientWith(vi.fn()), source)
+        const fetch = vi.fn<ModelFetch>(async (url) => {
+            urls.push(new URL(url).pathname)
+            return url.endsWith('/api/questions/cancel') ? new Response(null, { status: 204 }) : pendingBody(base)
+        })
+        const work = askModelQuestion(asked({ ...base, client: clientWith(fetch), signal: controller.signal }))
+        await vi.advanceTimersByTimeAsync(2_000)
+        controller.abort()
+        const result = await work
+        expect(result).toMatchObject({ status: 'unavailable', code: 'invalid_input', retryable: false })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(urls).toContain('/api/questions/cancel')
+        expect(urls.filter((path) => path === '/api/questions')).toHaveLength(1)
+    })
+
+    it('gives up at the ticket horizon as a timeout, cancels the job, and never resends the question', async () => {
+        vi.useFakeTimers()
+        const urls: string[] = []
+        const base = request(createDemoManual(), clientWith(vi.fn()), source)
+        const fetch = vi.fn<ModelFetch>(async (url) => {
+            urls.push(new URL(url).pathname)
+            return url.endsWith('/api/questions/cancel')
+                ? new Response(null, { status: 204 })
+                : pendingBody(base, 3_000)
+        })
+        const work = askModelQuestion(asked({ ...base, client: clientWith(fetch) }))
+        await vi.advanceTimersByTimeAsync(10_000)
+        const result = await work
+        expect(result).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+        expect(urls.filter((path) => path === '/api/questions')).toHaveLength(1)
+        expect(urls).toContain('/api/questions/cancel')
+    })
+
+    it('treats a first request that never answers as one timeout at the new budget, with no retry', async () => {
+        vi.useFakeTimers()
+        const fetch = vi.fn<ModelFetch>(() => new Promise<Response>(() => undefined))
+        const base = request(createDemoManual(), clientWith(fetch), source)
+        const work = askModelQuestion(asked(base))
+        await vi.advanceTimersByTimeAsync(11_900)
+        expect(fetch).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(300)
+        expect(await work).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+        expect(fetch).toHaveBeenCalledTimes(1)
     })
 })

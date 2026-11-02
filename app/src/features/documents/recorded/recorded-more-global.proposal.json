@@ -1,0 +1,345 @@
+{
+    "header": { "title": { "kind": "literal", "text": "More" }, "subtitle": null, "back": null, "actions": [] },
+    "body": {
+        "type": "Scroll",
+        "axis": "vertical",
+        "children": [
+            {
+                "type": "Stack",
+                "gap": "lg",
+                "align": "stretch",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Settings and help." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "neutral",
+                        "align": "start"
+                    },
+                    {
+                        "type": "Section",
+                        "title": { "kind": "literal", "text": "How it works" },
+                        "collapsible": false,
+                        "initiallyOpen": true,
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "help-scan" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "help-look" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "help-next" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "help-ask" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "SecondaryAction",
+                                "label": "Show tips again",
+                                "icon": "help",
+                                "intent": { "intent": "show-tips", "target": "screen" }
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Section",
+                        "title": { "kind": "literal", "text": "Settings" },
+                        "collapsible": false,
+                        "initiallyOpen": true,
+                        "children": [
+                            {
+                                "type": "Choice",
+                                "prompt": { "kind": "literal", "text": "Reading language" },
+                                "options": { "mode": "bound", "binding": "language" }
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "storage-summary" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "storage-note" },
+                                "role": "caption",
+                                "emphasis": "quiet",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "SecondaryAction",
+                                "label": "Open device settings",
+                                "icon": null,
+                                "intent": { "intent": "open-details", "target": "device-settings" }
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Section",
+                        "title": { "kind": "literal", "text": "Your builds on this device" },
+                        "collapsible": true,
+                        "initiallyOpen": false,
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-stay" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-library" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-once" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Section",
+                        "title": { "kind": "literal", "text": "What leaves this device" },
+                        "collapsible": true,
+                        "initiallyOpen": false,
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-read" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-check" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-ask" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "bound", "key": "privacy-camera" },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "neutral",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "bar": {
+        "primary": {
+            "type": "PrimaryAction",
+            "label": "Close",
+            "icon": "chevronLeft",
+            "intent": { "intent": "navigate", "target": "back" }
+        },
+        "secondary": {
+            "type": "SecondaryAction",
+            "label": "About this check",
+            "icon": "info",
+            "intent": { "intent": "open-details", "target": "about-check" }
+        }
+    },
+    "overlays": [],
+    "states": {
+        "busy": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "More" },
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            { "type": "Progress", "binding": "build", "label": null },
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "pending": {
+            "header": {
+                "title": { "kind": "literal", "text": "Working on it" },
+                "subtitle": { "kind": "literal", "text": "More" },
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Stack",
+                        "gap": "md",
+                        "align": "stretch",
+                        "children": [
+                            {
+                                "type": "Text",
+                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "role": "body",
+                                "emphasis": "normal",
+                                "tone": "info",
+                                "align": "start"
+                            },
+                            { "type": "Progress", "binding": "build", "label": null }
+                        ]
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "empty": null,
+        "error": {
+            "header": {
+                "title": { "kind": "literal", "text": "Something went wrong" },
+                "subtitle": null,
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Try again in a moment." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "caution",
+                        "align": "start"
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": {
+                    "type": "SecondaryAction",
+                    "label": "Close",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "back" }
+                }
+            },
+            "overlays": []
+        },
+        "recovery": {
+            "header": {
+                "title": { "kind": "literal", "text": "Let us get you back on track" },
+                "subtitle": null,
+                "back": null,
+                "actions": []
+            },
+            "body": {
+                "type": "Scroll",
+                "axis": "vertical",
+                "children": [
+                    {
+                        "type": "Text",
+                        "content": { "kind": "literal", "text": "Try again, or go back home." },
+                        "role": "body",
+                        "emphasis": "normal",
+                        "tone": "neutral",
+                        "align": "start"
+                    }
+                ]
+            },
+            "bar": {
+                "primary": {
+                    "type": "PrimaryAction",
+                    "label": "Home",
+                    "icon": "chevronLeft",
+                    "intent": { "intent": "navigate", "target": "home" }
+                },
+                "secondary": null
+            },
+            "overlays": []
+        },
+        "confirming": null
+    }
+}

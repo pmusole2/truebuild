@@ -10,6 +10,8 @@ export default defineConfig({
             'gates/**/*.test.ts',
         ],
         exclude: ['**/node_modules/**', '**/*.native.test.ts'],
+        // Keep TS-loading child-process integration tests and large manual fixtures within a bounded CPU budget.
+        maxWorkers: 4,
         restoreMocks: true,
     },
 })

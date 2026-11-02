@@ -6,6 +6,10 @@ import {
     type ManualBinding,
 } from '@truebuild/contracts'
 import { z } from 'zod'
+import { nativeProofConfig } from '../features/ai-effort-proof/config'
+
+// This pure transport module is also compiled by the Node-side fixture integration tests.
+declare const __DEV__: boolean
 
 export const MAX_RESPONSE_BYTES = 262_144
 
@@ -16,11 +20,17 @@ const PRIVATE_LAN =
 
 /** Metro/Next inline NODE_ENV at build time; a production bundle has no development escape hatch. */
 export function isDevelopmentBuild(): boolean {
-    return process.env.NODE_ENV !== 'production'
+    return typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production'
 }
 
 function isDevelopmentHost(hostname: string): boolean {
     return LOOPBACK_HOSTS.includes(hostname) || PRIVATE_LAN.test(hostname)
+}
+
+function isLoopbackHost(hostname: string): boolean {
+    return /^(?:localhost\.?|.*\.localhost\.?|127\..*|0\.0\.0\.0|\[::(?:1|ffff:7f[\da-f]{2}:[\da-f]{1,4})?\])$/iu.test(
+        hostname,
+    )
 }
 
 export type UnavailableCode = Extract<ApiResult<never>, { status: 'unavailable' }>['code']
@@ -46,12 +56,22 @@ export class InvalidResponseError extends Error {
 
 export function parseBaseUrl(raw: string): string {
     const url = new URL(raw)
+    let isolatedReleaseFixture = false
+    if (!isDevelopmentBuild() && process.env.EXPO_PUBLIC_RELEASE_FIXTURE === '1') {
+        try {
+            isolatedReleaseFixture = nativeProofConfig(raw) !== null
+        } catch {
+            // An invalid public build flag can never widen ordinary production transport policy.
+        }
+    }
 
     const schemeAllowed =
         url.protocol === 'https:' ||
-        (url.protocol === 'http:' && isDevelopmentBuild() && isDevelopmentHost(url.hostname))
+        (url.protocol === 'http:' &&
+            ((isDevelopmentBuild() && isDevelopmentHost(url.hostname)) || isolatedReleaseFixture))
     if (
         !schemeAllowed ||
+        (!isDevelopmentBuild() && !isolatedReleaseFixture && isLoopbackHost(url.hostname)) ||
         url.username !== '' ||
         url.password !== '' ||
         url.pathname !== '/' ||
@@ -201,10 +221,12 @@ export async function readBoundedText(
     response: Response,
     signal: AbortSignal,
     checkpoint: () => void,
+    maxBytes: number = MAX_RESPONSE_BYTES,
 ): Promise<string> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new InvalidResponseError('Invalid response limit')
     const declared = response.headers.get('content-length')
 
-    if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
+    if (declared !== null && Number(declared) > maxBytes) {
         discardResponse(response)
         throw new InvalidResponseError('Response exceeds the size limit')
     }
@@ -235,7 +257,7 @@ export async function readBoundedText(
 
             total += next.value.byteLength
 
-            if (total > MAX_RESPONSE_BYTES) {
+            if (total > maxBytes) {
                 onAbort()
                 throw new InvalidResponseError('Response exceeds the size limit')
             }
@@ -336,7 +358,10 @@ export function interpretEnvelope<T>(
         const failure = apiResultSchema(z.unknown()).safeParse(json)
 
         if (failure.success && failure.data.status === 'unavailable' && echoesRequest(failure.data, call, mode)) {
-            return unavailableResult(call.requestId, call.binding, failure.data.code, failure.data.retryable)
+            return {
+                ...unavailableResult<T>(call.requestId, call.binding, failure.data.code, failure.data.retryable),
+                ...(failure.data.message === undefined ? {} : { message: failure.data.message }),
+            }
         }
 
         return classify(status, call)

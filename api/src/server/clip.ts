@@ -5,8 +5,8 @@ import { z } from 'zod'
 import type { Deadline } from './deadline'
 
 const MAX_CLIP_BYTES = 20 * 1_024 * 1_024
-const FFPROBE = '/opt/homebrew/bin/ffprobe'
-const FFMPEG = '/opt/homebrew/bin/ffmpeg'
+const FFPROBE = process.env.FFPROBE_PATH ?? 'ffprobe'
+const FFMPEG = process.env.FFMPEG_PATH ?? 'ffmpeg'
 
 export class ClipError extends Error {
     constructor(readonly code: 'invalid_input' | 'unavailable') {
@@ -36,7 +36,7 @@ async function codec(
         const child = spawn(executable, [...args], {
             shell: false,
             stdio: ['pipe', 'pipe', 'pipe'],
-            env: { PATH: '/usr/bin:/bin', LANG: 'C', NODE_ENV: 'production' },
+            env: { PATH: process.env.PATH ?? '/usr/bin:/bin', LANG: 'C', NODE_ENV: 'production' },
         })
         const chunks: Buffer[] = []
         let outputBytes = 0

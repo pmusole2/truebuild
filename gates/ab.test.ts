@@ -290,7 +290,7 @@ describe('no automatic fallback: a Wonder failure stays a Wonder failure', () =>
         const { manifest, cwd } = await setup()
         const { factory } = fakeFactory({ [SPARK]: { attempts: 2 } })
         const report = await runAbGate({ manifest, cwd, apiKey: '<synthetic-key>', factory, random: () => false })
-        expect(report.providerRetryPolicy).toBe('provider_documented_429_500_503_max_3_attempts')
+        expect(report.providerRetryPolicy).toBe('one_pre_response_network_retry_100ms_no_http_retry')
         expect(report.gateRetryPolicy).toBe('none')
         expect(report.models.spark).toMatchObject({ attempts: 2, costStatus: 'priced', costUsd: 0.00166 })
         expect(report.requests).toBe(2 + 1)

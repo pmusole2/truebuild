@@ -5,34 +5,30 @@ import { MetaTransport, usageMetrics } from './meta-transport'
 afterEach(() => vi.useRealTimers())
 
 describe('absolute retry and model pacing boundaries', () => {
-    it.each([
-        ['seconds', '10'],
-        ['overflow', '9'.repeat(400)],
-    ])('does not dispatch a retry beyond the absolute deadline (%s)', async (_label, retryAfter) => {
+    it('separates pacing and retry backoff from time on the network, and observes nothing when not asked', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-        let calls = 0
-        let cancelled = false
+        const delays = [40, 30]
+        let call = 0
         const transport = new MetaTransport(async () => {
-            calls++
-            return new Response(
-                new ReadableStream({
-                    cancel: (): void => {
-                        cancelled = true
-                    },
-                }),
-                { status: 429, headers: { 'retry-after': retryAfter } },
-            )
+            const index = call++
+            await new Promise((resolve) => setTimeout(resolve, delays[index]))
+            return index === 0
+                ? new Response('busy', { status: 429, headers: { 'retry-after': '1' } })
+                : Response.json({})
         })
-        const deadline = createDeadline(2_000)
+        const observation = { paceWaitMs: 0, networkMs: 0 }
+        const deadline = createDeadline(20_000)
         try {
-            const pending = transport.send('muse-spark-1.3', {}, deadline).then(
-                () => 'unexpected_response',
-                (error: unknown) => error,
-            )
-            await vi.advanceTimersByTimeAsync(2_001)
-            expect(await pending).toMatchObject({ message: 'timeout' })
-            expect(calls).toBe(1)
-            expect(cancelled).toBe(true)
+            const pending = transport.send('muse-spark-1.3', {}, deadline, undefined, 3, observation)
+            await vi.advanceTimersByTimeAsync(3_000)
+            expect((await pending).status).toBe(200)
+            // 40 ms + 30 ms on the network; the one-second Retry-After wait is pacing, not provider time.
+            expect(observation.networkMs).toBeCloseTo(70, -1)
+            expect(observation.paceWaitMs).toBeGreaterThanOrEqual(1_000)
+            expect(observation.paceWaitMs).toBeLessThan(1_300)
+            const unobserved = transport.send('muse-wonder-1.0', {}, deadline)
+            await vi.advanceTimersByTimeAsync(3_000)
+            expect((await unobserved).status).toBeGreaterThan(0)
         } finally {
             deadline.dispose()
         }

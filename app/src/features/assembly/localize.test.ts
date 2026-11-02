@@ -25,9 +25,12 @@ const observation: Observation = {
 function request(streamFetch: StreamFetch, signal = new AbortController().signal): LocateRequest {
     return {
         client: new ModelApiClient({
-            baseUrl: 'http://127.0.0.1:3001',
+            baseUrl: 'https://localize.invalid',
             secret: 'public-demo-key-for-tests',
             streamFetch,
+            fetch: async (): Promise<never> => {
+                throw new Error('Only the injected stream belongs to localization tests.')
+            },
         }),
         requestId: 'localize-1',
         binding,

@@ -1,13 +1,14 @@
 import { describe, expect, it } from '@jest/globals'
 import { render, screen } from '@testing-library/react-native'
+import { contrastRatio } from '../theme/contrast'
 import { darkColors, lightColors } from '../theme/tokens'
 import { ThemeProvider } from '../theme/theme'
 import { Notice, StatusTag, VerdictTag, type Verdict } from './status'
 
 const VERDICT_LABELS: readonly (readonly [Verdict, string])[] = [
-    ['pass', 'Pass'],
-    ['refuse', 'Refuse'],
-    ['cannot_verify', 'Cannot verify'],
+    ['pass', 'Looks right'],
+    ['refuse', 'Not yet'],
+    ['cannot_verify', 'Can’t tell'],
 ]
 
 describe('verdict tags', () => {
@@ -23,18 +24,29 @@ describe('verdict tags', () => {
                 <VerdictTag verdict="refuse" />
             </>,
         )
-        expect(screen.getByText('Pass')).toHaveStyle({ color: lightColors.pass })
-        expect(screen.getByText('Refuse')).toHaveStyle({ color: lightColors.refuse })
+        expect(screen.getByText('Looks right')).toHaveStyle({ color: lightColors.pass })
+        expect(screen.getByText('Not yet')).toHaveStyle({ color: lightColors.refuse })
     })
 
-    it('the simulated tone reads as a strong, labelled stamp in dark mode too', async () => {
-        await render(
-            <ThemeProvider scheme="dark">
-                <StatusTag label="Simulated result" tone="simulated" icon="info" />
-            </ThemeProvider>,
-        )
-        expect(screen.getByText('Simulated result')).toHaveStyle({ color: darkColors.fillStrongInk })
-    })
+    it.each([
+        ['light', lightColors],
+        ['dark', darkColors],
+    ] as const)(
+        'the simulated tone is a readable labelled marker that does not outshine a verdict in %s',
+        async (scheme, colors) => {
+            await render(
+                <ThemeProvider scheme={scheme}>
+                    <StatusTag label="Simulated result" tone="simulated" icon="info" />
+                    <VerdictTag verdict="pass" />
+                </ThemeProvider>,
+            )
+            // Ink on the raised surface stays well above the 4.5 text threshold; the filled strong pairing is gone.
+            expect(screen.getByText('Simulated result')).toHaveStyle({ color: colors.ink })
+            expect(contrastRatio(colors.ink, colors.surfaceRaised)).toBeGreaterThan(7)
+            expect(screen.getByText('Simulated result')).not.toHaveStyle({ color: colors.fillStrongInk })
+            expect(screen.getByText('Looks right')).toHaveStyle({ color: colors.pass })
+        },
+    )
 })
 
 describe('notices', () => {

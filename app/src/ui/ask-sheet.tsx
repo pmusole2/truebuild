@@ -7,6 +7,7 @@ import { TextField } from './fields'
 import { focusRingStyle, useFocusRing } from './focus'
 import { Caption } from './text'
 import { Stack } from './surface'
+import { originId, parseOrigin } from './render-origin'
 
 export type AskPart = { readonly id: string; readonly label: string }
 
@@ -29,8 +30,11 @@ export function AskSheet({
     editable = true,
     onSubmit,
     busy = false,
+    stillThinking = false,
     disabledReason,
     answer,
+    submitLabel = 'Send question',
+    nativeID,
 }: {
     readonly question: string
     readonly questionLabel: string
@@ -44,15 +48,23 @@ export function AskSheet({
     readonly editable?: boolean
     readonly onSubmit: () => void
     readonly busy?: boolean
+    /** A real pending ticket was received. This deterministic status remains visible inside the open composer. */
+    readonly stillThinking?: boolean
     readonly disabledReason?: string
     readonly answer?: ReactNode
+    // Keep the visible and accessible action names identical for voice control.
+    readonly submitLabel?: string
+    // Render-origin marker for the root when a composed screen placed this composer.
+    readonly nativeID?: string
 }): ReactElement {
     const submitDisabled =
         !editable || busy || !hasTarget || question.trim().length === 0 || disabledReason !== undefined
+    const submitInstruction = submitLabel === 'Send question' ? 'Send' : submitLabel
     return (
-        <Stack gap="md">
+        <Stack gap="md" nativeID={nativeID}>
             <Caption>
-                Type a question, or use your keyboard’s dictation. Questions are sent only when you press Send.
+                Type a question, or use your keyboard’s dictation. Questions are sent only when you press{' '}
+                {submitInstruction}.
             </Caption>
             <TextField
                 label={questionLabel}
@@ -81,8 +93,19 @@ export function AskSheet({
                 </Stack>
             )}
             <Caption>{targetSummary}</Caption>
+            {busy && stillThinking ? (
+                <View
+                    nativeID={originId(parseOrigin(nativeID) ?? 'shell')}
+                    accessible
+                    accessibilityLabel="Still thinking…"
+                    accessibilityLiveRegion="polite"
+                >
+                    <Caption>Still thinking…</Caption>
+                </View>
+            ) : null}
             <AppButton
-                label="Send question"
+                label={submitLabel}
+                accessibilityLabel={submitLabel}
                 variant="primary"
                 busy={busy}
                 disabled={submitDisabled}
@@ -121,12 +144,12 @@ function PartChip({
                 disabled && styles.disabled,
                 {
                     borderColor: colors.borderStrong,
-                    backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised,
+                    backgroundColor: selected ? colors.accent : colors.surfaceRaised,
                 },
                 focusRingStyle(focus.focused, colors),
             ]}
         >
-            <Caption tone={selected ? 'inverse' : 'default'}>{label}</Caption>
+            <Caption tone={selected ? 'onAccent' : 'default'}>{label}</Caption>
         </Pressable>
     )
 }
@@ -142,6 +165,7 @@ const styles = StyleSheet.create({
     },
     chip: {
         minHeight: touchTarget,
+        maxWidth: '100%',
         paddingHorizontal: space.sm,
         justifyContent: 'center',
         borderWidth: 1,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
-import { act, render } from '@testing-library/react-native'
+import { render, screen } from '@testing-library/react-native'
 import { AccessibilityInfo, type EventSubscription } from 'react-native'
 import { spies } from './test-support/reanimated-mock'
 import { FeedbackProvider } from './feedback'
@@ -10,7 +10,7 @@ jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/re
 
 beforeEach(() => {
     spies.withRepeat.mockClear()
-    spies.cancelAnimation.mockClear()
+    spies.withTiming.mockClear()
     jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false)
     jest.spyOn(AccessibilityInfo, 'addEventListener').mockImplementation(
         () => ({ remove: (): void => undefined }) as unknown as EventSubscription,
@@ -18,32 +18,15 @@ beforeEach(() => {
 })
 
 describe('Skeleton', () => {
-    it('pulses with a repeating animation while motion is allowed', async () => {
+    it.each([false, true])('is a static placeholder that starts no loop (reduced motion %s)', async (reduced) => {
         await render(
-            <FeedbackProvider reduceMotion={false}>
+            <FeedbackProvider reduceMotion={reduced}>
                 <Skeleton />
             </FeedbackProvider>,
         )
-        expect(spies.withRepeat).toHaveBeenCalledWith(expect.anything(), -1, false)
-    })
-
-    it('starts no loop under reduced motion', async () => {
-        await render(
-            <FeedbackProvider reduceMotion={true}>
-                <Skeleton />
-            </FeedbackProvider>,
-        )
+        expect(screen.getByTestId('skeleton-block', { hidden: true })).toBeTruthy()
         expect(spies.withRepeat).not.toHaveBeenCalled()
-    })
-
-    it('cancels its loop when it unmounts', async () => {
-        const screen = await render(
-            <FeedbackProvider reduceMotion={false}>
-                <Skeleton />
-            </FeedbackProvider>,
-        )
-        await act(() => screen.unmount())
-        expect(spies.cancelAnimation).toHaveBeenCalled()
+        expect(spies.withTiming).not.toHaveBeenCalled()
     })
 })
 

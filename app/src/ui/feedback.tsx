@@ -16,19 +16,32 @@ export const noopHaptics: HapticPort = {
 
 type FeedbackContextValue = {
     readonly haptics: HapticPort
+    readonly announced: Set<string>
+    // Visual one-shots (the result icon) keep their own memory, so a haptic never suppresses a first reveal.
+    readonly revealed: Set<string>
     // null means "follow the system setting"; a boolean is an explicit override for previews and tests.
+    readonly provided: boolean
+    readonly systemReduceMotion: boolean
     readonly reduceMotionOverride: boolean | null
 }
 
-const FeedbackContext = createContext<FeedbackContextValue>({ haptics: noopHaptics, reduceMotionOverride: null })
+const FeedbackContext = createContext<FeedbackContextValue>({
+    haptics: noopHaptics,
+    announced: new Set(),
+    revealed: new Set(),
+    provided: false,
+    systemReduceMotion: true,
+    reduceMotionOverride: null,
+})
 
 /**
  * Tracks the system reduce-motion setting. Until the system answers, motion counts as reduced, so no animation starts
  * before the user's preference is known.
  */
-export function useSystemReduceMotion(): boolean {
+export function useSystemReduceMotion(enabled = true): boolean {
     const [reduced, setReduced] = useState(true)
     useEffect(() => {
+        if (!enabled) return undefined
         let active = true
         // A rejected query (unsupported capability) keeps motion reduced and never surfaces as an unhandled rejection.
         AccessibilityInfo.isReduceMotionEnabled()
@@ -49,7 +62,7 @@ export function useSystemReduceMotion(): boolean {
             active = false
             subscription.remove()
         }
-    }, [])
+    }, [enabled])
     return reduced
 }
 
@@ -62,21 +75,37 @@ export function FeedbackProvider({
     readonly reduceMotion?: boolean | null
     readonly children: ReactNode
 }): ReactElement {
+    // This provider outlives route screens. Returning to a retained result must not announce it a second time.
+    const systemReduceMotion = useSystemReduceMotion()
+    const announced = useMemo(() => new Set<string>(), [])
+    const revealed = useMemo(() => new Set<string>(), [])
     const value = useMemo(
-        (): FeedbackContextValue => ({ haptics, reduceMotionOverride: reduceMotion }),
-        [haptics, reduceMotion],
+        (): FeedbackContextValue => ({
+            provided: true,
+            haptics,
+            announced,
+            revealed,
+            systemReduceMotion,
+            reduceMotionOverride: reduceMotion,
+        }),
+        [haptics, announced, revealed, reduceMotion, systemReduceMotion],
     )
     return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>
 }
 
 export type Feedback = {
     readonly haptic: (kind: HapticKind) => void
+    readonly hapticOnce: (identity: string, kind: HapticKind) => void
+    // True the first time an identity is revealed for this provider, false ever after (a revisit never replays).
+    readonly revealOnce: (identity: string) => boolean
     readonly reduceMotion: boolean
 }
 
 export function useFeedback(): Feedback {
-    const { haptics, reduceMotionOverride } = useContext(FeedbackContext)
-    const system = useSystemReduceMotion()
+    const { haptics, announced, revealed, provided, reduceMotionOverride, systemReduceMotion } =
+        useContext(FeedbackContext)
+    const fallback = useSystemReduceMotion(!provided)
+    const system = provided ? systemReduceMotion : fallback
     return useMemo((): Feedback => {
         const haptic = (kind: HapticKind): void => {
             // Feedback is best-effort: neither a synchronous throw nor a rejected promise may block the action it accompanies.
@@ -86,6 +115,19 @@ export function useFeedback(): Feedback {
                 return
             }
         }
-        return { haptic, reduceMotion: reduceMotionOverride ?? system }
-    }, [haptics, reduceMotionOverride, system])
+        const hapticOnce = (identity: string, kind: HapticKind): void => {
+            if (!announced.has(identity)) {
+                announced.add(identity)
+                haptic(kind)
+            }
+        }
+        const revealOnce = (identity: string): boolean => {
+            if (revealed.has(identity)) {
+                return false
+            }
+            revealed.add(identity)
+            return true
+        }
+        return { haptic, hapticOnce, revealOnce, reduceMotion: reduceMotionOverride ?? system }
+    }, [haptics, announced, revealed, reduceMotionOverride, system])
 }

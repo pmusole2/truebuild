@@ -4,6 +4,7 @@ import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, touchTarget } from '../theme/tokens'
 import { focusRingStyle, useFocusRing } from './focus'
+import { Icon } from './icons'
 import { Caption, Label } from './text'
 
 export type TextFieldProps = {
@@ -81,7 +82,16 @@ export function TextField({
                     },
                 ]}
             />
-            {error === undefined ? null : <Caption tone="refuse">{error}</Caption>}
+            {error === undefined ? null : (
+                <View style={styles.error}>
+                    <View testID="field-error-icon" accessibilityElementsHidden={true} importantForAccessibility="no">
+                        <Icon name="alert" size="sm" color={colors.refuse} />
+                    </View>
+                    <View style={styles.errorText}>
+                        <Caption tone="refuse">{error}</Caption>
+                    </View>
+                </View>
+            )}
             {error !== undefined || hint === undefined ? null : <Caption>{hint}</Caption>}
         </View>
     )
@@ -95,11 +105,13 @@ export function SegmentedControl<T extends string>({
     options,
     value,
     onChange,
+    disabled = false,
 }: {
     readonly label: string
     readonly options: readonly SegmentOption<T>[]
     readonly value: T
     readonly onChange: (value: T) => void
+    readonly disabled?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     return (
@@ -114,6 +126,7 @@ export function SegmentedControl<T extends string>({
                     option={option}
                     selected={option.value === value}
                     onChange={onChange}
+                    disabled={disabled}
                 />
             ))}
         </View>
@@ -124,10 +137,12 @@ function SegmentChoice<T extends string>({
     option,
     selected,
     onChange,
+    disabled,
 }: {
     readonly option: SegmentOption<T>
     readonly selected: boolean
     readonly onChange: (value: T) => void
+    readonly disabled: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
@@ -135,17 +150,20 @@ function SegmentChoice<T extends string>({
         <Pressable
             accessibilityRole="radio"
             accessibilityLabel={option.label}
-            accessibilityState={{ checked: selected }}
+            accessibilityState={{ checked: selected, ...(disabled ? { disabled: true } : {}) }}
+            disabled={disabled ? true : undefined}
             aria-checked={selected}
             {...focus.focusHandlers}
-            onPress={(): void => onChange(option.value)}
+            onPress={(): void => {
+                if (!disabled) onChange(option.value)
+            }}
             style={[
                 styles.segment,
-                { backgroundColor: selected ? colors.fillStrong : colors.surfaceRaised },
+                { backgroundColor: selected ? colors.accent : colors.surfaceRaised },
                 focusRingStyle(focus.focused, colors),
             ]}
         >
-            <Caption tone={selected ? 'inverse' : 'default'}>{option.label}</Caption>
+            <Caption tone={selected ? 'onAccent' : 'default'}>{option.label}</Caption>
         </Pressable>
     )
 }
@@ -157,12 +175,14 @@ export function SettingRow({
     value,
     onValueChange,
     testID,
+    disabled = false,
 }: {
     readonly label: string
     readonly description?: string
     readonly value: boolean
     readonly onValueChange: (value: boolean) => void
     readonly testID?: string
+    readonly disabled?: boolean
 }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
@@ -171,10 +191,13 @@ export function SettingRow({
             accessibilityRole="switch"
             accessibilityLabel={label}
             accessibilityHint={description}
-            accessibilityState={{ checked: value }}
+            accessibilityState={{ checked: value, ...(disabled ? { disabled: true } : {}) }}
+            disabled={disabled ? true : undefined}
             aria-checked={value}
             {...focus.focusHandlers}
-            onPress={(): void => onValueChange(!value)}
+            onPress={(): void => {
+                if (!disabled) onValueChange(!value)
+            }}
             testID={testID}
             style={[styles.setting, { borderColor: colors.border }, focusRingStyle(focus.focused, colors)]}
         >
@@ -191,6 +214,8 @@ const styles = StyleSheet.create({
     field: {
         gap: space.xs,
     },
+    error: { flexDirection: 'row', alignItems: 'flex-start', gap: space.xs },
+    errorText: { flex: 1 },
     input: {
         minHeight: touchTarget,
         borderWidth: 1,

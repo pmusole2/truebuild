@@ -1,5 +1,5 @@
-// Workshop-tool identity: graphite ink on warm bench neutrals, with one safety-amber accent. Status colours are always
-// paired with an icon and a text label, so no verdict is conveyed by colour alone.
+// Neutral surfaces keep attention on the manual and assembly photo. Blue marks the primary action; status colours
+// always carry an icon and text, so a verdict never depends on colour alone.
 
 export type ColorScheme = 'light' | 'dark'
 
@@ -29,45 +29,45 @@ export type ColorToken =
 export type Colors = Readonly<Record<ColorToken, string>>
 
 export const lightColors: Colors = {
-    canvas: '#EEE8DB',
-    surface: '#FAF6EC',
-    surfaceRaised: '#FFFDF7',
-    surfaceSunken: '#E2D9C6',
-    ink: '#1E2225',
-    inkMuted: '#4F4A40',
-    inkInverse: '#F7F2E6',
-    border: '#CBBFA6',
-    borderStrong: '#7A7262',
-    focus: '#9A4B07',
-    fillStrong: '#262B2F',
-    fillStrongInk: '#F7F2E6',
-    accent: '#EB8E1F',
-    accentInk: '#8A4A06',
-    accentFillInk: '#1E2225',
-    pass: '#2D6A3E',
-    passSurface: '#DFEBD8',
-    refuse: '#A3331A',
-    refuseSurface: '#F5DED6',
-    caution: '#6F5110',
-    cautionSurface: '#F1E4BF',
+    canvas: '#F6F7F8',
+    surface: '#FFFFFF',
+    surfaceRaised: '#FFFFFF',
+    surfaceSunken: '#ECEEF0',
+    ink: '#171A1D',
+    inkMuted: '#4A5560',
+    inkInverse: '#FFFFFF',
+    border: '#C9CED4',
+    borderStrong: '#6B7480',
+    focus: '#0057C2',
+    fillStrong: '#171A1D',
+    fillStrongInk: '#FFFFFF',
+    accent: '#0057C2',
+    accentInk: '#004A9E',
+    accentFillInk: '#FFFFFF',
+    pass: '#1B6B3A',
+    passSurface: '#E6F2E9',
+    refuse: '#B42318',
+    refuseSurface: '#FDECEA',
+    caution: '#7A4A00',
+    cautionSurface: '#FFF1D6',
 }
 
 export const darkColors: Colors = {
-    canvas: '#15191C',
-    surface: '#1F2529',
-    surfaceRaised: '#283036',
-    surfaceSunken: '#0F1316',
-    ink: '#F1ECDF',
-    inkMuted: '#B7B0A1',
-    inkInverse: '#15191C',
-    border: '#3E474E',
-    borderStrong: '#8E877A',
-    focus: '#F4B25C',
-    fillStrong: '#F1ECDF',
-    fillStrongInk: '#15191C',
-    accent: '#F0A03A',
-    accentInk: '#F5B862',
-    accentFillInk: '#15191C',
+    canvas: '#0F1113',
+    surface: '#171A1D',
+    surfaceRaised: '#1F2328',
+    surfaceSunken: '#0B0D0F',
+    ink: '#F2F4F6',
+    inkMuted: '#B8C0C8',
+    inkInverse: '#171A1D',
+    border: '#343B42',
+    borderStrong: '#8A95A1',
+    focus: '#7AB8FF',
+    fillStrong: '#F2F4F6',
+    fillStrongInk: '#171A1D',
+    accent: '#8AB6FF',
+    accentInk: '#A9C9FF',
+    accentFillInk: '#071426',
     pass: '#97D3A4',
     passSurface: '#1E3324',
     refuse: '#F4A08A',
@@ -89,26 +89,35 @@ export const space = {
     xl: 32,
 } as const
 
+// Filled surfaces use 16-20 point continuous corners; sm stays small for outlines drawn on a photo.
 export const radius = {
     sm: 4,
-    md: 8,
-    lg: 12,
+    md: 16,
+    lg: 16,
+    sheet: 20,
+    hero: 20,
     pill: 999,
 } as const
 
 // Every control, including icon-only buttons and segmented options, keeps at least this interactive size.
 export const touchTarget = 44
 
+// The one primary action of a screen is taller than the floor so it is the obvious thing to press.
+export const primaryHeight = 56
+
+// Camera shutter diameter.
+export const shutterSize = 76
+
 export const iconSize = {
     sm: 20,
     md: 24,
 } as const
 
-// Durations for the shared motion helper. Under reduced motion every transition resolves immediately.
+// The only three transition durations. Under reduced motion every transition resolves immediately or fades at `fast`.
+// `emphasis` is the one bounded budget for the gentle spring (see ui/motion.ts); no other duration may be added.
 export const motion = {
     instant: 0,
-    quick: 150,
-    standard: 240,
-    sheet: 320,
-    pulse: 900,
+    fast: 150,
+    standard: 250,
+    emphasis: 350,
 } as const

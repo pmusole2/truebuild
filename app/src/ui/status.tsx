@@ -4,6 +4,7 @@ import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { radius, space, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
+import { useOriginNativeId } from './render-origin'
 
 // Verdicts always carry an icon and a text label. Colour is never the only signal.
 export type Verdict = 'pass' | 'refuse' | 'cannot_verify'
@@ -12,7 +13,8 @@ export type StatusTone = 'neutral' | 'simulated' | 'accent' | 'pass' | 'refuse' 
 
 const TONE: Readonly<Record<StatusTone, { surface: ColorToken; border: ColorToken; text: ColorToken }>> = {
     neutral: { surface: 'surfaceSunken', border: 'border', text: 'ink' },
-    simulated: { surface: 'fillStrong', border: 'fillStrong', text: 'fillStrongInk' },
+    // A labelled marker, not a verdict: raised and outlined, so it never outshines Pass, Refuse or Cannot verify.
+    simulated: { surface: 'surfaceRaised', border: 'borderStrong', text: 'ink' },
     accent: { surface: 'accent', border: 'accent', text: 'accentFillInk' },
     pass: { surface: 'passSurface', border: 'pass', text: 'pass' },
     refuse: { surface: 'refuseSurface', border: 'refuse', text: 'refuse' },
@@ -23,17 +25,20 @@ export function StatusTag({
     label,
     tone = 'neutral',
     icon,
+    nativeID,
 }: {
     readonly label: string
     readonly tone?: StatusTone
     readonly icon?: IconName
+    readonly nativeID?: string
 }): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const tokens = TONE[tone]
     const type = typeProps('label')
     const iconColor = colors[tokens.text]
     return (
-        <View style={[styles.tag, { backgroundColor: colors[tokens.surface], borderColor: colors[tokens.border] }]}>
+        <View nativeID={inheritedId} style={[styles.tag, { backgroundColor: colors[tokens.surface] }]}>
             {icon === undefined ? null : <Icon name={icon} size="sm" color={iconColor} />}
             <Text
                 maxFontSizeMultiplier={type.maxFontSizeMultiplier}
@@ -46,19 +51,25 @@ export function StatusTag({
 }
 
 const VERDICT: Readonly<Record<Verdict, { label: string; tone: StatusTone; icon: IconName }>> = {
-    pass: { label: 'Pass', tone: 'pass', icon: 'check' },
-    refuse: { label: 'Refuse', tone: 'refuse', icon: 'close' },
-    cannot_verify: { label: 'Cannot verify', tone: 'caution', icon: 'help' },
+    pass: { label: 'Looks right', tone: 'pass', icon: 'check' },
+    refuse: { label: 'Not yet', tone: 'refuse', icon: 'close' },
+    cannot_verify: { label: 'Can’t tell', tone: 'caution', icon: 'help' },
 }
 
-export function VerdictTag({ verdict }: { readonly verdict: Verdict }): ReactElement {
+export function VerdictTag({
+    verdict,
+    nativeID,
+}: {
+    readonly verdict: Verdict
+    readonly nativeID?: string
+}): ReactElement {
     const { label, tone, icon } = VERDICT[verdict]
-    return <StatusTag label={label} tone={tone} icon={icon} />
+    return <StatusTag label={label} tone={tone} icon={icon} nativeID={nativeID} />
 }
 
 export type NoticeTone = 'info' | 'caution' | 'error'
 
-const NOTICE_BAR: Readonly<Record<NoticeTone, ColorToken>> = {
+const NOTICE_INK: Readonly<Record<NoticeTone, ColorToken>> = {
     info: 'ink',
     caution: 'caution',
     error: 'refuse',
@@ -67,19 +78,30 @@ const NOTICE_BAR: Readonly<Record<NoticeTone, ColorToken>> = {
 /**
  * Inline message. Errors announce as alerts; other notices are read in place so they do not interrupt the user.
  */
-export function Notice({ text, tone = 'info' }: { readonly text: string; readonly tone?: NoticeTone }): ReactElement {
+export function Notice({
+    text,
+    tone = 'info',
+    nativeID,
+}: {
+    readonly text: string
+    readonly tone?: NoticeTone
+    readonly nativeID?: string
+}): ReactElement {
+    const inheritedId = useOriginNativeId(nativeID)
     const { colors } = useTheme()
     const type = typeProps('callout')
     return (
         <View
+            nativeID={inheritedId}
             accessible={true}
             accessibilityRole={tone === 'error' ? 'alert' : undefined}
-            style={[
-                styles.notice,
-                { backgroundColor: colors.surfaceSunken, borderLeftColor: colors[NOTICE_BAR[tone]] },
-            ]}
+            style={[styles.notice, { backgroundColor: colors.surfaceRaised }]}
         >
-            <Text maxFontSizeMultiplier={type.maxFontSizeMultiplier} style={[type.style, { color: colors.ink }]}>
+            <Icon name={tone === 'info' ? 'info' : 'alert'} size="sm" color={colors[NOTICE_INK[tone]]} />
+            <Text
+                maxFontSizeMultiplier={type.maxFontSizeMultiplier}
+                style={[type.style, styles.noticeText, { color: colors.ink }]}
+            >
                 {text}
             </Text>
         </View>
@@ -92,17 +114,24 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: space.xs,
-        borderWidth: 1,
-        borderRadius: radius.sm,
-        paddingHorizontal: space.xs,
+        borderRadius: radius.pill,
+        minHeight: 28,
+        paddingHorizontal: space.sm,
         paddingVertical: space.xxs,
     },
+    // Sentence case, so a verdict reads as a word and not as a shouted label.
     tagText: {
         flexShrink: 1,
+        textTransform: 'none',
+        letterSpacing: 0,
     },
     notice: {
-        borderLeftWidth: 4,
-        borderRadius: radius.sm,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: space.xs,
+        borderRadius: radius.md,
+        borderCurve: 'continuous',
         padding: space.sm,
     },
+    noticeText: { flex: 1 },
 })

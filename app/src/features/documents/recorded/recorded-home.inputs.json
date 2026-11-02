@@ -1,0 +1,15 @@
+{
+    "kind": "home",
+    "session": null,
+    "stepId": null,
+    "captureId": null,
+    "result": null,
+    "failure": null,
+    "uiState": {
+        "library": {
+            "entries": [],
+            "soleManualId": null
+        },
+        "busy": null
+    }
+}

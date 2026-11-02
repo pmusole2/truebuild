@@ -1,8 +1,11 @@
+import { SCREEN_CATALOG_V2_VERSION, SCREEN_DOCUMENT_V2_VERSION } from '@truebuild/contracts'
 import { Hono, type Context } from 'hono'
 
 import { DEMO_LABEL } from './providers/types'
 import { corsResponse, deniedOrigin, isAllowedOrigin, preflight } from './server/cors'
-import { createRuntimeFromEnvironment, type ApiRuntime } from './server/model-runtime'
+import { createRuntimeFromEnvironment, describeAiPolicy, type ApiRuntime } from './server/model-runtime'
+import { PRIVACY_PAGE_HTML } from './server/privacy-page'
+import { PUBLIC_LIMIT_MESSAGE, PublicLimitError } from './server/public-limits'
 
 type ApiEnv = { Variables: { runtime: ApiRuntime } }
 type Operation = 'parse' | 'check' | 'question' | 'segment'
@@ -11,9 +14,17 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/health', 'GET'],
     ['/api/session', 'GET'],
     ['/api/manuals/parse', 'POST'],
+    ['/api/pieces', 'POST'],
     ['/api/checks', 'POST'],
     ['/api/checks/second-opinion', 'POST'],
+    ['/api/checks/overlay', 'POST'],
+    ['/api/checks/overlay/result', 'POST'],
+    ['/api/checks/overlay/cancel', 'POST'],
     ['/api/questions', 'POST'],
+    ['/api/questions/result', 'POST'],
+    ['/api/questions/cancel', 'POST'],
+    ['/api/screens', 'POST'],
+    ['/api/screens/v2', 'POST'],
     ['/api/segments', 'POST'],
 ])
 
@@ -39,6 +50,8 @@ function dispatch(context: Context<ApiEnv>, operation: Operation): Promise<Respo
 const routes = new Hono<ApiEnv>()
     .get('/health', health)
     .get('/api/health', health)
+    // Public and unmetered: deliberately absent from `methods`, so neither the shared-key check nor the counter applies.
+    .get('/privacy', (context): Response => context.html(PRIVACY_PAGE_HTML))
     .get('/api/session', (context): Response =>
         context.json({
             status: 'ok',
@@ -47,14 +60,38 @@ const routes = new Hono<ApiEnv>()
             sparkModel: context.get('runtime').sparkModel,
             parseModel: context.get('runtime').parseModel,
             secondOpinionModel: context.get('runtime').secondOpinionModel,
+            aiPolicy: describeAiPolicy(context.get('runtime').policy),
+            followUps: { overlay: context.get('runtime').overlay, segments: context.get('runtime').segments },
+            // Secret-free: the whole-screen document version this server speaks and where, never a key or a model detail.
+            screensV2: {
+                documentVersion: SCREEN_DOCUMENT_V2_VERSION,
+                catalogVersion: SCREEN_CATALOG_V2_VERSION,
+                route: '/api/screens/v2',
+            },
             samModel: context.get('runtime').samModel,
             checkContext: context.get('runtime').checkContext,
             model: context.get('runtime').configured ? 'configured' : 'unconfigured',
         }),
     )
+    .post('/api/pieces', (context): Promise<Response> => context.get('runtime').model.pieces(context.req.raw))
     .post('/api/manuals/parse', (context): Promise<Response> => dispatch(context, 'parse'))
     .post('/api/checks/second-opinion', (context): Promise<Response> =>
         context.get('runtime').model.secondOpinion(context.req.raw),
+    )
+    .post('/api/checks/overlay', (context): Promise<Response> => context.get('runtime').model.overlay(context.req.raw))
+    .post('/api/checks/overlay/result', (context): Promise<Response> =>
+        context.get('runtime').model.overlayResult(context.req.raw),
+    )
+    .post('/api/checks/overlay/cancel', (context): Promise<Response> =>
+        context.get('runtime').model.overlayCancel(context.req.raw),
+    )
+    .post('/api/screens', (context): Promise<Response> => context.get('runtime').model.screens(context.req.raw))
+    .post('/api/screens/v2', (context): Promise<Response> => context.get('runtime').model.screensV2(context.req.raw))
+    .post('/api/questions/result', (context): Promise<Response> =>
+        context.get('runtime').model.questionResult(context.req.raw),
+    )
+    .post('/api/questions/cancel', (context): Promise<Response> =>
+        context.get('runtime').model.questionCancel(context.req.raw),
     )
     .post('/api/checks', (context): Promise<Response> => dispatch(context, 'check'))
     .post('/api/questions', (context): Promise<Response> => dispatch(context, 'question'))
@@ -87,7 +124,9 @@ export function createApp(
                 runtime.allowedOrigins,
             )
         try {
-            if (!isAllowedOrigin(request, runtime.allowedOrigins)) {
+            const publicPrivacy =
+                context.req.path === '/privacy' && (request.method === 'GET' || request.method === 'HEAD')
+            if (!publicPrivacy && !isAllowedOrigin(request, runtime.allowedOrigins)) {
                 await request.body?.cancel().catch((): void => {})
                 if (request.method === 'OPTIONS') {
                     return deniedOrigin(401)
@@ -108,7 +147,32 @@ export function createApp(
                         : corsResponse(request, deniedOrigin(401), runtime.allowedOrigins)
                 }
             }
-            await next()
+            // Collection/cancellation spends no model calls and must remain available after a ceiling is reached.
+            const generates =
+                method === 'POST' && !context.req.path.endsWith('/result') && !context.req.path.endsWith('/cancel')
+            try {
+                if (generates)
+                    await runtime.counter.runForClient(request, context.req.path === '/api/manuals/parse', next)
+                else await next()
+            } catch (error) {
+                if (!(error instanceof PublicLimitError)) throw error
+                await request.body?.cancel().catch((): void => {})
+                return corsResponse(
+                    request,
+                    Response.json(
+                        {
+                            status: 'unavailable',
+                            requestId: 'invalid-request',
+                            binding: null,
+                            code: 'budget_exhausted',
+                            retryable: false,
+                            message: PUBLIC_LIMIT_MESSAGE,
+                        },
+                        { status: 429, headers: { 'cache-control': 'no-store' } },
+                    ),
+                    runtime.allowedOrigins,
+                )
+            }
             context.res.headers.set('cache-control', 'no-store')
             corsResponse(request, context.res, runtime.allowedOrigins)
         } finally {

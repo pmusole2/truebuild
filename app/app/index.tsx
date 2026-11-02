@@ -1,6 +1,11 @@
 import type { ReactElement } from 'react'
-import { CaptureApp } from '../src/features/capture/app-screen'
+import { DocumentRouteBoundary } from '../src/features/documents/ownership'
+import { HomeRoute } from '../src/features/capture/route-screens'
 
 export default function IndexRoute(): ReactElement {
-    return <CaptureApp />
+    return (
+        <DocumentRouteBoundary>
+            <HomeRoute />
+        </DocumentRouteBoundary>
+    )
 }

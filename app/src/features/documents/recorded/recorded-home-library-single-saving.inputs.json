@@ -1,0 +1,27 @@
+{
+    "kind": "home",
+    "session": null,
+    "stepId": null,
+    "captureId": null,
+    "result": null,
+    "failure": null,
+    "uiState": {
+        "library": {
+            "entries": [
+                {
+                    "manualId": "demo-divider",
+                    "title": "Demo data — simulated results",
+                    "updatedAt": "2026-01-01T00:00:00.000Z",
+                    "stopStepId": null,
+                    "completed": 0,
+                    "total": 2,
+                    "firstPageId": "demo-page-1"
+                }
+            ],
+            "soleManualId": "demo-divider"
+        },
+        "busy": {
+            "activity": "saving"
+        }
+    }
+}

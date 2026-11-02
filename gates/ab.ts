@@ -31,8 +31,8 @@ const ARM_KEYS = { 'muse-spark-1.3': 'spark', 'muse-wonder-1.0': 'wonder' } as c
     'spark' | 'wonder'
 >
 
-/** Provider policy as implemented: documented 429/500/503 retries inside one parse call, at most 3 attempts. */
-export const PROVIDER_RETRY_POLICY = 'provider_documented_429_500_503_max_3_attempts'
+/** Provider policy: one 100ms retry before any response, never an HTTP-status retry. */
+export const PROVIDER_RETRY_POLICY = 'one_pre_response_network_retry_100ms_no_http_retry'
 /** The gate itself never re-sends a parse. */
 export const GATE_RETRY_POLICY = 'none'
 

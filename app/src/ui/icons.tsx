@@ -6,6 +6,7 @@ import { iconSize } from '../theme/tokens'
 // One 24-unit stroke grid for every glyph. Icons are decorative: the label beside or on the control carries meaning.
 const GLYPHS = {
     alert: ['M12 4.2 21 19.6H3z', 'M12 10v4.4', 'M12 17.2v.01'],
+    arrowRight: ['M4.5 12h14', 'M13 6.5 18.5 12 13 17.5'],
     camera: ['M4 8.2h3.2l1.7-2.4h6.2l1.7 2.4H20v10.8H4z', 'M12 16.2a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8z'],
     check: ['M5 12.6 9.9 17.4 19 7.2'],
     chevronLeft: ['M15 5.5 8.5 12l6.5 6.5'],
@@ -22,6 +23,7 @@ const GLYPHS = {
         'M9.1 8.6a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2z',
     ],
     info: ['M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17z', 'M12 11v5.2', 'M12 7.9v.01'],
+    more: ['M5.5 12v.01', 'M12 12v.01', 'M18.5 12v.01'],
     plus: ['M12 5.5v13', 'M5.5 12h13'],
     refresh: ['M19.2 12a7.2 7.2 0 1 1-2.1-5.1', 'M19.5 4.5v4.2h-4.2'],
     search: ['M10.8 4.8a6 6 0 1 0 0 12 6 6 0 0 0 0-12z', 'M15.3 15.3l4.3 4.3'],

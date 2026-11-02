@@ -3,6 +3,7 @@ import {
     LIMITS,
     type ApiResult,
     type CaptureBinding,
+    type ManualBinding,
     type ManualSession,
     type SegmentEvent,
 } from '@truebuild/contracts'
@@ -30,6 +31,7 @@ const captureBinding: CaptureBinding = {
     stepId: 'step-1',
     captureId: 'capture-1',
 }
+const manualBinding: ManualBinding = { kind: 'manual', manualId: session.manualId, revision: session.revision }
 const sourcePageIds = ['demo-page-1']
 const observation: ImageBytes = { bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg', width: 4, height: 3 }
 const source: ImageBytes = {
@@ -60,6 +62,10 @@ function scripted(response: () => Response): { fetch: ModelFetch; calls: Recorde
 
 function client(fetch: ModelFetch): ModelApiClient {
     return new ModelApiClient({ baseUrl: BASE_URL, secret: SECRET, fetch })
+}
+
+function okParse(): unknown {
+    return { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value: session.rawExtraction }
 }
 
 function okCheck(overrides: Record<string, unknown> = {}): unknown {
@@ -232,7 +238,7 @@ describe('trusted outer action checkpoint', () => {
             const text = stringify(value)
 
             if (typeof value === 'object' && value !== null && 'sourcePageIds' in value) {
-                now += 8001
+                now += MODEL_CHECK_TIMEOUT_MS + 1
             }
 
             return text
@@ -281,15 +287,19 @@ const segmentMetadata = {
 }
 
 describe('ModelApiClient construction', () => {
+    const noRequest: ModelFetch = (): Promise<Response> => Promise.reject(new Error('Construction sends no request.'))
+    const construct = (baseUrl: string): ModelApiClient =>
+        new ModelApiClient({ baseUrl, secret: SECRET, fetch: noRequest })
+
     it('refuses a non-loopback http origin, a path, or a credentialed origin before any I/O', () => {
-        expect(() => new ModelApiClient({ baseUrl: 'http://example.com', secret: SECRET })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001/api', secret: SECRET })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'https://user:pass@example.com', secret: SECRET })).toThrow()
+        expect(() => construct('http://example.com')).toThrow()
+        expect(() => construct('http://127.0.0.1:3001/api')).toThrow()
+        expect(() => construct('https://user:pass@example.com')).toThrow()
     })
 
     it('accepts https and LAN http origins for development', () => {
-        expect(() => new ModelApiClient({ baseUrl: 'https://api.example.com', secret: SECRET })).not.toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'http://192.168.1.20:3001', secret: SECRET })).not.toThrow()
+        expect(() => construct('https://api.example.com')).not.toThrow()
+        expect(() => construct('http://192.168.1.20:3001')).not.toThrow()
     })
 })
 
@@ -310,12 +320,12 @@ describe('ModelApiClient request validation (zero dispatch when invalid)', () =>
         expect(calls).toHaveLength(0)
     })
 
-    it('sends nothing when the metadata JSON exceeds the 512KiB app/server limit', async () => {
+    it('sends nothing when the metadata JSON exceeds the 1MiB app/server limit', async () => {
         const { fetch, calls } = scripted(() => jsonResponse(200, okCheck()))
         const first = session.reviewedSteps[0]!
         const oversized: ManualSession = {
             ...session,
-            reviewedSteps: Array.from({ length: 100 }, (_, index) => ({
+            reviewedSteps: Array.from({ length: 200 }, (_, index) => ({
                 ...first,
                 stepId: index === 0 ? first.stepId : `large-step-${index}`,
                 order: index + 1,
@@ -397,7 +407,7 @@ describe('ModelApiClient multipart dispatch', () => {
         expect(call?.init.redirect).toBe('error')
     })
 
-    it('uses the 8s check deadline, not the 30s parse deadline', async () => {
+    it('uses the 8s check deadline, not the 110s parse deadline', async () => {
         vi.useFakeTimers()
         try {
             const pending = new Promise<Response>(() => undefined)
@@ -414,7 +424,50 @@ describe('ModelApiClient multipart dispatch', () => {
 
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(MODEL_CHECK_TIMEOUT_MS).toBe(15_000)
+            expect(MODEL_PARSE_TIMEOUT_MS).toBe(175_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
+            // The streamed parse route allows 170s; the client outlasts it so the server reports its timeout.
+            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(170_000)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('accepts a parse reply delivered at 170 seconds', async () => {
+        vi.useFakeTimers()
+        let deliver: ((response: Response) => void) | undefined
+        const fetch = vi.fn(
+            (): Promise<Response> =>
+                new Promise((resolve) => {
+                    deliver = resolve
+                }),
+        )
+        try {
+            const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+            await vi.advanceTimersByTimeAsync(170_000)
+            expect(fetch).toHaveBeenCalledTimes(1)
+            deliver?.(jsonResponse(200, okParse()))
+            expect(await pending).toMatchObject({ status: 'ok', mode: 'model', requestId: REQUEST_ID })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('times out a hung parse at 175 seconds once without retry', async () => {
+        vi.useFakeTimers()
+        const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
+        try {
+            const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+            await vi.advanceTimersByTimeAsync(174_999)
+            let settled = false
+            void pending.then(() => (settled = true))
+            await Promise.resolve()
+            expect(settled).toBe(false)
+
+            await vi.advanceTimersByTimeAsync(2)
+            expect(await pending).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(fetch).toHaveBeenCalledTimes(1)
         } finally {
             vi.useRealTimers()
         }
@@ -481,6 +534,33 @@ describe('ModelApiClient segment stream', () => {
         observation,
         { requestId: REQUEST_ID },
     ]
+
+    it('ignores keepalive comments between parse progress and segment events', async () => {
+        const phases: string[] = []
+        const parse = scripted(() =>
+            streamOf([
+                'data: {"type":"progress","phase":"reading"}\n\n',
+                ': ping\n\n',
+                `data: ${JSON.stringify({ type: 'result', result: okParse() })}\n\n`,
+            ]),
+        )
+        expect(
+            await client(parse.fetch).parse(manualBinding, session.pages, [source], {
+                requestId: REQUEST_ID,
+                onProgress: (phase) => phases.push(phase),
+            }),
+        ).toMatchObject({ status: 'ok' })
+        expect(phases).toEqual(['reading'])
+
+        const api = segmentStream(
+            streamOf([
+                `data: ${JSON.stringify(snapshotEvent())}\n\n`,
+                ': ping\n\n',
+                `data: ${JSON.stringify(completedEvent())}\n\n`,
+            ]),
+        )
+        expect((await collect(api.segments(...segmentArgs()))).map((event) => event.status)).toEqual(['ok', 'ok'])
+    })
 
     it('yields a snapshot then exactly one completed terminal, in order', async () => {
         const client = segmentStream(sse([snapshotEvent(), completedEvent()]))
@@ -724,4 +804,64 @@ describe('segment terminal publication', () => {
             vi.useRealTimers()
         }
     })
+})
+
+it('validates and serializes parse language, defaults English, and rejects large parse batches without dispatch', async () => {
+    const run = scripted(() => jsonResponse(200, okParse()))
+    const api = client(run.fetch)
+    await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(JSON.parse(String((run.calls[0]!.init.body as FormData).get('metadata'))).language).toBe('en')
+    await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID, language: 'fr' })
+    expect(JSON.parse(String((run.calls[1]!.init.body as FormData).get('metadata'))).language).toBe('fr')
+    const invalid = await api.parse(manualBinding, session.pages, [source], {
+        requestId: REQUEST_ID,
+        language: 'free text',
+    })
+    expect(invalid.status).toBe('unavailable')
+    const pages = Array.from({ length: 9 }, (_, index) => ({
+        ...session.pages[0]!,
+        pageId: `page-${index}`,
+        assetId: `asset-${index}`,
+    }))
+    const large = await api.parse(
+        manualBinding,
+        pages,
+        pages.map(() => source),
+        { requestId: REQUEST_ID },
+    )
+    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('8 pages') })
+    expect(run.calls).toHaveLength(2)
+})
+
+it('preserves bounded server parse failure messages through non-success HTTP responses', async () => {
+    const run = scripted(() =>
+        jsonResponse(400, {
+            status: 'unavailable',
+            requestId: REQUEST_ID,
+            binding: manualBinding,
+            code: 'invalid_input',
+            retryable: false,
+            message: 'Split into 8 pages.',
+        }),
+    )
+    expect(
+        await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
+    ).toMatchObject({ status: 'unavailable', message: 'Split into 8 pages.' })
+})
+
+it('rejects new parse citations outside supplied pages', async () => {
+    const value = structuredClone(session.rawExtraction!)
+    value.steps[0]!.alternatives = ['a', 'b'].map((alternativeId) => ({
+        alternativeId,
+        title: alternativeId,
+        description: alternativeId,
+        sourceRefs: [{ pageId: 'missing', region: null }],
+    }))
+    value.steps[0]!.selectedAlternativeId = 'a'
+    const run = scripted(() =>
+        jsonResponse(200, { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }),
+    )
+    expect(
+        await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
+    ).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
 })

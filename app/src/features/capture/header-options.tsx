@@ -1,0 +1,101 @@
+import type { ComponentProps, ReactElement } from 'react'
+import { Platform } from 'react-native'
+import type { Stack } from 'expo-router'
+import type { SharedValue } from 'react-native-reanimated'
+import { darkColors, type Colors } from '../../theme/tokens'
+import { useLargeText } from '../../ui/large-text'
+import type { LibraryEntry } from './library'
+import { PinnedTitle } from './library-screen'
+import type { CoachContextValue } from '../onboarding/coach-provider'
+import { HeaderButtons, type MoreControl } from './screen-header'
+
+// Native header options only: titles, colours and the one trailing control. No controller, router or gate logic lives
+// here, so the production routes and the development gallery build their headers from one definition.
+
+// Production headers are the platform's own title string. A custom two-line Text would be drawn, uncapped, inside the
+// fixed-height native bar and clip at the largest system text size; the platform title scales and truncates natively.
+// The title is also the human name the back control announces, in place of the raw route path.
+export const ADD_TITLE = 'Add manual'
+export const READING_TITLE = 'Reading'
+export const DONE_TITLE = 'Done'
+
+/**
+ * Android's native title bar truncates at the largest system text size, and its Stack takes only a plain string. So
+ * there the titles lead with what matters and stay short ("1 of 3", "Add"); the full "Question 1 of 3" stays in the
+ * screen's own progress bar and question. Nothing is capped and no custom header is drawn. iOS and normal sizes keep
+ * the full titles, which fit.
+ */
+export function useCompactTitles(): boolean {
+    const large = useLargeText()
+    return Platform.OS === 'android' && large
+}
+
+export function addTitle(compact = false): string {
+    return compact ? 'Add' : ADD_TITLE
+}
+
+/** "Question 2 of 5" while a question is on screen ("2 of 5" when compact), else "Quick check". */
+export function checkTitle(progressLabel: string | undefined, compact = false): string {
+    if (progressLabel === undefined) {
+        return 'Quick check'
+    }
+    return compact ? progressLabel.replace(/^Question /u, '') : progressLabel
+}
+
+/** "Step 2 of 8": where the person is, which is what the header answers. */
+export function guideTitle(entry: LibraryEntry | undefined): string {
+    return entry === undefined ? 'Guide' : `Step ${entry.stepIndex + 1} of ${entry.session.reviewedSteps.length}`
+}
+
+export type HeaderStyle = {
+    headerStyle: { backgroundColor: string }
+    headerTintColor: string
+    headerShadowVisible: false
+    contentStyle: { backgroundColor: string }
+}
+
+/** The native header coloured from a palette, so light and dark both read as one surface with the canvas. */
+export function headerStyleFor(colors: Colors): HeaderStyle {
+    return {
+        headerStyle: { backgroundColor: colors.canvas },
+        headerTintColor: colors.accentInk,
+        headerShadowVisible: false,
+        contentStyle: { backgroundColor: colors.canvas },
+    }
+}
+
+/** Expo Go owns native status-bar configuration; use Expo's mounted prop stack rather than native Stack traits. */
+export function statusBarStyleFor(colors: Colors, camera = false): 'light' | 'dark' {
+    return camera || colors.canvas === darkColors.canvas ? 'light' : 'dark'
+}
+
+export type ScreenOptions = Exclude<
+    NonNullable<ComponentProps<typeof Stack.Screen>['options']>,
+    (...args: never[]) => unknown
+>
+
+/**
+ * Home's native header. iOS keeps the real Stack bar, its platform "TrueBuild" string and its More control, but not the
+ * platform large title, which painted nothing on a device: the list draws "Your builds" instead, and the bar's own
+ * small title takes its colour only once that has scrolled away (`collapsed`). Android and web pin the same title with
+ * Reanimated. One definition serves the production route and the development gallery, so they cannot drift.
+ */
+export function homeHeaderOptions(args: {
+    readonly colors: Colors
+    readonly scrollY: SharedValue<number>
+    readonly more: MoreControl | null
+    readonly collapsed?: boolean
+    readonly coachRegistry?: Pick<CoachContextValue, 'registerTarget'> | null
+}): ScreenOptions {
+    const ios = Platform.OS === 'ios'
+    return {
+        title: 'TrueBuild',
+        headerLargeTitleEnabled: false,
+        headerTitle: ios ? undefined : (): ReactElement => <PinnedTitle scrollY={args.scrollY} title="TrueBuild" />,
+        headerTitleStyle: ios ? { color: args.collapsed === true ? args.colors.ink : 'transparent' } : undefined,
+        headerRight:
+            args.more === null
+                ? undefined
+                : (): ReactElement => <HeaderButtons more={args.more!} coach="home" registry={args.coachRegistry} />,
+    }
+}

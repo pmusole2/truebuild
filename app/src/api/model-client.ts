@@ -1,11 +1,15 @@
 import { requestFetch } from './request-fetch'
+import { postDocuments } from './document-client'
 import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
 import {
     checkResultSchema,
     LIMITS,
     matchesBinding,
     parsedManualSchema,
+    pieceBatchRequestSchema,
+    pieceBatchResultSchema,
     questionResultSchema,
+    screensResultSchema,
     segmentEventSchema,
     type ApiResult,
     type CaptureBinding,
@@ -14,19 +18,39 @@ import {
     type ManualPage,
     type ManualSession,
     type ParsedManual,
+    type PieceBatchRequest,
+    type PieceBatchResult,
     type QuestionResult,
     type QuestionTarget,
+    type ScreenKind,
+    type ScreensResult,
     type SegmentEvent,
 } from '@truebuild/contracts'
 import {
+    MAX_PARSE_PAGES,
+    PARSE_SPLIT_MESSAGE,
     MODEL_METADATA_MAX_BYTES,
     modelCheckMetadataSchema,
+    modelOverlayMetadataSchema,
+    modelOverlayJobMetadataSchema,
+    OVERLAY_JOB_PATHS,
     modelParseMetadataSchema,
+    modelQuestionJobMetadataSchema,
     modelQuestionMetadataSchema,
+    modelScreensMetadataSchema,
     modelSegmentMetadataSchema,
     modelSecondOpinionMetadataSchema,
+    overlayResultSchema,
+    pendingResultSchema,
+    type ModelScreensMetadata,
+    type OverlayResult,
+    type PendingResult,
+    type ScreenContext,
+    type ModelScreensV2Metadata,
+    type ScreensV2Result,
 } from '@truebuild/contracts/model'
 import type { z } from 'zod'
+import { sameIdentity } from '../features/screens/screen-spec'
 import { streamFetch as defaultStreamFetch, type StreamFetch } from './stream-fetch'
 import {
     awaitStopped,
@@ -45,10 +69,30 @@ import {
 
 export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
-export const MODEL_PARSE_TIMEOUT_MS = 30_000
-export const MODEL_CHECK_TIMEOUT_MS = 8_000
+// Outlast the 165s parse budget and 170s route, so the server's own timeout answer arrives first.
+export const MODEL_PARSE_TIMEOUT_MS = 175_000
+// Live checks reached 11.6–11.75s; 15s lets the 12s server budget return honest result/timeout feedback.
+export const MODEL_CHECK_TIMEOUT_MS = 15_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
+// The server answers a question within QUESTION_SYNC_WAIT_MS (8 s by default) or hands back a 202 ticket. The first
+// request must outlive that wait, or the app would cancel exactly when the ticket arrives. The ticket then owns the
+// rest of the (server-bounded) job; a collect call long-polls for about five seconds at most.
+export const MODEL_QUESTION_FIRST_TIMEOUT_MS = 12_000
+export const MODEL_QUESTION_COLLECT_TIMEOUT_MS = 10_000
+export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
+// Paid baseline: Spark low screens 17s, quick-check medium 31s; outlast the server's 30s limit.
+export const MODEL_SCREEN_TIMEOUT_MS = 35_000
+export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
+/** Geometry batches are the slowest model call; a timeout is an unknown outcome, so the registry never resends it. */
+export const MODEL_PIECES_TIMEOUT_MS = 120_000
+/** Eight cutouts of up to 360k characters each, plus piece specs; the default 1 MB limit cannot hold a full batch. */
+export const MODEL_PIECES_RESPONSE_MAX_BYTES = 4 * 1_024 * 1_024
+export const MODEL_SCREEN_CONTROL_TIMEOUT_MS = 10_000
+export const MODEL_OVERLAY_TIMEOUT_MS = 75_000
+export const MODEL_OVERLAY_FIRST_TIMEOUT_MS = 12_000
+export const MODEL_OVERLAY_COLLECT_TIMEOUT_MS = 10_000
+export const MODEL_OVERLAY_CANCEL_TIMEOUT_MS = 5_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
 const MAX_SSE_EVENT_BYTES = 262_144
@@ -63,11 +107,22 @@ export interface ImageBytes {
     readonly height: number
 }
 
+/** Parse progress the server reports in order: `reading` when the provider call starts, `output` at its first delta. */
+export type ParseProgress = 'reading' | 'output'
+
 export interface ModelRequestContext {
     readonly requestId: string
     readonly signal?: AbortSignal
+    readonly language?: string
     /** Trusted in-process outer action deadline; never serialized or supplied by the backend. */
     readonly checkpoint?: () => void
+    /** Present only when the caller wants progress: parse then opts into the SSE stream. Absent keeps the JSON envelope. */
+    readonly onProgress?: (phase: ParseProgress) => void
+    /**
+     * Identity of the VALIDATED generated guide page the person is looking at (its `screenId` and exact `contextKey`).
+     * The server recomputes the key from the session and step; a request without one behaves as before.
+     */
+    readonly screen?: ScreenContext
 }
 
 function composeCheckpoint(
@@ -170,6 +225,85 @@ function ssePayload(block: string): string | null | undefined {
  * is bounded by one absolute monotonic deadline, validates the request and response against the frozen schemas, and
  * never publishes a value that does not echo its requestId, binding and mode.
  */
+/** Decodes a page picture the app already holds as a data URI; any other shape or MIME type is refused. */
+function bytesFromDataUri(uri: string | undefined, mimeType: ManualPage['mimeType']): Uint8Array | null {
+    const match = uri === undefined ? null : /^data:([a-z/]+);base64,([A-Za-z0-9+/]+=*)$/u.exec(uri)
+    if (match === null || match[1] !== mimeType) return null
+    const binary = atob(match[2] ?? '')
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+}
+
+const PARSE_PHASE_ORDER: readonly ParseProgress[] = ['reading', 'output']
+
+/**
+ * Reads a progress stream: ordered progress phases, then one `result` whose ApiResult JSON goes to the shared
+ * interpreter. A failed result is returned with a non-2xx status so the interpreter classifies it the same way.
+ */
+async function readProgressStream(
+    response: Response,
+    signal: AbortSignal,
+    checkpoint: () => void,
+    onProgress: (phase: ParseProgress) => void,
+): Promise<{ status: number; text: string }> {
+    if (response.body === null) throw new InvalidResponseError('Progress stream has no body')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    const stop = (): void => {
+        void reader.cancel().catch((): undefined => undefined)
+    }
+    signal.addEventListener('abort', stop, { once: true })
+    let buffer = ''
+    let streamed = 0
+    let phase = -1
+    let result: unknown = undefined
+    try {
+        for (;;) {
+            checkpoint()
+            const next = await awaitStopped(reader.read(), signal)
+            checkpoint()
+            if (next.done) break
+            streamed += next.value.byteLength
+            if (streamed > MAX_STREAM_BYTES) throw new InvalidResponseError('Progress stream is too large')
+            buffer += decoder.decode(next.value, { stream: true })
+            buffer = buffer.replace(/\r\n/gu, '\n')
+            let boundary = buffer.indexOf('\n\n')
+            while (boundary !== -1) {
+                const block = buffer.slice(0, boundary)
+                buffer = buffer.slice(boundary + 2)
+                boundary = buffer.indexOf('\n\n')
+                const payload = ssePayload(block)
+                if (payload === undefined) throw new InvalidResponseError('Malformed progress event')
+                if (payload === null) continue
+                if (result !== undefined) throw new InvalidResponseError('Event after result')
+                const event: unknown = JSON.parse(payload)
+                const kind =
+                    typeof event === 'object' && event !== null ? (event as { type?: unknown }).type : undefined
+                if (kind === 'progress') {
+                    const next = PARSE_PHASE_ORDER.indexOf((event as { phase?: ParseProgress }).phase as ParseProgress)
+                    if (next <= phase) throw new InvalidResponseError('Progress phase out of order')
+                    phase = next
+                    onProgress(PARSE_PHASE_ORDER[next] as ParseProgress)
+                } else if (kind === 'result') {
+                    result = (event as { result?: unknown }).result
+                } else {
+                    throw new InvalidResponseError('Unknown progress event')
+                }
+            }
+        }
+        buffer += decoder.decode()
+    } catch (error: unknown) {
+        if (error instanceof InvalidResponseError) throw error
+        throw new InvalidResponseError('Progress stream is not valid', { cause: error })
+    } finally {
+        signal.removeEventListener('abort', stop)
+        void reader.cancel().catch((): undefined => undefined)
+        reader.releaseLock()
+    }
+    if (result === undefined || buffer.trim() !== '') throw new InvalidResponseError('Progress stream has no result')
+    const failed = (result as { status?: unknown } | null)?.status === 'unavailable'
+    return { status: failed ? 502 : 200, text: JSON.stringify(result) }
+}
+
 export class ModelApiClient {
     private readonly baseUrl: string
     private readonly secret: string
@@ -180,7 +314,11 @@ export class ModelApiClient {
         this.baseUrl = parseBaseUrl(options.baseUrl)
         this.secret = options.secret
         this.fetchImpl = options.fetch ?? requestFetch
-        this.streamImpl = options.streamFetch ?? defaultStreamFetch
+        this.streamImpl = options.streamFetch ?? options.fetch ?? defaultStreamFetch
+    }
+
+    async screensV2(metadata: ModelScreensV2Metadata, ctx: ModelRequestContext): Promise<ScreensV2Result> {
+        return postDocuments({ metadata, ctx, baseUrl: this.baseUrl, secret: this.secret, fetch: this.fetchImpl })
     }
 
     async parse(
@@ -189,7 +327,23 @@ export class ModelApiClient {
         images: readonly ImageBytes[],
         ctx: ModelRequestContext,
     ): Promise<ApiResult<ParsedManual>> {
-        const metadata = { mode: 'model', requestId: ctx.requestId, binding, pages: [...pages] }
+        if (pages.length > MAX_PARSE_PAGES) {
+            return {
+                status: 'unavailable',
+                requestId: ctx.requestId,
+                binding,
+                code: 'invalid_input',
+                retryable: false,
+                message: PARSE_SPLIT_MESSAGE,
+            }
+        }
+        const metadata = {
+            mode: 'model',
+            requestId: ctx.requestId,
+            binding,
+            pages: [...pages],
+            language: ctx.language ?? 'en',
+        }
         const sourceIds = pages.map((_page, index) => `source-${index}`)
         const valid = modelParseMetadataSchema.safeParse(metadata)
         if (!valid.success || images.length !== pages.length || !fileFieldsWithinLimits(images)) {
@@ -214,6 +368,7 @@ export class ModelApiClient {
             accepts: (value: ParsedManual): boolean => everyRefInside(value, pageIds),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
+            onProgress: ctx.onProgress,
         })
     }
 
@@ -259,6 +414,7 @@ export class ModelApiClient {
             sourcePageIds: [...sourcePageIds],
             observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
             ...(secondary ? { secondOpinionToken } : {}),
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
         }
         const schema = secondary ? modelSecondOpinionMetadataSchema : modelCheckMetadataSchema
         if (!schema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
@@ -299,7 +455,7 @@ export class ModelApiClient {
         question: string,
         target: QuestionTarget,
         ctx: ModelRequestContext,
-    ): Promise<ApiResult<QuestionResult>> {
+    ): Promise<ApiResult<QuestionResult> | PendingResult> {
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -309,6 +465,7 @@ export class ModelApiClient {
             observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
             question,
             target,
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
         }
         if (!modelQuestionMetadataSchema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
             return invalidInputResult(ctx.requestId)
@@ -325,17 +482,281 @@ export class ModelApiClient {
         }
         const allowed = new Set(sourcePageIds)
 
-        return this.post({
+        return this.post<QuestionResult, PendingResult>({
             path: '/api/questions',
             requestId: ctx.requestId,
             binding,
             form,
-            timeoutMs: MODEL_CHECK_TIMEOUT_MS,
+            timeoutMs: MODEL_QUESTION_FIRST_TIMEOUT_MS,
             valueSchema: questionResultSchema,
             accepts: (value: QuestionResult): boolean => value.sourceRefs.every((ref) => allowed.has(ref.pageId)),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
+            pending: pendingFor(ctx.requestId, binding),
         })
+    }
+
+    /**
+     * Collects a slow question's ticket: pending again, or the original final response (an envelope). This never
+     * resends the question or its photo; a stopped or cancelled job is reported as such and not repeated.
+     */
+    async questionResult(
+        binding: CaptureBinding,
+        ticket: string,
+        ctx: ModelRequestContext,
+        sourcePageIds: readonly string[],
+    ): Promise<ApiResult<QuestionResult> | PendingResult> {
+        const body = { mode: 'model', requestId: ctx.requestId, binding, ticket }
+        if (!modelQuestionJobMetadataSchema.safeParse(body).success) {
+            return invalidInputResult(ctx.requestId)
+        }
+        const allowed = new Set(sourcePageIds)
+        return this.post<QuestionResult, PendingResult>({
+            path: '/api/questions/result',
+            requestId: ctx.requestId,
+            binding,
+            form: JSON.stringify(body),
+            timeoutMs: MODEL_QUESTION_COLLECT_TIMEOUT_MS,
+            valueSchema: questionResultSchema,
+            accepts: (value: QuestionResult): boolean => value.sourceRefs.every((ref) => allowed.has(ref.pageId)),
+            signal: ctx.signal,
+            checkpoint: ctx.checkpoint,
+            pending: pendingFor(ctx.requestId, binding),
+        })
+    }
+
+    /** Best-effort stop of a slow question's job (204). Never throws; a refusal or failure is simply `false`. */
+    async questionCancel(
+        binding: CaptureBinding,
+        ticket: string,
+        ctx: Pick<ModelRequestContext, 'requestId'>,
+    ): Promise<boolean> {
+        const body = { mode: 'model', requestId: ctx.requestId, binding, ticket }
+        if (!modelQuestionJobMetadataSchema.safeParse(body).success) {
+            return false
+        }
+        const guard = createCallGuard(MODEL_QUESTION_CANCEL_TIMEOUT_MS, undefined)
+        let owned: Response | undefined
+        try {
+            const url = new URL('/api/questions/cancel', this.baseUrl).toString()
+            owned = await awaitStopped(
+                this.fetchImpl(url, this.init(JSON.stringify(body), guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            return owned.status === 204
+        } catch {
+            return false
+        } finally {
+            guard.dispose()
+            if (owned !== undefined) {
+                discardResponse(owned)
+            }
+        }
+    }
+
+    /**
+     * Wonder overlay for one published verdict. Consumes the one-use ticket from `followUps.overlay`; the verdict never
+     * waits for it and it carries no decision. A replay or different bytes is refused by the server, not retried here.
+     */
+    async overlay(
+        binding: CaptureBinding,
+        session: ManualSession,
+        sourcePageIds: readonly string[],
+        sources: readonly ImageBytes[],
+        observation: ImageBytes,
+        overlayToken: string,
+        ctx: ModelRequestContext,
+    ): Promise<ApiResult<OverlayResult>> {
+        const metadata = {
+            mode: 'model',
+            requestId: ctx.requestId,
+            binding,
+            session,
+            sourcePageIds: [...sourcePageIds],
+            observation: { mimeType: observation.mimeType, width: observation.width, height: observation.height },
+            overlayToken,
+            ...(ctx.screen === undefined ? {} : { screen: ctx.screen }),
+        }
+        if (!modelOverlayMetadataSchema.safeParse(metadata).success || sources.length !== sourcePageIds.length) {
+            return invalidInputResult(ctx.requestId)
+        }
+        if (!fileFieldsWithinLimits([...sources, observation])) {
+            return invalidInputResult(ctx.requestId)
+        }
+        const form = buildForm(metadata, [
+            ...sources.map((image, index) => ({ name: `source-${index}`, image })),
+            { name: 'observation', image: observation },
+        ])
+        if (form === null) {
+            return invalidInputResult(ctx.requestId)
+        }
+        const guard = createCallGuard(MODEL_OVERLAY_TIMEOUT_MS, ctx.signal)
+        let ticket: string | null = null
+        let cancelled = false
+        const cancel = (): void => {
+            if (ticket === null || cancelled) return
+            cancelled = true
+            void this.cancelOverlay(binding, ticket, ctx.requestId)
+        }
+        guard.signal.addEventListener('abort', cancel, { once: true })
+        let horizon = performance.now() + MODEL_OVERLAY_TIMEOUT_MS
+        const checkpoint = (): void => {
+            guard.checkpoint()
+            ctx.checkpoint?.()
+            if (performance.now() >= horizon) throw new Error('overlay_expired')
+        }
+        const pending = (value: unknown): PendingResult | null => {
+            const parsed = pendingFor(ctx.requestId, binding)(value)
+            return parsed !== null && (ticket === null || parsed.ticket === ticket) ? parsed : null
+        }
+        const post = (
+            path: string,
+            body: FormData | string,
+            timeoutMs: number,
+        ): Promise<ApiResult<OverlayResult> | PendingResult> =>
+            this.post<OverlayResult, PendingResult>({
+                path,
+                requestId: ctx.requestId,
+                binding,
+                form: body,
+                timeoutMs,
+                valueSchema: overlayResultSchema,
+                accepts: (): boolean => true,
+                signal: guard.signal,
+                checkpoint,
+                pending,
+                acceptSyntheticFixture: (value): boolean => value.evidence === 'synthetic-fixture',
+            })
+        try {
+            checkpoint()
+            let result = await post('/api/checks/overlay', form, MODEL_OVERLAY_FIRST_TIMEOUT_MS)
+            while (result.status === 'pending') {
+                ticket ??= result.ticket
+                horizon = Math.min(horizon, performance.now() + result.expiresInMs + 5_000)
+                checkpoint()
+                await waitForOverlay(
+                    Math.min(result.retryAfterMs, Math.max(0, horizon - performance.now())),
+                    guard.signal,
+                )
+                checkpoint()
+                // Result/cancel share the questions' authenticated JSON job protocol. Only the original effect
+                // is multipart; collection never resends its images or one-use overlay token.
+                const body = JSON.stringify({ mode: 'model', requestId: ctx.requestId, binding, ticket })
+                result = await post(
+                    OVERLAY_JOB_PATHS.result,
+                    body,
+                    Math.max(1, Math.min(MODEL_OVERLAY_COLLECT_TIMEOUT_MS, horizon - performance.now())),
+                )
+            }
+            checkpoint()
+            if (result.status === 'ok' && result.mode === 'model' && result.value.evidence === 'synthetic-fixture') {
+                cancel()
+                return unavailableResult(ctx.requestId, binding, 'invalid_output', false)
+            }
+            if (result.status === 'unavailable' && result.code === 'invalid_output') cancel()
+            return result
+        } catch {
+            cancel()
+            return unavailableResult(ctx.requestId, binding, ctx.signal?.aborted ? 'invalid_input' : 'timeout', false)
+        } finally {
+            guard.signal.removeEventListener('abort', cancel)
+            guard.dispose()
+            releaseMultipartImages(form)
+        }
+    }
+
+    private async cancelOverlay(binding: CaptureBinding, ticket: string, requestId: string): Promise<void> {
+        const metadata = modelOverlayJobMetadataSchema.safeParse({ mode: 'model', requestId, binding, ticket })
+        if (!metadata.success) return
+        const guard = createCallGuard(MODEL_OVERLAY_CANCEL_TIMEOUT_MS, undefined)
+        let response: Response | undefined
+        try {
+            guard.checkpoint()
+            response = await awaitStopped(
+                this.fetchImpl(
+                    new URL(OVERLAY_JOB_PATHS.cancel, this.baseUrl).toString(),
+                    this.init(JSON.stringify(metadata.data), guard.signal),
+                ),
+                guard.signal,
+                discardResponse,
+            )
+        } catch {
+            // Best effort with the original owned ticket; never retry a cancellation or resend the effect.
+        } finally {
+            if (response !== undefined) discardResponse(response)
+            guard.dispose()
+        }
+    }
+
+    /**
+     * Model-composed screens: generate one, or control the background step-page job (precompute, progress, cancel).
+     * Zero files. The envelope is the screens envelope, not the check envelope. A document is accepted only when every
+     * identity field and its kind match what was asked, so a stale, foreign or mislabelled document is never published.
+     */
+    async screens(request: ScreenRequest, ctx: ModelRequestContext): Promise<ScreensResult> {
+        const metadata = screenMetadata(request, ctx.requestId)
+        const valid = modelScreensMetadataSchema.safeParse(metadata)
+        if (!valid.success) {
+            return screensUnavailable(ctx.requestId, 'invalid_input', false)
+        }
+        const form = buildForm(metadata, [])
+        if (form === null) {
+            return screensUnavailable(ctx.requestId, 'invalid_input', false)
+        }
+        const { requestId } = ctx
+        if (ctx.signal?.aborted === true) {
+            return screensUnavailable(requestId, 'invalid_input', false)
+        }
+        const generating = request.op === 'generate'
+        const guard = createCallGuard(
+            generating
+                ? stepPageKind(request.kind)
+                    ? MODEL_STEP_PAGE_TIMEOUT_MS
+                    : MODEL_SCREEN_TIMEOUT_MS
+                : MODEL_SCREEN_CONTROL_TIMEOUT_MS,
+            ctx.signal,
+        )
+        const { checkpoint, outerExpired } = composeCheckpoint(guard, ctx.checkpoint)
+        let owned: Response | undefined
+        try {
+            checkpoint()
+            const url = new URL('/api/screens', this.baseUrl).toString()
+            owned = await awaitStopped(
+                this.fetchImpl(url, this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            checkpoint()
+            const text = await readBoundedText(owned, guard.signal, checkpoint)
+            checkpoint()
+            const result = interpretScreens(owned.status, text, requestId, request)
+            checkpoint()
+            return result
+        } catch (error: unknown) {
+            try {
+                checkpoint()
+            } catch {
+                /* Classify the stopped action below. */
+            }
+            if (outerExpired() || (!guard.callerAborted() && guard.timedOut())) {
+                return screensUnavailable(requestId, 'timeout', true)
+            }
+            if (guard.callerAborted()) {
+                return screensUnavailable(requestId, 'invalid_input', false)
+            }
+            return screensUnavailable(
+                requestId,
+                error instanceof InvalidResponseError ? 'invalid_output' : 'provider_error',
+                error instanceof InvalidResponseError ? false : true,
+            )
+        } finally {
+            releaseMultipartImages(form)
+            guard.dispose()
+            if (owned !== undefined) {
+                discardResponse(owned)
+            }
+        }
     }
 
     /**
@@ -381,20 +802,77 @@ export class ModelApiClient {
         yield* this.streamSegments(call, form, ctx)
     }
 
-    private async post<T>(spec: {
+    /**
+     * One geometry batch for the piece registry. Every answer that is not a valid result (an unavailable envelope, a bad
+     * status, a timeout, a malformed page) is null, which the registry records as an unknown outcome: it is never resent.
+     */
+    async pieceBatch(
+        request: PieceBatchRequest,
+        pageUris: Readonly<Record<string, string>>,
+    ): Promise<PieceBatchResult | null> {
+        const valid = pieceBatchRequestSchema.safeParse(request)
+        if (!valid.success) return null
+        const form = new FormData()
+        form.append('metadata', JSON.stringify(valid.data))
+        for (const page of valid.data.pages) {
+            const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
+            if (bytes === null) return null
+            appendMultipartImage(
+                form,
+                `page:${page.pageId}`,
+                { bytes, mimeType: page.mimeType, width: page.width, height: page.height },
+                page.pageId,
+            )
+        }
+        const guard = createCallGuard(MODEL_PIECES_TIMEOUT_MS, undefined)
+        try {
+            const url = new URL('/api/pieces', this.baseUrl).toString()
+            const response = await awaitStopped(
+                this.fetchImpl(url, this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            const text = await readBoundedText(
+                response,
+                guard.signal,
+                guard.checkpoint,
+                MODEL_PIECES_RESPONSE_MAX_BYTES,
+            )
+            if (!response.ok) return null
+            const result = pieceBatchResultSchema.safeParse(JSON.parse(text))
+            return result.success ? result.data : null
+        } catch {
+            return null
+        } finally {
+            guard.dispose()
+        }
+    }
+
+    private async post<T, P = never>(spec: {
         path: string
         requestId: string
         binding: ManualBinding | CaptureBinding
-        form: FormData
+        form: FormData | string
         timeoutMs: number
         valueSchema: z.ZodType<T>
         accepts: (value: T, binding: ManualBinding | CaptureBinding) => boolean
         signal: AbortSignal | undefined
         checkpoint: (() => void) | undefined
-    }): Promise<ApiResult<T>> {
+        /** A 202 carries this shape instead of an envelope (slow questions). Only the requested binding may match. */
+        pending?: (value: unknown) => P | null
+        /** Overlay fixtures explicitly identify synthetic IO; other model APIs retain their original strict mode. */
+        acceptSyntheticFixture?: (value: T) => boolean
+        /** Present only for a progress-reporting route: it opts into the SSE stream instead of the JSON envelope. */
+        onProgress?: (phase: ParseProgress) => void
+    }): Promise<ApiResult<T> | P> {
         const { requestId, binding, signal } = spec
+        const release = (): void => {
+            if (typeof spec.form !== 'string') {
+                releaseMultipartImages(spec.form)
+            }
+        }
         if (signal?.aborted === true) {
-            releaseMultipartImages(spec.form)
+            release()
             return unavailableResult(requestId, binding, 'invalid_input', false)
         }
 
@@ -414,13 +892,53 @@ export class ModelApiClient {
         try {
             checkpoint()
             const url = new URL(spec.path, this.baseUrl).toString()
-            const init = this.init(spec.form, guard.signal)
+            const onProgress = spec.onProgress
+            const init = this.init(spec.form, guard.signal, onProgress !== undefined)
             checkpoint()
-            owned = await awaitStopped(this.fetchImpl(url, init), guard.signal, discardResponse)
+            owned = await awaitStopped(
+                onProgress !== undefined ? this.streamImpl(url, init) : this.fetchImpl(url, init),
+                guard.signal,
+                discardResponse,
+            )
             checkpoint()
-            const text = await readBoundedText(owned, guard.signal, checkpoint)
+            // Only a successful event stream is read as progress; any other answer keeps the legacy JSON envelope.
+            const streamed =
+                onProgress !== undefined &&
+                owned.status >= 200 &&
+                owned.status < 300 &&
+                owned.headers.get('content-type')?.startsWith('text/event-stream') === true
+            const body =
+                streamed && onProgress !== undefined
+                    ? await readProgressStream(owned, guard.signal, checkpoint, onProgress)
+                    : { status: owned.status, text: await readBoundedText(owned, guard.signal, checkpoint) }
             checkpoint()
-            const result = interpretEnvelope(call, owned.status, text, 'model', modelStatusResult)
+            const text = body.text
+            if (spec.pending !== undefined && owned.status === 202) {
+                let json: unknown
+                try {
+                    json = JSON.parse(text)
+                } catch {
+                    throw new InvalidResponseError('Pending response is not JSON')
+                }
+                const pending = spec.pending(json)
+                if (pending === null) {
+                    throw new InvalidResponseError('Pending response does not echo this request')
+                }
+                checkpoint()
+                return pending
+            }
+            const result = interpretEnvelope(call, body.status, text, 'model', modelStatusResult)
+            if (
+                result.status === 'unavailable' &&
+                result.code === 'invalid_output' &&
+                spec.acceptSyntheticFixture !== undefined
+            ) {
+                const fixture = interpretEnvelope(call, body.status, text, 'fixture', modelStatusResult)
+                if (fixture.status === 'ok' && spec.acceptSyntheticFixture(fixture.value)) {
+                    checkpoint()
+                    return fixture
+                }
+            }
             checkpoint()
 
             return result
@@ -444,7 +962,7 @@ export class ModelApiClient {
             }
             return unavailableResult(requestId, binding, 'provider_error', true)
         } finally {
-            releaseMultipartImages(spec.form)
+            release()
             guard.dispose()
             if (owned !== undefined) {
                 discardResponse(owned)
@@ -452,10 +970,15 @@ export class ModelApiClient {
         }
     }
 
-    private init(form: FormData, signal: AbortSignal): RequestInit {
+    private init(form: FormData | string, signal: AbortSignal, progress = false): RequestInit {
         return {
             method: 'POST',
-            headers: { 'x-truebuild-key': this.secret, Accept: 'application/json, text/event-stream' },
+            headers: {
+                'x-truebuild-key': this.secret,
+                // A progress request names only the stream, so the server cannot answer with the JSON envelope.
+                Accept: progress ? 'text/event-stream' : 'application/json, text/event-stream',
+                ...(typeof form === 'string' ? { 'content-type': 'application/json' } : {}),
+            },
             body: form,
             credentials: 'omit',
             redirect: 'error',
@@ -534,7 +1057,8 @@ export class ModelApiClient {
                     return
                 }
 
-                buffer += decoder.decode(next.value, { stream: true }).replace(/\r\n?/gu, '\n')
+                buffer += decoder.decode(next.value, { stream: true })
+                buffer = buffer.replace(/\r\n/gu, '\n')
                 let boundary = buffer.indexOf('\n\n')
 
                 while (boundary !== -1) {
@@ -623,11 +1147,211 @@ export class ModelApiClient {
     }
 }
 
+/** One typed `/api/screens` call. `generate` names the screen kind; the rest control the background step-page job. */
+export type ScreenRequest =
+    | {
+          readonly op: 'generate'
+          readonly kind: ScreenKind
+          readonly session: ManualSession | null
+          readonly stepId: string | null
+          readonly captureId: string | null
+          readonly result: ModelScreensMetadata['result']
+          readonly failure: ModelScreensMetadata['failure']
+          readonly completedStepIds?: readonly string[]
+          readonly uiState?: ModelScreensMetadata['uiState']
+      }
+    | { readonly op: 'precompute'; readonly session: ManualSession; readonly focusStepId: string | null }
+    | { readonly op: 'progress'; readonly binding: ManualBinding; readonly want: readonly string[] }
+    | { readonly op: 'cancel'; readonly binding: ManualBinding }
+
+const STEP_PAGE_KINDS: ReadonlySet<ScreenKind> = new Set(['guide', 'result', 'answer'])
+
+function stepPageKind(kind: ScreenKind): boolean {
+    return STEP_PAGE_KINDS.has(kind)
+}
+
+function screenMetadata(request: ScreenRequest, requestId: string): unknown {
+    const base = {
+        mode: 'model',
+        requestId,
+        kind: null,
+        binding: null,
+        session: null,
+        stepId: null,
+        captureId: null,
+        result: null,
+        failure: null,
+        focusStepId: null,
+        want: [] as string[],
+    }
+    switch (request.op) {
+        case 'generate':
+            return {
+                ...base,
+                op: 'generate',
+                kind: request.kind,
+                binding:
+                    request.session === null
+                        ? null
+                        : { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
+                session: request.session,
+                stepId: request.stepId,
+                captureId: request.captureId,
+                result: request.result,
+                failure: request.failure,
+                ...(request.completedStepIds === undefined ? {} : { completedStepIds: [...request.completedStepIds] }),
+                ...(request.uiState === undefined ? {} : { uiState: request.uiState }),
+            }
+        case 'precompute':
+            return {
+                ...base,
+                op: 'precompute',
+                binding: { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
+                session: request.session,
+                focusStepId: request.focusStepId,
+            }
+        case 'progress':
+            return { ...base, op: 'progress', binding: request.binding, want: [...request.want] }
+        case 'cancel':
+            return { ...base, op: 'cancel', binding: request.binding }
+    }
+}
+
+function screensUnavailable(
+    requestId: string,
+    code: Extract<ScreensResult, { status: 'unavailable' }>['code'],
+    retryable: boolean,
+): ScreensResult {
+    return { status: 'unavailable', requestId, binding: null, code, retryable }
+}
+
+function pendingFor(requestId: string, binding: CaptureBinding): (value: unknown) => PendingResult | null {
+    return (value: unknown): PendingResult | null => {
+        const parsed = pendingResultSchema.safeParse(value)
+        return parsed.success && parsed.data.requestId === requestId && matchesBinding(parsed.data.binding, binding)
+            ? parsed.data
+            : null
+    }
+}
+
+function waitForOverlay(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject): void => {
+        const finish = (): void => {
+            clearTimeout(timer)
+            signal.removeEventListener('abort', abort)
+            resolve()
+        }
+        const abort = (): void => {
+            clearTimeout(timer)
+            signal.removeEventListener('abort', abort)
+            reject(new Error('overlay_stopped'))
+        }
+        const timer = setTimeout(finish, ms)
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+    })
+}
+
+function statusToScreensCode(status: number): Extract<ScreensResult, { status: 'unavailable' }>['code'] {
+    if (status === 401 || status === 403) return 'unauthorized'
+    if (status === 503) return 'unconfigured'
+    if (status === 400 || status === 413 || status === 415) return 'invalid_input'
+    if (status === 409) return 'duplicate_request'
+    if (status === 429) return 'budget_exhausted'
+    if (status === 504) return 'timeout'
+    return status >= 500 && status < 600 ? 'provider_error' : 'invalid_output'
+}
+
+/** Pure: validates the whole screens envelope and the identity of every document against what was requested. */
+export function interpretScreens(
+    status: number,
+    text: string,
+    requestId: string,
+    request: ScreenRequest,
+): ScreensResult {
+    let json: unknown
+    try {
+        json = JSON.parse(text)
+    } catch {
+        return status >= 200 && status < 300
+            ? screensUnavailable(requestId, 'invalid_output', false)
+            : screensUnavailable(requestId, statusToScreensCode(status), status >= 500)
+    }
+    const parsed = screensResultSchema.safeParse(json)
+    if (!parsed.success || parsed.data.requestId !== requestId) {
+        return status >= 200 && status < 300
+            ? screensUnavailable(requestId, 'invalid_output', false)
+            : screensUnavailable(requestId, statusToScreensCode(status), status >= 500)
+    }
+    const result = parsed.data
+    if (status < 200 || status >= 300) {
+        return result.status === 'unavailable' ? result : screensUnavailable(requestId, 'invalid_output', false)
+    }
+    if (result.status === 'unavailable') {
+        return result
+    }
+    return acceptsScreens(request, result.value) ? result : screensUnavailable(requestId, 'invalid_output', false)
+}
+
+function acceptsScreens(request: ScreenRequest, value: Extract<ScreensResult, { status: 'ok' }>['value']): boolean {
+    switch (request.op) {
+        case 'generate': {
+            const document = value.document
+            if (document === null || value.documents.length > 0 || value.progress !== null) return false
+            return (
+                document.kind === request.kind &&
+                sameIdentity(document.bound, {
+                    manualId: request.session?.manualId ?? null,
+                    revision: request.session?.revision ?? null,
+                    stepId: request.stepId,
+                    captureId: request.result === null ? null : request.captureId,
+                })
+            )
+        }
+        case 'precompute':
+        case 'cancel': {
+            const progress = value.progress
+            const binding = request.op === 'precompute' ? request.session : request.binding
+            return (
+                value.document === null &&
+                value.documents.length === 0 &&
+                (progress === null ||
+                    (progress.manualId === binding.manualId && progress.revision === binding.revision))
+            )
+        }
+        case 'progress': {
+            const progress = value.progress
+            if (value.document !== null) return false
+            if (
+                progress !== null &&
+                (progress.manualId !== request.binding.manualId || progress.revision !== request.binding.revision)
+            ) {
+                return false
+            }
+            const want = new Set(request.want)
+            return value.documents.every(
+                (document) =>
+                    document.kind === 'guide' &&
+                    document.bound.stepId !== null &&
+                    want.has(document.bound.stepId) &&
+                    sameIdentity(document.bound, {
+                        manualId: request.binding.manualId,
+                        revision: request.binding.revision,
+                        stepId: document.bound.stepId,
+                        captureId: null,
+                    }),
+            )
+        }
+    }
+}
+
 function everyRefInside(parsed: ParsedManual, pageIds: ReadonlySet<string>): boolean {
     const refs = [
         ...parsed.parts.flatMap((part) => (part.name.state === 'known' ? part.name.sourceRefs : [])),
         ...parsed.steps.flatMap((step) => [
             ...step.sourceRefs,
+            ...(step.alternatives?.flatMap((alternative) => alternative.sourceRefs) ?? []),
+            ...step.parts.flatMap((part) => part.quantityBasis?.sourceRefs ?? []),
             ...step.parts.flatMap((part) => (part.quantity.state === 'known' ? part.quantity.sourceRefs : [])),
             ...(step.orientation.state === 'known' ? step.orientation.sourceRefs : []),
             ...(step.connection.state === 'known' ? step.connection.sourceRefs : []),

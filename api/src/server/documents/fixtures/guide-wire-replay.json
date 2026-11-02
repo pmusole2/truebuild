@@ -1,0 +1,1539 @@
+{
+    "source": "Three observed750bd29WonderREADYoutputs, pieces-v11. Model output has noinstructionTextorPieceViewernodes. No images, credentialsorrequestheaders.",
+    "session": {
+        "manualId": "manual-4b258b3b-ede3-4c28-b604-e59cd624d132",
+        "title": "Untitled manual",
+        "updatedAt": "2026-11-02T06:18:32.980Z",
+        "revision": 3,
+        "pages": [
+            {
+                "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                "assetId": "asset-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                "width": 960,
+                "height": 1280,
+                "mimeType": "image/jpeg",
+                "contentHash": "3dca77ed074150da4c412ed6649a5b486a6f53e946028ae94fc76cdd35269489"
+            },
+            {
+                "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                "assetId": "asset-b921e6f0-3c28-4deb-869b-799279b6325e",
+                "width": 960,
+                "height": 1280,
+                "mimeType": "image/jpeg",
+                "contentHash": "ab76c08603a75be537dc007b1f02d8e64f6e019cfd8dec0cf118b93a1d87f5df"
+            },
+            {
+                "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                "assetId": "asset-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                "width": 960,
+                "height": 1280,
+                "mimeType": "image/jpeg",
+                "contentHash": "3661c0ad0b8630585ad8ae0a64b36168d931c0ce0012692c89c5f62b10df755a"
+            },
+            {
+                "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                "assetId": "asset-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                "width": 960,
+                "height": 1280,
+                "mimeType": "image/jpeg",
+                "contentHash": "afcab71bbea4221253e9bf20a5cf155d02862125c988db687589b2f80382b944"
+            }
+        ],
+        "parts": [
+            {
+                "partId": "part-walking-machine",
+                "name": {
+                    "state": "known",
+                    "value": "Walking machine",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                            "region": null
+                        }
+                    ]
+                },
+                "label": null,
+                "dimensions": null,
+                "inventoryQuantity": 1,
+                "drawingBox": [0.285, 0.235, 0.395, 0.285]
+            },
+            {
+                "partId": "part-knob",
+                "name": {
+                    "state": "known",
+                    "value": "knob",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "region": null
+                        }
+                    ]
+                },
+                "label": null,
+                "dimensions": null,
+                "inventoryQuantity": 2,
+                "drawingBox": [0.735, 0.362, 0.075, 0.075]
+            },
+            {
+                "partId": "part-phone-support",
+                "name": {
+                    "state": "known",
+                    "value": "phone support",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "region": null
+                        }
+                    ]
+                },
+                "label": null,
+                "dimensions": null,
+                "inventoryQuantity": 1,
+                "drawingBox": [0.735, 0.44, 0.08, 0.055]
+            },
+            {
+                "partId": "part-screw-m4x15",
+                "name": {
+                    "state": "known",
+                    "value": "M4 * 15 screw",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "region": null
+                        }
+                    ]
+                },
+                "label": null,
+                "dimensions": null,
+                "inventoryQuantity": 2,
+                "drawingBox": [0.73, 0.76, 0.1, 0.04]
+            }
+        ],
+        "rawExtraction": {
+            "model": "muse-spark-1.3",
+            "telemetry": {
+                "stage": "parse",
+                "model": "muse-spark-1.3",
+                "effort": "medium",
+                "timing": {
+                    "timeToProviderMs": 99.14737500000047,
+                    "paceWaitMs": 0.04679200000828132,
+                    "networkMs": 4849.57695800002,
+                    "bodyMs": 46642.65749999997,
+                    "providerMs": 51492.67408299999,
+                    "parseValidateMs": 8.258583999995608,
+                    "totalMs": 51600.133875
+                },
+                "stream": {
+                    "timeToCreatedMs": 5315.933583999984,
+                    "timeToFirstSummaryMs": 6956.806209000002,
+                    "timeToFirstOutputMs": 43462.758542000025,
+                    "eventCount": 303
+                },
+                "usage": {
+                    "inputTokens": 11738,
+                    "cachedTokens": 0,
+                    "outputTokens": 8751,
+                    "reasoningTokens": 6549
+                }
+            },
+            "parts": [
+                {
+                    "partId": "part-walking-machine",
+                    "name": {
+                        "state": "known",
+                        "value": "Walking machine",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "label": null,
+                    "dimensions": null,
+                    "inventoryQuantity": 1,
+                    "drawingBox": [0.285, 0.235, 0.395, 0.285]
+                },
+                {
+                    "partId": "part-knob",
+                    "name": {
+                        "state": "known",
+                        "value": "knob",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "label": null,
+                    "dimensions": null,
+                    "inventoryQuantity": 2,
+                    "drawingBox": [0.735, 0.362, 0.075, 0.075]
+                },
+                {
+                    "partId": "part-phone-support",
+                    "name": {
+                        "state": "known",
+                        "value": "phone support",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "label": null,
+                    "dimensions": null,
+                    "inventoryQuantity": 1,
+                    "drawingBox": [0.735, 0.44, 0.08, 0.055]
+                },
+                {
+                    "partId": "part-screw-m4x15",
+                    "name": {
+                        "state": "known",
+                        "value": "M4 * 15 screw",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "label": null,
+                    "dimensions": null,
+                    "inventoryQuantity": 2,
+                    "drawingBox": [0.73, 0.76, 0.1, 0.04]
+                }
+            ],
+            "steps": [
+                {
+                    "stepId": "step-1-place-machine",
+                    "order": 1,
+                    "title": "Open package and place walking machine flat on ground",
+                    "kind": "assembly",
+                    "requirements": {
+                        "orientation": true,
+                        "connection": true,
+                        "visibleChecks": true
+                    },
+                    "alternatives": null,
+                    "selectedAlternativeId": null,
+                    "parts": [
+                        {
+                            "partId": "part-walking-machine",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "part-walking-machine",
+                            "description": "Machine flat on the ground with running belt facing up"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["part-walking-machine"],
+                            "description": "Walking machine rests flat on the ground"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "check-1-1",
+                            "description": {
+                                "state": "known",
+                                "value": "Walking machine present flat on ground with running belt visible",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "region": null
+                        }
+                    ],
+                    "correction": null,
+                    "safetyNotes": []
+                },
+                {
+                    "stepId": "step-2-fix-handrail",
+                    "order": 2,
+                    "title": "Stand handrail vertical and fix to bottom frame with two knobs",
+                    "kind": "assembly",
+                    "requirements": {
+                        "orientation": true,
+                        "connection": true,
+                        "visibleChecks": true
+                    },
+                    "alternatives": null,
+                    "selectedAlternativeId": null,
+                    "parts": [
+                        {
+                            "partId": "part-knob",
+                            "quantity": {
+                                "state": "known",
+                                "value": 2,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        },
+                        {
+                            "partId": "part-walking-machine",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": {
+                                "kind": "carried_over",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    }
+                                ],
+                                "stepId": "step-1-place-machine",
+                                "partId": "part-walking-machine"
+                            }
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "part-walking-machine",
+                            "description": "Handrail vertical and upright above front of machine"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["part-walking-machine", "part-knob"],
+                            "description": "Handrail fixed on bottom frame in corresponding screw holes with two knobs"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "check-2-1",
+                            "description": {
+                                "state": "known",
+                                "value": "Handrail upright and two knobs attached at bottom frame screw holes on both sides",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ],
+                    "correction": null,
+                    "safetyNotes": []
+                },
+                {
+                    "stepId": "step-3-attach-phone-support",
+                    "order": 3,
+                    "title": "Attach phone support to middle of armrest pipe with two screws",
+                    "kind": "assembly",
+                    "requirements": {
+                        "orientation": true,
+                        "connection": true,
+                        "visibleChecks": true
+                    },
+                    "alternatives": null,
+                    "selectedAlternativeId": null,
+                    "parts": [
+                        {
+                            "partId": "part-phone-support",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        },
+                        {
+                            "partId": "part-screw-m4x15",
+                            "quantity": {
+                                "state": "known",
+                                "value": 2,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        },
+                        {
+                            "partId": "part-walking-machine",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                        "region": null
+                                    },
+                                    {
+                                        "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                        "region": null
+                                    }
+                                ]
+                            },
+                            "quantityBasis": {
+                                "kind": "carried_over",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    }
+                                ],
+                                "stepId": "step-1-place-machine",
+                                "partId": "part-walking-machine"
+                            }
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "part-phone-support",
+                            "description": "Phone support centered on top middle of armrest pipe"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["part-phone-support", "part-screw-m4x15", "part-walking-machine"],
+                            "description": "Phone support held in corresponding screw hole in middle of armrest pipe with two M4 * 15 screws rotated tightly"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "check-3-1",
+                            "description": {
+                                "state": "known",
+                                "value": "Phone support present on top middle of handrail and attached with screws",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ],
+                    "correction": null,
+                    "safetyNotes": []
+                }
+            ],
+            "unknowns": []
+        },
+        "extractionSourcePageIds": [
+            "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+            "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+            "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+            "page-d06cf248-8c85-4f45-bddb-4f06bff8531e"
+        ],
+        "reviewedSteps": [
+            {
+                "stepId": "step-1-place-machine",
+                "order": 1,
+                "title": "Open package and place walking machine flat on ground",
+                "kind": "assembly",
+                "requirements": {
+                    "orientation": true,
+                    "connection": true,
+                    "visibleChecks": true
+                },
+                "alternatives": null,
+                "selectedAlternativeId": null,
+                "parts": [
+                    {
+                        "partId": "part-walking-machine",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": null
+                    }
+                ],
+                "orientation": {
+                    "state": "known",
+                    "value": {
+                        "partId": "part-walking-machine",
+                        "description": "Machine flat on the ground with running belt facing up"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "region": null
+                        }
+                    ]
+                },
+                "connection": {
+                    "state": "known",
+                    "value": {
+                        "partIds": ["part-walking-machine"],
+                        "description": "Walking machine rests flat on the ground"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "region": null
+                        }
+                    ]
+                },
+                "visibleChecks": [
+                    {
+                        "checkId": "check-1-1",
+                        "description": {
+                            "state": "known",
+                            "value": "Walking machine present flat on ground with running belt visible",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "sourceRefs": [
+                    {
+                        "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                        "region": null
+                    }
+                ],
+                "correction": null,
+                "safetyNotes": []
+            },
+            {
+                "stepId": "step-2-fix-handrail",
+                "order": 2,
+                "title": "Stand handrail vertical and fix to bottom frame with two knobs",
+                "kind": "assembly",
+                "requirements": {
+                    "orientation": true,
+                    "connection": true,
+                    "visibleChecks": true
+                },
+                "alternatives": null,
+                "selectedAlternativeId": null,
+                "parts": [
+                    {
+                        "partId": "part-knob",
+                        "quantity": {
+                            "state": "known",
+                            "value": 2,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": null
+                    },
+                    {
+                        "partId": "part-walking-machine",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": {
+                            "kind": "carried_over",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                }
+                            ],
+                            "stepId": "step-1-place-machine",
+                            "partId": "part-walking-machine"
+                        }
+                    }
+                ],
+                "orientation": {
+                    "state": "known",
+                    "value": {
+                        "partId": "part-walking-machine",
+                        "description": "Handrail vertical and upright above front of machine"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ]
+                },
+                "connection": {
+                    "state": "known",
+                    "value": {
+                        "partIds": ["part-walking-machine", "part-knob"],
+                        "description": "Handrail fixed on bottom frame in corresponding screw holes with two knobs"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ]
+                },
+                "visibleChecks": [
+                    {
+                        "checkId": "check-2-1",
+                        "description": {
+                            "state": "known",
+                            "value": "Handrail upright and two knobs attached at bottom frame screw holes on both sides",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "sourceRefs": [
+                    {
+                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                        "region": null
+                    }
+                ],
+                "correction": null,
+                "safetyNotes": []
+            },
+            {
+                "stepId": "step-3-attach-phone-support",
+                "order": 3,
+                "title": "Attach phone support to middle of armrest pipe with two screws",
+                "kind": "assembly",
+                "requirements": {
+                    "orientation": true,
+                    "connection": true,
+                    "visibleChecks": true
+                },
+                "alternatives": null,
+                "selectedAlternativeId": null,
+                "parts": [
+                    {
+                        "partId": "part-phone-support",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": null
+                    },
+                    {
+                        "partId": "part-screw-m4x15",
+                        "quantity": {
+                            "state": "known",
+                            "value": 2,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": null
+                    },
+                    {
+                        "partId": "part-walking-machine",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                                    "region": null
+                                },
+                                {
+                                    "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                                    "region": null
+                                }
+                            ]
+                        },
+                        "quantityBasis": {
+                            "kind": "carried_over",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                }
+                            ],
+                            "stepId": "step-1-place-machine",
+                            "partId": "part-walking-machine"
+                        }
+                    }
+                ],
+                "orientation": {
+                    "state": "known",
+                    "value": {
+                        "partId": "part-phone-support",
+                        "description": "Phone support centered on top middle of armrest pipe"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ]
+                },
+                "connection": {
+                    "state": "known",
+                    "value": {
+                        "partIds": ["part-phone-support", "part-screw-m4x15", "part-walking-machine"],
+                        "description": "Phone support held in corresponding screw hole in middle of armrest pipe with two M4 * 15 screws rotated tightly"
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "region": null
+                        }
+                    ]
+                },
+                "visibleChecks": [
+                    {
+                        "checkId": "check-3-1",
+                        "description": {
+                            "state": "known",
+                            "value": "Phone support present on top middle of handrail and attached with screws",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "sourceRefs": [
+                    {
+                        "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                        "region": null
+                    }
+                ],
+                "correction": null,
+                "safetyNotes": []
+            }
+        ],
+        "reviewStatus": "reviewed"
+    },
+    "cases": [
+        {
+            "guide": 1,
+            "recordedResponse": "raw-1b5db2ad-5792-43bb-a582-b3c629a2acef.json",
+            "stepId": "step-1-place-machine",
+            "stepPieces": [
+                {
+                    "pieceId": "walking-machine-468c09a8",
+                    "quantity": 1
+                }
+            ],
+            "uiState": {
+                "library": {
+                    "entries": [
+                        {
+                            "manualId": "manual-4b258b3b-ede3-4c28-b604-e59cd624d132",
+                            "title": "Open package and place walking machine flat on ground",
+                            "updatedAt": "2026-11-02T06:18:32.980Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0"
+                        },
+                        {
+                            "manualId": "manual-a43d50a9-8e88-4615-8145-8b71e73c8171",
+                            "title": "Open package and place machine flat on ground",
+                            "updatedAt": "2026-11-01T20:09:12.032Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-c34ee839-e54c-4554-af5b-9d503882de6c"
+                        },
+                        {
+                            "manualId": "manual-65c1c7c6-e578-438b-acf5-2525923b2f61",
+                            "title": "Put machine flat on ground",
+                            "updatedAt": "2026-11-01T16:51:52.751Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-6a963c47-4a51-4526-8058-66e849f3ef79"
+                        },
+                        {
+                            "manualId": "manual-63270f43-cdbc-4c9d-9800-18f097dbfa36",
+                            "title": "0 page manual",
+                            "updatedAt": "2026-11-01T08:15:30.746Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 0,
+                            "firstPageId": null
+                        }
+                    ],
+                    "soleManualId": null
+                },
+                "pages": {
+                    "items": [
+                        {
+                            "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "width": 960,
+                            "height": 1280
+                        }
+                    ],
+                    "maxPages": 20,
+                    "canRead": true,
+                    "languageOptions": ["en", "es", "fr", "de", "pt-BR"]
+                },
+                "reading": {
+                    "cancellation": "confirm-before-stop"
+                }
+            },
+            "wire": {
+                "bar": {
+                    "primary": {
+                        "icon": null,
+                        "intent": {
+                            "intent": "capture",
+                            "target": "take-photo"
+                        },
+                        "label": "Take photo",
+                        "type": "PrimaryAction"
+                    },
+                    "secondary": {
+                        "icon": null,
+                        "intent": {
+                            "intent": "ask",
+                            "target": "about-step"
+                        },
+                        "label": "Ask about this step",
+                        "type": "SecondaryAction"
+                    }
+                },
+                "body": "n1",
+                "header": {
+                    "actions": [
+                        {
+                            "icon": "more",
+                            "intent": {
+                                "intent": "navigate",
+                                "target": "more"
+                            },
+                            "label": "More"
+                        }
+                    ],
+                    "back": {
+                        "icon": "chevronLeft",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "back"
+                        },
+                        "label": "Back"
+                    },
+                    "subtitle": {
+                        "key": "step-position",
+                        "kind": "bound"
+                    },
+                    "title": {
+                        "key": "step-title",
+                        "kind": "bound"
+                    }
+                },
+                "nodes": [
+                    {
+                        "children": ["n2"],
+                        "id": "n1",
+                        "padding": "none",
+                        "surface": "plain",
+                        "tone": "neutral",
+                        "type": "Card"
+                    },
+                    {
+                        "children": ["n3", "n4", "n5", "n7", "n14"],
+                        "id": "n2",
+                        "padding": "none",
+                        "surface": "plain",
+                        "tone": "neutral",
+                        "type": "Card"
+                    },
+                    {
+                        "id": "n3",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n4",
+                        "label": {
+                            "key": "step-position",
+                            "kind": "bound"
+                        },
+                        "tone": "neutral",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n5",
+                        "label": {
+                            "kind": "literal",
+                            "text": "Parts"
+                        },
+                        "tone": "neutral",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n6",
+                        "label": {
+                            "kind": "literal",
+                            "text": "This step"
+                        },
+                        "tone": "neutral",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n7",
+                        "label": {
+                            "kind": "literal",
+                            "text": "Directions"
+                        },
+                        "tone": "info",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n8",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n9",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n10",
+                        "label": {
+                            "kind": "literal",
+                            "text": "This step"
+                        },
+                        "tone": "neutral",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n11",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n12",
+                        "label": {
+                            "kind": "literal",
+                            "text": "Details"
+                        },
+                        "tone": "neutral",
+                        "type": "Badge"
+                    },
+                    {
+                        "id": "n13",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n14",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n15",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n16",
+                        "name": "check",
+                        "size": "sm",
+                        "tone": "neutral",
+                        "type": "Icon"
+                    }
+                ],
+                "overlays": []
+            },
+            "rawNodes": 16,
+            "normalizedNodes": 7,
+            "qualityIssues": ["guide_quality:instruction_text_missing"],
+            "contextHash": "55faa77bdfe38d35c230ac095df90f1576dbea3fa663cdf42176582a3603c9a0"
+        },
+        {
+            "guide": 2,
+            "recordedResponse": "raw-56a6016a-1638-48ef-9b77-60737416e760.json",
+            "stepId": "step-2-fix-handrail",
+            "stepPieces": [
+                {
+                    "pieceId": "knob-560a9950",
+                    "quantity": 2
+                },
+                {
+                    "pieceId": "walking-machine-468c09a8",
+                    "quantity": 1
+                }
+            ],
+            "uiState": {
+                "library": {
+                    "entries": [
+                        {
+                            "manualId": "manual-4b258b3b-ede3-4c28-b604-e59cd624d132",
+                            "title": "Open package and place walking machine flat on ground",
+                            "updatedAt": "2026-11-02T06:18:32.980Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0"
+                        },
+                        {
+                            "manualId": "manual-a43d50a9-8e88-4615-8145-8b71e73c8171",
+                            "title": "Open package and place machine flat on ground",
+                            "updatedAt": "2026-11-01T20:09:12.032Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-c34ee839-e54c-4554-af5b-9d503882de6c"
+                        },
+                        {
+                            "manualId": "manual-65c1c7c6-e578-438b-acf5-2525923b2f61",
+                            "title": "Put machine flat on ground",
+                            "updatedAt": "2026-11-01T16:51:52.751Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-6a963c47-4a51-4526-8058-66e849f3ef79"
+                        },
+                        {
+                            "manualId": "manual-63270f43-cdbc-4c9d-9800-18f097dbfa36",
+                            "title": "0 page manual",
+                            "updatedAt": "2026-11-01T08:15:30.746Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 0,
+                            "firstPageId": null
+                        }
+                    ],
+                    "soleManualId": null
+                },
+                "pages": {
+                    "items": [
+                        {
+                            "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "width": 960,
+                            "height": 1280
+                        }
+                    ],
+                    "maxPages": 20,
+                    "canRead": true,
+                    "languageOptions": ["en", "es", "fr", "de", "pt-BR"]
+                },
+                "reading": {
+                    "cancellation": "confirm-before-stop"
+                }
+            },
+            "wire": {
+                "bar": {
+                    "primary": {
+                        "icon": null,
+                        "intent": {
+                            "intent": "capture",
+                            "target": "take-photo"
+                        },
+                        "label": "Take photo",
+                        "type": "PrimaryAction"
+                    },
+                    "secondary": {
+                        "icon": "more",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "more"
+                        },
+                        "label": "More",
+                        "type": "SecondaryAction"
+                    }
+                },
+                "body": "n1",
+                "header": {
+                    "actions": [],
+                    "back": {
+                        "icon": "arrowRight",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "back"
+                        },
+                        "label": "Back"
+                    },
+                    "subtitle": {
+                        "key": "step-position",
+                        "kind": "bound"
+                    },
+                    "title": {
+                        "key": "step-title",
+                        "kind": "bound"
+                    }
+                },
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "name": "search",
+                        "size": "md",
+                        "tone": "info",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n1",
+                        "name": "search",
+                        "size": "md",
+                        "tone": "info",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n1",
+                        "size": "md",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n1",
+                        "size": "md",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n1",
+                        "name": "search",
+                        "size": "md",
+                        "tone": "info",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n1",
+                        "name": "search",
+                        "size": "md",
+                        "tone": "info",
+                        "type": "Icon"
+                    },
+                    {
+                        "id": "n1",
+                        "name": "search",
+                        "size": "md",
+                        "tone": "info",
+                        "type": "Icon"
+                    }
+                ],
+                "overlays": []
+            },
+            "rawNodes": 7,
+            "normalizedNodes": 1,
+            "qualityIssues": ["guide_quality:instruction_text_missing"],
+            "contextHash": "efc60891677fdff9d9e753203fc61dfb3041fe802b99ab84a7b7b4358a6d80fe"
+        },
+        {
+            "guide": 3,
+            "recordedResponse": "raw-7e4b3a42-5147-4126-a939-1d34a5996208.json",
+            "stepId": "step-3-attach-phone-support",
+            "stepPieces": [
+                {
+                    "pieceId": "phone-support-25edf4bd",
+                    "quantity": 1
+                },
+                {
+                    "pieceId": "m4-15-screw-a400e2c1",
+                    "quantity": 2
+                },
+                {
+                    "pieceId": "walking-machine-468c09a8",
+                    "quantity": 1
+                }
+            ],
+            "uiState": {
+                "library": {
+                    "entries": [
+                        {
+                            "manualId": "manual-4b258b3b-ede3-4c28-b604-e59cd624d132",
+                            "title": "Open package and place walking machine flat on ground",
+                            "updatedAt": "2026-11-02T06:18:32.980Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0"
+                        },
+                        {
+                            "manualId": "manual-a43d50a9-8e88-4615-8145-8b71e73c8171",
+                            "title": "Open package and place machine flat on ground",
+                            "updatedAt": "2026-11-01T20:09:12.032Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-c34ee839-e54c-4554-af5b-9d503882de6c"
+                        },
+                        {
+                            "manualId": "manual-65c1c7c6-e578-438b-acf5-2525923b2f61",
+                            "title": "Put machine flat on ground",
+                            "updatedAt": "2026-11-01T16:51:52.751Z",
+                            "stopStepId": "step-1",
+                            "completed": 0,
+                            "total": 3,
+                            "firstPageId": "page-6a963c47-4a51-4526-8058-66e849f3ef79"
+                        },
+                        {
+                            "manualId": "manual-63270f43-cdbc-4c9d-9800-18f097dbfa36",
+                            "title": "0 page manual",
+                            "updatedAt": "2026-11-01T08:15:30.746Z",
+                            "stopStepId": null,
+                            "completed": 0,
+                            "total": 0,
+                            "firstPageId": null
+                        }
+                    ],
+                    "soleManualId": null
+                },
+                "pages": {
+                    "items": [
+                        {
+                            "pageId": "page-853b2db3-bfa4-423a-a4e9-acf1badad6b0",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-b921e6f0-3c28-4deb-869b-799279b6325e",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-6c0fbf06-9b09-4295-8738-3faa44538b04",
+                            "width": 960,
+                            "height": 1280
+                        },
+                        {
+                            "pageId": "page-d06cf248-8c85-4f45-bddb-4f06bff8531e",
+                            "width": 960,
+                            "height": 1280
+                        }
+                    ],
+                    "maxPages": 20,
+                    "canRead": true,
+                    "languageOptions": ["en", "es", "fr", "de", "pt-BR"]
+                },
+                "reading": {
+                    "cancellation": "confirm-before-stop"
+                }
+            },
+            "wire": {
+                "bar": {
+                    "primary": {
+                        "icon": null,
+                        "intent": {
+                            "intent": "capture",
+                            "target": "take-photo"
+                        },
+                        "label": "Take a photo",
+                        "type": "PrimaryAction"
+                    },
+                    "secondary": {
+                        "icon": null,
+                        "intent": {
+                            "intent": "ask",
+                            "target": "about-step"
+                        },
+                        "label": "Ask about this step",
+                        "type": "SecondaryAction"
+                    }
+                },
+                "body": "n1",
+                "header": {
+                    "actions": [
+                        {
+                            "icon": "more",
+                            "intent": {
+                                "intent": "navigate",
+                                "target": "more"
+                            },
+                            "label": "More"
+                        }
+                    ],
+                    "back": {
+                        "icon": "chevronLeft",
+                        "intent": {
+                            "intent": "navigate",
+                            "target": "back"
+                        },
+                        "label": "Back"
+                    },
+                    "subtitle": {
+                        "kind": "literal",
+                        "text": "This step"
+                    },
+                    "title": {
+                        "kind": "literal",
+                        "text": "This step"
+                    }
+                },
+                "nodes": [
+                    {
+                        "align": "stretch",
+                        "children": ["n2"],
+                        "gap": "md",
+                        "id": "n1",
+                        "type": "Stack"
+                    },
+                    {
+                        "id": "n2",
+                        "size": "lg",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n3",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n4",
+                        "size": "lg",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n5",
+                        "size": "lg",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n6",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n7",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n8",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n9",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n10",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n11",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n12",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n13",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n14",
+                        "size": "sm",
+                        "type": "Spacer"
+                    },
+                    {
+                        "id": "n15",
+                        "size": "sm",
+                        "type": "Spacer"
+                    }
+                ],
+                "overlays": []
+            },
+            "rawNodes": 15,
+            "normalizedNodes": 2,
+            "qualityIssues": ["guide_quality:title_not_bound", "guide_quality:instruction_text_missing"],
+            "contextHash": "bd0bc5b84ee1c8870d9772df15b180427afb5b62ae10beec659f3e2db2de2c33"
+        }
+    ]
+}

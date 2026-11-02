@@ -1,0 +1,461 @@
+{
+    "kind": "reading",
+    "session": {
+        "manualId": "demo-divider",
+        "title": "Demo data — simulated results",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": 1,
+        "pages": [
+            {
+                "pageId": "demo-page-1",
+                "assetId": "demo-asset-1",
+                "width": 1200,
+                "height": 900,
+                "mimeType": "image/png",
+                "contentHash": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        ],
+        "parts": [
+            {
+                "partId": "side-panel",
+                "name": {
+                    "state": "known",
+                    "value": "Side panel",
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                }
+            },
+            {
+                "partId": "divider",
+                "name": {
+                    "state": "known",
+                    "value": "Divider shelf",
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                }
+            }
+        ],
+        "rawExtraction": {
+            "parts": [
+                {
+                    "partId": "side-panel",
+                    "name": {
+                        "state": "known",
+                        "value": "Side panel",
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "partId": "divider",
+                    "name": {
+                        "state": "known",
+                        "value": "Divider shelf",
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    }
+                }
+            ],
+            "steps": [
+                {
+                    "stepId": "step-1",
+                    "order": 1,
+                    "title": "Stand the side panel upright",
+                    "parts": [
+                        {
+                            "partId": "side-panel",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "side-panel",
+                            "description": "Groove faces inward toward the divider."
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["side-panel"],
+                            "description": "Keep the panel free before seating the divider."
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "groove-inward",
+                            "description": {
+                                "state": "known",
+                                "value": "The inward-facing groove is visible.",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ],
+                    "correction": {
+                        "reviewed": false,
+                        "actions": [
+                            {
+                                "actionId": "turn-panel",
+                                "instruction": "Turn the panel so the groove faces inward.",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                {
+                    "stepId": "step-2",
+                    "order": 2,
+                    "title": "Seat the divider in the groove",
+                    "parts": [
+                        {
+                            "partId": "side-panel",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "partId": "divider",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "divider",
+                            "description": "Divider is horizontal and square to the upright panel."
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["side-panel", "divider"],
+                            "description": "Divider edge rests inside the panel groove."
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "demo-page-1",
+                                "region": null
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "divider-seated",
+                            "description": {
+                                "state": "known",
+                                "value": "Divider is fully seated with no visible gap.",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ],
+                    "correction": {
+                        "reviewed": false,
+                        "actions": [
+                            {
+                                "actionId": "reseat-divider",
+                                "instruction": "Lift the divider and reseat its edge inside the groove.",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "demo-page-1",
+                                        "region": null
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ],
+            "unknowns": []
+        },
+        "reviewedSteps": [
+            {
+                "stepId": "step-1",
+                "order": 1,
+                "title": "Stand the side panel upright",
+                "parts": [
+                    {
+                        "partId": "side-panel",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "orientation": {
+                    "state": "known",
+                    "value": {
+                        "partId": "side-panel",
+                        "description": "Groove faces inward toward the divider."
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                },
+                "connection": {
+                    "state": "known",
+                    "value": {
+                        "partIds": ["side-panel"],
+                        "description": "Keep the panel free before seating the divider."
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                },
+                "visibleChecks": [
+                    {
+                        "checkId": "groove-inward",
+                        "description": {
+                            "state": "known",
+                            "value": "The inward-facing groove is visible.",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "sourceRefs": [
+                    {
+                        "pageId": "demo-page-1",
+                        "region": null
+                    }
+                ],
+                "correction": {
+                    "reviewed": true,
+                    "actions": [
+                        {
+                            "actionId": "turn-panel",
+                            "instruction": "Turn the panel so the groove faces inward.",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                "stepId": "step-2",
+                "order": 2,
+                "title": "Seat the divider in the groove",
+                "parts": [
+                    {
+                        "partId": "side-panel",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "partId": "divider",
+                        "quantity": {
+                            "state": "known",
+                            "value": 1,
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "orientation": {
+                    "state": "known",
+                    "value": {
+                        "partId": "divider",
+                        "description": "Divider is horizontal and square to the upright panel."
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                },
+                "connection": {
+                    "state": "known",
+                    "value": {
+                        "partIds": ["side-panel", "divider"],
+                        "description": "Divider edge rests inside the panel groove."
+                    },
+                    "sourceRefs": [
+                        {
+                            "pageId": "demo-page-1",
+                            "region": null
+                        }
+                    ]
+                },
+                "visibleChecks": [
+                    {
+                        "checkId": "divider-seated",
+                        "description": {
+                            "state": "known",
+                            "value": "Divider is fully seated with no visible gap.",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "sourceRefs": [
+                    {
+                        "pageId": "demo-page-1",
+                        "region": null
+                    }
+                ],
+                "correction": {
+                    "reviewed": true,
+                    "actions": [
+                        {
+                            "actionId": "reseat-divider",
+                            "instruction": "Lift the divider and reseat its edge inside the groove.",
+                            "sourceRefs": [
+                                {
+                                    "pageId": "demo-page-1",
+                                    "region": null
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ],
+        "reviewStatus": "reviewed"
+    },
+    "stepId": null,
+    "captureId": null,
+    "result": null,
+    "failure": null,
+    "uiState": {
+        "pages": {
+            "items": [
+                {
+                    "pageId": "demo-page-1",
+                    "width": 1200,
+                    "height": 900
+                }
+            ],
+            "maxPages": 20,
+            "canRead": true,
+            "languageOptions": ["en", "es"]
+        },
+        "reading": {
+            "cancellation": "confirm-before-stop"
+        },
+        "busy": {
+            "activity": "saving"
+        }
+    }
+}

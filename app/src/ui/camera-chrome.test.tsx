@@ -1,7 +1,9 @@
 import { describe, expect, it, jest } from '@jest/globals'
 import { fireEvent, render, screen } from '@testing-library/react-native'
-import { Text } from 'react-native'
+import { StyleSheet, Text } from 'react-native'
 import { CameraChrome } from './camera-chrome'
+
+jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
 
 jest.mock(
     'react-native-safe-area-context',
@@ -43,6 +45,35 @@ describe('CameraChrome', () => {
         expect(onShutter).not.toHaveBeenCalled()
     })
 
+    it('shows visible progress on the shutter while a photo is being prepared, and only then', async () => {
+        const view = await render(
+            <CameraChrome
+                hint="Frame the step"
+                shutterLabel="Preparing photo…"
+                busy={true}
+                onShutter={(): void => undefined}
+                onClose={(): void => undefined}
+            >
+                <Text>Viewfinder</Text>
+            </CameraChrome>,
+        )
+        expect(screen.getByTestId('shutter-busy')).toBeTruthy()
+        expect(screen.getByRole('button', { name: 'Preparing photo…' }).props.accessibilityState).toMatchObject({
+            busy: true,
+        })
+        await view.rerender(
+            <CameraChrome
+                hint="Frame the step"
+                shutterLabel="Take photo"
+                onShutter={(): void => undefined}
+                onClose={(): void => undefined}
+            >
+                <Text>Viewfinder</Text>
+            </CameraChrome>,
+        )
+        expect(screen.queryByTestId('shutter-busy')).toBeNull()
+    })
+
     it('shows the framing hint and the viewfinder content', async () => {
         await render(
             <CameraChrome
@@ -56,5 +87,23 @@ describe('CameraChrome', () => {
         )
         expect(screen.getByText('Frame the step')).toBeTruthy()
         expect(screen.getByText('Viewfinder')).toBeTruthy()
+    })
+
+    it('backs the shutter ring with a dark halo so it stays visible on a bright scene', async () => {
+        await render(
+            <CameraChrome
+                hint="Show the part."
+                shutterLabel="Take photo"
+                onShutter={(): void => undefined}
+                onClose={(): void => undefined}
+            >
+                <Text>Viewfinder</Text>
+            </CameraChrome>,
+        )
+        const ring = StyleSheet.flatten(screen.getByTestId('camera-shutter').props.style)
+        expect(ring.backgroundColor).toMatch(/^rgba\(15, 17, 19,/u)
+        expect(StyleSheet.flatten(screen.getByTestId('camera-shutter').parent?.props.style).backgroundColor).toMatch(
+            /^rgba\(15, 17, 19,/u,
+        )
     })
 })

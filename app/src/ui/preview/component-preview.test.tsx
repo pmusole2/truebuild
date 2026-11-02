@@ -49,3 +49,17 @@ describe('ComponentPreview', () => {
         expect(screen.getByRole('radio', { name: 'Light' }).props.accessibilityState).toEqual({ checked: true })
     })
 })
+
+describe('ComponentPreview guidance example', () => {
+    it('shows mocked part guidance with every drawn thing named in text', async () => {
+        await render(<ComponentPreview />)
+        expect(screen.getByText('Next part: Divider shelf')).toBeTruthy()
+        expect(screen.getByText('Target for Divider shelf')).toBeTruthy()
+        expect(screen.getByText('Move Divider shelf to the marked area')).toBeTruthy()
+        expect(
+            screen.getByText(
+                'Part guidance: dashed next part, solid target and one arrow, only when both were located for the same part. Mocked geometry.',
+            ),
+        ).toBeTruthy()
+    })
+})

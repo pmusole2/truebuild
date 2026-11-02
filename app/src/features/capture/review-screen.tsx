@@ -1,0 +1,426 @@
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { StyleSheet, View } from 'react-native'
+import Animated from 'react-native-reanimated'
+import type { ManualSession, ManualStep } from '@truebuild/contracts'
+import { AppButton } from '../../ui/button'
+import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
+import { ProgressBar } from '../../ui/progress'
+import { MoreSheet } from '../../ui/sheet'
+import { Card, Stack } from '../../ui/surface'
+import { Body, Caption, Heading, Instruction } from '../../ui/text'
+import { focusRingStyle, useFocusRing } from '../../ui/focus'
+import { useStepTransition } from '../../ui/motion'
+import { PressMotion } from '../../ui/press-motion'
+import { useTheme } from '../../theme/theme'
+import { space, touchTarget } from '../../theme/tokens'
+import { reviewedSession, unresolvedCriticalFacts } from './controller'
+import type { LibraryEntry } from './library'
+import { quickCheckCandidates } from '../onboarding/coach-inventory'
+import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
+import { AboutThisCheck } from './more-sections'
+import { PageImage } from './page-media'
+import { firstSentences, isProgressNotice, plainReason } from './plain-copy'
+import { FixEditor } from './fix-editor'
+import { otherBlockers, type Question } from './quick-check-model'
+import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
+import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
+import { defaultNav, type ScreenNav } from './screen-nav'
+import { StepDetails } from './step-details'
+import { StepPicture } from './step-picture'
+import type { WorkflowScreenProps } from './workflow-types'
+import { useQuickProgress, type QuickProgress } from '../screens/quick-progress'
+
+/** Internal issue wording turned into a plain line for More. Part ids and field names never show. */
+function plainIssue(issue: string): string {
+    return issue.replace(/^Part \S+ name: /u, 'A part name is unclear: ').replace(/, quantity of \S+:/u, ', how many:')
+}
+type QuickCheckProps = WorkflowScreenProps &
+    ChromeProps & {
+        entry: LibraryEntry
+        readonly nav?: ScreenNav
+        readonly progress?: QuickProgress
+    }
+
+/**
+ * Quick check: one honest question at a time. Only what the existing gate lets a person fill in is asked (a missing
+ * orientation or missing visible checks, each from the step's cited page); anything else needs clearer pages. Nothing
+ * is guessed, so with no value from the manual the card shows its picture, the question and Let me fix it. The editor
+ * opens in the More sheet. The whole manual is confirmed only by the explicit Start building tap after the questions.
+ */
+export function OverviewScreen({
+    state,
+    controller,
+    entry,
+    nav: navProp,
+    chrome = 'inline',
+    more: moreProp,
+    progress: progressProp,
+}: QuickCheckProps): ReactElement {
+    const { session } = entry
+    const nav = navProp ?? defaultNav(controller)
+    const internalMore = useMoreState()
+    const more = moreProp ?? internalMore
+    const heroHeight = useHeroHeight()
+    const ownProgress = useQuickProgress(session)
+    const { questions, current, position, total, skipped } = progressProp ?? ownProgress
+    const skip = progressProp?.skip ?? ownProgress.skip
+    const unskip = progressProp?.unskip ?? ownProgress.unskip
+    const blockers = otherBlockers(session)
+    const reviewed = session.reviewStatus === 'reviewed'
+    const canConfirm = reviewedSession(session) !== null
+    const busy = state.pending !== null || state.storageReadOnly
+    // Nothing has been read yet: no extraction and no steps. (A session that already carries steps is shown as it is.)
+    const noRead = session.rawExtraction === null && session.reviewedSteps.length === 0
+    const unreadable = current !== undefined && current.step.sourceRefs.length === 0
+    let sentence: string
+    let primary: BarAction | null = null
+    let secondary: BarAction | undefined
+    if (noRead) {
+        sentence = 'Add photos of your manual and read them first.'
+        primary = {
+            label: 'Add photos',
+            compactLabel: 'Add',
+            onPress: nav.editPages,
+        }
+    } else if (current !== undefined && !unreadable) {
+        // Short enough for one line at the normal size, so the manual's own words beneath it show without scrolling.
+        // The editor in More keeps the full wording with the step number.
+        sentence = current.kind === 'orientation' ? 'Which way should it face?' : 'What should you see?'
+    } else if (questions.length > 0 || blockers.length > 0 || current !== undefined) {
+        sentence = 'One thing still needs a clearer photo before we can check your work.'
+        primary = {
+            label: 'Add clearer photos',
+            compactLabel: 'Add',
+            testID: 'quick-check-clearer',
+            onPress: nav.editPages,
+        }
+        secondary =
+            skipped.length > 0
+                ? {
+                      label: 'Answer skipped questions',
+                      icon: 'refresh' as const,
+                      onPress: unskip,
+                  }
+                : undefined
+    } else if (canConfirm || reviewed) {
+        sentence = 'Thanks. Your steps are ready.'
+        primary = {
+            label: reviewed ? 'Keep building' : 'Start building',
+            compactLabel: reviewed ? 'Resume' : 'Start',
+            testID: 'quick-check-start',
+            busy: state.pending !== null,
+            disabled: busy,
+            onPress: (): void => {
+                void nav.startBuilding()
+            },
+        }
+    } else {
+        sentence = 'One thing still needs a clearer photo before we can check your work.'
+        primary = {
+            label: 'Add clearer photos',
+            compactLabel: 'Add',
+            testID: 'quick-check-clearer',
+            onPress: nav.editPages,
+        }
+    }
+    const asking = current !== undefined && !unreadable
+
+    // A new question moves its picture and sentence together; nothing moves while work, a sheet or a tip holds the screen.
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const previousPosition = useRef(position)
+    const direction = position >= previousPosition.current ? 1 : -1
+    useEffect(() => {
+        previousPosition.current = position
+    }, [position])
+    const questionMotion = useStepTransition(
+        current?.id ?? 'none',
+        direction,
+        scope.active && !attention && !more.open && state.pending === null,
+    )
+    useCoachScreen('quick-check', {
+        suppressed: busy || more.open,
+        candidates: quickCheckCandidates({
+            state: asking
+                ? 'asking'
+                : primary?.testID === 'quick-check-clearer'
+                  ? 'blocked'
+                  : primary?.testID === 'quick-check-start'
+                    ? 'ready'
+                    : 'none',
+        }),
+    })
+    // The header count already shows progress; "Saved. Thanks." would be a second sentence under the question.
+    const quietState =
+        state.notice !== null && isProgressNotice(state.notice)
+            ? {
+                  ...state,
+                  notice: null,
+              }
+            : state
+    return (
+        <ScreenBody testID="overview-screen">
+            <View testID="quick-check-screen" style={styles.flex}>
+                {chrome === 'inline' ? (
+                    <InlineHeader
+                        title="Quick check"
+                        subtitle={asking ? `Question ${position} of ${total}` : undefined}
+                        more={more}
+                    />
+                ) : null}
+                {asking ? (
+                    <>
+                        <ProgressBar label={`Question ${position} of ${total}`} value={position - 1} total={total} />
+                        <View style={[styles.hero, styles.clip]}>
+                            <Animated.View style={questionMotion}>
+                                <StepPicture
+                                    reference={current.step.sourceRefs[0]}
+                                    references={current.step.sourceRefs}
+                                    session={session}
+                                    pageUris={state.pageUris}
+                                    height={heroHeight}
+                                    cover
+                                />
+                            </Animated.View>
+                        </View>
+                        <TextRegion compact>
+                            <PlainNotice state={quietState} controller={controller} />
+
+                            <Animated.View style={[styles.question, questionMotion]}>
+                                <>
+                                    <Instruction>{sentence}</Instruction>
+                                    {current.reason === null ? null : (
+                                        <Caption>{`The manual says: ${firstSentences(plainReason(current.reason), 1)}`}</Caption>
+                                    )}
+                                </>
+                            </Animated.View>
+                        </TextRegion>
+                        <FixedBottomBar
+                            primary={{
+                                label: 'Let me fix it',
+                                compactLabel: 'Fix',
+                                testID: 'quick-check-fix',
+                                disabled: busy,
+                                onPress: (): void => more.show('fix'),
+                            }}
+                            secondary={{
+                                label: 'Skip for now',
+                                icon: 'arrowRight',
+                                testID: 'quick-check-skip',
+                                disabled: busy,
+                                onPress: (): void => skip(current.id),
+                            }}
+                        />
+                    </>
+                ) : (
+                    <>
+                        <View style={styles.hero}>
+                            <StepPicture
+                                reference={session.reviewedSteps[0]?.sourceRefs[0]}
+                                references={session.reviewedSteps.flatMap((item) => item.sourceRefs)}
+                                session={session}
+                                pageUris={state.pageUris}
+                                height={heroHeight}
+                                cover
+                            />
+                        </View>
+                        <TextRegion>
+                            <PlainNotice state={quietState} controller={controller} />
+                            <Instruction>{sentence}</Instruction>
+                        </TextRegion>
+                        <FixedBottomBar
+                            {...{
+                                primary,
+                                secondary,
+                            }}
+                            reason={null}
+                        />
+                    </>
+                )}
+            </View>
+            <QuickCheckMore
+                visible={more.open}
+                onClose={more.hide}
+                session={session}
+                state={state}
+                controller={controller}
+                nav={nav}
+                issues={unresolvedCriticalFacts(session)}
+                editing={more.mode === 'fix' && asking ? current : undefined}
+                busy={busy}
+            />
+        </ScreenBody>
+    )
+}
+function QuickCheckMore({
+    visible,
+    onClose,
+    session,
+    state,
+    controller,
+    nav,
+    issues,
+    editing,
+    busy,
+}: {
+    visible: boolean
+    onClose: () => void
+    session: ManualSession
+    state: WorkflowScreenProps['state']
+    controller: WorkflowScreenProps['controller']
+    nav: ScreenNav
+    issues: readonly string[]
+    editing: Question | undefined
+    busy: boolean
+}): ReactElement {
+    const [openPage, setOpenPage] = useState<number | null>(null)
+    const enlarged = openPage === null ? undefined : session.pages[openPage]
+    const notes = session.rawExtraction?.unknowns ?? []
+    const close = (): void => {
+        setOpenPage(null)
+        onClose()
+    }
+    return (
+        <MoreSheet
+            visible={visible}
+            title={
+                editing !== undefined
+                    ? 'Let me fix it'
+                    : enlarged === undefined
+                      ? 'What we read'
+                      : `Page ${(openPage ?? 0) + 1}`
+            }
+            compactTitle={editing !== undefined ? 'Fix' : enlarged === undefined ? 'More' : undefined}
+            onClose={close}
+            detents={['tall', 'full']}
+        >
+            {editing !== undefined ? (
+                <FixEditor
+                    key={`${session.manualId}:${session.revision}:${editing.id}`}
+                    question={editing}
+                    session={session}
+                    state={state}
+                    controller={controller}
+                    busy={busy}
+                    onDone={close}
+                />
+            ) : enlarged !== undefined ? (
+                <Stack gap="sm">
+                    <PageImage
+                        uri={state.pageUris[enlarged.pageId]}
+                        label={`Manual page ${(openPage ?? 0) + 1}`}
+                        aspectRatio={enlarged.width / enlarged.height}
+                    />
+                    <AppButton label="Back to what we read" variant="quiet" onPress={(): void => setOpenPage(null)} />
+                </Stack>
+            ) : (
+                <Stack gap="md">
+                    <Caption>You checked these against your manual. Tap a page to see it bigger.</Caption>
+                    <View style={styles.strip}>
+                        {session.pages.map((page, index) => (
+                            <PageStripItem
+                                key={page.pageId}
+                                number={index + 1}
+                                uri={state.pageUris[page.pageId]}
+                                aspectRatio={page.width / page.height}
+                                onOpen={(): void => setOpenPage(index)}
+                            />
+                        ))}
+                    </View>
+                    {session.parts.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Parts</Heading>
+                            {session.parts.map((part) => (
+                                <Body key={part.partId}>
+                                    {part.name.state === 'known' ? part.name.value : 'A part with no clear name'}
+                                </Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {issues.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Still unclear</Heading>
+                            {issues.map((issue) => (
+                                <Body key={issue}>{plainIssue(issue)}</Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {notes.length === 0 ? null : (
+                        <Stack gap="xs">
+                            <Heading>Things we could not read</Heading>
+                            {notes.map((note, index) => (
+                                <Body key={index}>{note}</Body>
+                            ))}
+                        </Stack>
+                    )}
+                    {session.reviewedSteps.map((step: ManualStep, index) => (
+                        <Card tone="raised" key={step.stepId} testID="step-card">
+                            <StepDetails session={session} index={index} />
+                        </Card>
+                    ))}
+                    <AppButton
+                        label="Edit manual pages"
+                        variant="quiet"
+                        disabled={state.pending !== null}
+                        onPress={(): void => {
+                            close()
+                            nav.editPages()
+                        }}
+                    />
+                    <AboutThisCheck result={session.rawExtraction ?? undefined} onCompare={close} />
+                </Stack>
+            )}
+        </MoreSheet>
+    )
+}
+function PageStripItem({
+    number,
+    uri,
+    aspectRatio,
+    onOpen,
+}: {
+    number: number
+    uri: string | undefined
+    aspectRatio: number
+    onOpen: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const focus = useFocusRing()
+    return (
+        <PressMotion
+            testID="page-strip-item"
+            accessibilityRole="button"
+            accessibilityLabel={`Manual page ${number}`}
+            accessibilityHint="Opens the page full width"
+            {...focus.focusHandlers}
+            onPress={onOpen}
+            style={[styles.stripItem, focusRingStyle(focus.focused, colors)]}
+        >
+            <PageImage uri={uri} label={`Manual page ${number}`} aspectRatio={aspectRatio} />
+        </PressMotion>
+    )
+}
+const styles = StyleSheet.create({
+    flex: {
+        flex: 1,
+    },
+    hero: {
+        paddingHorizontal: space.md,
+        paddingTop: space.sm,
+    },
+    clip: {
+        overflow: 'hidden',
+    },
+    question: {
+        gap: space.sm,
+    },
+    strip: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: space.xs,
+    },
+    stripItem: {
+        width: 96,
+        minHeight: touchTarget,
+    },
+})

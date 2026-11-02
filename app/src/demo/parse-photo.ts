@@ -47,7 +47,13 @@ async function parseFixture(runtime: ParseRuntime, signal: AbortSignal): Promise
         signal,
     })
     if (result.status !== 'ok') {
-        return { status: 'failed', message: `Parse unavailable (${result.code}). Nothing was read.` }
+        return {
+            status: 'failed',
+            message:
+                result.code === 'budget_exhausted'
+                    ? 'Too many builds right now, try again later.'
+                    : `Parse unavailable (${result.code}). Nothing was read.`,
+        }
     }
     return {
         status: 'parsed',
@@ -89,7 +95,13 @@ async function parseModel(runtime: ParseRuntime, signal: AbortSignal): Promise<P
         return { status: 'cancelled' }
     }
     if (result.status !== 'ok') {
-        return { status: 'failed', message: `Parse unavailable (${result.code}). Nothing was read.` }
+        return {
+            status: 'failed',
+            message:
+                result.code === 'budget_exhausted'
+                    ? 'Too many builds right now, try again later.'
+                    : `Parse unavailable (${result.code}). Nothing was read.`,
+        }
     }
     return {
         status: 'parsed',

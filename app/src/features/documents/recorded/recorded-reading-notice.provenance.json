@@ -1,0 +1,5 @@
+{
+    "fixtureId": "recorded-reading-notice-sol-v1",
+    "schemaVersion": 1,
+    "description": "Test fixture for Reading with a held problem notice and generic waiting activity."
+}

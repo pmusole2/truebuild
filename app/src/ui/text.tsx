@@ -1,15 +1,18 @@
 import type { ReactElement, ReactNode } from 'react'
-import { Text } from 'react-native'
+import { Text, type StyleProp, type TextStyle } from 'react-native'
 import { useTheme } from '../theme/theme'
+import { useOriginNativeId } from './render-origin'
 import { typeProps, type TypeRole } from '../theme/typography'
 import type { Colors } from '../theme/tokens'
 
-export type TextTone = 'default' | 'muted' | 'inverse' | 'accent' | 'pass' | 'refuse' | 'caution'
+// `onAccent` is the label ink for text drawn on a filled accent surface (a selected segment or chip).
+export type TextTone = 'default' | 'muted' | 'inverse' | 'onAccent' | 'accent' | 'pass' | 'refuse' | 'caution'
 
 const TONE_TOKEN: Readonly<Record<TextTone, keyof Colors>> = {
     default: 'ink',
     muted: 'inkMuted',
     inverse: 'inkInverse',
+    onAccent: 'accentFillInk',
     accent: 'accentInk',
     pass: 'pass',
     refuse: 'refuse',
@@ -20,6 +23,9 @@ type TypeProps = {
     readonly children: ReactNode
     readonly tone?: TextTone
     readonly numberOfLines?: number
+    // Render-origin marker for a text composed from a screen document; see features/screens/render-origin.
+    readonly nativeID?: string
+    readonly style?: StyleProp<TextStyle>
 }
 
 function Typeset({
@@ -28,15 +34,19 @@ function Typeset({
     header = false,
     children,
     numberOfLines,
+    nativeID,
+    style,
 }: TypeProps & { readonly role: TypeRole; readonly header?: boolean }): ReactElement {
     const { colors } = useTheme()
+    const inheritedId = useOriginNativeId(nativeID)
     const type = typeProps(role)
     return (
         <Text
+            nativeID={inheritedId}
             accessibilityRole={header ? 'header' : undefined}
             maxFontSizeMultiplier={type.maxFontSizeMultiplier}
             numberOfLines={numberOfLines}
-            style={[type.style, { color: colors[TONE_TOKEN[tone]] }]}
+            style={[type.style, { color: colors[TONE_TOKEN[tone]] }, style]}
         >
             {children}
         </Text>
@@ -46,6 +56,15 @@ function Typeset({
 // Headings announce as headers to assistive tech. Body and caption text stay plain text and scale with Dynamic Type.
 export function Title(props: TypeProps): ReactElement {
     return <Typeset role="title" header {...props} />
+}
+
+export function LargeTitle(props: TypeProps): ReactElement {
+    return <Typeset role="largeTitle" header {...props} />
+}
+
+/** The one sentence a person acts on. Wraps freely; the screen scrolls only this text when it overflows. */
+export function Instruction(props: TypeProps): ReactElement {
+    return <Typeset role="instruction" {...props} />
 }
 
 export function Heading(props: TypeProps): ReactElement {

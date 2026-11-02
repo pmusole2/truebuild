@@ -71,13 +71,16 @@ describe('type scale', () => {
         expect(style.lineHeight).toBeGreaterThanOrEqual(style.fontSize * 1.25)
     })
 
-    it.each(ROLES)('%s still scales to 200 percent of the system text size', (role) => {
-        expect(typeScale[role].maxFontSizeMultiplier).toBeGreaterThanOrEqual(2)
+    it.each(ROLES)('%s honours the complete system text-size range without a cap', (role) => {
+        expect(typeScale[role].maxFontSizeMultiplier).toBe(0)
     })
 
-    it('keeps the display face for titles and the system sans for reading text', () => {
+    it('uses the platform system sans consistently for every type role', () => {
         expect(typeScale.title.fontFamily).toBe(typeScale.display.fontFamily)
         expect(typeScale.body.fontFamily).toBeUndefined()
+        for (const role of ROLES) {
+            expect(typeScale[role].fontFamily).toBeUndefined()
+        }
     })
 })
 
