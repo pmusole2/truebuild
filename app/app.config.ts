@@ -50,6 +50,12 @@ assertProductionEnvironment(process.env)
 const config: ExpoConfig = {
     name: 'TrueBuild',
     slug: 'truebuild',
+    owner: 'princezuko9222',
+    extra: {
+        eas: {
+            projectId: 'ae1a9376-1863-4338-b717-14adf7ba7126',
+        },
+    },
     scheme: 'truebuild',
     version: '0.1.0',
     icon: './assets/icon.png',
