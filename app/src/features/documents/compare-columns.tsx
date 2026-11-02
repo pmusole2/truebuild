@@ -1,10 +1,11 @@
 import type { ScreenDocumentV2 } from '@truebuild/contracts'
 import type { ReactElement } from 'react'
-import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Card, Stack } from '../../ui/surface'
 import { Caption, Heading } from '../../ui/text'
 import { space } from '../../theme/tokens'
 import { useLargeText } from '../../ui/large-text'
+import { ViewerScrollView } from '../pieces/viewer-scroll-lock'
 import { DocumentRenderer } from './document-renderer'
 import type { FrameBindings } from './types'
 
@@ -52,10 +53,10 @@ export function CompareColumns({ panes }: { readonly panes: readonly ComparePane
     )
     if (wide) return content
     return (
-        <ScrollView testID="compare-narrow" contentContainerStyle={styles.narrow}>
+        <ViewerScrollView testID="compare-narrow" contentContainerStyle={styles.narrow}>
             <Caption>Narrow layout: panes are stacked, not side by side.</Caption>
             {content}
-        </ScrollView>
+        </ViewerScrollView>
     )
 }
 

@@ -12,15 +12,26 @@ import {
     type ReactElement,
     type ReactNode,
 } from 'react'
-import { Image, PanResponder, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native'
+import {
+    Image,
+    Modal,
+    PanResponder,
+    Platform,
+    Pressable,
+    StyleSheet,
+    useWindowDimensions,
+    View,
+    type GestureResponderEvent,
+} from 'react-native'
 import { requireOptionalNativeModule } from 'expo'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { pieceSpecSchema, type PieceSpec } from '@truebuild/contracts'
 import { Heading, Caption, Body } from '../../ui/text'
-import { radius, space } from '../../theme/tokens'
+import { radius, space, touchTarget } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
 import type { PieceScene } from './piece-scene'
 import { loadPieceGL } from './piece-gl'
+import { lockPageScroll, unlockPageScroll } from './viewer-scroll-lock'
 
 // The normal document renderer may import this module without loading GL or Three (including on unsupported devices).
 const LazyGLView = lazy(loadPieceGL)
@@ -164,6 +175,32 @@ export function PieceViewer({
     )
 }
 
+/** A text button at the 44 point touch floor. Local so the viewer's module graph does not load the button and motion stack. */
+function ViewerButton({
+    label,
+    accessibilityLabel,
+    testID,
+    onPress,
+}: {
+    label: string
+    accessibilityLabel: string
+    testID: string
+    onPress: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <Pressable
+            testID={testID}
+            accessibilityRole="button"
+            accessibilityLabel={accessibilityLabel}
+            onPress={onPress}
+            style={[styles.viewerButton, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}
+        >
+            <Body>{label}</Body>
+        </Pressable>
+    )
+}
+
 function fingerDistance(event: GestureResponderEvent): number | null {
     const [one, two] = event.nativeEvent.touches
     return one === undefined || two === undefined ? null : Math.hypot(one.pageX - two.pageX, one.pageY - two.pageY)
@@ -175,18 +212,26 @@ function ValidPieceViewer({
     showName,
     fallback,
     onFrame,
+    fullscreen = false,
 }: {
     piece: PieceSpec
     height: number
     showName: boolean
     fallback: ReactElement
     onFrame?: (timestampMs: number) => void
+    /** The expanded copy inside its Modal: it never opens another Modal. */
+    fullscreen?: boolean
 }): ReactElement {
     const { colors } = useTheme()
+    const { height: windowHeight } = useWindowDimensions()
     const [failureReason, setFailureReason] = useState<FallbackReason | null>(null)
+    const [expanded, setExpanded] = useState(false)
     const failed = failureReason !== null
     useFallbackLog(piece.id, failureReason)
     const host = useRef<ComponentRef<typeof View>>(null)
+    const scrollOwner = useRef<object>({})
+    const lockPage = useCallback((): void => lockPageScroll(scrollOwner.current), [])
+    const unlockPage = useCallback((): void => unlockPageScroll(scrollOwner.current), [])
     const mounted = useRef(true)
     const unavailable = useRef(false)
     const creationEpoch = useRef(0)
@@ -222,9 +267,11 @@ function ValidPieceViewer({
         (reason: FallbackReason): void => {
             unavailable.current = true
             release()
+            // The name card has no drag, so a failure mid-drag must hand the page back.
+            unlockPage()
             if (mounted.current) setFailureReason(reason)
         },
-        [release],
+        [release, unlockPage],
     )
     const watchStartup = useCallback((): void => {
         clearStartup()
@@ -281,8 +328,10 @@ function ValidPieceViewer({
             // Release GPU objects before the child GLView unregisters its native context during unmount.
             mounted.current = false
             release()
+            // An unmount mid-drag (or a modal closing over it) must not leave the page held still.
+            unlockPage()
         }
-    }, [release, watchStartup])
+    }, [release, watchStartup, unlockPage])
     // Native uses PanResponder pinch; the web wheel listener is non-passive so zoom cannot scroll the page behind it.
     useEffect(() => {
         const element: unknown = host.current
@@ -309,14 +358,12 @@ function ValidPieceViewer({
     const responder = useMemo(
         () =>
             PanResponder.create({
-                // Leave an ordinary touch unclaimed until its direction is clear, so the parent can scroll vertically.
-                onStartShouldSetPanResponder: (_event, movement) => movement.numberActiveTouches > 1,
-                onMoveShouldSetPanResponder: (_event, movement) =>
-                    movement.numberActiveTouches > 1 ||
-                    (Math.hypot(movement.dx, movement.dy) > 6 && Math.abs(movement.dx) >= Math.abs(movement.dy) * 0.6),
-                onMoveShouldSetPanResponderCapture: (_event, movement) => movement.numberActiveTouches > 1,
+                // A touch that starts on the view belongs to it in any direction; the page holds still until it ends.
+                onStartShouldSetPanResponder: () => true,
+                onMoveShouldSetPanResponder: () => true,
                 onPanResponderTerminationRequest: () => false,
                 onPanResponderGrant: (event, movement): void => {
+                    lockPage()
                     gesture.current = {
                         x: movement.dx,
                         y: movement.dy,
@@ -341,8 +388,10 @@ function ValidPieceViewer({
                     gesture.current.distance = distance
                     draw()
                 },
+                onPanResponderRelease: (): void => unlockPage(),
+                onPanResponderTerminate: (): void => unlockPage(),
             }),
-        [draw],
+        [draw, lockPage, unlockPage],
     )
     if (failed) return fallback
     const webEvents = Platform.OS === 'web' ? { onContextLost: (): void => fail('context_lost') } : {}
@@ -383,6 +432,42 @@ function ValidPieceViewer({
                 </GLBoundary>
             </View>
             <Caption>Drag to rotate. Pinch to zoom. Double-tap to reset.</Caption>
+            {fullscreen ? null : (
+                <ViewerButton
+                    label="Expand"
+                    accessibilityLabel={`Expand ${piece.name} 3D view`}
+                    testID="piece-viewer-expand"
+                    onPress={(): void => setExpanded(true)}
+                />
+            )}
+            {fullscreen ? null : (
+                <Modal
+                    testID="piece-viewer-fullscreen-modal"
+                    visible={expanded}
+                    animationType="slide"
+                    onRequestClose={(): void => setExpanded(false)}
+                >
+                    <View
+                        testID="piece-viewer-fullscreen"
+                        style={[styles.fullscreen, { backgroundColor: colors.canvas }]}
+                    >
+                        <ViewerButton
+                            label="Close"
+                            accessibilityLabel="Close 3D view"
+                            testID="piece-viewer-close"
+                            onPress={(): void => setExpanded(false)}
+                        />
+                        <ValidPieceViewer
+                            piece={piece}
+                            height={Math.max(240, windowHeight - 160)}
+                            showName={showName}
+                            fallback={fallback}
+                            onFrame={onFrame}
+                            fullscreen
+                        />
+                    </View>
+                </Modal>
+            )}
         </View>
     )
 }
@@ -629,6 +714,16 @@ export function PiecesGrid({
 
 const styles = StyleSheet.create({
     viewer: { gap: space.sm },
+    fullscreen: { flex: 1, padding: space.md, gap: space.sm },
+    viewerButton: {
+        alignSelf: 'flex-start',
+        minHeight: touchTarget,
+        minWidth: touchTarget,
+        justifyContent: 'center',
+        paddingHorizontal: space.md,
+        borderRadius: radius.md,
+        borderWidth: StyleSheet.hairlineWidth,
+    },
     guideCard: { gap: space.xs },
     guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
     viewport: { borderRadius: radius.lg, overflow: 'hidden' },
