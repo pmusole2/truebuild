@@ -1,51 +1,58 @@
 import type { ExpoConfig } from 'expo/config'
 
+/** The only API origin a store build or OTA update may ship with. */
+export const PRODUCTION_API_BASE_URL = 'https://truebuild-suhsi.sevalla.app'
+
+/** Process-style environment; `process.env` satisfies it, and tests can pass a partial record. */
+export type ReleaseEnvironment = Readonly<Record<string, string | undefined>>
+
+/** Fixture, proof and test-only switches. A production release must leave each one unset, empty or '0'. */
+const FIXTURE_AND_TEST_FLAGS: readonly string[] = [
+    'EXPO_PUBLIC_RELEASE_FIXTURE',
+    'EXPO_PUBLIC_DOCUMENT_FIXTURES',
+    'EXPO_PUBLIC_AI_EFFORT_PROOF',
+    'EXPO_PUBLIC_AI_EFFORT_PROOF_RUN',
+    'EXPO_PUBLIC_PIECES_TEST',
+    'EXPO_PUBLIC_PIECE_VIEWER_TEST',
+    'EXPO_PUBLIC_SCREENS_TEST_DELAY_MS',
+    'EXPO_PUBLIC_SCREENS_TEST_FAIL',
+]
+
+function isSet(value: string | undefined): boolean {
+    return value !== undefined && !['', '0'].includes(value)
+}
+
 /**
- * Build-time guard for the EAS production profile. A store build must use a real HTTPS API origin, the meta provider
- * path, and no fixture-only build flags. Local `expo start` runs (no EAS_BUILD_PROFILE) are not restricted.
+ * A production release is a store build (EAS_BUILD_PROFILE=production) or the `expo export` that `eas update` spawns.
+ * `eas update --environment` merges the remote environment into that child process, where it is the only copy of the
+ * server-side values. Local `expo start` and other commands are not restricted.
  */
-function assertProductionEnvironment(env: NodeJS.ProcessEnv): void {
-    if (env.EAS_BUILD_PROFILE !== 'production') return
+export function isProductionReleaseContext(env: ReleaseEnvironment, argv: readonly string[]): boolean {
+    return env.EAS_BUILD_PROFILE === 'production' || argv[2] === 'export'
+}
 
-    const apiBaseUrl = env.EXPO_PUBLIC_API_BASE_URL ?? ''
-    if (apiBaseUrl.includes('REPLACE_ME')) {
-        throw new Error('Replace the REPLACE_ME placeholder in app/eas.json with the deployed API origin.')
+/** Throws unless the environment names the exact production API origin, the meta provider, steps and no fixtures. */
+export function assertProductionEnvironment(env: ReleaseEnvironment): void {
+    if (env.EXPO_PUBLIC_API_BASE_URL !== PRODUCTION_API_BASE_URL) {
+        throw new Error(`EXPO_PUBLIC_API_BASE_URL must be exactly ${PRODUCTION_API_BASE_URL} for production releases.`)
     }
-
-    let url: URL
-    try {
-        url = new URL(apiBaseUrl)
-    } catch {
-        throw new Error('EXPO_PUBLIC_API_BASE_URL must be an absolute https origin for production builds.')
+    if (env.EXPO_PUBLIC_PROVIDER_MODE !== 'meta') {
+        throw new Error('Production releases must set EXPO_PUBLIC_PROVIDER_MODE=meta.')
     }
-    if (
-        url.protocol !== 'https:' ||
-        /^(?:localhost\.?|.*\.localhost\.?|127\..*|0\.0\.0\.0|\[::(?:1|ffff:7f[\da-f]{2}:[\da-f]{1,4})?\])$/iu.test(
-            url.hostname,
-        ) ||
-        url.username !== '' ||
-        url.password !== '' ||
-        url.pathname !== '/' ||
-        url.search !== '' ||
-        url.hash !== ''
-    ) {
-        throw new Error(
-            'EXPO_PUBLIC_API_BASE_URL must be a bare https origin with no credentials, path, query or hash.',
-        )
+    if (env.EXPO_PUBLIC_GENERATIVE_UI !== 'steps') {
+        throw new Error('Production releases must set EXPO_PUBLIC_GENERATIVE_UI=steps.')
     }
-
-    if (env.EXPO_PUBLIC_PROVIDER_MODE !== undefined && env.EXPO_PUBLIC_PROVIDER_MODE !== 'meta') {
-        throw new Error('Production builds must use EXPO_PUBLIC_PROVIDER_MODE=meta.')
-    }
-    if (env.EXPO_PUBLIC_RELEASE_FIXTURE !== undefined && !['', '0'].includes(env.EXPO_PUBLIC_RELEASE_FIXTURE)) {
-        throw new Error('Production builds must not enable EXPO_PUBLIC_RELEASE_FIXTURE.')
-    }
-    if (env.EXPO_PUBLIC_DOCUMENT_FIXTURES !== undefined && !['', '0'].includes(env.EXPO_PUBLIC_DOCUMENT_FIXTURES)) {
-        throw new Error('Production builds must not enable EXPO_PUBLIC_DOCUMENT_FIXTURES.')
+    for (const flag of FIXTURE_AND_TEST_FLAGS) {
+        if (isSet(env[flag])) {
+            throw new Error(`Production releases must not enable ${flag}.`)
+        }
     }
 }
 
-assertProductionEnvironment(process.env)
+// Runs inside the store-build and EAS Update export processes; the EAS environment is merged there, not before.
+if (isProductionReleaseContext(process.env, process.argv)) {
+    assertProductionEnvironment(process.env)
+}
 
 const config: ExpoConfig = {
     name: 'TrueBuild',
@@ -57,7 +64,15 @@ const config: ExpoConfig = {
         },
     },
     scheme: 'truebuild',
-    version: '0.1.0',
+    version: '0.1.1',
+    runtimeVersion: {
+        policy: 'appVersion',
+    },
+    updates: {
+        url: 'https://u.expo.dev/ae1a9376-1863-4338-b717-14adf7ba7126',
+        checkAutomatically: 'ON_LOAD',
+        fallbackToCacheTimeout: 0,
+    },
     icon: './assets/icon.png',
     orientation: 'portrait',
     userInterfaceStyle: 'automatic',
