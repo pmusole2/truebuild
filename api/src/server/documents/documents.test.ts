@@ -1,5 +1,6 @@
 import {
     SCREEN_KINDS_V2,
+    bodyTextRefSchema,
     manualSessionSchema,
     screenUiStateV2Schema,
     type ScreenContextInputsV2,
@@ -31,6 +32,7 @@ import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
 import sparseGuides from './fixtures/guide-wire-replay.json'
 import { guideQualityIssues } from './guide-quality'
+import { normalizeDocumentWire } from './normalize-wire'
 import { createDocumentService, precomputeItems, type DocumentService, type DocumentServiceOptions } from './service'
 
 afterEach(() => vi.restoreAllMocks())
@@ -731,6 +733,63 @@ describe('service: the page a check names', () => {
 })
 
 describe('Guide usability floor', () => {
+    it('supplies the visible instruction even when classified directions leave the required fact list empty', async () => {
+        const session = demoSession({ safety: false })
+        session.reviewedSteps[0]!.safetyNotes = []
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        expect(context.material.requirements.facts).toEqual([])
+        expect(context.material.facts.some((fact) => fact.basis === 'direction')).toBe(true)
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        // Minimal reproduction of the drone log's orphan cleanup followed by missing visible instruction.
+        // The raw orphan payload was not retained; a Text here also proves cleanup cannot promote it into the body.
+        const sparse: WireProposal = {
+            ...goodWire('guide', session),
+            body: 'scroll',
+            overlays: [],
+            nodes: [
+                { id: 'scroll', type: 'Scroll', axis: 'vertical', children: ['stack'] },
+                { id: 'stack', type: 'Stack', gap: 'md', align: 'stretch', children: ['progress'] },
+                { id: 'progress', type: 'Progress', binding: 'step', label: null },
+                {
+                    id: 'f3502',
+                    type: 'Text',
+                    content: { kind: 'bound', key: 'step-title' },
+                    role: 'body',
+                    tone: 'neutral',
+                    emphasis: 'normal',
+                    align: 'start',
+                },
+            ],
+        }
+        const normalized = normalizeDocumentWire(sparse, context)
+        expect(normalized.issueCodes).toEqual(['normalization.nodes.f3502:unreachable_node'])
+        const missing = evaluateWire(normalized.value, context)
+        expect(missing.ok).toBe(true)
+        if (!missing.ok) throw new Error('Sparse Guide must reach the quality floor')
+        expect(guideQualityIssues(missing.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        expect((await liveService([sparse]).service.generate(inputs)).metadata.source).toBe('fallback')
+
+        const view = context.view.dynamic.document as Record<string, unknown>
+        const instruction = bodyTextRefSchema.parse(view.instructionText)
+        expect(instruction).toEqual({ kind: 'bound', key: 'step-title' })
+        const corrected: WireProposal = {
+            ...sparse,
+            nodes: sparse.nodes.map((node) =>
+                node.id === 'stack'
+                    ? { ...node, children: ['f3502', 'progress'] }
+                    : node.id === 'f3502'
+                      ? { ...node, content: instruction }
+                      : node,
+            ),
+        }
+        const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
+        expect(evaluated.ok).toBe(true)
+        if (!evaluated.ok) throw new Error('Supplied instruction must pass the strict gate')
+        expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
+        expect((await liveService([corrected]).service.generate(inputs)).metadata.source).toBe('generated')
+    })
+
     it('keeps a strict-valid sparse Guide on the complete shell with its live piece catalog', async () => {
         const row = sparseGuides.cases[0]!
         const inputs: ScreenContextInputsV2 = {
