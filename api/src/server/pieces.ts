@@ -45,6 +45,8 @@ interface PieceCrop {
     /** Refined drawing box; null when the crop is a client cutout reused for repair. */
     box: PieceCropResult['box'] | null
     inkRatio: number | null
+    /** Broader figure context is sent to the model but is never shown or stored as this piece's own cutout. */
+    contextOnly: boolean
 }
 
 async function readCrop(uri: string): Promise<PieceCrop | null> {
@@ -56,7 +58,7 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
         const image: ObservationImage = { bytes, width: info.width, height: info.height, mimeType: 'image/png' }
         // A reused cutout passes the same blank gate as a fresh crop; the whole frame is its drawing box.
         const ink = await refinePieceCrop(image, [0, 0, 1, 1])
-        return ink ? { uri, image, box: null, inkRatio: ink.inkRatio } : null
+        return ink ? { uri, image, box: null, inkRatio: ink.inkRatio, contextOnly: false } : null
     } catch {
         return null
     }
@@ -68,7 +70,7 @@ async function cropDrawing(part: ManualPieceInput, image: ObservationImage | und
     if (!image || !box) return null
     try {
         const crop = await refinePieceCrop(image, box)
-        return crop && crop.uri.length <= 360_000 ? crop : null
+        return crop && crop.uri.length <= 360_000 ? { ...crop, contextOnly: part.drawingBox == null } : null
     } catch {
         return null
     }
@@ -179,7 +181,7 @@ export async function generatePieceBatch(
             name: part.name,
             status: piece === null ? ('invalid' as const) : part.repair ? ('repaired' as const) : ('passed' as const),
             piece,
-            cutoutUri: crop?.uri ?? null,
+            cutoutUri: crop && !crop.contextOnly ? crop.uri : null,
             issueCodes,
         }
         console.info(

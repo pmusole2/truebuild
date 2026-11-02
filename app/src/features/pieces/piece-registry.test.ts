@@ -516,7 +516,10 @@ describe('piece registry', () => {
             ...session,
             reviewedSteps: session.reviewedSteps.map((step) => ({
                 ...step,
-                sourceRefs: [{ pageId: 'page-3', region }],
+                sourceRefs: [
+                    { pageId: 'page-2', region: null },
+                    { pageId: 'page-3', region },
+                ],
             })),
         })
         expect(regional.every((part) => part.figureBox?.join(',') === '0.2,0.3,0.5,0.4')).toBe(true)

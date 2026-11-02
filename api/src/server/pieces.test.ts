@@ -515,8 +515,16 @@ it('drops shared own-box claims and reused cutouts while accepting explicit broa
                 requestId: 'pieces-grouped',
                 contentHash: 'd'.repeat(64),
                 parts: [
-                    { ...part('propeller-a'), cutoutUri: `data:image/png;base64,${drawing.toString('base64')}` },
-                    { ...part('propeller-b'), cutoutUri: `data:image/png;base64,${drawing.toString('base64')}` },
+                    {
+                        ...part('propeller-a'),
+                        figureBox: [0, 0, 0.5, 1],
+                        cutoutUri: `data:image/png;base64,${drawing.toString('base64')}`,
+                    },
+                    {
+                        ...part('propeller-b'),
+                        figureBox: [0, 0, 0.5, 1],
+                        cutoutUri: `data:image/png;base64,${drawing.toString('base64')}`,
+                    },
                     { ...part('battery'), drawingBox: undefined, figureBox: [0.2, 0.2, 0.6, 0.6] },
                 ],
                 pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
@@ -529,9 +537,12 @@ it('drops shared own-box claims and reused cutouts while accepting explicit broa
     expect(result.results.map((value) => [value.id, value.cutoutUri !== null])).toEqual([
         ['propeller-a', false],
         ['propeller-b', false],
-        ['battery', true],
+        ['battery', false],
     ])
     expect(generatePieces).toHaveBeenCalledTimes(1)
-    expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: ['battery'] })
-    expect(generatePieces.mock.calls[0]![0].images).toHaveLength(1)
+    expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: ['propeller-a', 'propeller-b', 'battery'] })
+    const sentImages = generatePieces.mock.calls[0]![0].images
+    expect(sentImages).toHaveLength(3)
+    expect(Buffer.from(sentImages[0]!.bytes).equals(drawing)).toBe(false)
+    expect(sentImages[0]!.bytes).toEqual(sentImages[1]!.bytes)
 })
