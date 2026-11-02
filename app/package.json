@@ -6,6 +6,7 @@
     "scripts": {
         "start": "EXPO_NO_DOTENV=1 expo start",
         "web": "EXPO_NO_DOTENV=1 expo start --web",
+        "ota:production": "eas update --channel production --environment production",
         "typecheck": "tsc --noEmit",
         "test": "jest --runInBand --no-watchman"
     },
@@ -21,6 +22,7 @@
         "expo-router": "58.0.26",
         "expo-splash-screen": "~58.0.12",
         "expo-status-bar": "58.0.4",
+        "expo-updates": "~58.0.20",
         "react": "19.3.0",
         "react-dom": "19.3.0",
         "react-native": "0.88.0",

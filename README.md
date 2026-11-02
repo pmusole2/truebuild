@@ -97,6 +97,18 @@ The shared fixture key above is public test configuration. Production builds rej
 For an API mock that exercises the Meta request protocol without inference, the main Playwright
 suite starts `api/scripts/mock-server.ts` with its required `--test-only` flag.
 
+## Production over-the-air updates
+
+`npm run ota:production --workspace @truebuild/app` publishes JavaScript and asset changes to the
+`production` EAS Update channel. It needs the EAS CLI and an EAS login with access to the project.
+The `production` EAS environment must define `EXPO_PUBLIC_API_BASE_URL` as the Sevalla origin,
+`EXPO_PUBLIC_PROVIDER_MODE=meta`, and `EXPO_PUBLIC_GENERATIVE_UI=steps`. The export checks these
+values, and refuses fixture or test flags, before it bundles anything.
+
+Native module changes, native configuration changes and app `version` changes need a new store build.
+Updates target the app version (`runtimeVersion` policy `appVersion`), so an update reaches only
+builds with the same version.
+
 ## Checks
 
 ```sh

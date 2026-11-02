@@ -6,6 +6,8 @@
         "production": {
             "autoIncrement": true,
             "distribution": "store",
+            "channel": "production",
+            "environment": "production",
             "env": {
                 "EXPO_PUBLIC_API_BASE_URL": "https://truebuild-suhsi.sevalla.app",
                 "EXPO_PUBLIC_PROVIDER_MODE": "meta",
