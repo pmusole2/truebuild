@@ -415,6 +415,11 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     )
     expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use extrude for flat outlines'))
     expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use round primitives for round members'))
+    expect(bodies[0]).toHaveProperty(
+        'instructions',
+        expect.stringContaining('Use volumetric primitives for thick housings'),
+    )
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Never add a schema placeholder'))
     expect(bodies[0]).toHaveProperty('instructions', expect.not.stringContaining('Fold small surface lobes'))
     const failed = first.results[1]!
     const repaired = await handler(
