@@ -34,7 +34,7 @@ export class PublicModelCallCounter extends ModelCallCounter {
     constructor(
         dailyLimit = 1_500,
         readonly clientDailyLimit = 200,
-        readonly clientParseHourlyLimit = 3,
+        readonly clientParseHourlyLimit = 10,
         private readonly now: () => number = Date.now,
     ) {
         super(dailyLimit)

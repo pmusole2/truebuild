@@ -35,7 +35,7 @@ describe('Hono HTTP boundary', (): void => {
                     binding: { kind: 'manual', manualId: 'demo-divider', revision: 1 },
                 }),
             })
-        for (let attempt = 0; attempt < 3; attempt++) expect((await parse('192.0.2.1')).status).toBe(200)
+        for (let attempt = 0; attempt < 10; attempt++) expect((await parse('192.0.2.1')).status).toBe(200)
         const limited = await parse('192.0.2.1', '198.51.100.10')
         expect(limited.status).toBe(429)
         expect(await limited.json()).toMatchObject({
@@ -43,6 +43,46 @@ describe('Hono HTTP boundary', (): void => {
             message: 'Too many builds right now, try again later.',
         })
         expect((await parse('192.0.2.2')).status).toBe(200)
+    })
+
+    it('serves the public privacy statement as HTML with no key or limits, even while the daily model cap is exhausted', async (): Promise<void> => {
+        const runtime = createRuntimeFromEnvironment({
+            PROVIDER_MODE: 'fixture',
+            API_SHARED_SECRET: 'truebuild-fixture-demo',
+            MODEL_CALL_LIMIT_PER_DAY: '1',
+        })
+        const api = createApp({ runtime, onDuration: (): void => {} })
+        runtime.counter.claim()
+        const exhausted = await api.request('/api/manuals/parse', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'x-truebuild-key': 'truebuild-fixture-demo' },
+            body: JSON.stringify({
+                mode: 'fixture',
+                requestId: 'parse-capped',
+                binding: { kind: 'manual', manualId: 'demo-divider', revision: 1 },
+            }),
+        })
+        expect(exhausted.status).toBe(429)
+        const privacy = await api.request('/privacy')
+        expect(privacy.status).toBe(200)
+        expect(privacy.headers.get('content-type')).toMatch(/^text\/html/)
+        expect((await api.request('/privacy', { headers: { origin: 'https://store-review.example' } })).status).toBe(
+            200,
+        )
+        const html = await privacy.text()
+        for (const claim of [
+            'Manual pages and photos from the app are sent to our server.',
+            "Meta's AI models process them to create guides and checks.",
+            'TrueBuild holds manual pages and photos in server memory only for session processing.',
+            'Uploads are not saved to server disk.',
+            'Closing the app does not immediately clear server caches.',
+            'TrueBuild does not sell this data or use it for ads.',
+            'No accounts and no advertising or analytics tracking.',
+            'Temporary IP-based usage counters help prevent abuse.',
+            'Dated 2 November 2026.',
+            'pmusole2@gmail.com',
+        ])
+            expect(html).toContain(claim)
     })
 
     it('keeps both public health paths, exact JSON envelopes, and explicit method errors', async (): Promise<void> => {

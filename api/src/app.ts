@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import { DEMO_LABEL } from './providers/types'
 import { corsResponse, deniedOrigin, isAllowedOrigin, preflight } from './server/cors'
 import { createRuntimeFromEnvironment, describeAiPolicy, type ApiRuntime } from './server/model-runtime'
+import { PRIVACY_PAGE_HTML } from './server/privacy-page'
 import { PUBLIC_LIMIT_MESSAGE, PublicLimitError } from './server/public-limits'
 
 type ApiEnv = { Variables: { runtime: ApiRuntime } }
@@ -49,6 +50,8 @@ function dispatch(context: Context<ApiEnv>, operation: Operation): Promise<Respo
 const routes = new Hono<ApiEnv>()
     .get('/health', health)
     .get('/api/health', health)
+    // Public and unmetered: deliberately absent from `methods`, so neither the shared-key check nor the counter applies.
+    .get('/privacy', (context): Response => context.html(PRIVACY_PAGE_HTML))
     .get('/api/session', (context): Response =>
         context.json({
             status: 'ok',
@@ -121,7 +124,9 @@ export function createApp(
                 runtime.allowedOrigins,
             )
         try {
-            if (!isAllowedOrigin(request, runtime.allowedOrigins)) {
+            const publicPrivacy =
+                context.req.path === '/privacy' && (request.method === 'GET' || request.method === 'HEAD')
+            if (!publicPrivacy && !isAllowedOrigin(request, runtime.allowedOrigins)) {
                 await request.body?.cancel().catch((): void => {})
                 if (request.method === 'OPTIONS') {
                     return deniedOrigin(401)

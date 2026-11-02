@@ -9,7 +9,7 @@
             "env": {
                 "EXPO_PUBLIC_API_BASE_URL": "https://REPLACE_ME.sevalla.app",
                 "EXPO_PUBLIC_PROVIDER_MODE": "meta",
-                "EXPO_PUBLIC_GENERATIVE_UI": "full"
+                "EXPO_PUBLIC_GENERATIVE_UI": "steps"
             }
         }
     },

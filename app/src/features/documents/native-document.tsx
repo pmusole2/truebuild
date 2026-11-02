@@ -56,7 +56,7 @@ import { heroImageRect } from '../assembly/hero-geometry'
 import { extractTapCoordinates } from '../assembly/frozen-photo'
 import { partSourceRefs } from '../screens/part-source'
 import { stepPartChoices } from '../assembly/question-state'
-import { FactEditorBlock, ManualLibraryBlock, PageGalleryBlock } from '../screens/blocks-live'
+import { FactEditorBlock, libraryEntries, ManualLibraryBlock, PageGalleryBlock } from '../screens/blocks-live'
 import type { BlockContext } from '../screens/blocks'
 import { barTestId } from '../screens/bar-ids'
 import { originId, RenderOriginProvider, mergeNativeIds, type RenderOrigin } from '../screens/render-origin'
@@ -186,6 +186,8 @@ type Environment = {
     guidePillPaths: ReadonlySet<string>
     /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
     rootScroll: RefObject<ScrollViewInstance | null>
+    /** The measured Guide bar already includes its safe area; the final piece can scroll completely above it. */
+    scrollBottomPadding: number
     /** The workflow page being shown: the local state of every node outside `photoBranch` belongs to it alone. */
     page: string
     /** The held photo's own path and every path above it: the one branch of a page that may outlive that page. */
@@ -202,15 +204,18 @@ const originAt = (environment: Environment, path: string): RenderOrigin => {
     return origin
 }
 
-/** A quantity picture belongs to the document's step, never a different live selection's index. */
-function partRefs(environment: Environment, partId: string): ReturnType<typeof partSourceRefs> {
+/** Printed name citations locate text; only a separate drawing box may identify the part illustration. */
+function partDrawingReference(environment: Environment, partId: string): DocumentSourceV2 | undefined {
     const session = environment.bindings.session
-    if (session === undefined) return []
-    const index =
-        session.reviewStatus === 'reviewed'
-            ? session.reviewedSteps.findIndex((step) => step.stepId === environment.document.bound.stepId)
-            : -1
-    return partSourceRefs(session, partId, index < 0 ? undefined : index)
+    const part = screenFacts(session ?? null)?.parts.find((item) => item.partId === partId)
+    const box = part?.drawingBox
+    const pageId =
+        part?.name.state === 'known'
+            ? part.name.sourceRefs.find((ref) => session?.pages.some((page) => page.pageId === ref.pageId))?.pageId
+            : undefined
+    return pageId === undefined || box == null
+        ? undefined
+        : { pageId, region: { x: box[0], y: box[1], width: box[2], height: box[3] } }
 }
 
 /** A result is visible only with its resolved reusable photo and the document's exact held text witness. */
@@ -301,6 +306,8 @@ function duplicateFactPaths(
     const seen = new Set<string>()
     const citationsByFact = new Map<string, Set<number>>()
     const resultText = new Map<string, { refs: Set<string>; indexes: Set<number> }>()
+    let nativeResumeCard = false
+    let guideTitleFactShown = false
     const key = (ref: ScreenDocumentV2['sources'][number]): string =>
         JSON.stringify([
             ref.pageId,
@@ -309,6 +316,25 @@ function duplicateFactPaths(
     const collectResults = (node: ScreenNodeV2, at: string): void => {
         if (node.type === 'Section' && node.collapsible && !node.initiallyOpen && !containsSafety(node, document))
             return
+        const live = bindings.live
+        if (
+            document.kind === 'guide' &&
+            node.type === 'Text' &&
+            node.content.kind === 'fact' &&
+            node.content.factId === 'title'
+        )
+            guideTitleFactShown = true
+        if (
+            document.kind === 'home' &&
+            node.type === 'ManualList' &&
+            node.layout === 'cards' &&
+            live !== null &&
+            !live.state.loading &&
+            !live.state.storageReadOnly &&
+            bindings.readOnly !== true &&
+            libraryEntries({ ...node, type: 'ManualLibrary', emptyText: null }, live.state.entries).length === 1
+        )
+            nativeResumeCard = true
         if (
             node.type === 'VerdictCard' &&
             node.showReason &&
@@ -341,7 +367,22 @@ function duplicateFactPaths(
         let currentFact: string | null = null
         node.children.forEach((child, index) => {
             const next = `${at}.${index}`
-            if (child.type === 'Text' && child.content.kind === 'fact') {
+            if (
+                guideTitleFactShown &&
+                child.type === 'Text' &&
+                child.content.kind === 'bound' &&
+                child.content.key === 'step-title'
+            ) {
+                // Keep the full fact and its citation in the body; the generic title binding adds no new words.
+                omitted.add(next)
+            } else if (
+                nativeResumeCard &&
+                child.type === 'Text' &&
+                child.content.kind === 'literal' &&
+                child.content.text.trim() === 'Pick up where you left off.'
+            ) {
+                omitted.add(next)
+            } else if (child.type === 'Text' && child.content.kind === 'fact') {
                 const id = child.content.factId
                 currentFact = id
                 const fact = document.facts.find((item) => item.factId === id)
@@ -543,7 +584,7 @@ function manualImageSource(
         : node.source.kind === 'page'
           ? { pageId: node.source.pageId, region: null }
           : node.source.kind === 'part' && environment.bindings.session !== undefined
-            ? partRefs(environment, node.source.partId)[0]
+            ? partDrawingReference(environment, node.source.partId)
             : undefined
 }
 function unavailableManualImage(node: Extract<ScreenNodeV2, { type: 'Image' }>, environment: Environment): boolean {
@@ -1204,8 +1245,8 @@ function guideCardIncludesPart(document: ScreenDocumentV2, bindings: FrameBindin
 }
 
 /**
- * One known part in the catalog. A picture is drawn only from the part's own cited figure region; a part cited
- * without a region never borrows the whole manual page as its thumbnail. Its name and count stay, with its own
+ * A name citation often points to a text/table cell, not the part. Only the explicit drawing box may select a crop.
+ * Without one the crop stays hidden; the name, count and 3D viewer remain, with the part's own
  * cited page one tap away through the same source disclosure as a fact citation.
  */
 function PieceTile({
@@ -1222,14 +1263,13 @@ function PieceTile({
     const { document, bindings } = environment
     const facts = screenFacts(bindings.session ?? null)
     const part = facts?.parts.find((item) => item.partId === node.partId)
-    const refs = partRefs(environment, node.partId)
     const links = (environment.citations[path]?.show ?? []).flatMap((index) => {
         const source = environment.planSources[index]
         return source === undefined ? [] : [source]
     })
     if (part === undefined) return null
     const session = bindings.session
-    const grounded = refs.find((ref) => ref.region != null)
+    const grounded = partDrawingReference(environment, node.partId)
     const cardOwnsLabel = guideCardIncludesPart(document, bindings, part.partId)
     const label = part.name.state === 'known' ? part.name.value : 'Part'
     return (
@@ -1462,6 +1502,9 @@ function NodeContent({
                             : {
                                   gap: space.sm,
                                   padding: path === `${environment.prefix}body` ? space.md : 0,
+                                  ...(path === `${environment.prefix}body`
+                                      ? { paddingBottom: space.md + environment.scrollBottomPadding }
+                                      : {}),
                                   // Tablet: cap the reading measure and centre it; header and bar stay full width.
                                   ...(path === `${environment.prefix}body` && width >= 768
                                       ? { width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const }
@@ -1846,6 +1889,7 @@ export function NativeDocumentRenderer({
     essentialControls?: ReactNode
 }): ReactElement {
     const { width } = useWindowDimensions()
+    const [barHeight, setBarHeight] = useState(0)
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
@@ -1929,6 +1973,21 @@ export function NativeDocumentRenderer({
         planSources,
         lowPriorityPaths,
     )
+    const subtitle = selected.variant.header.subtitle
+    const subtitleText = documentText(document, bindings, subtitle).trim().replace(/\s+/gu, ' ')
+    let instructionInBody = false
+    if (document.kind === 'guide' && subtitleText !== '') {
+        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
+            if (
+                !hidden &&
+                path.startsWith(`${selected.prefix}body`) &&
+                !omitted.has(path) &&
+                node.type === 'Text' &&
+                documentText(document, bindings, node.content).trim().replace(/\s+/gu, ' ') === subtitleText
+            )
+                instructionInBody = true
+        })
+    }
     const environment: Environment = {
         document,
         bindings,
@@ -1952,6 +2011,7 @@ export function NativeDocumentRenderer({
         trailing: null,
         guidePillPaths: new Set<string>(),
         rootScroll,
+        scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
         page: bodyPage,
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
     }
@@ -2051,8 +2111,8 @@ export function NativeDocumentRenderer({
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
                             <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            {selected.variant.header.subtitle === null ? null : (
-                                <Caption>{documentText(document, bindings, selected.variant.header.subtitle)}</Caption>
+                            {subtitle === null || instructionInBody ? null : (
+                                <Caption>{documentText(document, bindings, subtitle)}</Caption>
                             )}
                         </View>
                         {selected.variant.header.actions.map((item, index) => (
@@ -2080,6 +2140,7 @@ export function NativeDocumentRenderer({
                             nestedScrollEnabled
                             contentContainerStyle={{
                                 padding: space.md,
+                                paddingBottom: space.md + environment.scrollBottomPadding,
                                 gap: space.sm,
                                 ...(width >= 768
                                     ? { width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const }
@@ -2097,6 +2158,7 @@ export function NativeDocumentRenderer({
                 </Animated.View>
                 {essentialControls}
                 <FixedBottomBar
+                    onHeight={document.kind === 'guide' ? setBarHeight : undefined}
                     nativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     primary={action(selected.variant.bar.primary, 'primary')}

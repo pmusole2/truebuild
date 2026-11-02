@@ -130,7 +130,7 @@ export function createRuntimeFromEnvironment(
     const counter = new PublicModelCallCounter(
         positiveInteger(environment.MODEL_CALL_LIMIT_PER_DAY, 1_500),
         positiveInteger(environment.MODEL_CALL_LIMIT_PER_CLIENT_DAY, 200),
-        positiveInteger(environment.PARSE_LIMIT_PER_HOUR, 3),
+        positiveInteger(environment.PARSE_LIMIT_PER_HOUR, 10),
     )
     const policy = aiPolicyFromEnvironment(environment, {
         checkTimeoutMs,

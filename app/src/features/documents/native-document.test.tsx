@@ -16,8 +16,10 @@ import {
     type ScreenNodeV2,
 } from '@truebuild/contracts'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
+import { cropFor, placeCrop } from '../capture/step-picture'
+import { space } from '../../theme/tokens'
 import { partSourceRefs } from '../screens/part-source'
-import { captureUiState } from '../screens/ui-state'
+import { captureUiState, homeUiState } from '../screens/ui-state'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider, type HapticPort } from '../../ui/feedback'
 import { DocumentRenderer } from './document-renderer'
@@ -416,6 +418,7 @@ describe('the actual v2 catalog renderer', () => {
         expect(screen.getByText('Divider shelf')).toBeTruthy()
         // The parts cite a page with no figure region: no whole-page picture is drawn for either tile.
         expect(screen.queryByTestId('part-hero-side-panel')).toBeNull()
+        expect(screen.getByTestId('part-tile-divider')).toBeTruthy()
         expect(screen.queryByTestId('part-hero-divider')).toBeNull()
         // The same page is already cited by the step overview: one shared opener replaces repeated tile links.
         const sideTile = screen.getByTestId('part-tile-side-panel')
@@ -468,7 +471,7 @@ describe('the actual v2 catalog renderer', () => {
         expect(tile.getByRole('button', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
     })
 
-    it('draws a part picture from its own cited figure region while a regionless part stays picture-free', async () => {
+    it('uses the explicit part drawing instead of the name citation and hides crops without a drawing box', async () => {
         const { inputs, bindings } = await setup()
         const pageId = inputs.session!.pages[0]!.pageId
         const sideName = inputs.session!.parts.find((part) => part.partId === 'side-panel')?.name
@@ -483,8 +486,18 @@ describe('the actual v2 catalog renderer', () => {
                               value: sideName?.state === 'known' ? sideName.value : 'Side panel',
                               sourceRefs: [{ pageId, region: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 } }],
                           },
+                          drawingBox: [0.6, 0.2, 0.2, 0.3],
                       }
-                    : part,
+                    : {
+                          ...part,
+                          name:
+                              part.name.state === 'known'
+                                  ? {
+                                        ...part.name,
+                                        sourceRefs: [{ pageId, region: { x: 0.1, y: 0.7, width: 0.4, height: 0.04 } }],
+                                    }
+                                  : part.name,
+                      },
             ),
         })
         const document = compose(
@@ -500,7 +513,19 @@ describe('the actual v2 catalog renderer', () => {
             [{ type: 'Stepper', binding: 'steps', label: null }],
         )
         await render(wrap(<DocumentRenderer document={document} bindings={{ ...bindings, session }} />))
-        expect(screen.getByTestId('part-hero-side-panel')).toBeTruthy()
+        const hero = screen.getByTestId('part-hero-side-panel')
+        await fireEvent(hero, 'layout', { nativeEvent: { layout: { width: 300, height: 160 } } })
+        const image = within(hero).getByLabelText('Picture from your manual')
+        expect(StyleSheet.flatten(image.props.style)).toEqual(
+            expect.objectContaining(
+                placeCrop(
+                    { width: 300, height: 100 },
+                    session.pages[0]!,
+                    cropFor({ x: 0.6, y: 0.2, width: 0.2, height: 0.3 }),
+                ),
+            ),
+        )
+        expect(screen.getByTestId('part-tile-divider')).toBeTruthy()
         expect(screen.queryByTestId('part-hero-divider')).toBeNull()
     })
 
@@ -606,6 +631,28 @@ describe('the actual v2 catalog renderer', () => {
         )
         expect(header.queryAll((node) => node.type === 'RCTScrollView')).toHaveLength(0)
         expect(header.queryAll((node) => node.props.maxFontSizeMultiplier === 0).length).toBeGreaterThan(0)
+    })
+
+    it('shows Guide directions and Home resume copy once, with room below the final Guide piece', async () => {
+        const { inputs, bindings } = await setup()
+        const document = compose(inputs)
+        const direction = inputs.session!.reviewedSteps[0]!.title
+        document.header.subtitle = { kind: 'literal', text: direction }
+        const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+        expect(screen.getAllByText(direction)).toHaveLength(1)
+        await fireEvent(screen.getByTestId('bottom-bar'), 'layout', {
+            nativeEvent: { layout: { width: 390, height: 128 } },
+        })
+        expect(StyleSheet.flatten(bodyScroller().props.contentContainerStyle).paddingBottom).toBe(space.md + 128)
+
+        const homeInputs = {
+            ...inputs,
+            kind: 'home' as const,
+            stepId: null,
+            uiState: homeUiState(bindings.live!.state.entries),
+        }
+        await view.rerender(wrap(<DocumentRenderer document={compose(homeInputs)} bindings={bindings} />))
+        expect(screen.getAllByText('Pick up where you left off.')).toHaveLength(1)
     })
 
     it.each(['kind', 'manual', 'step', 'result capture', 'answer capture'] as const)(

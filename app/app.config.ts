@@ -52,6 +52,7 @@ const config: ExpoConfig = {
     slug: 'truebuild',
     scheme: 'truebuild',
     version: '0.1.0',
+    icon: './assets/icon.png',
     orientation: 'portrait',
     userInterfaceStyle: 'automatic',
     ios: {
@@ -68,6 +69,15 @@ const config: ExpoConfig = {
     },
     plugins: [
         'expo-router',
+        [
+            'expo-splash-screen',
+            {
+                image: './assets/icon.png',
+                imageWidth: 200,
+                resizeMode: 'contain',
+                backgroundColor: '#0057C2',
+            },
+        ],
         [
             'expo-camera',
             {
