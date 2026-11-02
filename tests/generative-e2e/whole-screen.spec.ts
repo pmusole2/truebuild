@@ -13,14 +13,43 @@ async function photographPage(page: Page, first: boolean): Promise<void> {
     await expect(page.getByTestId('read-manual')).toBeEnabled()
 }
 
+// Fresh startup only: accepts the visible AI consent once, through its own control. Nothing is pre-accepted or skipped.
+async function acceptAiConsentOnce(page: Page): Promise<void> {
+    const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
+    await agree
+        .or(page.getByTestId('home-add'))
+        .or(page.getByRole('button', { name: 'Try again', exact: true }))
+        .first()
+        .waitFor({ state: 'visible', timeout: 60_000 })
+    if (await agree.isVisible()) await agree.click()
+}
+
+/** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
+async function readManualWithConsent(page: Page): Promise<void> {
+    const sent = page.waitForRequest(
+        (request) => request.url() === `${API}/api/manuals/parse` && request.method() === 'POST',
+        { timeout: 60_000 },
+    )
+    const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
+    const prompted = agree.waitFor({ state: 'visible', timeout: 60_000 }).then(() => true)
+    const outcome = Promise.race([sent.then(() => false), prompted])
+    void outcome.catch(() => undefined)
+    await page.getByTestId('read-manual').click()
+    if (await outcome) await agree.click()
+    await sent
+}
+
 async function prepareGuide(page: Page, alreadyHome = false): Promise<void> {
-    if (!alreadyHome) await page.goto('/')
+    if (!alreadyHome) {
+        await page.goto('/')
+        await acceptAiConsentOnce(page)
+    }
     await page.getByTestId('home-add').click()
     await photographPage(page, true)
     const parse = page
         .waitForResponse((response) => response.url() === `${API}/api/manuals/parse`)
         .then(async (response) => ({ status: response.status(), body: await response.json() }))
-    await page.getByTestId('read-manual').click()
+    await readManualWithConsent(page)
     expect((await parse).status).toBe(200)
     await expect(page.getByTestId('quick-check-start')).toBeEnabled()
     await page.getByTestId('quick-check-start').click()
@@ -71,6 +100,7 @@ test('a complete document owns the frame; off stays local and full publishes hon
                   .then((response) => response.json())
             : null
     await page.goto('/')
+    await acceptAiConsentOnce(page)
     // Launch recordings intentionally serve Home without a request; factual manual routes still use the API.
     await prepareGuide(page, true)
     if (firstDocument !== null) {
@@ -133,9 +163,10 @@ test('the verdict shows its held photo before a late overlay is collected', asyn
 
 test('reading cancellation is an authored confirmation and Keep preserves the running parse', async ({ page }) => {
     await page.goto('/')
+    await acceptAiConsentOnce(page)
     await page.getByTestId('home-add').click()
     await photographPage(page, true)
-    await page.getByTestId('read-manual').click()
+    await readManualWithConsent(page)
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Stop reading', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Keep reading', exact: true }).click()

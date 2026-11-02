@@ -15,6 +15,7 @@ import { ColdStartProvider } from '../src/ui/cold-start'
 import { FeedbackProvider, useFeedback } from '../src/ui/feedback'
 import { nativeHaptics } from '../src/ui/haptics'
 import { DocumentNavigationRoot, DocumentOwnershipProvider } from '../src/features/documents/ownership'
+import { AiConsentRoot } from '../src/features/consent/consent-root'
 
 // Documents own the visible header. The native Stack retains Back gestures and transitions when motion is enabled.
 // The controller above it preserves the held photo, result and draft across pushes, pops and swipes.
@@ -73,6 +74,7 @@ export default function RootLayout(): ReactElement {
                                         <ColdStartProvider>
                                             <AppCoachProvider>
                                                 <ThemedStack />
+                                                <AiConsentRoot />
                                                 <MeterTriggers />
                                             </AppCoachProvider>
                                         </ColdStartProvider>

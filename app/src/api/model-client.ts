@@ -1,5 +1,7 @@
 import { requestFetch } from './request-fetch'
-import { postDocuments } from './document-client'
+import { documentUnavailable, postDocuments } from './document-client'
+import { aiConsent } from '../features/consent/consent-runtime'
+import type { AiConsentStore } from '../features/consent/consent-store'
 import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
 import {
     checkResultSchema,
@@ -157,6 +159,8 @@ export interface ModelClientOptions {
     readonly secret: string
     readonly fetch?: ModelFetch
     readonly streamFetch?: StreamFetch
+    /** Trusted fixture clients inject transports; ordinary app clients use the persisted permission store. */
+    readonly consent?: AiConsentStore
 }
 
 const SOURCE_EXTENSION: Record<ManualPage['mimeType'], string> = {
@@ -309,15 +313,40 @@ export class ModelApiClient {
     private readonly secret: string
     private readonly fetchImpl: ModelFetch
     private readonly streamImpl: StreamFetch
+    private readonly consent: AiConsentStore | null
 
     constructor(options: ModelClientOptions) {
         this.baseUrl = parseBaseUrl(options.baseUrl)
         this.secret = options.secret
-        this.fetchImpl = options.fetch ?? requestFetch
-        this.streamImpl = options.streamFetch ?? options.fetch ?? defaultStreamFetch
+        this.consent =
+            options.consent ?? (options.fetch === undefined && options.streamFetch === undefined ? aiConsent : null)
+        const guarded = (transport: ModelFetch, store: AiConsentStore | null): ModelFetch =>
+            store === null
+                ? transport
+                : async (url, init): Promise<Response> => {
+                      if (!(await store.request(init.signal ?? undefined))) {
+                          throw new Error('ai_consent_required')
+                      }
+                      if (init.signal?.aborted) throw new Error('request_stopped')
+                      return transport(url, init)
+                  }
+        this.fetchImpl = guarded(
+            options.fetch ?? requestFetch,
+            options.consent ?? (options.fetch === undefined ? aiConsent : null),
+        )
+        this.streamImpl = guarded(
+            options.streamFetch ?? options.fetch ?? defaultStreamFetch,
+            options.consent ?? (options.streamFetch === undefined && options.fetch === undefined ? aiConsent : null),
+        )
+    }
+
+    private async allowed(signal?: AbortSignal, explicit = true): Promise<boolean> {
+        return this.consent === null || this.consent.request(signal, explicit)
     }
 
     async screensV2(metadata: ModelScreensV2Metadata, ctx: ModelRequestContext): Promise<ScreensV2Result> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal, false)))
+            return documentUnavailable(ctx.requestId, 'invalid_input')
         return postDocuments({ metadata, ctx, baseUrl: this.baseUrl, secret: this.secret, fetch: this.fetchImpl })
     }
 
@@ -327,6 +356,8 @@ export class ModelApiClient {
         images: readonly ImageBytes[],
         ctx: ModelRequestContext,
     ): Promise<ApiResult<ParsedManual>> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal)))
+            return unavailableResult(ctx.requestId, binding, 'invalid_input', false)
         if (pages.length > MAX_PARSE_PAGES) {
             return {
                 status: 'unavailable',
@@ -405,6 +436,8 @@ export class ModelApiClient {
         ctx: ModelRequestContext,
         secondOpinionToken?: string,
     ): Promise<ApiResult<CheckResult>> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal)))
+            return unavailableResult(ctx.requestId, binding, 'invalid_input', false)
         const secondary = secondOpinionToken !== undefined
         const metadata = {
             mode: 'model',
@@ -456,6 +489,8 @@ export class ModelApiClient {
         target: QuestionTarget,
         ctx: ModelRequestContext,
     ): Promise<ApiResult<QuestionResult> | PendingResult> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal)))
+            return unavailableResult(ctx.requestId, binding, 'invalid_input', false)
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -568,6 +603,8 @@ export class ModelApiClient {
         overlayToken: string,
         ctx: ModelRequestContext,
     ): Promise<ApiResult<OverlayResult>> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal)))
+            return unavailableResult(ctx.requestId, binding, 'invalid_input', false)
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -695,6 +732,8 @@ export class ModelApiClient {
      * identity field and its kind match what was asked, so a stale, foreign or mislabelled document is never published.
      */
     async screens(request: ScreenRequest, ctx: ModelRequestContext): Promise<ScreensResult> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal, false)))
+            return screensUnavailable(ctx.requestId, 'invalid_input', false)
         const metadata = screenMetadata(request, ctx.requestId)
         const valid = modelScreensMetadataSchema.safeParse(metadata)
         if (!valid.success) {
@@ -771,6 +810,10 @@ export class ModelApiClient {
         image: ImageBytes,
         ctx: ModelRequestContext,
     ): AsyncGenerator<ApiResult<SegmentEvent>, void, void> {
+        if (this.consent !== null && !(await this.allowed(ctx.signal))) {
+            yield unavailableResult(ctx.requestId, binding, 'invalid_input', false)
+            return
+        }
         const metadata = {
             mode: 'model',
             requestId: ctx.requestId,
@@ -810,6 +853,7 @@ export class ModelApiClient {
         request: PieceBatchRequest,
         pageUris: Readonly<Record<string, string>>,
     ): Promise<PieceBatchResult | null> {
+        if (this.consent !== null && !(await this.allowed(undefined, false))) return null
         const valid = pieceBatchRequestSchema.safeParse(request)
         if (!valid.success) return null
         const form = new FormData()
