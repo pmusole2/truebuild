@@ -5,6 +5,25 @@ import { PIECE_CUTOUT_MAX_CHARS } from '@truebuild/contracts'
 import type { ObservationImage } from './media'
 import { refinePieceCrop } from './piece-crop'
 
+it('keeps a part crop inside its own box even when connected ink extends beyond it', async () => {
+    const bytes = await sharp(
+        Buffer.from(
+            '<svg width="100" height="100"><rect width="100" height="100" fill="white"/><circle cx="50" cy="50" r="20" fill="black"/></svg>',
+        ),
+    )
+        .png()
+        .toBuffer()
+    const image: ObservationImage = { bytes, mimeType: 'image/png', width: 100, height: 100 }
+    const box = [0.4, 0.3, 0.2, 0.4] as const
+    const crop = await refinePieceCrop(image, box, { withinBox: true })
+    expect(crop).not.toBeNull()
+    const [x, y, w, h] = crop!.box
+    expect(x).toBeGreaterThanOrEqual(box[0])
+    expect(y).toBeGreaterThanOrEqual(box[1])
+    expect(x + w).toBeLessThanOrEqual(box[0] + box[2])
+    expect(y + h).toBeLessThanOrEqual(box[1] + box[3])
+})
+
 it('finds an offset ink drawing without table borders, preserves nearby strokes, and bounds blank or invalid crops', async (): Promise<void> => {
     const width = 360
     const height = 240

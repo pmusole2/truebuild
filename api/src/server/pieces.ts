@@ -69,7 +69,7 @@ async function cropDrawing(part: ManualPieceInput, image: ObservationImage | und
     const box = part.drawingBox ?? part.figureBox
     if (!image || !box) return null
     try {
-        const crop = await refinePieceCrop(image, box)
+        const crop = await refinePieceCrop(image, box, { withinBox: true })
         return crop && crop.uri.length <= 360_000 ? { ...crop, contextOnly: part.drawingBox == null } : null
     } catch {
         return null

@@ -141,6 +141,7 @@ function blobs(mask: Uint8Array, width: number, height: number): Blob[] {
 export async function refinePieceCrop(
     image: ObservationImage,
     drawingBox: readonly [number, number, number, number],
+    options: { withinBox?: boolean } = {},
 ): Promise<PieceCropResult | null> {
     const [x, y, w, h] = drawingBox
     if (
@@ -167,11 +168,13 @@ export async function refinePieceCrop(
         const source = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels, failOn: 'warning' }).autoOrient()
         const metadata = await source.metadata()
         if (metadata.autoOrient.width !== image.width || metadata.autoOrient.height !== image.height) return null
-        const expansion = 1.1
-        const left = Math.max(0, Math.floor((x - expansion * w) * image.width))
-        const top = Math.max(0, Math.floor((y - expansion * h) * image.height))
-        const right = Math.min(image.width, Math.ceil((x + (1 + expansion) * w) * image.width))
-        const bottom = Math.min(image.height, Math.ceil((y + (1 + expansion) * h) * image.height))
+        const expansion = options.withinBox ? 0 : 1.1
+        const startPixel = options.withinBox ? Math.ceil : Math.floor
+        const endPixel = options.withinBox ? Math.floor : Math.ceil
+        const left = Math.max(0, startPixel((x - expansion * w) * image.width))
+        const top = Math.max(0, startPixel((y - expansion * h) * image.height))
+        const right = Math.min(image.width, endPixel((x + (1 + expansion) * w) * image.width))
+        const bottom = Math.min(image.height, endPixel((y + (1 + expansion) * h) * image.height))
         const region = { left, top, width: right - left, height: bottom - top }
         const scale = Math.min(
             1,
