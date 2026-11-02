@@ -164,7 +164,7 @@ export function AddRoute(): ReactElement {
                 <DocumentSurface
                     kind={importFailed ? 'error' : entry?.session.pages.length === 0 ? 'add' : 'pages'}
                     choosePages={(): void => choosePages()}
-                    retry={importFailed ? (): void => choosePages() : undefined}
+                    retry={importFailed && !state.storageReadOnly ? (): void => choosePages() : undefined}
                 />
             </CoachRoute>
         </>
