@@ -535,6 +535,33 @@ describe('ModelApiClient segment stream', () => {
         { requestId: REQUEST_ID },
     ]
 
+    it('ignores keepalive comments between parse progress and segment events', async () => {
+        const phases: string[] = []
+        const parse = scripted(() =>
+            streamOf([
+                'data: {"type":"progress","phase":"reading"}\n\n',
+                ': ping\n\n',
+                `data: ${JSON.stringify({ type: 'result', result: okParse() })}\n\n`,
+            ]),
+        )
+        expect(
+            await client(parse.fetch).parse(manualBinding, session.pages, [source], {
+                requestId: REQUEST_ID,
+                onProgress: (phase) => phases.push(phase),
+            }),
+        ).toMatchObject({ status: 'ok' })
+        expect(phases).toEqual(['reading'])
+
+        const api = segmentStream(
+            streamOf([
+                `data: ${JSON.stringify(snapshotEvent())}\n\n`,
+                ': ping\n\n',
+                `data: ${JSON.stringify(completedEvent())}\n\n`,
+            ]),
+        )
+        expect((await collect(api.segments(...segmentArgs()))).map((event) => event.status)).toEqual(['ok', 'ok'])
+    })
+
     it('yields a snapshot then exactly one completed terminal, in order', async () => {
         const client = segmentStream(sse([snapshotEvent(), completedEvent()]))
 

@@ -51,7 +51,9 @@ const runtime = createRuntimeFromEnvironment(
         MODEL_API_KEY: '<synthetic>',
         MODEL_SECOND_OPINION: secondOpinion ? 'muse-wonder-1.0' : undefined,
         API_SHARED_SECRET: 'truebuild-fixture-demo',
-        MODEL_CALL_LIMIT: '200',
+        MODEL_CALL_LIMIT_PER_DAY: '200',
+        // One isolated test process serves multiple independent synthetic clients/scenarios.
+        PARSE_LIMIT_PER_HOUR: '1000',
         MODEL_LAYOUT_WONDER: followUps ? undefined : '0',
         MODEL_SEGMENTS: followUps ? undefined : '0',
         MODEL_CHECK_CONTEXT: process.env.MODEL_CHECK_CONTEXT,

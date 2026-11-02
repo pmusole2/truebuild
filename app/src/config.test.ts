@@ -20,6 +20,16 @@ describe('production API origin rule', () => {
         process.env.NODE_ENV = 'production'
         expect(() => parseBaseUrl('http://192.168.1.20:3001')).toThrow(/https origin/)
         expect(() => parseBaseUrl('http://127.0.0.1:3001')).toThrow(/https origin/)
+        for (const url of [
+            'https://localhost',
+            'https://127.0.0.1',
+            'https://[::1]',
+            'https://[::]',
+            'https://[::ffff:127.0.0.1]',
+            'https://app.localhost',
+        ]) {
+            expect(() => parseBaseUrl(url)).toThrow(/https origin/)
+        }
         expect(parseBaseUrl('https://api.example.com')).toBe('https://api.example.com')
     })
 

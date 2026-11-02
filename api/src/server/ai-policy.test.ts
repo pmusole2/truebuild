@@ -150,12 +150,13 @@ describe('AI policy', (): void => {
 })
 
 describe('runtime policy wiring', (): void => {
-    it('has no default call-count cap and accepts a verdict deadline beyond eight seconds', (): void => {
+    it('uses daily call ceilings and accepts a verdict deadline beyond eight seconds', (): void => {
         const runtime = createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '20000' })
-        expect(runtime.counter.limit).toBe(Number.POSITIVE_INFINITY)
+        expect(runtime.counter.limit).toBe(1_500)
         expect(createRuntimeFromEnvironment({}).policy.stages.verdict.deadlineMs).toBe(12_000)
         expect(runtime.policy.stages.verdict.deadlineMs).toBe(20_000)
-        expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT: '5' }).counter.limit).toBe(5)
+        expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT: '8' }).counter.limit).toBe(1_500)
+        expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT_PER_DAY: '5' }).counter.limit).toBe(5)
     })
 
     it('resolves the verdict deadline from CHECK_TIMEOUT_MS or its alias and rejects disagreement or invalid values', (): void => {

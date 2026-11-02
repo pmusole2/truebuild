@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import { DEMO_LABEL } from './providers/types'
 import { corsResponse, deniedOrigin, isAllowedOrigin, preflight } from './server/cors'
 import { createRuntimeFromEnvironment, describeAiPolicy, type ApiRuntime } from './server/model-runtime'
+import { PUBLIC_LIMIT_MESSAGE, PublicLimitError } from './server/public-limits'
 
 type ApiEnv = { Variables: { runtime: ApiRuntime } }
 type Operation = 'parse' | 'check' | 'question' | 'segment'
@@ -141,7 +142,32 @@ export function createApp(
                         : corsResponse(request, deniedOrigin(401), runtime.allowedOrigins)
                 }
             }
-            await next()
+            // Collection/cancellation spends no model calls and must remain available after a ceiling is reached.
+            const generates =
+                method === 'POST' && !context.req.path.endsWith('/result') && !context.req.path.endsWith('/cancel')
+            try {
+                if (generates)
+                    await runtime.counter.runForClient(request, context.req.path === '/api/manuals/parse', next)
+                else await next()
+            } catch (error) {
+                if (!(error instanceof PublicLimitError)) throw error
+                await request.body?.cancel().catch((): void => {})
+                return corsResponse(
+                    request,
+                    Response.json(
+                        {
+                            status: 'unavailable',
+                            requestId: 'invalid-request',
+                            binding: null,
+                            code: 'budget_exhausted',
+                            retryable: false,
+                            message: PUBLIC_LIMIT_MESSAGE,
+                        },
+                        { status: 429, headers: { 'cache-control': 'no-store' } },
+                    ),
+                    runtime.allowedOrigins,
+                )
+            }
             context.res.headers.set('cache-control', 'no-store')
             corsResponse(request, context.res, runtime.allowedOrigins)
         } finally {

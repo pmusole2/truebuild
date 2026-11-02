@@ -80,7 +80,7 @@ function runtime(
             PROVIDER_MODE: 'meta',
             MODEL_API_KEY: '<synthetic>',
             API_SHARED_SECRET: secret,
-            MODEL_CALL_LIMIT: '3',
+            MODEL_CALL_LIMIT_PER_DAY: '3',
             // The pre-change public shape is what GENERATIVE_UI=off with no second-opinion offer must keep.
             GENERATIVE_UI: 'off',
             MODEL_SECOND_OPINION: 'off',

@@ -220,7 +220,7 @@ describe('inactive SAM transport over controlled local HTTP', (): void => {
 
     it('sends normalized inline video and preserves sparse out-of-order source frame IDs', async (): Promise<void> => {
         const generated = spawnSync(
-            '/opt/homebrew/bin/ffmpeg',
+            process.env.FFMPEG_PATH ?? 'ffmpeg',
             [
                 '-nostdin',
                 '-v',

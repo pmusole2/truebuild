@@ -26,8 +26,8 @@ describe('provider runtime configuration', (): void => {
         for (const env of [
             { PROVIDER_MODE: 'unknown' },
             { MODEL_CHECK_CONTEXT: 'automatic' },
-            { MODEL_CALL_LIMIT: '0' },
-            { MODEL_CALL_LIMIT: '2.5' },
+            { MODEL_CALL_LIMIT_PER_DAY: '0' },
+            { MODEL_CALL_LIMIT_PER_CLIENT_DAY: '2.5' },
             { CHECK_TIMEOUT_MS: '0' },
             { CHECK_TIMEOUT_MS: '105001' },
             { GENERATIVE_UI: 'partial' },

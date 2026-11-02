@@ -13,9 +13,9 @@ COPY api/src ./api/src
 COPY api/tsconfig.json ./api/tsconfig.json
 
 # tsx is an installed production dependency; workspace contracts also contain TypeScript.
-# Clip processing is separately UNQUALIFIED here: the existing implementation requires
-# ffprobe and ffmpeg 8.0.1 at /opt/homebrew/bin, which this Linux image does not provide.
-ENV NODE_ENV=production PROVIDER_MODE=meta PORT=3001
+# The app sends frozen images, not clips; ffmpeg is not needed by its reachable flows.
+# Sevalla supplies PORT at runtime; the server's local fallback is 3001.
+ENV NODE_ENV=production PROVIDER_MODE=meta
 USER node
 EXPOSE 3001
 CMD ["npm", "run", "start", "--workspace", "@truebuild/api"]

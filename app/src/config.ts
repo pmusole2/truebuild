@@ -1,8 +1,19 @@
+import { isDevelopmentBuild } from './api/transport'
+
 /**
  * Build-time public configuration. EXPO_PUBLIC_* values are visible in the app bundle: they are never Meta credentials.
  * Meta is the default. Fixture mode is reserved for explicit automated/offline tooling.
  */
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:3001'
+const DEVELOPMENT_API_BASE_URL = 'http://127.0.0.1:3001'
+
+/** Loopback is a development-only default. A release build must name its HTTPS origin; it never falls back to loopback. */
+function resolveApiBaseUrl(value: string | undefined): string {
+    if (value !== undefined) return value
+    if (isDevelopmentBuild()) return DEVELOPMENT_API_BASE_URL
+    throw new Error('EXPO_PUBLIC_API_BASE_URL must be set for release builds')
+}
+
+export const API_BASE_URL = resolveApiBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL)
 
 /** Public demo-only shared key sent as x-truebuild-key. Synthetic and visible in the bundle, never a real credential. */
 export const API_SECRET = process.env.EXPO_PUBLIC_API_SECRET ?? ''

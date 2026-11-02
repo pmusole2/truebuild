@@ -5,8 +5,8 @@ export class BudgetError extends Error {
 }
 
 /**
- * Process-local attempt counter. There is no default cap: the limit applies only when an operator sets
- * MODEL_CALL_LIMIT explicitly. Failures, cancellation and unknown outcomes never refund a call.
+ * Explicit attempt counter for injected handlers and bounded tests. The environment runtime uses its daily subclass.
+ * Failures, cancellation and unknown outcomes never refund a call.
  */
 export class ModelCallCounter {
     #used = 0

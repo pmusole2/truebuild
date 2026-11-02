@@ -281,7 +281,7 @@ describe('MODEL_LAYOUT runtime configuration', (): void => {
                     PROVIDER_MODE: 'meta',
                     MODEL_API_KEY: '<synthetic>',
                     API_SHARED_SECRET: key,
-                    MODEL_CALL_LIMIT: '3',
+                    MODEL_CALL_LIMIT_PER_DAY: '3',
                     // No Wonder overlay stage is offered, so the Spark call is not verdict-only (that is covered in
                     // follow-ups.test.ts): this is the in-call layout composition these cases describe.
                     MODEL_LAYOUT_WONDER: '0',

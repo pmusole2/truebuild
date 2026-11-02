@@ -1376,7 +1376,7 @@ describe('Meta provider parse repair through the guarded transport', (): void =>
                 PROVIDER_MODE: 'meta',
                 MODEL_API_KEY: '<synthetic>',
                 API_SHARED_SECRET: state.key,
-                MODEL_CALL_LIMIT: '3',
+                MODEL_CALL_LIMIT_PER_DAY: '3',
             },
             outbound,
         )

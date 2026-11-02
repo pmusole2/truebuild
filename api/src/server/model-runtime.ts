@@ -25,7 +25,7 @@ import {
     MAX_DEADLINE_MS,
     type AiPolicy,
 } from './ai-policy'
-import { ModelCallCounter } from './budget'
+import { PublicModelCallCounter } from './public-limits'
 import { DEFAULT_ORIGINS } from './cors'
 import { createApiHandlers } from './handlers'
 import { createModelHandlers, guardModelFetch, runModelParseRepair } from './model-service'
@@ -53,7 +53,7 @@ export interface ApiRuntime {
     segments: boolean
     samModel: 'sam-3.1'
     auth: SharedKeyAuth
-    counter: ModelCallCounter
+    counter: PublicModelCallCounter
     allowedOrigins: readonly string[]
     fixture: ReturnType<typeof createApiHandlers>
     model: ReturnType<typeof createModelHandlers>
@@ -126,11 +126,11 @@ export function createRuntimeFromEnvironment(
         .map((value) => positiveInteger(value, 12_000, MAX_DEADLINE_MS))
     if (new Set(verdictDeadlines).size > 1) throw new Error('conflicting_verdict_deadline')
     const checkTimeoutMs = verdictDeadlines[0] ?? 12_000
-    // No call-count cap unless an operator sets MODEL_CALL_LIMIT explicitly.
-    const counter = new ModelCallCounter(
-        environment.MODEL_CALL_LIMIT === undefined || environment.MODEL_CALL_LIMIT === ''
-            ? undefined
-            : positiveInteger(environment.MODEL_CALL_LIMIT, 1),
+    // MODEL_CALL_LIMIT was process-lifetime and is deliberately ignored, including old local .env values.
+    const counter = new PublicModelCallCounter(
+        positiveInteger(environment.MODEL_CALL_LIMIT_PER_DAY, 1_500),
+        positiveInteger(environment.MODEL_CALL_LIMIT_PER_CLIENT_DAY, 200),
+        positiveInteger(environment.PARSE_LIMIT_PER_HOUR, 3),
     )
     const policy = aiPolicyFromEnvironment(environment, {
         checkTimeoutMs,

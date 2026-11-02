@@ -18,6 +18,33 @@ function app(environment: Record<string, string | undefined> = {}): ReturnType<t
 }
 
 describe('Hono HTTP boundary', (): void => {
+    it('limits parses per client without locking out a different client', async (): Promise<void> => {
+        const api = app({ MODEL_CALL_LIMIT: '8' })
+        const parse = async (ip: string, forwarded = '198.51.100.9'): Promise<Response> =>
+            api.request('/api/manuals/parse', {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-truebuild-key': 'truebuild-fixture-demo',
+                    'cf-connecting-ip': ip,
+                    'x-forwarded-for': forwarded,
+                },
+                body: JSON.stringify({
+                    mode: 'fixture',
+                    requestId: 'parse-limit',
+                    binding: { kind: 'manual', manualId: 'demo-divider', revision: 1 },
+                }),
+            })
+        for (let attempt = 0; attempt < 3; attempt++) expect((await parse('192.0.2.1')).status).toBe(200)
+        const limited = await parse('192.0.2.1', '198.51.100.10')
+        expect(limited.status).toBe(429)
+        expect(await limited.json()).toMatchObject({
+            code: 'budget_exhausted',
+            message: 'Too many builds right now, try again later.',
+        })
+        expect((await parse('192.0.2.2')).status).toBe(200)
+    })
+
     it('keeps both public health paths, exact JSON envelopes, and explicit method errors', async (): Promise<void> => {
         const api = app()
         for (const path of ['/health', '/api/health']) {

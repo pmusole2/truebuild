@@ -98,6 +98,10 @@ async function honestResponse(response: Response, path: string): Promise<Respons
                     while ((end = pending.indexOf('\n\n')) >= 0) {
                         const event = pending.slice(0, end)
                         pending = pending.slice(end + 2)
+                        if (event.startsWith(':')) {
+                            controller.enqueue(encoder.encode(`${event}\n\n`))
+                            continue
+                        }
                         if (!event.startsWith('data: ')) throw new Error('Unexpected fixture stream')
                         const value: unknown = JSON.parse(event.slice(6))
                         if (record(value)) scrubResult(value.value)
@@ -163,6 +167,9 @@ export function createNativeFixtureApp(options: NativeFixtureOptions = {}): {
     const scenario = options.scenario ?? 'full'
     const base = createRuntimeFromEnvironment({
         PROVIDER_MODE: 'fixture',
+        // A single fixture server serves the whole browser suite under the same loopback client IP.
+        PARSE_LIMIT_PER_HOUR: '1000',
+        MODEL_CALL_LIMIT_PER_DAY: '200',
         API_SHARED_SECRET: SHARED_KEY,
         GENERATIVE_UI: options.generativeUi ?? 'full',
         MODEL_SECOND_OPINION: 'muse-wonder-1.0',

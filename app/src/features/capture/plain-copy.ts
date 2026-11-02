@@ -145,6 +145,10 @@ const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
     [/^Choose up to \d+ pages/u, 'You can keep up to 20 pages. A retake replaces one page.'],
     [/^Enter a language code/u, 'Pick a reading language.'],
     [/^Manual reading timed out/u, 'Reading took too long. Try again.'],
+    [
+        /^(?:Manual reading unavailable|Unavailable) \(budget_exhausted\)|^Too many builds right now/u,
+        'Too many builds right now, try again later.',
+    ],
     [/^Manual reading unavailable/u, 'We could not read those pages. Try again.'],
     [/^Camera photo preparation timed out/u, 'The photo took too long. Take a new photo.'],
     [/^Cannot use this camera photo/u, 'We could not use that photo. Check the camera and take a new one.'],
@@ -200,7 +204,7 @@ export function isProblemNotice(notice: string): boolean {
     if (PHOTO_RECOVERY.has(notice)) {
         return true
     }
-    return /unavailable|timed out|could not|not allowed|cannot|not confirmed|nothing was|read-only|invalid|no longer|older manual/iu.test(
+    return /too many builds|unavailable|timed out|could not|not allowed|cannot|not confirmed|nothing was|read-only|invalid|no longer|older manual/iu.test(
         notice,
     )
 }

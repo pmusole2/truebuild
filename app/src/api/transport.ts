@@ -27,6 +27,12 @@ function isDevelopmentHost(hostname: string): boolean {
     return LOOPBACK_HOSTS.includes(hostname) || PRIVATE_LAN.test(hostname)
 }
 
+function isLoopbackHost(hostname: string): boolean {
+    return /^(?:localhost\.?|.*\.localhost\.?|127\..*|0\.0\.0\.0|\[::(?:1|ffff:7f[\da-f]{2}:[\da-f]{1,4})?\])$/iu.test(
+        hostname,
+    )
+}
+
 export type UnavailableCode = Extract<ApiResult<never>, { status: 'unavailable' }>['code']
 export type ApiMode = 'fixture' | 'model'
 
@@ -65,6 +71,7 @@ export function parseBaseUrl(raw: string): string {
             ((isDevelopmentBuild() && isDevelopmentHost(url.hostname)) || isolatedReleaseFixture))
     if (
         !schemeAllowed ||
+        (!isDevelopmentBuild() && !isolatedReleaseFixture && isLoopbackHost(url.hostname)) ||
         url.username !== '' ||
         url.password !== '' ||
         url.pathname !== '/' ||

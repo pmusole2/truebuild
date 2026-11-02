@@ -21,7 +21,7 @@ const UNAVAILABLE_QUESTION: Record<string, string> = {
     unconfigured: 'Live questions are not configured on the connected backend. No model was called.',
     unauthorized: 'The backend rejected the shared key (x-truebuild-key). Check EXPO_PUBLIC_API_SECRET.',
     timeout: 'The question timed out. Nothing was answered; try again.',
-    budget_exhausted: 'The check budget is used up. Nothing was answered.',
+    budget_exhausted: 'Too many builds right now, try again later.',
     invalid_input: 'This question cannot be sent for this step and photo. Check the wording and target.',
 }
 

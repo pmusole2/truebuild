@@ -68,6 +68,7 @@ import {
 import type { SamInput, SamProvider } from '../providers/sam'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { BudgetError, ConcurrencyGate, type ModelCallCounter } from './budget'
+import { PUBLIC_LIMIT_MESSAGE, PublicLimitError } from './public-limits'
 import { corsResponse, isAllowedOrigin, preflight } from './cors'
 import { createDeadline, createParseDeadline, RequestStoppedError, type Deadline } from './deadline'
 import {
@@ -314,6 +315,20 @@ function acceptsEventStream(request: Request): boolean {
     return accept.includes('text/event-stream') && !accept.includes('application/json')
 }
 
+/** Comments keep an admitted SSE response active without changing the event contract. */
+function startKeepalive(output: ReadableStreamDefaultController<Uint8Array>): () => void {
+    const ping = new TextEncoder().encode(': ping\n\n')
+    const timer = setInterval((): void => {
+        try {
+            output.enqueue(ping)
+        } catch {
+            clearInterval(timer)
+        }
+    }, 15_000)
+    timer.unref()
+    return (): void => clearInterval(timer)
+}
+
 /**
  * Progress events, then one `result` event carrying the full ApiResult the legacy JSON route would have sent. Every
  * failure is still an ApiResult (timeout, try again), so the stream itself stays HTTP 200 once it has started.
@@ -324,12 +339,14 @@ function progressResponse(run: (progress: ProgressSink) => Promise<Response>, st
     let cancelled = false
     let streaming = false
     let phaseOrder = -1
+    let stopKeepalive = (): void => {}
     const stream = new ReadableStream<Uint8Array>({
         start(controller): void {
             output = controller
         },
         cancel(): void {
             cancelled = true
+            stopKeepalive()
             stop()
         },
     })
@@ -344,6 +361,7 @@ function progressResponse(run: (progress: ProgressSink) => Promise<Response>, st
             phaseOrder = next
             if (!streaming) {
                 streaming = true
+                stopKeepalive = startKeepalive(output)
                 resolve(
                     new Response(stream, {
                         headers: {
@@ -357,15 +375,18 @@ function progressResponse(run: (progress: ProgressSink) => Promise<Response>, st
             send({ type: 'progress', phase })
         })
             .then(async (response) => {
+                stopKeepalive()
                 // Preserve real HTTP errors (auth, admission, first-event timeout) before streaming starts.
                 if (!streaming) resolve(response)
                 else send({ type: 'result', result: await response.json() })
             })
             .catch((error: unknown): void => {
+                stopKeepalive()
                 if (!streaming) reject(error)
                 else if (!cancelled) output.error(error)
             })
             .finally((): void => {
+                stopKeepalive()
                 try {
                     output.close()
                 } catch {
@@ -421,6 +442,9 @@ function errorResult(
     }
     if (error instanceof AuthenticationError) {
         return { code: 'unauthorized', status: 401 }
+    }
+    if (error instanceof PublicLimitError) {
+        return { code: 'budget_exhausted', status: 429, message: PUBLIC_LIMIT_MESSAGE }
     }
     if (error instanceof AdmissionError) {
         return {
@@ -1722,6 +1746,7 @@ function segmentResponse(
     }
     let providerIterator: AsyncIterator<SegmentEvent> | undefined
     let closed = false
+    let stopKeepalive = (): void => {}
     let providerReturnRequested = false
     const closeProvider = (): void => {
         if (providerReturnRequested || !providerIterator?.return) {
@@ -1736,6 +1761,7 @@ function segmentResponse(
         }
     }
     const stop = (): void => {
+        stopKeepalive()
         execution.stop()
         closeProvider()
     }
@@ -1793,11 +1819,15 @@ function segmentResponse(
     }
     const source = events()
     const abort = (): void => {
+        stopKeepalive()
         closeProvider()
     }
     execution.deadline.signal.addEventListener('abort', abort, { once: true })
     return new Response(
         new ReadableStream<Uint8Array>({
+            start(controller): void {
+                stopKeepalive = startKeepalive(controller)
+            },
             async pull(controller): Promise<void> {
                 try {
                     const next = await source.next()
@@ -1805,6 +1835,7 @@ function segmentResponse(
                         return
                     }
                     if (next.done) {
+                        stopKeepalive()
                         closed = true
                         execution.deadline.signal.removeEventListener('abort', abort)
                         controller.close()
@@ -1815,7 +1846,9 @@ function segmentResponse(
                         execution.check()
                     }
                     controller.enqueue(bytes)
+                    if (next.value.status !== 'ok' || next.value.value.type !== 'snapshot') stopKeepalive()
                 } catch (error) {
+                    stopKeepalive()
                     if (!closed) {
                         const failure = errorResult(error, execution)
                         controller.enqueue(
@@ -1829,6 +1862,7 @@ function segmentResponse(
                 }
             },
             cancel(): void {
+                stopKeepalive()
                 closed = true
                 execution.deadline.signal.removeEventListener('abort', abort)
                 stop()

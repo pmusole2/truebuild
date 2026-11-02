@@ -8,7 +8,7 @@ import { normalizeClip } from './clip'
 export async function syntheticClip(duration = 1): Promise<Uint8Array> {
     return new Promise((resolve, reject): void => {
         const child = spawn(
-            '/opt/homebrew/bin/ffmpeg',
+            process.env.FFMPEG_PATH ?? 'ffmpeg',
             [
                 '-nostdin',
                 '-v',
