@@ -1,3 +1,4 @@
+import { asRequestedMetaResponse } from '../test-support/meta-stream'
 import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
@@ -1284,8 +1285,8 @@ describe('one-use parse repair grant', (): void => {
     })
 })
 
-describe('parse route timing with the default eighty-five second budget', (): void => {
-    it('accepts an eighty-second parse inside the route budget', async (): Promise<void> => {
+describe('parse route timing with the default one-hundred-and-twenty-five second budget', (): void => {
+    it('accepts a one-hundred-and-twenty-second parse inside the route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
         const handlers = createModelHandlers({
@@ -1297,7 +1298,7 @@ describe('parse route timing with the default eighty-five second budget', (): vo
         try {
             const pending = handlers.parse(parseRequest(state))
             await gate.entered
-            await vi.advanceTimersByTimeAsync(80_000)
+            await vi.advanceTimersByTimeAsync(120_000)
             gate.release(parsed())
             expect((await pending).status).toBe(200)
         } finally {
@@ -1305,7 +1306,7 @@ describe('parse route timing with the default eighty-five second budget', (): vo
         }
     })
 
-    it('times out a hung parse at exactly the eighty-five second route budget', async (): Promise<void> => {
+    it('times out a hung parse at exactly the one-hundred-and-twenty-five second route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
         const handlers = createModelHandlers({
@@ -1317,7 +1318,7 @@ describe('parse route timing with the default eighty-five second budget', (): vo
         try {
             const pending = handlers.parse(parseRequest(state))
             await gate.entered
-            await vi.advanceTimersByTimeAsync(84_999)
+            await vi.advanceTimersByTimeAsync(124_999)
             let settled = false
             void pending.then((): void => {
                 settled = true
@@ -1362,9 +1363,12 @@ describe('parse route timing with the default eighty-five second budget', (): vo
 describe('Meta provider parse repair through the guarded transport', (): void => {
     it('wires the one-use repair grant through the configured runtime', async (): Promise<void> => {
         const state = await setup()
-        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> => {
+        const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
             if (outbound.mock.calls.length === 1) throw new TypeError('fetch failed')
-            return Response.json(completed(outbound.mock.calls.length === 2 ? unresolvedParsed() : parsed()))
+            return asRequestedMetaResponse(
+                Response.json(completed(outbound.mock.calls.length === 2 ? unresolvedParsed() : parsed())),
+                init,
+            )
         })
         vi.spyOn(console, 'info').mockImplementation((): void => {})
         const runtime = createRuntimeFromEnvironment(
@@ -1392,7 +1396,10 @@ describe('Meta provider parse repair through the guarded transport', (): void =>
         const bodies: string[] = []
         const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
             bodies.push(String(init?.body))
-            return Response.json(completed(bodies.length === 1 ? unresolvedParsed() : parsed()))
+            return asRequestedMetaResponse(
+                Response.json(completed(bodies.length === 1 ? unresolvedParsed() : parsed())),
+                init,
+            )
         })
         const actual = createMetaProvider({
             apiKey: 'synthetic-test-key',
@@ -1416,8 +1423,8 @@ describe('Meta provider parse repair through the guarded transport', (): void =>
     it('keeps the first real parse with the budget at one and sends no second request', async (): Promise<void> => {
         const state = await setup()
         state.counter = new ModelCallCounter(1)
-        const outbound = vi.fn<typeof fetch>(async (): Promise<Response> =>
-            Response.json(completed(unresolvedParsed())),
+        const outbound = vi.fn<typeof fetch>(async (_url, init): Promise<Response> =>
+            asRequestedMetaResponse(Response.json(completed(unresolvedParsed())), init),
         )
         const actual = createMetaProvider({
             apiKey: 'synthetic-test-key',

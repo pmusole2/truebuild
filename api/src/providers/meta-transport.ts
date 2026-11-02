@@ -70,6 +70,10 @@ export interface ProviderMetrics {
     paceWaitMs?: number
     networkMs?: number
     bodyMs?: number
+    timeToCreatedMs?: number
+    timeToFirstOutputMs?: number
+    streamEventCount?: number
+    attempt?: number
 }
 
 /** Filled in by `MetaTransport.send`: where the time before the response headers went. */

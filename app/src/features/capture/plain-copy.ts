@@ -99,6 +99,10 @@ export function plainPending(pending: string | null): string | null {
     if (pending === null) {
         return null
     }
+    // The provider has started its output: the stream's `output` phase, shown without a fake percentage.
+    if (pending.startsWith('Reading manual pages: laying out steps')) {
+        return 'Laying out steps…'
+    }
     if (pending.startsWith('Reading')) {
         return 'Reading your manual. This can take a minute.'
     }

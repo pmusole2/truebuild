@@ -15,7 +15,16 @@ export interface Deadline {
 }
 
 export function createDeadline(timeoutMs: number, parentSignal?: AbortSignal): Deadline {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 105_000) {
+    return deadlineWithin(timeoutMs, parentSignal, 105_000)
+}
+
+/** Parse alone may outlive 105 s: the stream is capped at 120 s plus the route return margin. */
+export function createParseDeadline(timeoutMs: number, parentSignal?: AbortSignal): Deadline {
+    return deadlineWithin(timeoutMs, parentSignal, 125_000)
+}
+
+function deadlineWithin(timeoutMs: number, parentSignal: AbortSignal | undefined, maximumMs: number): Deadline {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > maximumMs) {
         throw new Error('invalid_timeout')
     }
 

@@ -65,6 +65,7 @@ import { useMeterReading } from '../screens/native-meter'
 import { CompareManualsRow, StagesPanel } from '../screens/attribution'
 import { PieceViewer, PiecesGrid } from '../pieces/piece-viewer'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
+import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
@@ -401,7 +402,7 @@ function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean
     return 'children' in node && node.children.some((child) => containsSafety(child, document))
 }
 
-/** The controller reports no per-page parse progress: show known page count and an indeterminate, truthful activity. */
+/** Show known page count and the observed parse phase, with no per-page or percentage claim. */
 function ReadingProgress({
     environment,
     label,
@@ -414,7 +415,8 @@ function ReadingProgress({
     const { colors } = useTheme()
     const scope = useCoachScope()
     const attention = useCoachAttention()
-    const reading = environment.bindings.live?.state.pending?.startsWith('Reading') === true
+    const pending = environment.bindings.live?.state.pending ?? null
+    const reading = pending?.startsWith('Reading') === true
     const breath = useReadingLoop(reading && scope.active && !attention)
     const count = environment.bindings.session?.pages.length ?? 0
     return (
@@ -423,7 +425,7 @@ function ReadingProgress({
             accessible
             accessibilityRole={reading ? 'progressbar' : 'text'}
             accessibilityLabel={label || (reading ? 'Reading your manual' : 'Manual pages')}
-            accessibilityValue={reading ? { text: 'In progress' } : undefined}
+            accessibilityValue={reading ? { text: plainPending(pending) ?? 'In progress' } : undefined}
             style={styles.row}
         >
             {reading ? (
@@ -434,7 +436,14 @@ function ReadingProgress({
                     ]}
                 />
             ) : null}
-            <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
+            <View style={styles.stack}>
+                <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
+                {reading ? (
+                    <View testID="reading-stream-phase">
+                        <Caption>{plainPending(pending)}</Caption>
+                    </View>
+                ) : null}
+            </View>
         </View>
     )
 }

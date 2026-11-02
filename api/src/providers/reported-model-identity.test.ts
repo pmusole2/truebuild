@@ -4,6 +4,7 @@ import { createDemoManual } from '@truebuild/contracts'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 
+import { asRequestedMetaResponse, decodeMetaFixtureResponse } from '../test-support/meta-stream'
 import { MOCK_PROVIDER_KEY, startMetaMock, type MockScenario } from '../test-support/meta-http-mock'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
 
@@ -46,8 +47,8 @@ async function harness(
     const mock = await startMetaMock({ scenario })
     const fetchImpl: typeof fetch = async (url, init) => {
         const response = await mock.transport(url, init)
-        const body = (await response.json()) as Record<string, unknown>
-        return Response.json(rewrite(body), { status: response.status })
+        const body = (await decodeMetaFixtureResponse(response)) as Record<string, unknown>
+        return asRequestedMetaResponse(Response.json(rewrite(body), { status: response.status }), init)
     }
     return {
         provider: createMetaProvider({ apiKey: MOCK_PROVIDER_KEY, fetchImpl }),

@@ -44,7 +44,15 @@ import {
     PARSE_RETURN_MARGIN_MS,
     parseFirstAttemptTimeoutMs,
 } from '../server/parse-budget'
-import { createDeadline, RequestStoppedError, type Deadline } from '../server/deadline'
+import { createDeadline, createParseDeadline, RequestStoppedError, type Deadline } from '../server/deadline'
+import {
+    parseStreamGuard,
+    readParseStream,
+    ParseStreamError,
+    type ParseProgress,
+    type ParseStreamTiming,
+} from './parse-stream'
+export type { ParseProgress } from './parse-stream'
 import {
     MediaValidationError,
     validateAndNormalizeImages,
@@ -139,6 +147,7 @@ export interface CallTelemetry {
     paceWaitMs?: number
     networkMs?: number
     bodyMs?: number
+    stream?: ParseStreamTiming
     usage: { inputTokens?: number; cachedTokens?: number; outputTokens?: number; reasoningTokens?: number }
 }
 
@@ -172,6 +181,15 @@ export function observedTelemetry(call: VerifiedCallTelemetry): ObservedCallTele
             parseValidateMs: call.parseValidateMs,
             totalMs: call.totalMs,
         },
+        ...(call.stream === undefined
+            ? {}
+            : {
+                  stream: {
+                      timeToCreatedMs: known(call.stream.timeToCreatedMs),
+                      timeToFirstOutputMs: known(call.stream.timeToFirstOutputMs),
+                      eventCount: call.stream.eventCount,
+                  },
+              }),
         usage: {
             inputTokens: known(call.usage.inputTokens),
             cachedTokens: known(call.usage.cachedTokens),
@@ -253,7 +271,11 @@ export interface MetaProvider {
         },
         signal: AbortSignal,
     ): Promise<ScreenGeneration>
-    parseManual(input: ParseManualInput, signal: AbortSignal): Promise<ParsedManual>
+    parseManual(
+        input: ParseManualInput,
+        signal: AbortSignal,
+        onProgress?: (phase: ParseProgress) => void,
+    ): Promise<ParsedManual>
     checkStep(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
     secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
@@ -769,12 +791,13 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         timeoutMs: number,
         signal: AbortSignal,
         work: (deadline: Deadline) => Promise<T>,
+        parse = false,
     ): Promise<T> {
         if (!apiKey?.trim()) {
             throw new MetaProviderError('unconfigured')
         }
 
-        const deadline = createDeadline(timeoutMs, signal)
+        const deadline = parse ? createParseDeadline(timeoutMs, signal) : createDeadline(timeoutMs, signal)
 
         try {
             deadline.checkpoint()
@@ -797,6 +820,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 )
             }
 
+            if (error instanceof RequestStoppedError && error.reason === 'timeout')
+                throw new MetaProviderError('timeout')
+            if (error instanceof ParseStreamError) throw new MetaProviderError(error.code)
             if (error instanceof BudgetError) throw error
             if (error instanceof MetaProviderError) {
                 throw error
@@ -843,10 +869,12 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         stage: PolicyStage = stageFor(operation, secondary),
         verdictOnly = false,
         effort: AiEffort = policy.stages[stage].effort,
+        onParseProgress?: (phase: ParseProgress) => void,
     ): Promise<{ value: T; telemetry: VerifiedCallTelemetry }> {
         deadline.checkpoint()
         const clockStart = requestClock.getStore()?.start ?? performance.now()
         const stagePolicy = policy.stages[stage]
+        const streamingParse = operation === 'parse' && model === 'muse-spark-1.3'
         const { requestId, binding, step, question, target, dynamic, ...stable } = context
         const language = operation === 'parse' && typeof stable.language === 'string' ? stable.language : undefined
         const operationInstructions =
@@ -913,7 +941,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         const body = JSON.stringify({
             model,
             store: false,
-            stream: false,
+            stream: streamingParse,
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
             max_output_tokens: stagePolicy.maxOutputTokens,
@@ -931,166 +959,219 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         const sendStart = performance.now()
         const metricsOperation = secondary ? 'second_opinion' : operation
         const transportObservation: TransportObservation = { paceWaitMs: 0, networkMs: 0 }
-        const pending = transport.send(
-            model,
-            {
-                method: 'POST',
-                redirect: 'error',
-                headers: {
-                    authorization: `Bearer ${apiKey}`,
-                    'content-type': 'application/json',
-                    accept: 'application/json',
-                },
-                body,
-                signal: deadline.signal,
-            },
-            deadline,
-            (status, latencyMs) => {
-                options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
-            },
-            // One short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
-            2,
-            transportObservation,
-            2,
-        )
-
-        // Even a response that settles beyond the absolute deadline retains explicit body custody.
-        const response = await waitWithin(pending, deadline, (late): void => cancelBody(late.body))
-
+        const streamGuard = streamingParse ? parseStreamGuard(deadline, onParseProgress) : undefined
+        const responseDeadline = streamGuard?.deadline ?? deadline
+        let responseStatus = 0
+        let streamOutputTokens: number | undefined
+        let streamTimingEmitted = false
         try {
-            deadline.checkpoint()
+            const pending = transport.send(
+                model,
+                {
+                    method: 'POST',
+                    redirect: 'error',
+                    headers: {
+                        authorization: `Bearer ${apiKey}`,
+                        'content-type': 'application/json',
+                        accept: streamingParse ? 'text/event-stream' : 'application/json',
+                    },
+                    body,
+                    signal: responseDeadline.signal,
+                },
+                responseDeadline,
+                (status, latencyMs) => {
+                    options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
+                },
+                // One short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
+                2,
+                transportObservation,
+                2,
+            )
 
-            if (!response.ok) {
-                throw new MetaProviderError('provider_error')
-            }
-
-            const bodyStart = performance.now()
-            const bytes = await readMetaBody(response, deadline)
-            const received = performance.now()
-            // Outer JSON parse belongs to validation time, not to the provider's.
-            const raw = decodeMetaJson(bytes, deadline)
-            const usage = usageMetrics(raw)
-            const telemetryUsage = {
-                ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
-                ...(usage.cachedTokens === undefined ? {} : { cachedTokens: usage.cachedTokens }),
-                ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
-                ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-            }
-            // `Response.model` is required by the Responses API: the provider's own statement of what answered.
-            const identified = reportedModel(raw, model)
-            const envelope = completedResponseSchema.safeParse(raw)
-            deadline.checkpoint()
-            const assistant = envelope.success
-                ? envelope.data.output.find((item) => item.type === 'message')
-                : undefined
-            const text = assistant?.type === 'message' ? assistant.content[0]?.text : undefined
-            const emit = (parseValidateMs: number): CallTelemetry => {
-                const done = performance.now()
-                const telemetry: CallTelemetry = {
-                    stage,
-                    ...(identified === undefined ? {} : { model: identified }),
-                    effort,
-                    timeToProviderMs: Math.max(0, sendStart - clockStart),
-                    providerMs: Math.max(0, received - sendStart),
-                    parseValidateMs,
-                    totalMs: Math.max(0, done - clockStart),
-                    paceWaitMs: transportObservation.paceWaitMs,
-                    networkMs: transportObservation.networkMs,
-                    bodyMs: Math.max(0, received - bodyStart),
-                    usage: telemetryUsage,
-                }
-                // Timings, ids and counts only: never a body, prompt, reasoning text or credential.
-                options.onMetrics?.({
-                    operation: metricsOperation,
-                    // The configured request target. `modelIdentity` states whether the response confirmed it.
-                    model,
-                    modelIdentity: identified === undefined ? 'unverified' : 'verified',
-                    status: response.status,
-                    latencyMs: Math.max(0, received - sendStart),
-                    effort,
-                    stage,
-                    timeToProviderMs: telemetry.timeToProviderMs,
-                    providerMs: telemetry.providerMs,
-                    parseValidateMs: telemetry.parseValidateMs,
-                    totalMs: telemetry.totalMs,
-                    ...(telemetry.paceWaitMs === undefined ? {} : { paceWaitMs: telemetry.paceWaitMs }),
-                    ...(telemetry.networkMs === undefined ? {} : { networkMs: telemetry.networkMs }),
-                    ...(telemetry.bodyMs === undefined ? {} : { bodyMs: telemetry.bodyMs }),
-                    ...usage,
-                })
-                return telemetry
-            }
-
-            const reject = (issueCodes: readonly string[]): void => {
-                console.info(
-                    JSON.stringify({
-                        event: 'provider_rejection',
-                        operation: metricsOperation,
-                        requestId,
-                        stage,
-                        model: identified ?? null,
-                        effort,
-                        issueCodes,
-                    }),
-                )
-            }
-
-            if (identified === undefined) {
-                reject(['response:model_identity'])
-                // Never repaired or retried: a response that does not report the requested model contributes nothing.
-                const failed = new MetaProviderError('invalid_output')
-                failed.telemetry = emit(Math.max(0, performance.now() - received))
-                throw failed
-            }
-
-            if (text === undefined) {
-                reject(
-                    isIncompleteResponse(raw)
-                        ? ['response:incomplete']
-                        : !envelope.success
-                          ? envelope.error.issues.map(
-                                (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
-                            )
-                          : ['response:missing_message'],
-                )
-                const failed = new MetaProviderError(
-                    'invalid_output',
-                    isIncompleteResponse(raw) ? 'incomplete' : 'malformed',
-                )
-                failed.telemetry = emit(Math.max(0, performance.now() - received))
-                throw failed
-            }
-
-            let parsed: unknown
+            // Even a response that settles beyond the absolute deadline retains explicit body custody.
+            const response = await waitWithin(pending, responseDeadline, (late): void => cancelBody(late.body))
+            responseStatus = response.status
 
             try {
-                parsed = JSON.parse(text)
-            } catch {
-                reject(['response:invalid_json'])
-                const failed = new MetaProviderError('invalid_output', 'malformed')
-                failed.telemetry = emit(Math.max(0, performance.now() - received))
-                throw failed
+                deadline.checkpoint()
+
+                if (!response.ok) {
+                    throw new MetaProviderError('provider_error')
+                }
+
+                const bodyStart = performance.now()
+                const raw =
+                    streamGuard === undefined
+                        ? decodeMetaJson(await readMetaBody(response, deadline), deadline)
+                        : await readParseStream(response, streamGuard)
+                const received = performance.now()
+                const usage = usageMetrics(raw)
+                streamOutputTokens = usage.outputTokens
+                const telemetryUsage = {
+                    ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+                    ...(usage.cachedTokens === undefined ? {} : { cachedTokens: usage.cachedTokens }),
+                    ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+                    ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
+                }
+                // `Response.model` is required by the Responses API: the provider's own statement of what answered.
+                const identified = reportedModel(raw, model)
+                const envelope = completedResponseSchema.safeParse(raw)
+                deadline.checkpoint()
+                const assistant = envelope.success
+                    ? envelope.data.output.find((item) => item.type === 'message')
+                    : undefined
+                const text = assistant?.type === 'message' ? assistant.content[0]?.text : undefined
+                const emit = (parseValidateMs: number): CallTelemetry => {
+                    if (streamGuard !== undefined) streamTimingEmitted = true
+                    const done = performance.now()
+                    const telemetry: CallTelemetry = {
+                        stage,
+                        ...(identified === undefined ? {} : { model: identified }),
+                        effort,
+                        timeToProviderMs: Math.max(0, sendStart - clockStart),
+                        providerMs: Math.max(0, received - sendStart),
+                        parseValidateMs,
+                        totalMs: Math.max(0, done - clockStart),
+                        paceWaitMs: transportObservation.paceWaitMs,
+                        networkMs: transportObservation.networkMs,
+                        bodyMs: Math.max(0, received - bodyStart),
+                        ...(streamGuard === undefined ? {} : { stream: { ...streamGuard.timing } }),
+                        usage: telemetryUsage,
+                    }
+                    // Timings, ids and counts only: never a body, prompt, reasoning text or credential.
+                    options.onMetrics?.({
+                        operation: metricsOperation,
+                        // The configured request target. `modelIdentity` states whether the response confirmed it.
+                        model,
+                        modelIdentity: identified === undefined ? 'unverified' : 'verified',
+                        status: response.status,
+                        latencyMs: Math.max(0, received - sendStart),
+                        effort,
+                        stage,
+                        timeToProviderMs: telemetry.timeToProviderMs,
+                        providerMs: telemetry.providerMs,
+                        parseValidateMs: telemetry.parseValidateMs,
+                        totalMs: telemetry.totalMs,
+                        ...(telemetry.paceWaitMs === undefined ? {} : { paceWaitMs: telemetry.paceWaitMs }),
+                        ...(telemetry.networkMs === undefined ? {} : { networkMs: telemetry.networkMs }),
+                        ...(telemetry.bodyMs === undefined ? {} : { bodyMs: telemetry.bodyMs }),
+                        ...usage,
+                        ...(streamGuard === undefined
+                            ? {}
+                            : {
+                                  timeToCreatedMs: streamGuard.timing.timeToCreatedMs,
+                                  timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
+                                  streamEventCount: streamGuard.timing.eventCount,
+                                  attempt: repair === undefined ? 1 : 2,
+                              }),
+                    })
+                    return telemetry
+                }
+
+                const reject = (issueCodes: readonly string[]): void => {
+                    console.info(
+                        JSON.stringify({
+                            event: 'provider_rejection',
+                            operation: metricsOperation,
+                            requestId,
+                            stage,
+                            model: identified ?? null,
+                            effort,
+                            issueCodes,
+                        }),
+                    )
+                }
+
+                if (
+                    streamGuard !== undefined &&
+                    typeof raw === 'object' &&
+                    raw !== null &&
+                    'status' in raw &&
+                    raw.status === 'failed'
+                ) {
+                    reject(['response:failed'])
+                    const failed = new MetaProviderError('provider_error')
+                    failed.telemetry = emit(Math.max(0, performance.now() - received))
+                    throw failed
+                }
+
+                if (identified === undefined) {
+                    reject(['response:model_identity'])
+                    // Never repaired or retried: a response that does not report the requested model contributes nothing.
+                    const failed = new MetaProviderError('invalid_output')
+                    failed.telemetry = emit(Math.max(0, performance.now() - received))
+                    throw failed
+                }
+
+                if (text === undefined) {
+                    reject(
+                        isIncompleteResponse(raw)
+                            ? ['response:incomplete']
+                            : !envelope.success
+                              ? envelope.error.issues.map(
+                                    (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
+                                )
+                              : ['response:missing_message'],
+                    )
+                    const failed = new MetaProviderError(
+                        'invalid_output',
+                        isIncompleteResponse(raw) ? 'incomplete' : 'malformed',
+                    )
+                    failed.telemetry = emit(Math.max(0, performance.now() - received))
+                    throw failed
+                }
+
+                let parsed: unknown
+
+                try {
+                    parsed = JSON.parse(text)
+                } catch {
+                    reject(['response:invalid_json'])
+                    const failed = new MetaProviderError('invalid_output', 'malformed')
+                    failed.telemetry = emit(Math.max(0, performance.now() - received))
+                    throw failed
+                }
+
+                deadline.checkpoint()
+                const validated = schema.safeParse(parsed)
+                deadline.checkpoint()
+                const telemetry = emit(Math.max(0, performance.now() - received))
+
+                if (!validated.success) {
+                    reject(
+                        validated.error.issues.map(
+                            (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
+                        ),
+                    )
+                    const failed = new MetaProviderError('invalid_output', 'malformed')
+                    failed.telemetry = telemetry
+                    throw failed
+                }
+
+                return { value: validated.data, telemetry: { ...telemetry, model: identified } }
+            } finally {
+                cancelBody(response.body)
             }
-
-            deadline.checkpoint()
-            const validated = schema.safeParse(parsed)
-            deadline.checkpoint()
-            const telemetry = emit(Math.max(0, performance.now() - received))
-
-            if (!validated.success) {
-                reject(
-                    validated.error.issues.map(
-                        (issue) => `${issue.path.map(String).join('.') || 'root'}:${issue.code}`,
-                    ),
-                )
-                const failed = new MetaProviderError('invalid_output', 'malformed')
-                failed.telemetry = telemetry
-                throw failed
+        } catch (error) {
+            if (streamGuard !== undefined && !streamTimingEmitted) {
+                options.onMetrics?.({
+                    operation: metricsOperation,
+                    model,
+                    status: responseStatus,
+                    latencyMs: Math.max(0, performance.now() - sendStart),
+                    stage,
+                    effort,
+                    attempt: repair === undefined ? 1 : 2,
+                    timeToCreatedMs: streamGuard.timing.timeToCreatedMs,
+                    timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
+                    streamEventCount: streamGuard.timing.eventCount,
+                    outputTokens: streamOutputTokens,
+                    totalMs: Math.max(0, performance.now() - clockStart),
+                })
             }
-
-            return { value: validated.data, telemetry: { ...telemetry, model: identified } }
+            throw error
         } finally {
-            cancelBody(response.body)
+            streamGuard?.dispose()
         }
     }
 
@@ -1257,109 +1338,126 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     }
 
     return {
-        async parseManual(input, signal): Promise<ParsedManual> {
+        async parseManual(input, signal, onProgress): Promise<ParsedManual> {
             const startedAt = performance.now()
             // The overall budget is the configured parse deadline (default 80 s); the route adds its own margin.
             const overallMs = policy.stages.parse.deadlineMs
-            return execute(overallMs, signal, async (deadline): Promise<ParsedManual> => {
-                const parsed = inputValue(parseInputSchema, input)
-                validateSources(parsed.pages)
-                const images = await waitWithin(
-                    validateAndNormalizeImages(sourceObservations(parsed.pages), deadline.signal, LIMITS.manualPages),
-                    deadline,
-                )
-                const context = {
-                    requestId: parsed.requestId,
-                    binding: parsed.binding,
-                    language: parsed.language ?? DEFAULT_PARSE_LANGUAGE,
-                    sourcePages: parsed.pages.map((source): ManualPage => source.page),
-                }
-                const firstAttemptMs = parseFirstAttemptTimeoutMs(parsed.pages.length, overallMs)
-                let lastTelemetry: VerifiedCallTelemetry | undefined
-                const remainingRepairMs = (): number =>
-                    overallMs - (performance.now() - startedAt) - PARSE_RETURN_MARGIN_MS
-                const attempt = (repair?: ParseRepair): Promise<ParsedManual> =>
-                    execute(
-                        repair ? Math.min(PARSE_REPAIR_MS, remainingRepairMs()) : firstAttemptMs,
-                        deadline.signal,
-                        async (attemptDeadline): Promise<ParsedManual> => {
-                            const sent = await dispatchDetailed(
-                                'parse',
-                                context,
-                                images,
-                                providerParseSchema,
-                                attemptDeadline,
-                                extractionModel,
-                                false,
-                                repair && { instructions: PARSE_REPAIR_INSTRUCTIONS, data: repair },
-                            )
-                            const value = sent.value
-                            lastTelemetry = sent.telemetry
-                            const sessionCheck = manualSessionSchema.safeParse({
-                                manualId: parsed.binding.manualId,
-                                revision: parsed.binding.revision,
-                                title: 'Provider extraction',
-                                updatedAt: '2026-01-01T00:00:00.000Z',
-                                pages: parsed.pages.map((source): ManualPage => source.page),
-                                parts: [],
-                                rawExtraction: value,
-                                reviewedSteps: [],
-                                reviewStatus: 'unreviewed',
-                            })
-                            attemptDeadline.checkpoint()
-                            if (!sessionCheck.success) throw new MetaProviderError('invalid_output')
-                            return value
-                        },
+            return execute(
+                overallMs,
+                signal,
+                async (deadline): Promise<ParsedManual> => {
+                    const parsed = inputValue(parseInputSchema, input)
+                    validateSources(parsed.pages)
+                    const images = await waitWithin(
+                        validateAndNormalizeImages(
+                            sourceObservations(parsed.pages),
+                            deadline.signal,
+                            LIMITS.manualPages,
+                        ),
+                        deadline,
                     )
-                const first = await attempt()
-                const firstTelemetry = lastTelemetry
-                const issues = unresolvedCriticalFacts({ parts: first.parts, reviewedSteps: first.steps })
-                // Keep the valid first result unless at least 20 s of repair work plus return margin remains.
-                const repairFits = remainingRepairMs() >= PARSE_MIN_REPAIR_MS
-                if (issues.length > 0 && repairFits) {
-                    try {
-                        const repair = (): Promise<ParsedManual> =>
-                            attempt({
-                                issues,
-                                preserve: {
-                                    partIds: first.parts.map((part) => part.partId),
-                                    steps: first.steps.map((step) => ({
-                                        stepId: step.stepId,
-                                        order: step.order,
-                                        partIds: step.parts.map((part) => part.partId),
-                                        checkIds: step.visibleChecks.map((check) => check.checkId),
-                                        safetyNoteIds: (step.safetyNotes ?? []).map((entry) => entry.noteId),
-                                    })),
-                                },
-                            })
-                        const second = await waitWithin(
-                            options.runParseRepair ? options.runParseRepair(repair) : repair(),
-                            deadline,
-                        )
-                        deadline.checkpoint()
-                        if (
-                            retainsParseCoverage(first, second) &&
-                            unresolvedCriticalFacts({ parts: second.parts, reviewedSteps: second.steps }).length <
-                                issues.length
-                        ) {
-                            return {
-                                ...second,
-                                model: extractionModel,
-                                ...(lastTelemetry === undefined ? {} : { telemetry: observedTelemetry(lastTelemetry) }),
-                            }
-                        }
-                    } catch {
-                        // A failed repair retains the first result while the overall action is live. Caller
-                        // cancellation and overall expiry still win, even after an individual attempt times out.
-                        deadline.checkpoint()
+                    const context = {
+                        requestId: parsed.requestId,
+                        binding: parsed.binding,
+                        language: parsed.language ?? DEFAULT_PARSE_LANGUAGE,
+                        sourcePages: parsed.pages.map((source): ManualPage => source.page),
                     }
-                }
-                return {
-                    ...first,
-                    model: extractionModel,
-                    ...(firstTelemetry === undefined ? {} : { telemetry: observedTelemetry(firstTelemetry) }),
-                }
-            })
+                    const firstAttemptMs = parseFirstAttemptTimeoutMs(parsed.pages.length, overallMs)
+                    let lastTelemetry: VerifiedCallTelemetry | undefined
+                    const remainingRepairMs = (): number =>
+                        overallMs - (performance.now() - startedAt) - PARSE_RETURN_MARGIN_MS
+                    const attempt = (repair?: ParseRepair): Promise<ParsedManual> =>
+                        execute(
+                            repair ? Math.min(PARSE_REPAIR_MS, remainingRepairMs()) : firstAttemptMs,
+                            deadline.signal,
+                            async (attemptDeadline): Promise<ParsedManual> => {
+                                const sent = await dispatchDetailed(
+                                    'parse',
+                                    context,
+                                    images,
+                                    providerParseSchema,
+                                    attemptDeadline,
+                                    extractionModel,
+                                    false,
+                                    repair && { instructions: PARSE_REPAIR_INSTRUCTIONS, data: repair },
+                                    false,
+                                    'parse',
+                                    false,
+                                    policy.stages.parse.effort,
+                                    onProgress,
+                                )
+                                const value = sent.value
+                                lastTelemetry = sent.telemetry
+                                const sessionCheck = manualSessionSchema.safeParse({
+                                    manualId: parsed.binding.manualId,
+                                    revision: parsed.binding.revision,
+                                    title: 'Provider extraction',
+                                    updatedAt: '2026-01-01T00:00:00.000Z',
+                                    pages: parsed.pages.map((source): ManualPage => source.page),
+                                    parts: [],
+                                    rawExtraction: value,
+                                    reviewedSteps: [],
+                                    reviewStatus: 'unreviewed',
+                                })
+                                attemptDeadline.checkpoint()
+                                if (!sessionCheck.success) throw new MetaProviderError('invalid_output')
+                                return value
+                            },
+                            true,
+                        )
+                    const first = await attempt()
+                    const firstTelemetry = lastTelemetry
+                    const issues = unresolvedCriticalFacts({ parts: first.parts, reviewedSteps: first.steps })
+                    // Keep the valid first result unless at least 20 s of repair work plus return margin remains.
+                    const repairFits = remainingRepairMs() >= PARSE_MIN_REPAIR_MS
+                    if (issues.length > 0 && repairFits) {
+                        try {
+                            const repair = (): Promise<ParsedManual> =>
+                                attempt({
+                                    issues,
+                                    preserve: {
+                                        partIds: first.parts.map((part) => part.partId),
+                                        steps: first.steps.map((step) => ({
+                                            stepId: step.stepId,
+                                            order: step.order,
+                                            partIds: step.parts.map((part) => part.partId),
+                                            checkIds: step.visibleChecks.map((check) => check.checkId),
+                                            safetyNoteIds: (step.safetyNotes ?? []).map((entry) => entry.noteId),
+                                        })),
+                                    },
+                                })
+                            const second = await waitWithin(
+                                options.runParseRepair ? options.runParseRepair(repair) : repair(),
+                                deadline,
+                            )
+                            deadline.checkpoint()
+                            if (
+                                retainsParseCoverage(first, second) &&
+                                unresolvedCriticalFacts({ parts: second.parts, reviewedSteps: second.steps }).length <
+                                    issues.length
+                            ) {
+                                return {
+                                    ...second,
+                                    model: extractionModel,
+                                    ...(lastTelemetry === undefined
+                                        ? {}
+                                        : { telemetry: observedTelemetry(lastTelemetry) }),
+                                }
+                            }
+                        } catch {
+                            // A failed repair retains the first result while the overall action is live. Caller
+                            // cancellation and overall expiry still win, even after an individual attempt times out.
+                            deadline.checkpoint()
+                        }
+                    }
+                    return {
+                        ...first,
+                        model: extractionModel,
+                        ...(firstTelemetry === undefined ? {} : { telemetry: observedTelemetry(firstTelemetry) }),
+                    }
+                },
+                true,
+            )
         },
 
         checkStep: (input, signal) => checkWithModel(input, signal, liveModel),

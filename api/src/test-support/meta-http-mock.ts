@@ -296,11 +296,11 @@ export async function startMetaMock(
                 )
                 return
             }
-            assert.equal(request.stream, false)
             assert(request.instructions)
             assert(request.text)
             inspectSchema(request.text.format.schema)
             const operation = request.text.format.name.replace('truebuild_', '')
+            assert.equal(request.stream, operation === 'parse' && request.model === 'muse-spark-1.3')
             assert(['parse', 'check', 'question', 'overlay', 'screen'].includes(operation))
             assert.equal(parts[0]?.type, 'input_text')
             if (operation === 'screen' || operation === 'overlay') {
@@ -616,29 +616,36 @@ export async function startMetaMock(
                 allowed && typeof allowed === 'object'
                     ? Object.fromEntries(Object.entries(value).filter(([key]) => key in allowed))
                     : value
-            outgoing.setHeader('content-type', 'application/json')
-            outgoing.end(
-                JSON.stringify({
-                    ...responseEnvelope(request.model, 'completed', [], {}),
-                    output: [
-                        { type: 'reasoning', id: 'mock-reasoning', summary: [] },
-                        {
-                            id: 'msg-842549258569147',
-                            type: 'message',
-                            role: 'assistant',
-                            status: 'completed',
-                            content: [{ type: 'output_text', text: JSON.stringify(emitted), annotations: [] }],
-                        },
-                    ],
-                    usage: {
-                        input_tokens: 100,
-                        input_tokens_details: { cached_tokens: 50 },
-                        output_tokens: 20,
-                        output_tokens_details: { reasoning_tokens: 5 },
-                        total_tokens: 120,
+            const response = {
+                ...responseEnvelope(request.model, 'completed', [], {}),
+                output: [
+                    { type: 'reasoning', id: 'mock-reasoning', summary: [] },
+                    {
+                        id: 'msg-842549258569147',
+                        type: 'message',
+                        role: 'assistant',
+                        status: 'completed',
+                        content: [{ type: 'output_text', text: JSON.stringify(emitted), annotations: [] }],
                     },
-                }),
-            )
+                ],
+                usage: {
+                    input_tokens: 100,
+                    input_tokens_details: { cached_tokens: 50 },
+                    output_tokens: 20,
+                    output_tokens_details: { reasoning_tokens: 5 },
+                    total_tokens: 120,
+                },
+            }
+            if (operation === 'parse' && request.model === 'muse-spark-1.3') {
+                outgoing.setHeader('content-type', 'text/event-stream')
+                outgoing.end(
+                    event({ type: 'response.created', response: { ...response, status: 'in_progress', output: [] } }) +
+                        event({ type: 'response.completed', response }),
+                )
+            } else {
+                outgoing.setHeader('content-type', 'application/json')
+                outgoing.end(JSON.stringify(response))
+            }
         } catch {
             failures.push('request_conformance_failed')
             outgoing.statusCode = 400

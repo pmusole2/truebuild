@@ -69,7 +69,7 @@ import type { SamInput, SamProvider } from '../providers/sam'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { BudgetError, ConcurrencyGate, type ModelCallCounter } from './budget'
 import { corsResponse, isAllowedOrigin, preflight } from './cors'
-import { createDeadline, RequestStoppedError, type Deadline } from './deadline'
+import { createDeadline, createParseDeadline, RequestStoppedError, type Deadline } from './deadline'
 import {
     exactModelFiles,
     ModelBodyError,
@@ -305,14 +305,94 @@ interface Execution {
     dispose(): void
 }
 
-function admit(request: Request, auth: SharedKeyAuth, duration: number, origins?: readonly string[]): Execution {
+/** Parse progress phases the provider reports, in order. */
+type ProgressSink = (phase: 'reading' | 'output') => void
+
+/** Only an explicit SSE opt-in streams; a request that also accepts JSON, or names nothing, keeps the legacy envelope. */
+function acceptsEventStream(request: Request): boolean {
+    const accept = request.headers.get('accept') ?? ''
+    return accept.includes('text/event-stream') && !accept.includes('application/json')
+}
+
+/**
+ * Progress events, then one `result` event carrying the full ApiResult the legacy JSON route would have sent. Every
+ * failure is still an ApiResult (timeout, try again), so the stream itself stays HTTP 200 once it has started.
+ */
+function progressResponse(run: (progress: ProgressSink) => Promise<Response>, stop: () => void): Promise<Response> {
+    const encoder = new TextEncoder()
+    let output: ReadableStreamDefaultController<Uint8Array>
+    let cancelled = false
+    let streaming = false
+    let phaseOrder = -1
+    const stream = new ReadableStream<Uint8Array>({
+        start(controller): void {
+            output = controller
+        },
+        cancel(): void {
+            cancelled = true
+            stop()
+        },
+    })
+    return new Promise<Response>((resolve, reject) => {
+        const send = (event: unknown): void => {
+            if (!cancelled) output.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+        }
+        void run((phase) => {
+            const next = phase === 'reading' ? 0 : 1
+            // A repair has another created/output pair, but the visible action never moves backwards.
+            if (next <= phaseOrder || cancelled) return
+            phaseOrder = next
+            if (!streaming) {
+                streaming = true
+                resolve(
+                    new Response(stream, {
+                        headers: {
+                            'content-type': 'text/event-stream',
+                            'cache-control': 'no-store',
+                            'x-accel-buffering': 'no',
+                        },
+                    }),
+                )
+            }
+            send({ type: 'progress', phase })
+        })
+            .then(async (response) => {
+                // Preserve real HTTP errors (auth, admission, first-event timeout) before streaming starts.
+                if (!streaming) resolve(response)
+                else send({ type: 'result', result: await response.json() })
+            })
+            .catch((error: unknown): void => {
+                if (!streaming) reject(error)
+                else if (!cancelled) output.error(error)
+            })
+            .finally((): void => {
+                try {
+                    output.close()
+                } catch {
+                    /* Already closed by cancellation or an error. */
+                }
+            })
+    })
+}
+
+function admit(
+    request: Request,
+    auth: SharedKeyAuth,
+    duration: number,
+    origins?: readonly string[],
+    deadlineFor: typeof createDeadline = createDeadline,
+    cancellation?: AbortSignal,
+): Execution {
     const startedAt = performance.now()
     auth.authenticate(request)
     if (!isAllowedOrigin(request, origins)) {
         throw new AuthenticationError()
     }
     const abort = new AbortController()
-    const deadline = createDeadline(duration, AbortSignal.any([request.signal, abort.signal]))
+    const deadline = deadlineFor(
+        duration,
+        AbortSignal.any([request.signal, abort.signal, ...(cancellation ? [cancellation] : [])]),
+    )
     const check = (): void => deadline.checkpoint()
     try {
         check()
@@ -642,12 +722,16 @@ export function createModelHandlers(options: {
         output: z.ZodType<T>,
         duration: number,
         prepare: (metadata: M, files: Map<string, File>, deadline: Deadline) => Promise<I>,
-        dispatch: ((input: I, signal: AbortSignal) => Promise<T>) | null,
+        dispatch: ((input: I, signal: AbortSignal, progress?: ProgressSink) => Promise<T>) | null,
         validate: (value: T, metadata: M) => boolean,
         scopeHeaders?: (metadata: M) => Record<string, string>,
         publish?: (value: T, input: I) => { value: T; rollback?: () => void },
         policy: {
             repairable?: boolean
+            /** Parse only: an SSE opt-in reports progress phases before the result. */
+            progress?: boolean
+            /** Parse only: the route deadline is bounded by the parse ceiling, not the default. */
+            deadlineFor?: typeof createDeadline
             /** Called once the request identity is parsed and authorized, before any provider work. */
             onMetadata?: (metadata: M) => void
             /** Route name and the resolved path (for example verdict-only), for the outcome log. */
@@ -657,13 +741,17 @@ export function createModelHandlers(options: {
             present?: (value: T) => T
         } = {},
     ): Handler {
-        return async (request): Promise<Response> => {
+        const run = async (
+            request: Request,
+            progress?: ProgressSink,
+            cancellation?: AbortSignal,
+        ): Promise<Response> => {
             let execution: Execution | undefined
             let metadata: M | undefined
             let rollback: (() => void) | undefined
             let releaseSlot: (() => void) | undefined
             try {
-                execution = admit(request, auth, duration, allowedOrigins)
+                execution = admit(request, auth, duration, allowedOrigins, policy.deadlineFor, cancellation)
                 if (policy.repairable) execution.context.repair = { used: false }
                 if (!dispatch) {
                     throw new AdmissionError('unconfigured', 503)
@@ -684,7 +772,7 @@ export function createModelHandlers(options: {
                 const active = execution
                 const raw = await withinModelDeadline(
                     admission.run({ start: active.startedAt }, () =>
-                        effects.run(active.context, (): Promise<T> => dispatch(input, providerSignal)),
+                        effects.run(active.context, (): Promise<T> => dispatch(input, providerSignal, progress)),
                     ),
                     execution.deadline,
                 )
@@ -749,6 +837,15 @@ export function createModelHandlers(options: {
                 execution?.dispose()
             }
         }
+        return async (request): Promise<Response> => {
+            if (policy.progress !== true || !acceptsEventStream(request)) return run(request)
+            const cancelled = new AbortController()
+            const response = await progressResponse(
+                (progress) => run(request, progress, cancelled.signal),
+                () => cancelled.abort(new RequestStoppedError('cancelled')),
+            )
+            return corsResponse(request, response, allowedOrigins)
+        }
     }
 
     const parse = jsonHandler(
@@ -757,7 +854,8 @@ export function createModelHandlers(options: {
         policy.stages.parse.deadlineMs + PARSE_ROUTE_MARGIN_MS,
         parseFiles,
         provider
-            ? (input, signal): ReturnType<MetaProvider['parseManual']> => provider.parseManual(input, signal)
+            ? (input, signal, progress): ReturnType<MetaProvider['parseManual']> =>
+                  provider.parseManual(input, signal, progress)
             : null,
         (value, metadata): boolean =>
             manualSessionSchema.safeParse({
@@ -773,7 +871,13 @@ export function createModelHandlers(options: {
             }).success,
         undefined,
         undefined,
-        { repairable: true, route: 'parse', present: (value) => asPublic(value) },
+        {
+            repairable: true,
+            route: 'parse',
+            present: (value) => asPublic(value),
+            progress: true,
+            deadlineFor: createParseDeadline,
+        },
     )
     const scopeHeaders = (metadata: ModelCheckMetadata): Record<string, string> => {
         const mode = options.checkContext ?? 'full'

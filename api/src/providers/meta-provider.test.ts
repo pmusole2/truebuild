@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { metaOutputSchemas } from './meta-schemas'
 import { createMetaProvider, MetaProviderError, type CheckStepInput, type MetaProvider } from './meta-provider'
 import { observed } from '../test-support/telemetry'
+import { asRequestedMetaResponse } from '../test-support/meta-stream'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
 import { createDeadline } from '../server/deadline'
 import { MetaTransport, retryAfterDeadline } from './meta-transport'
@@ -161,7 +162,7 @@ async function localServer(
         const response = await fetch(`http://127.0.0.1:${address.port}/responses`, init)
         observeResponse?.(response)
 
-        return response
+        return asRequestedMetaResponse(response, init)
     }
 
     try {
@@ -439,7 +440,7 @@ describe('inactive direct Meta transport', (): void => {
                 expect(transport.dispatches()).toBe(1)
                 expect(transport.bodies[0]).toMatchObject({
                     store: false,
-                    stream: false,
+                    stream: true,
                     text: {
                         format: {
                             type: 'json_schema',

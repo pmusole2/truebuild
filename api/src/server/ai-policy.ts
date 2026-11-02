@@ -1,4 +1,4 @@
-import { PARSE_DEFAULT_OVERALL_MS, PARSE_ROUTE_MARGIN_MS, describeParseBudget } from './parse-budget'
+import { PARSE_DEFAULT_OVERALL_MS, describeParseBudget } from './parse-budget'
 import {
     AI_EFFORTS,
     aiEffortSchema,
@@ -57,8 +57,8 @@ export interface AiPolicy {
 
 /** Longest deadline `createDeadline` accepts. */
 export const MAX_DEADLINE_MS = 105_000
-/** The parse route adds this margin to the overall parse budget, so the budget itself stops below the route ceiling. */
-const MAX_PARSE_BUDGET_MS = MAX_DEADLINE_MS - PARSE_ROUTE_MARGIN_MS
+/** Parse has its own 120 s ceiling; the route factory separately allows its return margin. */
+const MAX_PARSE_BUDGET_MS = PARSE_DEFAULT_OVERALL_MS
 const MIN_OUTPUT_TOKENS = 16
 /** Documented context window; an output cap above it is meaningless. Not a claim about the output maximum. */
 const MAX_OUTPUT_TOKEN_SETTING = 1_048_576
@@ -122,7 +122,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
     const wonder: StandardModel = 'muse-wonder-1.0'
     const base: Record<PolicyStage, Omit<StagePolicy, 'provisional' | 'measurementId'>> = {
         parse: {
-            effort: 'medium', // User-paid parse baseline: 31–35 s; selected for the 55 s first-attempt budget.
+            effort: 'medium', // User-paid parse baseline: 31–35 s; streaming uses first-event/idle guards and the 120 s overall ceiling.
             maxOutputTokens: 48_000,
             deadlineMs: PARSE_DEFAULT_OVERALL_MS,
             model: defaults.parseModel,

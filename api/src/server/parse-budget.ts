@@ -3,15 +3,15 @@
  * budgets, not measured provider bounds: the overall budget covers one first attempt plus at most one repair, and the
  * route allows a small margin on top of it before it answers.
  */
-export const PARSE_DEFAULT_OVERALL_MS = 80_000 // User-paid parse baseline 31–35 s; user-selected overall headroom.
-export const PARSE_FIRST_ATTEMPT_BASE_MS = 55_000 // Paid medium parse baseline 31–35 s; requested first-attempt headroom.
+export const PARSE_DEFAULT_OVERALL_MS = 120_000 // Streaming parse correctness ceiling, including the existing one-shot repair.
+export const PARSE_FIRST_ATTEMPT_BASE_MS = 120_000 // Stream events enforce 15 s first-event and 20 s idle limits instead of a 55 s total.
 export const PARSE_REPAIR_MS = 40_000
 export const PARSE_MIN_REPAIR_MS = 20_000 // User-selected repair floor after the user-paid 31–35 s parse baseline.
 export const PARSE_RETURN_MARGIN_MS = 1_000
 /** Route allowance beyond the overall budget (admission, multipart, media, response); also the client's minimum margin. */
 export const PARSE_ROUTE_MARGIN_MS = 5_000
 
-/** User-selected 55 s at every page count, bounded by the configured overall budget and return margin. */
+/** Active streamed output can continue to the overall ceiling, bounded by the return margin. */
 export function parseFirstAttemptTimeoutMs(_pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
     return Math.min(PARSE_FIRST_ATTEMPT_BASE_MS, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
 }

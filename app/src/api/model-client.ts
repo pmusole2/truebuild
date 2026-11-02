@@ -69,8 +69,8 @@ import {
 
 export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
-// Outlast the default 85s parse route and its supported 105s override ceiling; local page reads share this budget.
-export const MODEL_PARSE_TIMEOUT_MS = 110_000
+// Outlast the parse route: 120s stage deadline plus its 5s margin, so the server's own timeout answer arrives first.
+export const MODEL_PARSE_TIMEOUT_MS = 130_000
 // Live checks reached 11.6–11.75s; 15s lets the 12s server budget return honest result/timeout feedback.
 export const MODEL_CHECK_TIMEOUT_MS = 15_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
@@ -107,12 +107,17 @@ export interface ImageBytes {
     readonly height: number
 }
 
+/** Parse progress the server reports in order: `reading` when the provider call starts, `output` at its first delta. */
+export type ParseProgress = 'reading' | 'output'
+
 export interface ModelRequestContext {
     readonly requestId: string
     readonly signal?: AbortSignal
     readonly language?: string
     /** Trusted in-process outer action deadline; never serialized or supplied by the backend. */
     readonly checkpoint?: () => void
+    /** Present only when the caller wants progress: parse then opts into the SSE stream. Absent keeps the JSON envelope. */
+    readonly onProgress?: (phase: ParseProgress) => void
     /**
      * Identity of the VALIDATED generated guide page the person is looking at (its `screenId` and exact `contextKey`).
      * The server recomputes the key from the session and step; a request without one behaves as before.
@@ -228,6 +233,77 @@ function bytesFromDataUri(uri: string | undefined, mimeType: ManualPage['mimeTyp
     return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
+const PARSE_PHASE_ORDER: readonly ParseProgress[] = ['reading', 'output']
+
+/**
+ * Reads a progress stream: ordered progress phases, then one `result` whose ApiResult JSON goes to the shared
+ * interpreter. A failed result is returned with a non-2xx status so the interpreter classifies it the same way.
+ */
+async function readProgressStream(
+    response: Response,
+    signal: AbortSignal,
+    checkpoint: () => void,
+    onProgress: (phase: ParseProgress) => void,
+): Promise<{ status: number; text: string }> {
+    if (response.body === null) throw new InvalidResponseError('Progress stream has no body')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    const stop = (): void => {
+        void reader.cancel().catch((): undefined => undefined)
+    }
+    signal.addEventListener('abort', stop, { once: true })
+    let buffer = ''
+    let streamed = 0
+    let phase = -1
+    let result: unknown = undefined
+    try {
+        for (;;) {
+            checkpoint()
+            const next = await awaitStopped(reader.read(), signal)
+            checkpoint()
+            if (next.done) break
+            streamed += next.value.byteLength
+            if (streamed > MAX_STREAM_BYTES) throw new InvalidResponseError('Progress stream is too large')
+            buffer += decoder.decode(next.value, { stream: true })
+            buffer = buffer.replace(/\r\n/gu, '\n')
+            let boundary = buffer.indexOf('\n\n')
+            while (boundary !== -1) {
+                const block = buffer.slice(0, boundary)
+                buffer = buffer.slice(boundary + 2)
+                boundary = buffer.indexOf('\n\n')
+                const payload = ssePayload(block)
+                if (payload === undefined) throw new InvalidResponseError('Malformed progress event')
+                if (payload === null) continue
+                if (result !== undefined) throw new InvalidResponseError('Event after result')
+                const event: unknown = JSON.parse(payload)
+                const kind =
+                    typeof event === 'object' && event !== null ? (event as { type?: unknown }).type : undefined
+                if (kind === 'progress') {
+                    const next = PARSE_PHASE_ORDER.indexOf((event as { phase?: ParseProgress }).phase as ParseProgress)
+                    if (next <= phase) throw new InvalidResponseError('Progress phase out of order')
+                    phase = next
+                    onProgress(PARSE_PHASE_ORDER[next] as ParseProgress)
+                } else if (kind === 'result') {
+                    result = (event as { result?: unknown }).result
+                } else {
+                    throw new InvalidResponseError('Unknown progress event')
+                }
+            }
+        }
+        buffer += decoder.decode()
+    } catch (error: unknown) {
+        if (error instanceof InvalidResponseError) throw error
+        throw new InvalidResponseError('Progress stream is not valid', { cause: error })
+    } finally {
+        signal.removeEventListener('abort', stop)
+        void reader.cancel().catch((): undefined => undefined)
+        reader.releaseLock()
+    }
+    if (result === undefined || buffer.trim() !== '') throw new InvalidResponseError('Progress stream has no result')
+    const failed = (result as { status?: unknown } | null)?.status === 'unavailable'
+    return { status: failed ? 502 : 200, text: JSON.stringify(result) }
+}
+
 export class ModelApiClient {
     private readonly baseUrl: string
     private readonly secret: string
@@ -238,7 +314,7 @@ export class ModelApiClient {
         this.baseUrl = parseBaseUrl(options.baseUrl)
         this.secret = options.secret
         this.fetchImpl = options.fetch ?? requestFetch
-        this.streamImpl = options.streamFetch ?? defaultStreamFetch
+        this.streamImpl = options.streamFetch ?? options.fetch ?? defaultStreamFetch
     }
 
     async screensV2(metadata: ModelScreensV2Metadata, ctx: ModelRequestContext): Promise<ScreensV2Result> {
@@ -292,6 +368,7 @@ export class ModelApiClient {
             accepts: (value: ParsedManual): boolean => everyRefInside(value, pageIds),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
+            onProgress: ctx.onProgress,
         })
     }
 
@@ -785,6 +862,8 @@ export class ModelApiClient {
         pending?: (value: unknown) => P | null
         /** Overlay fixtures explicitly identify synthetic IO; other model APIs retain their original strict mode. */
         acceptSyntheticFixture?: (value: T) => boolean
+        /** Present only for a progress-reporting route: it opts into the SSE stream instead of the JSON envelope. */
+        onProgress?: (phase: ParseProgress) => void
     }): Promise<ApiResult<T> | P> {
         const { requestId, binding, signal } = spec
         const release = (): void => {
@@ -813,12 +892,27 @@ export class ModelApiClient {
         try {
             checkpoint()
             const url = new URL(spec.path, this.baseUrl).toString()
-            const init = this.init(spec.form, guard.signal)
+            const onProgress = spec.onProgress
+            const init = this.init(spec.form, guard.signal, onProgress !== undefined)
             checkpoint()
-            owned = await awaitStopped(this.fetchImpl(url, init), guard.signal, discardResponse)
+            owned = await awaitStopped(
+                onProgress !== undefined ? this.streamImpl(url, init) : this.fetchImpl(url, init),
+                guard.signal,
+                discardResponse,
+            )
             checkpoint()
-            const text = await readBoundedText(owned, guard.signal, checkpoint)
+            // Only a successful event stream is read as progress; any other answer keeps the legacy JSON envelope.
+            const streamed =
+                onProgress !== undefined &&
+                owned.status >= 200 &&
+                owned.status < 300 &&
+                owned.headers.get('content-type')?.startsWith('text/event-stream') === true
+            const body =
+                streamed && onProgress !== undefined
+                    ? await readProgressStream(owned, guard.signal, checkpoint, onProgress)
+                    : { status: owned.status, text: await readBoundedText(owned, guard.signal, checkpoint) }
             checkpoint()
+            const text = body.text
             if (spec.pending !== undefined && owned.status === 202) {
                 let json: unknown
                 try {
@@ -833,13 +927,13 @@ export class ModelApiClient {
                 checkpoint()
                 return pending
             }
-            const result = interpretEnvelope(call, owned.status, text, 'model', modelStatusResult)
+            const result = interpretEnvelope(call, body.status, text, 'model', modelStatusResult)
             if (
                 result.status === 'unavailable' &&
                 result.code === 'invalid_output' &&
                 spec.acceptSyntheticFixture !== undefined
             ) {
-                const fixture = interpretEnvelope(call, owned.status, text, 'fixture', modelStatusResult)
+                const fixture = interpretEnvelope(call, body.status, text, 'fixture', modelStatusResult)
                 if (fixture.status === 'ok' && spec.acceptSyntheticFixture(fixture.value)) {
                     checkpoint()
                     return fixture
@@ -876,12 +970,13 @@ export class ModelApiClient {
         }
     }
 
-    private init(form: FormData | string, signal: AbortSignal): RequestInit {
+    private init(form: FormData | string, signal: AbortSignal, progress = false): RequestInit {
         return {
             method: 'POST',
             headers: {
                 'x-truebuild-key': this.secret,
-                Accept: 'application/json, text/event-stream',
+                // A progress request names only the stream, so the server cannot answer with the JSON envelope.
+                Accept: progress ? 'text/event-stream' : 'application/json, text/event-stream',
                 ...(typeof form === 'string' ? { 'content-type': 'application/json' } : {}),
             },
             body: form,
@@ -962,7 +1057,8 @@ export class ModelApiClient {
                     return
                 }
 
-                buffer += decoder.decode(next.value, { stream: true }).replace(/\r\n?/gu, '\n')
+                buffer += decoder.decode(next.value, { stream: true })
+                buffer = buffer.replace(/\r\n/gu, '\n')
                 let boundary = buffer.indexOf('\n\n')
 
                 while (boundary !== -1) {

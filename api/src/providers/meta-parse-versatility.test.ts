@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, parseFirstAttemptTimeoutMs, stepRefs, type ParseManualInput } from './meta-provider'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
+import { asRequestedMetaResponse, timedMetaResponse } from '../test-support/meta-stream'
 
 // Everything here is synthetic and mocked: no recorded provider output, no live request.
 const CITED = [{ pageId: 'demo-page-1', region: null }]
@@ -70,7 +71,7 @@ function queued(
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
         if (bodies.length > values.length) throw new Error('Unexpected additional model request')
-        return Response.json(envelope(values[bodies.length - 1]))
+        return asRequestedMetaResponse(Response.json(envelope(values[bodies.length - 1])), init)
     })
     return { provider: createMetaProvider({ apiKey: '<synthetic>', ...options, fetchImpl }), fetchImpl, bodies }
 }
@@ -580,8 +581,13 @@ describe('fixed first parse attempt and page limit', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += fetchImpl.mock.calls.length === 1 ? firstMs : 19_999
-            return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? unresolved : clean))
+            return timedMetaResponse(
+                envelope(fetchImpl.mock.calls.length === 1 ? unresolved : clean),
+                fetchImpl.mock.calls.length === 1 ? firstMs : 19_999,
+                (ms): void => {
+                    monotonic += ms
+                },
+            )
         })
         try {
             const policy = aiPolicyFromEnvironment(
@@ -609,8 +615,9 @@ describe('fixed first parse attempt and page limit', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += elapsedMs
-            return Response.json(envelope(clean))
+            return timedMetaResponse(envelope(clean), elapsedMs, (ms): void => {
+                monotonic += ms
+            })
         })
         try {
             const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
@@ -624,31 +631,31 @@ describe('fixed first parse attempt and page limit', () => {
         }
     }
 
-    it('times out a first response beyond the selected fifty-five seconds even for seven pages', async () => {
-        expect(await timed(7, 80_000)).toEqual({ calls: 1, outcome: 'timeout' })
+    it('times out steady output beyond the overall ceiling even for seven pages', async () => {
+        expect(await timed(7, 120_001)).toEqual({ calls: 1, outcome: 'timeout' })
     })
 
     it.each([
-        [1, 55_000],
-        [4, 55_000],
-        [5, 55_000],
-        [7, 55_000],
-        [8, 55_000],
+        [1, 119_000],
+        [4, 119_000],
+        [5, 119_000],
+        [7, 119_000],
+        [8, 119_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
     })
 
     it.each([
-        [1, 55_000],
-        [4, 55_000],
-        [5, 55_000],
-        [6, 55_000],
-        [7, 55_000],
-        [8, 55_000],
-        [9, 55_000],
-        [20, 55_000],
-    ])('computes %i pages as a %i ms first attempt and never exceeds 55 seconds', (pages, expected) => {
+        [1, 119_000],
+        [4, 119_000],
+        [5, 119_000],
+        [6, 119_000],
+        [7, 119_000],
+        [8, 119_000],
+        [9, 119_000],
+        [20, 119_000],
+    ])('computes %i pages as a %i ms first attempt and never exceeds the overall return margin', (pages, expected) => {
         expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
     })
 

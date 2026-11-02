@@ -991,20 +991,24 @@ describe('the actual v2 catalog renderer', () => {
             stepId: null,
             uiState: { busy: { activity: 'reading' } },
         })
-        await render(
+        const reading = (pending: string): ReactElement =>
             wrap(
                 <DocumentRenderer
                     document={document}
-                    bindings={{
-                        ...bindings,
-                        live: { ...bindings.live!, state: { ...bindings.live!.state, pending: 'Reading your pages…' } },
-                    }}
+                    bindings={{ ...bindings, live: { ...bindings.live!, state: { ...bindings.live!.state, pending } } }}
                     variant="busy"
                 />,
-            ),
-        )
+            )
+        const view = await render(reading('Reading your pages…'))
         const progress = screen.getByRole('progressbar', { name: 'Reading your manual' })
-        expect(progress.props.accessibilityValue).toEqual({ text: 'In progress' })
+        expect(progress.props.accessibilityValue).toEqual({ text: 'Reading your manual. This can take a minute.' })
+        expect(screen.getByText('1 manual page')).toBeTruthy()
+        expect(screen.queryByText('Page 1 of 1')).toBeNull()
+        await view.rerender(reading('Reading manual pages: laying out steps…'))
+        expect(screen.getByRole('progressbar', { name: 'Reading your manual' }).props.accessibilityValue).toEqual({
+            text: 'Laying out steps…',
+        })
+        expect(within(screen.getByTestId('reading-stream-phase')).getByText('Laying out steps…')).toBeTruthy()
         expect(screen.getByText('1 manual page')).toBeTruthy()
         expect(screen.queryByText('Page 1 of 1')).toBeNull()
     })

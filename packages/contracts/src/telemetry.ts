@@ -58,6 +58,9 @@ export const callTelemetrySchema = z.strictObject({
         parseValidateMs: ms,
         totalMs: ms,
     }),
+    stream: z
+        .strictObject({ timeToCreatedMs: ms, timeToFirstOutputMs: ms, eventCount: z.number().int().min(0) })
+        .optional(),
     usage: z.strictObject({
         inputTokens: count,
         cachedTokens: count,

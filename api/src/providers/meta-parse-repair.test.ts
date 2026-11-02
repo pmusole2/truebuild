@@ -1,3 +1,4 @@
+import { asRequestedMetaResponse, timedMetaResponse } from '../test-support/meta-stream'
 import { createHash } from 'node:crypto'
 import { createDemoManual, parsedManualSchema, type ParsedManual } from '@truebuild/contracts'
 import sharp from 'sharp'
@@ -72,7 +73,10 @@ function queued(
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
         if (bodies.length > values.length) throw new Error('Unexpected additional model request')
         const value = values[bodies.length - 1]
-        return value instanceof Response ? value : Response.json(envelope(value, String(bodies.at(-1)?.model)))
+        return asRequestedMetaResponse(
+            value instanceof Response ? value : Response.json(envelope(value, String(bodies.at(-1)?.model))),
+            init,
+        )
     })
     return { provider: createMetaProvider({ apiKey: '<synthetic>', ...options, fetchImpl }), fetch: fetchImpl, bodies }
 }
@@ -407,7 +411,7 @@ describe('bounded parse repair', () => {
             let cancelled = false
             const fetchImpl = vi.fn<typeof fetch>(async (_url, init): Promise<Response> => {
                 if (scope === 'repair' && fetchImpl.mock.calls.length === 1) {
-                    return Response.json(envelope(missingConnection(clean)))
+                    return asRequestedMetaResponse(Response.json(envelope(missingConnection(clean))), init)
                 }
                 attemptSignal = init?.signal ?? undefined
                 return new Promise((resolve) => {
@@ -447,8 +451,9 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += 35_000
-            return Response.json(envelope(clean))
+            return timedMetaResponse(envelope(clean), 35_000, (ms): void => {
+                monotonic += ms
+            })
         })
         try {
             const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
@@ -464,13 +469,18 @@ describe('bounded parse repair', () => {
         }
     })
 
-    it('accepts a 40-second first attempt and one 35-second repair inside the 100-second overall deadline', async () => {
+    it('accepts a 40-second first attempt and one 35-second repair inside the 120-second overall deadline', async () => {
         const { input, clean } = await fixture()
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
-            return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean))
+            return timedMetaResponse(
+                envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean),
+                fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
+                (ms): void => {
+                    monotonic += ms
+                },
+            )
         })
         try {
             const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
@@ -494,8 +504,13 @@ describe('bounded parse repair', () => {
             let monotonic = 100
             const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
             const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-                monotonic += 25_000
-                return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? first : clean))
+                return timedMetaResponse(
+                    envelope(fetchImpl.mock.calls.length === 1 ? first : clean),
+                    25_000,
+                    (ms): void => {
+                        monotonic += ms
+                    },
+                )
             })
             try {
                 const policy = aiPolicyFromEnvironment(
@@ -528,8 +543,13 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += fetchImpl.mock.calls.length === 1 ? 5_000 : 40_000
-            return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? first : clean))
+            return timedMetaResponse(
+                envelope(fetchImpl.mock.calls.length === 1 ? first : clean),
+                fetchImpl.mock.calls.length === 1 ? 5_000 : 40_000,
+                (ms): void => {
+                    monotonic += ms
+                },
+            )
         })
         try {
             const provider = createMetaProvider({ apiKey: '<synthetic>', fetchImpl })
@@ -550,12 +570,17 @@ describe('bounded parse repair', () => {
         let monotonic = 100
         const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
-            monotonic += scope === 'first attempt' ? 55_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000
-            return Response.json(envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean))
+            return timedMetaResponse(
+                envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean),
+                scope === 'first attempt' ? 119_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
+                (ms): void => {
+                    monotonic += ms
+                },
+            )
         })
         const runParseRepair: NonNullable<MetaProviderOptions['runParseRepair']> = async (work) => {
             // Include admission/pacing time in the absolute overall budget, outside either attempt's budget.
-            monotonic += 25_000
+            monotonic += 55_000
             return work()
         }
         try {

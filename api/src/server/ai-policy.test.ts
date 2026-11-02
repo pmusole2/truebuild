@@ -83,24 +83,24 @@ describe('AI policy', (): void => {
     })
 
     it('honors the documented parse deadline and reports the budgets that are actually executed', (): void => {
-        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(80_000)
+        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(120_000)
         const { stages } = aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)
         expect(stages.parse.deadlineMs).toBe(60_000)
         const described = describeAiPolicy(aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)) as {
             stages: { parse: { budget: Record<string, number> } }
         }
-        // Every page count gets 55 s, capped by the overall budget; a repair needs at least 20 s plus return margin.
+        // Every page count shares the configured overall budget; a repair needs at least 20 s plus return margin.
         expect(described.stages.parse.budget).toEqual({
             overallMs: 60_000,
             routeMs: 65_000,
-            firstAttemptMinMs: 55_000,
-            firstAttemptMaxMs: 55_000,
+            firstAttemptMinMs: 59_000,
+            firstAttemptMaxMs: 59_000,
             repairMs: 40_000,
             minimumRepairMs: 20_000,
             clientMinimumMs: 65_000,
         })
-        // The route allowance has to fit the trusted ceiling, so the budget itself stops 5 s below it.
-        for (const value of ['100001', '999', '1e5', 'abc']) {
+        // Parse alone has a 120 s overall ceiling and a separate route return margin.
+        for (const value of ['120001', '999', '1e5', 'abc']) {
             expect(() => aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: value }, defaults)).toThrow(
                 'invalid_ai_deadline',
             )

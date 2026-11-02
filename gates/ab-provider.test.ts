@@ -1,3 +1,4 @@
+import { asRequestedMetaResponse, decodeMetaFixtureResponse } from '../api/src/test-support/meta-stream'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -75,12 +76,15 @@ function editBody(mock: MockHandle, model: string, edit: (body: { usage?: Record
     return async (url, init) => {
         const response = await mock.transport(url, init)
         if (requestModel(init) !== model) return response
-        const body = (await response.json()) as { usage?: Record<string, unknown> }
+        const body = (await decodeMetaFixtureResponse(response)) as { usage?: Record<string, unknown> }
         edit(body)
-        return new Response(JSON.stringify(body), {
-            status: response.status,
-            headers: { 'content-type': 'application/json' },
-        })
+        return asRequestedMetaResponse(
+            new Response(JSON.stringify(body), {
+                status: response.status,
+                headers: { 'content-type': 'application/json' },
+            }),
+            init,
+        )
     }
 }
 

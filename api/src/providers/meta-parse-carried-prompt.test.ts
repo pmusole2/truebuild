@@ -1,3 +1,4 @@
+import { asRequestedMetaResponse } from '../test-support/meta-stream'
 import type { ManualStep, ParsedManual } from '@truebuild/contracts'
 import { unresolvedCriticalFacts } from '@truebuild/contracts/model'
 import { describe, expect, it, vi } from 'vitest'
@@ -54,18 +55,21 @@ function queued(values: unknown[]): {
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
         if (bodies.length > values.length) throw new Error('Unexpected additional model request')
 
-        return Response.json({
-            status: 'completed',
-            model: 'muse-spark-1.3',
-            output: [
-                {
-                    type: 'message',
-                    role: 'assistant',
-                    status: 'completed',
-                    content: [{ type: 'output_text', text: JSON.stringify(values[bodies.length - 1]) }],
-                },
-            ],
-        })
+        return asRequestedMetaResponse(
+            Response.json({
+                status: 'completed',
+                model: 'muse-spark-1.3',
+                output: [
+                    {
+                        type: 'message',
+                        role: 'assistant',
+                        status: 'completed',
+                        content: [{ type: 'output_text', text: JSON.stringify(values[bodies.length - 1]) }],
+                    },
+                ],
+            }),
+            init,
+        )
     })
 
     return { provider: createMetaProvider({ apiKey: '<synthetic>', fetchImpl }), bodies, fetchImpl }

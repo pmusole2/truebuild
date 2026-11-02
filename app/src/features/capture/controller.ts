@@ -718,6 +718,13 @@ export class CaptureController {
                     signal: guard.signal,
                     checkpoint: guard.checkpoint,
                     language: parsedLanguage.data,
+                    // A late phase from an earlier or stopped operation must not rewrite the current pending text.
+                    onProgress: (phase): void => {
+                        if (phase !== 'output' || token !== this.epoch || this.operation !== operation) return
+                        if (guard.signal.aborted) return
+                        // Keeps the `Reading` prefix so the reading surface and Back/cancel predicates still match.
+                        this.publish({ pending: 'Reading manual pages: laying out steps…', notice: null })
+                    },
                 },
             )
             guard.checkpoint()
