@@ -1,6 +1,7 @@
 import {
     SCREEN_KINDS_V2,
     bodyTextRefSchema,
+    headerV2Schema,
     manualSessionSchema,
     screenUiStateV2Schema,
     type ScreenContextInputsV2,
@@ -733,6 +734,42 @@ describe('service: the page a check names', () => {
 })
 
 describe('Guide usability floor', () => {
+    it('supplies Guide header references instead of generic labels even when body instructions are valid', async () => {
+        const session = demoSession({ safety: false })
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        const complete = goodWire('guide', session)
+        // Both live install-guide rejections had reachable instructions but these literal header pairs.
+        for (const title of ['This step', 'Directions']) {
+            const generic: WireProposal = {
+                ...complete,
+                header: {
+                    ...complete.header,
+                    title: { kind: 'literal', text: title },
+                    subtitle: { kind: 'literal', text: 'This step' },
+                },
+            }
+            const evaluated = evaluateWire(normalizeDocumentWire(generic, context).value, context)
+            expect(evaluated.ok).toBe(true)
+            if (!evaluated.ok) throw new Error('Generic labels must reach the unchanged quality floor')
+            expect(guideQualityIssues(evaluated.proposal, context)).toEqual(['guide_quality:title_not_bound'])
+            expect((await liveService([generic]).service.generate(inputs)).metadata.source).toBe('fallback')
+        }
+
+        const view = context.view.dynamic.document as Record<string, unknown>
+        const headerText = headerV2Schema.pick({ title: true, subtitle: true }).parse(view.headerText)
+        expect(headerText).toEqual({
+            title: { kind: 'bound', key: 'step-title' },
+            subtitle: { kind: 'bound', key: 'step-position' },
+        })
+        expect(DOCUMENT_INSTRUCTIONS).toContain('document.headerText')
+        const corrected: WireProposal = { ...complete, header: { ...complete.header, ...headerText } }
+        const live = liveService([corrected])
+        expect((await live.service.generate(inputs)).metadata.source).toBe('generated')
+        expect(live.inputs[0]!.dynamic.document).toMatchObject({ headerText })
+    })
+
     it('supplies the visible instruction even when classified directions leave the required fact list empty', async () => {
         const session = demoSession({ safety: false })
         session.reviewedSteps[0]!.safetyNotes = []

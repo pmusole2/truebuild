@@ -129,9 +129,15 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 readyFacts: ready.facts,
                 /** Every source index the ready screen must cite visibly: the requirements plus the overview steps' pages. */
                 readySources: ready.sources,
-                // Guide usability is independent of mandatory safety facts: even an empty list needs body instructions.
+                // Guide usability is independent of mandatory facts: copy these refs rather than generic UI labels.
                 ...(used.kind === 'guide' && step !== null
-                    ? { instructionText: { kind: 'bound', key: 'step-title' } }
+                    ? {
+                          headerText: {
+                              title: { kind: 'bound', key: 'step-title' },
+                              subtitle: { kind: 'bound', key: 'step-position' },
+                          },
+                          instructionText: { kind: 'bound', key: 'step-title' },
+                      }
                     : {}),
                 overview: material.overview,
                 failure: inputs.failure,
