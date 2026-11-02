@@ -16,6 +16,7 @@ export const PRIVACY_PAGE_HTML = `<!doctype html>
 <ul>
 <li>Manual pages and photos from the app are sent to our server.</li>
 <li>Meta's AI models process them to create guides and checks.</li>
+<li>Meta's own terms govern how Meta processes and retains them. TrueBuild cannot control how long Meta keeps them.</li>
 <li>TrueBuild holds manual pages and photos in server memory only for session processing. Uploads are not saved to server disk.</li>
 <li>Temporary session data can remain in server memory after requests finish and is removed as caches are cleared or replaced, or when the server restarts. Closing the app does not immediately clear server caches.</li>
 <li>TrueBuild does not sell this data or use it for ads.</li>

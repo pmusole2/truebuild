@@ -26,8 +26,35 @@ test.beforeEach(async ({ context }) => {
     await context.grantPermissions(['camera'], { origin: WEB })
 })
 
+// Fresh startup only: accepts the visible AI consent once, through its own control. Nothing is pre-accepted or skipped.
+async function acceptAiConsentOnce(page: Page): Promise<void> {
+    const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
+    await agree
+        .or(page.getByTestId('home-add'))
+        .or(page.getByRole('button', { name: 'Try again', exact: true }))
+        .first()
+        .waitFor({ state: 'visible', timeout: 60_000 })
+    if (await agree.isVisible()) await agree.click()
+}
+
+/** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
+async function readManualWithConsent(page: Page): Promise<void> {
+    const sent = page.waitForRequest(
+        (request) => request.url() === `${API}/api/manuals/parse` && request.method() === 'POST',
+        { timeout: 60_000 },
+    )
+    const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
+    const prompted = agree.waitFor({ state: 'visible', timeout: 60_000 }).then(() => true)
+    const outcome = Promise.race([sent.then(() => false), prompted])
+    void outcome.catch(() => undefined)
+    await page.getByTestId('read-manual').click()
+    if (await outcome) await agree.click()
+    await sent
+}
+
 async function openFreshLibrary(page: Page): Promise<void> {
     await page.goto('/')
+    await acceptAiConsentOnce(page)
     await expect(page.getByRole('heading', { name: 'Your manuals', exact: true })).toBeVisible({
         timeout: 60_000,
     })
@@ -51,7 +78,7 @@ async function addTwoPagesAndRead(page: Page): Promise<Response> {
     const parse = page.waitForResponse(
         (response) => response.url() === `${API}/api/manuals/parse` && response.request().method() === 'POST',
     )
-    await page.getByTestId('read-manual').click()
+    await readManualWithConsent(page)
     return parse
 }
 
@@ -177,6 +204,7 @@ test('refusal shows the expected diagram and your photo side by side in More, an
 test('the library shows its restoring state while it loads, before any manual is listed', async ({ page }) => {
     // Development-build query parameter: delays only the first restore, so the loading state is observable.
     await page.goto('/?truebuildTestRestoreDelayMs=3000')
+    await acceptAiConsentOnce(page)
     await expect(page.getByRole('heading', { name: 'Working on it', exact: true }).first()).toBeVisible({
         timeout: 60_000,
     })
@@ -239,7 +267,7 @@ test('a cancelled reading says that nothing more is shown, and the reading is no
         downloadThroughput: -1,
         uploadThroughput: -1,
     })
-    await page.getByTestId('read-manual').click()
+    await readManualWithConsent(page)
     await expect(page.getByRole('heading', { name: 'Reading your manual', exact: true }).first()).toBeVisible({
         timeout: 15000,
     })
@@ -294,6 +322,7 @@ test('a local library that cannot be read keeps its data, says so, and offers an
         }
     })
     await page.goto('/')
+    await acceptAiConsentOnce(page)
     await expect(page.getByText('Saving is paused until your saved builds open again.', { exact: true })).toBeVisible({
         timeout: 60_000,
     })
