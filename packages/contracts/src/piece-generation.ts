@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { pieceIdSchema, pieceSpecSchema } from './piece-spec'
+import { pieceIdSchema, PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 
-export const PIECE_GEOMETRY_PROMPT_VERSION = 6
+export const PIECE_GEOMETRY_PROMPT_VERSION = 7
 /** Invalidates cached crops/geometry when deterministic crop selection changes, without changing the model prompt. */
 export const PIECE_CROP_VERSION = 1
 /** Top-left normalized drawing rectangle on the cited source page. Malformed optional hints are omitted. */
@@ -32,6 +32,8 @@ export const manualPieceInputSchema = z.strictObject({
     quantity: z.number().int().positive().max(100_000).nullable(),
     label: z.string().trim().min(1).max(80).nullable(),
     dimensions: z.string().trim().min(1).max(300).nullable(),
+    /** Other inventory names are exclusion hints, never instructions or additional geometry requests. */
+    notPartOfThisPiece: z.array(z.string().trim().min(1).max(80)).max(PIECE_SPEC_LIMITS.pieces).optional(),
     pageId: z.string().min(1).max(128).nullable(),
     drawingBox: optionalPieceDrawingBoxSchema,
     cutoutUri: pieceCutoutSchema.nullable().optional(),

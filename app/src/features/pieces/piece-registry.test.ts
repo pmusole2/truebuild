@@ -69,6 +69,7 @@ function piece(id: string, name: string): PieceSpec {
 
 type Call = {
     readonly ids: string[]
+    readonly exclusions: (readonly string[] | undefined)[]
     readonly repairIds: string[]
     readonly cutouts: (string | null)[]
     readonly marked: boolean
@@ -91,6 +92,7 @@ function scriptedGenerate(
             stored?.batches.some((batch) => batch.state === 'dispatching' && batch.ids.join() === ids.join()) === true
         calls.push({
             ids,
+            exclusions: request.parts.map((part) => part.notPartOfThisPiece),
             repairIds: request.parts.filter((part) => part.repair !== undefined).map((part) => part.id),
             cutouts: request.parts.map((part) => part.cutoutUri ?? null),
             marked,
@@ -136,6 +138,11 @@ describe('piece registry', () => {
         expect(first.maxInFlight()).toBe(2)
         expect(first.calls[2]?.repairIds).toEqual(['part-3', 'part-5'])
         expect(first.calls[2]?.cutouts).toEqual([CUTOUT, CUTOUT])
+        for (const call of first.calls)
+            for (const [index, id] of call.ids.entries())
+                expect(call.exclusions[index]).toEqual(
+                    manual.parts.filter((part) => part.id !== id).map((part) => part.name),
+                )
         expect(first.calls.every((call) => call.marked)).toBe(true)
         expect(ready.pieces.map((item) => item.id)).toHaveLength(9)
         expect(ready.pieces.some((item) => item.id === 'part-5')).toBe(false)

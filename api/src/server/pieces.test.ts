@@ -204,6 +204,15 @@ it('keeps valid piece parts only when the count or every largest-part check pres
     }
 })
 
+it('preserves a valid detached thin structural member without guessing whether it belongs to the piece', async () => {
+    const parts = [
+        boxPart(8),
+        { type: 'cylinder', dimensions: { radius: 0.025, height: 2 }, position: [0, 3, 0], rotation: [0, 0, 0] },
+    ]
+    const result = await composePiece('frame', rawPiece('frame', parts))
+    expect(result.results[0]).toMatchObject({ status: 'passed', piece: { parts }, issueCodes: [] })
+})
+
 it('removes consecutive outline and profile duplicates before strict validation without closing or repairing invalid paths', async () => {
     const lathe = {
         type: 'lathe',
@@ -319,7 +328,11 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     const metadata: PieceBatchRequest = {
         requestId: 'pieces-test',
         contentHash: 'a'.repeat(64),
-        parts: [part('bracket'), { ...part('pin'), drawingBox: [-0.1, 0, 0.5, 0.5] }, part('washer')],
+        parts: [
+            { ...part('bracket'), notPartOfThisPiece: ['pin', 'washer'] },
+            { ...part('pin'), drawingBox: [-0.1, 0, 0.5, 0.5] },
+            part('washer'),
+        ],
         pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
     }
     const unauthorized = await handler(pieceRequest(metadata, png, false))
@@ -339,6 +352,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     const cutoutBytes = Buffer.from(plain.split(',')[1]!, 'base64')
     expect((await sharp(cutoutBytes).stats()).isOpaque).toBe(true)
     const firstInput = generatePieces.mock.calls[0]![0]
+    expect(firstInput.parts[0]).toMatchObject({ notPartOfThisPiece: ['pin', 'washer'] })
     expect(firstInput.imagePieceIds).toEqual(['bracket', 'washer'])
     const cutoutInfo = await sharp(cutoutBytes).metadata()
     expect(Buffer.from(firstInput.images[0]!.bytes)).toEqual(cutoutBytes)
@@ -354,6 +368,10 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
         max_output_tokens: 48_000,
         text: { format: { name: 'truebuild_pieces' } },
     })
+    expect(bodies[0]).toHaveProperty(
+        'input.0.content.0.text',
+        expect.stringContaining('"notPartOfThisPiece":["pin","washer"]'),
+    )
     const failed = first.results[1]!
     const repaired = await handler(
         pieceRequest(
