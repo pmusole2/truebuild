@@ -636,25 +636,25 @@ describe('fixed first parse attempt and page limit', () => {
     })
 
     it.each([
-        [1, 119_000],
-        [4, 119_000],
-        [5, 119_000],
-        [7, 119_000],
-        [8, 119_000],
+        [1, 120_000],
+        [4, 120_000],
+        [5, 120_000],
+        [7, 120_000],
+        [8, 120_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
     })
 
     it.each([
-        [1, 119_000],
-        [4, 119_000],
-        [5, 119_000],
-        [6, 119_000],
-        [7, 119_000],
-        [8, 119_000],
-        [9, 119_000],
-        [20, 119_000],
+        [1, 120_000],
+        [4, 120_000],
+        [5, 120_000],
+        [6, 120_000],
+        [7, 120_000],
+        [8, 120_000],
+        [9, 120_000],
+        [20, 120_000],
     ])('computes %i pages as a %i ms first attempt and never exceeds the overall return margin', (pages, expected) => {
         expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
     })

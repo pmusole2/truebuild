@@ -572,7 +572,7 @@ describe('bounded parse repair', () => {
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
             return timedMetaResponse(
                 envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean),
-                scope === 'first attempt' ? 119_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
+                scope === 'first attempt' ? 120_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
                 (ms): void => {
                     monotonic += ms
                 },
@@ -580,7 +580,7 @@ describe('bounded parse repair', () => {
         })
         const runParseRepair: NonNullable<MetaProviderOptions['runParseRepair']> = async (work) => {
             // Include admission/pacing time in the absolute overall budget, outside either attempt's budget.
-            monotonic += 55_000
+            monotonic += 90_000
             return work()
         }
         try {

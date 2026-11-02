@@ -1525,7 +1525,13 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         // Same persistent adapter, new controller: a stored photo is view-only.
         const next = new CaptureController({
             storage: store,
-            client: new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: '' }),
+            client: new ModelApiClient({
+                baseUrl: 'https://restore.invalid',
+                secret: '',
+                fetch: async (): Promise<never> => {
+                    throw new Error('No model requests belong to restore.')
+                },
+            }),
             digest,
             normalize: async (): Promise<typeof image> => image,
             id: (): string => 'restore',

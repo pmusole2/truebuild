@@ -287,15 +287,19 @@ const segmentMetadata = {
 }
 
 describe('ModelApiClient construction', () => {
+    const noRequest: ModelFetch = (): Promise<Response> => Promise.reject(new Error('Construction sends no request.'))
+    const construct = (baseUrl: string): ModelApiClient =>
+        new ModelApiClient({ baseUrl, secret: SECRET, fetch: noRequest })
+
     it('refuses a non-loopback http origin, a path, or a credentialed origin before any I/O', () => {
-        expect(() => new ModelApiClient({ baseUrl: 'http://example.com', secret: SECRET })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001/api', secret: SECRET })).toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'https://user:pass@example.com', secret: SECRET })).toThrow()
+        expect(() => construct('http://example.com')).toThrow()
+        expect(() => construct('http://127.0.0.1:3001/api')).toThrow()
+        expect(() => construct('https://user:pass@example.com')).toThrow()
     })
 
     it('accepts https and LAN http origins for development', () => {
-        expect(() => new ModelApiClient({ baseUrl: 'https://api.example.com', secret: SECRET })).not.toThrow()
-        expect(() => new ModelApiClient({ baseUrl: 'http://192.168.1.20:3001', secret: SECRET })).not.toThrow()
+        expect(() => construct('https://api.example.com')).not.toThrow()
+        expect(() => construct('http://192.168.1.20:3001')).not.toThrow()
     })
 })
 
@@ -421,16 +425,16 @@ describe('ModelApiClient multipart dispatch', () => {
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
             expect(MODEL_CHECK_TIMEOUT_MS).toBe(15_000)
-            expect(MODEL_PARSE_TIMEOUT_MS).toBe(130_000)
+            expect(MODEL_PARSE_TIMEOUT_MS).toBe(175_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
-            // The streamed parse route allows 125s; the client outlasts it so the server reports its timeout.
-            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(125_000)
+            // The streamed parse route allows 170s; the client outlasts it so the server reports its timeout.
+            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(170_000)
         } finally {
             vi.useRealTimers()
         }
     })
 
-    it('accepts a parse reply delivered at 125 seconds', async () => {
+    it('accepts a parse reply delivered at 170 seconds', async () => {
         vi.useFakeTimers()
         let deliver: ((response: Response) => void) | undefined
         const fetch = vi.fn(
@@ -441,7 +445,7 @@ describe('ModelApiClient multipart dispatch', () => {
         )
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(125_000)
+            await vi.advanceTimersByTimeAsync(170_000)
             expect(fetch).toHaveBeenCalledTimes(1)
             deliver?.(jsonResponse(200, okParse()))
             expect(await pending).toMatchObject({ status: 'ok', mode: 'model', requestId: REQUEST_ID })
@@ -450,12 +454,12 @@ describe('ModelApiClient multipart dispatch', () => {
         }
     })
 
-    it('times out a hung parse at 130 seconds once without retry', async () => {
+    it('times out a hung parse at 175 seconds once without retry', async () => {
         vi.useFakeTimers()
         const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(129_999)
+            await vi.advanceTimersByTimeAsync(174_999)
             let settled = false
             void pending.then(() => (settled = true))
             await Promise.resolve()

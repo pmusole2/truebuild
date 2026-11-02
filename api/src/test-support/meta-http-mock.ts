@@ -70,7 +70,7 @@ const requestSchema = z.strictObject({
         .optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     instructions: z.string().optional(),
-    reasoning: z.strictObject({ effort: z.enum(AI_EFFORTS) }).optional(),
+    reasoning: z.strictObject({ effort: z.enum(AI_EFFORTS), summary: z.literal('auto').optional() }).optional(),
     input: z.tuple([
         z.strictObject({ type: z.literal('message'), role: z.literal('user'), content: z.array(content).min(2) }),
     ]),
@@ -301,6 +301,10 @@ export async function startMetaMock(
             inspectSchema(request.text.format.schema)
             const operation = request.text.format.name.replace('truebuild_', '')
             assert.equal(request.stream, operation === 'parse' && request.model === 'muse-spark-1.3')
+            assert.equal(
+                request.reasoning?.summary,
+                operation === 'parse' && request.model === 'muse-spark-1.3' ? 'auto' : undefined,
+            )
             assert(['parse', 'check', 'question', 'overlay', 'screen'].includes(operation))
             assert.equal(parts[0]?.type, 'input_text')
             if (operation === 'screen' || operation === 'overlay') {

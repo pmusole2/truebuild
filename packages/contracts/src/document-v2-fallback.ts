@@ -938,6 +938,7 @@ function stateVariant(
         (state === 'empty' ? EMPTY_COPY_V2[inputs.kind] : undefined) ??
         STATE_COPY_V2[state]
     const waiting = state === 'busy' || state === 'pending'
+    const readingFailure = inputs.kind === 'reading' && (state === 'error' || state === 'recovery')
     const retryAllowed = ['reading', 'quick-check', 'result', 'error', 'recovery'].includes(inputs.kind)
     const home = secondary('Home', intent('navigate', 'home'), 'chevronLeft')
     // A camera that failed leads its error and recovery screens with the way to try it again.
@@ -997,7 +998,9 @@ function stateVariant(
             : []),
     ]
     return {
-        header: stateHeader(state, material, ready),
+        header: readingFailure
+            ? { ...stateHeader(state, material, ready), title: lit(copy.heading), subtitle: null }
+            : stateHeader(state, material, ready),
         body: scroll([
             stack([
                 ...(holdCamera ? [cameraView(material), cameraTips(material)] : []),
@@ -1012,8 +1015,8 @@ function stateVariant(
                 ...(waiting
                     ? [{ type: 'Progress', binding: activity === 'reading' ? 'reading' : 'build', label: null } as Node]
                     : []),
-                text(lit(copy.heading), { role: 'heading' }),
-                text(lit(copy.detail), { tone: 'info' }),
+                ...(readingFailure ? [] : [text(lit(copy.heading), { role: 'heading' })]),
+                ...(readingFailure && material.requirements.notice ? [] : [text(lit(copy.detail), { tone: 'info' })]),
                 ...noticeNodes(material, state),
                 ...stated,
             ]),

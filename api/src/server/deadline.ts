@@ -18,9 +18,9 @@ export function createDeadline(timeoutMs: number, parentSignal?: AbortSignal): D
     return deadlineWithin(timeoutMs, parentSignal, 105_000)
 }
 
-/** Parse alone may outlive 105 s: the stream is capped at 120 s plus the route return margin. */
+/** Parse alone may outlive 105 s: its 165 s budget includes one 120 s attempt and one 40 s repair. */
 export function createParseDeadline(timeoutMs: number, parentSignal?: AbortSignal): Deadline {
-    return deadlineWithin(timeoutMs, parentSignal, 125_000)
+    return deadlineWithin(timeoutMs, parentSignal, 170_000)
 }
 
 function deadlineWithin(timeoutMs: number, parentSignal: AbortSignal | undefined, maximumMs: number): Deadline {

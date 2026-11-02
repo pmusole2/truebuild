@@ -57,7 +57,7 @@ export interface AiPolicy {
 
 /** Longest deadline `createDeadline` accepts. */
 export const MAX_DEADLINE_MS = 105_000
-/** Parse has its own 120 s ceiling; the route factory separately allows its return margin. */
+/** Parse has its own 165 s ceiling; the route factory separately allows its return margin. */
 const MAX_PARSE_BUDGET_MS = PARSE_DEFAULT_OVERALL_MS
 const MIN_OUTPUT_TOKENS = 16
 /** Documented context window; an output cap above it is meaningless. Not a claim about the output maximum. */
@@ -122,7 +122,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
     const wonder: StandardModel = 'muse-wonder-1.0'
     const base: Record<PolicyStage, Omit<StagePolicy, 'provisional' | 'measurementId'>> = {
         parse: {
-            effort: 'medium', // User-paid parse baseline: 31–35 s; streaming uses first-event/idle guards and the 120 s overall ceiling.
+            effort: 'medium', // User-paid parse baseline: 31–35 s; a 120 s first attempt plus one repair fits the 165 s overall ceiling.
             maxOutputTokens: 48_000,
             deadlineMs: PARSE_DEFAULT_OVERALL_MS,
             model: defaults.parseModel,

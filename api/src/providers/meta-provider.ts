@@ -186,6 +186,7 @@ export function observedTelemetry(call: VerifiedCallTelemetry): ObservedCallTele
             : {
                   stream: {
                       timeToCreatedMs: known(call.stream.timeToCreatedMs),
+                      timeToFirstSummaryMs: known(call.stream.timeToFirstSummaryMs),
                       timeToFirstOutputMs: known(call.stream.timeToFirstOutputMs),
                       eventCount: call.stream.eventCount,
                   },
@@ -945,7 +946,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
             max_output_tokens: stagePolicy.maxOutputTokens,
-            reasoning: { effort },
+            reasoning: { effort, ...(streamingParse ? { summary: 'auto' } : {}) },
             prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
             instructions:
                 repair === undefined
@@ -1060,6 +1061,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                             ? {}
                             : {
                                   timeToCreatedMs: streamGuard.timing.timeToCreatedMs,
+                                  timeToFirstSummaryMs: streamGuard.timing.timeToFirstSummaryMs,
                                   timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
                                   streamEventCount: streamGuard.timing.eventCount,
                                   attempt: repair === undefined ? 1 : 2,
@@ -1163,6 +1165,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     effort,
                     attempt: repair === undefined ? 1 : 2,
                     timeToCreatedMs: streamGuard.timing.timeToCreatedMs,
+                    timeToFirstSummaryMs: streamGuard.timing.timeToFirstSummaryMs,
                     timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
                     streamEventCount: streamGuard.timing.eventCount,
                     outputTokens: streamOutputTokens,
@@ -1340,7 +1343,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     return {
         async parseManual(input, signal, onProgress): Promise<ParsedManual> {
             const startedAt = performance.now()
-            // The overall budget is the configured parse deadline (default 80 s); the route adds its own margin.
+            // The overall budget is the configured parse deadline (default 165 s); the route adds its own margin.
             const overallMs = policy.stages.parse.deadlineMs
             return execute(
                 overallMs,

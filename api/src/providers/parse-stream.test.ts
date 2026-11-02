@@ -81,7 +81,30 @@ describe('streamed parse deadlines', () => {
         }
     })
 
-    it('fails a silent stream with the timeout category used by the existing reading error and Try again flow', async () => {
+    it('accepts 60 seconds of reasoning silence after created before visible output', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        const parent = createParseDeadline(120_000)
+        const guard = parseStreamGuard(parent)
+        const stream = source()
+        const result = readParseStream(stream.response, guard)
+        void result.catch(() => {})
+        try {
+            stream.send('response.created')
+            await vi.advanceTimersByTimeAsync(0)
+            await vi.advanceTimersByTimeAsync(60_000)
+            stream.send('response.output_text.delta', { delta: '{' })
+            stream.send('response.completed', { response: { status: 'completed' } })
+            expect(await result).toEqual({ status: 'completed' })
+            expect(guard.timing.timeToFirstOutputMs).toBe(60_000)
+            expect(stream.cancelled()).toBe(true)
+        } finally {
+            guard.dispose()
+            parent.dispose()
+            vi.useRealTimers()
+        }
+    })
+
+    it('fails a stream silent after its first visible delta with the timeout category used by the existing reading error and Try again flow', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
         const parent = createParseDeadline(120_000)
         const guard = parseStreamGuard(parent)
@@ -91,7 +114,10 @@ describe('streamed parse deadlines', () => {
         try {
             stream.send('response.created')
             await vi.advanceTimersByTimeAsync(0)
-            await vi.advanceTimersByTimeAsync(20_001)
+            stream.send('response.reasoning_summary_text.delta', { delta: 'Reviewing the pages.' })
+            await vi.advanceTimersByTimeAsync(0)
+            expect(guard.timing.timeToFirstSummaryMs).toBe(0)
+            await vi.advanceTimersByTimeAsync(30_001)
             await rejection
             expect(guard.deadline.signal.reason).toBeInstanceOf(RequestStoppedError)
             expect(stream.cancelled()).toBe(true)

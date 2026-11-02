@@ -52,12 +52,18 @@ function selectProof(): void {
     process.env.EXPO_PUBLIC_AI_EFFORT_PROOF = '1'
     process.env.EXPO_PUBLIC_PROVIDER_MODE = 'fixture'
 }
+const realFetch = globalThis.fetch
 beforeEach(() => {
     for (const name of env) delete process.env[name]
     mockApi.url = 'http://127.0.0.1:3101'
     globals.__DEV__ = true
+    // Production factories build the real client on the global fetch; this file sends nothing, so any request fails.
+    globalThis.fetch = async (): Promise<never> => {
+        throw new Error('No model requests belong to proof wiring.')
+    }
 })
 afterAll(() => {
+    globalThis.fetch = realFetch
     env.forEach((name, index) => {
         const value = saved[index]
         if (value === undefined) delete process.env[name]

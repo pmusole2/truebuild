@@ -71,6 +71,7 @@ export interface ProviderMetrics {
     networkMs?: number
     bodyMs?: number
     timeToCreatedMs?: number
+    timeToFirstSummaryMs?: number
     timeToFirstOutputMs?: number
     streamEventCount?: number
     attempt?: number

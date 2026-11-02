@@ -39,7 +39,13 @@ function setup(entry?: LibraryEntry): { controller: CaptureController; storage: 
     const storage = new LibraryStorage(kv, async (): Promise<string> => '0'.repeat(64))
     const controller = new CaptureController({
         storage,
-        client: new ModelApiClient({ baseUrl: 'http://127.0.0.1:3001', secret: '' }),
+        client: new ModelApiClient({
+            baseUrl: 'https://screens.invalid',
+            secret: '',
+            fetch: async (): Promise<never> => {
+                throw new Error('No model requests belong to screen tests.')
+            },
+        }),
         normalize: async (): Promise<never> => {
             throw new Error('No camera in this screen test')
         },

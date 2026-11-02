@@ -3,12 +3,13 @@ import { RequestStoppedError, type Deadline } from '../server/deadline'
 export type ParseProgress = 'reading' | 'output'
 export interface ParseStreamTiming {
     timeToCreatedMs?: number
+    timeToFirstSummaryMs?: number
     timeToFirstOutputMs?: number
     eventCount: number
 }
 
 const FIRST_EVENT_MS = 15_000
-const IDLE_MS = 20_000
+const IDLE_MS = 30_000
 const MAX_STREAM_BYTES = 4_194_304
 const MAX_EVENT_BYTES = 1_048_576
 const MAX_EVENTS = 65_536
@@ -39,6 +40,7 @@ export function parseStreamGuard(
     const parentAbort = (): void => controller.abort(parent.signal.reason)
     const arm = (): void => {
         if (timer !== undefined) clearTimeout(timer)
+        if (!Number.isFinite(due)) return
         timer = setTimeout(stop, Math.max(0, due - performance.now()))
         timer.unref?.()
     }
@@ -67,13 +69,27 @@ export function parseStreamGuard(
             const now = performance.now()
             if (type === 'response.created' && timing.timeToCreatedMs === undefined) {
                 timing.timeToCreatedMs = Math.max(0, now - started)
+                // Raw reasoning may be silent for most of the attempt. Only the parent ceiling applies until
+                // the first visible summary/output delta; lifecycle events are not a reasoning heartbeat.
+                due = Number.POSITIVE_INFINITY
+                arm()
                 progress('reading')
+            }
+            if (
+                type === 'response.reasoning_summary_text.delta' &&
+                hasOutput &&
+                timing.timeToFirstSummaryMs === undefined
+            ) {
+                timing.timeToFirstSummaryMs = Math.max(0, now - started)
             }
             if (type === 'response.output_text.delta' && hasOutput && timing.timeToFirstOutputMs === undefined) {
                 timing.timeToFirstOutputMs = Math.max(0, now - started)
                 progress('output')
             }
-            if (timing.timeToCreatedMs !== undefined) {
+            if (
+                timing.timeToCreatedMs !== undefined &&
+                (timing.timeToFirstOutputMs !== undefined || timing.timeToFirstSummaryMs !== undefined)
+            ) {
                 due = now + IDLE_MS
                 arm()
             }

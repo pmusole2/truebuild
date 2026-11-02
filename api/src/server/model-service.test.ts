@@ -1285,7 +1285,7 @@ describe('one-use parse repair grant', (): void => {
     })
 })
 
-describe('parse route timing with the default one-hundred-and-twenty-five second budget', (): void => {
+describe('parse route timing with the default one-hundred-and-seventy second budget', (): void => {
     it('accepts a one-hundred-and-twenty-second parse inside the route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
@@ -1306,7 +1306,7 @@ describe('parse route timing with the default one-hundred-and-twenty-five second
         }
     })
 
-    it('times out a hung parse at exactly the one-hundred-and-twenty-five second route budget', async (): Promise<void> => {
+    it('times out a hung parse at exactly the one-hundred-and-seventy second route budget', async (): Promise<void> => {
         const state = await setup()
         const gate = gatedParse()
         const handlers = createModelHandlers({
@@ -1318,7 +1318,7 @@ describe('parse route timing with the default one-hundred-and-twenty-five second
         try {
             const pending = handlers.parse(parseRequest(state))
             await gate.entered
-            await vi.advanceTimersByTimeAsync(124_999)
+            await vi.advanceTimersByTimeAsync(169_999)
             let settled = false
             void pending.then((): void => {
                 settled = true

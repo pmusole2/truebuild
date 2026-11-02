@@ -101,6 +101,24 @@ describe('the direct v2 fallback builder', () => {
         for (const state of requiredStatesV2(kind, material.requirements)) {
             expect(proposal.states[state], `${kind} ${state}`).not.toBeNull()
         }
+        if (kind === 'reading') {
+            const withNotice = inputsFor(kind)
+            withNotice.uiState = { ...withNotice.uiState, failure: { notice: true } }
+            const failure = buildFallbackProposalV2(documentMaterialV2(withNotice)).states.error!
+            let bodyHeadings = 0
+            let bodyLines = 0
+            visitVariantNodesV2(failure, '', ({ node }) => {
+                if (node.type === 'Text') {
+                    if (node.role === 'heading') bodyHeadings++
+                    else bodyLines++
+                }
+            })
+            expect(failure.header.title).toEqual({ kind: 'literal', text: 'Something went wrong' })
+            expect(bodyHeadings).toBe(0)
+            expect(bodyLines).toBe(1)
+            expect(JSON.stringify(failure.body)).toContain('operation-notice')
+            expect(failure.bar.primary.label).toBe('Try again')
+        }
     })
 
     it.each(SCREEN_KINDS_V2)(
@@ -296,9 +314,11 @@ describe('state wording is stable', () => {
                 const variant = proposal.states[state]
                 if (variant === null) continue
                 const copy = state === 'empty' ? emptyCopy : STATE_COPY_V2[state]
-                expect(literals(variant), `${kind}/${state}`).toEqual(
-                    expect.arrayContaining([copy.heading, copy.detail]),
-                )
+                const readingFailure = kind === 'reading' && (state === 'error' || state === 'recovery')
+                const stated = readingFailure
+                    ? [variant.header.title.kind === 'literal' ? variant.header.title.text : '', ...literals(variant)]
+                    : literals(variant)
+                expect(stated, `${kind}/${state}`).toEqual(expect.arrayContaining([copy.heading, copy.detail]))
             }
         },
     )
