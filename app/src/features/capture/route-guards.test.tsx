@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within, type RenderResult } f
 import { createDemoManual } from '@truebuild/contracts'
 import { ModelApiClient, type ModelFetch } from '../../api/model-client'
 import { jpegHeader } from '../../media/test-fixtures'
+import { MediaRejectedError } from '../../media/media-errors'
 import { CaptureController } from './controller'
 import { createController } from './controller-factory'
 import { LibraryStorage, type KeyValueStorage, type LibraryEntry } from './library'
@@ -137,6 +138,33 @@ afterEach(async () => {
     jest.restoreAllMocks()
     jest.mocked(createController).mockReset()
 })
+
+it.each([
+    ['unsupported', false, 'Use a JPEG, PNG or WebP photo.'],
+    ['unreadable', true, 'This photo will not open. Save it again as JPEG, PNG or WebP.'],
+] as const)(
+    'shows a rejected %s import on Add and retries the photo picker once',
+    async (failure, hasPages, message) => {
+        const item = entry('guard-manual', 'unparsed')
+        if (!hasPages) item.session.pages = []
+        const controller = await runtime([item])
+        const view = await mount()
+        await act(async () => controller.open('guard-manual'))
+        await act(async () => router.push('/add'))
+        await waitFor(() => expect(view.getPathname()).toBe('/add'))
+        await act(async () => {
+            await controller.importPages(async () => {
+                throw new MediaRejectedError(failure)
+            })
+        })
+        expect(await screen.findByText(message)).toBeTruthy()
+        expect(controller.getSnapshot().pending).toBeNull()
+        const retry = jest.spyOn(controller, 'importPages').mockResolvedValue(undefined)
+        await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
+        expect(retry).toHaveBeenCalledTimes(1)
+        expect(view.getPathname()).toBe('/add')
+    },
+)
 
 it.each([
     ['not read yet', 'unparsed', '/add'],

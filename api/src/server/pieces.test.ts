@@ -372,6 +372,12 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
         'input.0.content.0.text',
         expect.stringContaining('"notPartOfThisPiece":["pin","washer"]'),
     )
+    expect(bodies[0]).toHaveProperty(
+        'instructions',
+        expect.stringContaining(
+            'Preserve integral shafts, stems, pegs and other connected functional structural members',
+        ),
+    )
     const failed = first.results[1]!
     const repaired = await handler(
         pieceRequest(
