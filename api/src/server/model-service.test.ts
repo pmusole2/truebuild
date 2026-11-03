@@ -1100,6 +1100,7 @@ describe('parse removal compatibility at the response boundary', () => {
         steps: z
             .array(
                 manualStepSchema.safeExtend({
+                    actions: z.never().optional(),
                     kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
                 }),
             )
@@ -1114,7 +1115,12 @@ describe('parse removal compatibility at the response boundary', () => {
     ])('preserves removal meaning for $stream streaming / $capable capable clients', async ({ stream, capable }) => {
         const state = await setup()
         const canonical = parsed()
-        canonical.steps[0] = { ...canonical.steps[0]!, title: 'Remove the divider', kind: 'remove' }
+        canonical.steps[0] = {
+            ...canonical.steps[0]!,
+            title: 'Remove the divider',
+            kind: 'remove',
+            actions: [{ actionId: 'a1', instruction: 'Lift the divider.', sourceRefs: canonical.steps[0]!.sourceRefs }],
+        }
         expect(oldParsedManual.safeParse(canonical).success).toBe(false)
         const original = structuredClone(canonical)
         const handlers = createModelHandlers({
@@ -1134,7 +1140,7 @@ describe('parse removal compatibility at the response boundary', () => {
         headers.delete('content-type')
         if (stream) headers.set('accept', 'text/event-stream')
         const response = await handlers.parse(
-            new Request(`${base.url}${capable ? '?stepKinds=remove' : ''}`, {
+            new Request(`${base.url}${capable ? '?stepKinds=remove&stepActions=1' : ''}`, {
                 headers,
                 method: 'POST',
                 body: await base.formData(),
@@ -1150,9 +1156,12 @@ describe('parse removal compatibility at the response boundary', () => {
             : ((await response.json()) as { value: unknown })
         expect(parsedManualSchema.parse(wire.value)).toEqual({
             ...original,
-            steps: original.steps.map((step) =>
-                step.kind === 'remove' && !capable ? { ...step, kind: 'adjust' } : step,
-            ),
+            steps: original.steps.map((step) => {
+                const { actions, ...legacy } = step
+                return capable
+                    ? { ...legacy, ...(actions === undefined ? {} : { actions }) }
+                    : { ...legacy, ...(step.kind === 'remove' ? { kind: 'adjust' } : {}) }
+            }),
         })
         expect(oldParsedManual.safeParse(wire.value).success).toBe(!capable)
         expect(canonical).toEqual(original)

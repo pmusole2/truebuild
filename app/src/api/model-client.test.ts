@@ -814,6 +814,7 @@ it('validates and serializes parse language, defaults English, and rejects large
     const api = client(run.fetch)
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
     expect(new URL(run.calls[0]!.url).searchParams.get('stepKinds')).toBe('remove')
+    expect(new URL(run.calls[0]!.url).searchParams.get('stepActions')).toBe('1')
     expect(JSON.parse(String((run.calls[0]!.init.body as FormData).get('metadata'))).language).toBe('en')
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID, language: 'fr' })
     expect(JSON.parse(String((run.calls[1]!.init.body as FormData).get('metadata'))).language).toBe('fr')

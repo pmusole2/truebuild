@@ -308,8 +308,16 @@ describe('an unreadable safety note stays visible in the document (F1)', () => {
         }
     })
 
-    it('keeps every legacy unclassified direction mandatory and unaffected', () => {
-        const material = documentMaterialV2(inputsFor('guide', extracted(undefined)))
+    it('keeps legacy unclassified detail mandatory outside Guide and Guide checks separate', () => {
+        const inputs = inputsFor('guide', extracted(undefined))
+        const guide = documentMaterialV2(inputs)
+        expect(guide.requirements.facts).toEqual(['title'])
+        expect(
+            guide.facts
+                .filter((fact) => fact.kind === 'orientation' || fact.kind === 'connection' || fact.kind === 'check')
+                .every((fact) => fact.basis === 'direction'),
+        ).toBe(true)
+        const material = documentMaterialV2({ ...inputs, kind: 'camera' })
         const required = material.facts.filter((fact) => material.requirements.facts.includes(fact.factId))
         expect(required.map((fact) => [fact.factId, fact.basis])).toEqual([
             ['title', 'unclassified-step'],
@@ -412,8 +420,9 @@ describe('the unreadable-safety explanation respects the schema maxima', () => {
     it('holds exactly one marker beside 99 readable notes and every direction, in a valid document', () => {
         const inputs = inputsFor('guide', widest())
         const material = documentMaterialV2(inputs)
-        // 1 marker + 99 notes + the selected alternative, orientation, connection, 100 checks and 100 actions.
-        expect(material.facts).toHaveLength(303)
+        // 1 marker + 99 notes + title, selected alternative, orientation, connection and 100 checks; unreviewed fixes stay hidden.
+        expect(material.facts).toHaveLength(204)
+        expect(material.facts.some((fact) => fact.factId.startsWith('correction:'))).toBe(false)
         expect(markers(material.facts)).toEqual([MARKER])
         const document = build(inputs)
         expect(messages(document)).toEqual([])

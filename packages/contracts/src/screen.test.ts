@@ -590,6 +590,7 @@ describe('typed manual safety notes and required manual facts', (): void => {
         // Directions stay available to a composition but are not forced once the step has an explicit classification.
         const all = manualDirectionFacts(session, 'step-1')
         expect(all.filter((fact) => fact.basis === 'direction').map((fact) => fact.factId)).toEqual([
+            'title',
             'orientation',
             'connection',
             'check:groove-inward',

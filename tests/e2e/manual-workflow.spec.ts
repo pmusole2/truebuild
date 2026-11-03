@@ -40,7 +40,8 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 /** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
-        (request) => request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST',
+        (request) =>
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1` && request.method() === 'POST',
         { timeout: 60_000 },
     )
     const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
@@ -77,7 +78,8 @@ async function addTwoPagesAndRead(page: Page): Promise<Response> {
     await page.getByRole('button', { name: 'Move page up', exact: true }).click()
     const parse = page.waitForResponse(
         (response) =>
-            response.url() === `${API}/api/manuals/parse?stepKinds=remove` && response.request().method() === 'POST',
+            response.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1` &&
+            response.request().method() === 'POST',
     )
     await readManualWithConsent(page)
     return parse
@@ -123,7 +125,10 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
     })
     let parses = 0
     page.on('request', (request) => {
-        if (request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST') {
+        if (
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1` &&
+            request.method() === 'POST'
+        ) {
             parses++
         }
     })
@@ -179,7 +184,8 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
     expect(parses).toBe(1)
     const response = page.waitForResponse(
         (result) =>
-            result.url() === `${API}/api/manuals/parse?stepKinds=remove` && result.request().method() === 'POST',
+            result.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1` &&
+            result.request().method() === 'POST',
     )
     await sheet.getByRole('button', { name: 'Re-read', exact: true }).click()
     expect((await response).status()).toBe(200)

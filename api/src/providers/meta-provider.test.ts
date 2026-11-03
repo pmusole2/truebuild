@@ -468,6 +468,13 @@ describe('inactive direct Meta transport', (): void => {
                     'List every unresolved item in the top-level unknowns array, including missing checks/citations and bounded-extraction omissions;',
                     'never silently omit parts or steps.',
                     'Any correction is unreviewed; reviewed must be false.',
+                    'Parse actions:',
+                    'one physical action per entry',
+                    'about 12 words or fewer',
+                    '90 characters',
+                    'Start each instruction with a verb',
+                    'selected reading language',
+                    'correction: null when the manual prints no fix',
                 ]) {
                     expect(transport.bodies[0]).toMatchObject({ instructions: expect.stringContaining(rule) })
                 }

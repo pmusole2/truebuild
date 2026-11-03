@@ -14,6 +14,7 @@ import {
     sourceResolverV2,
     type DocumentSourceV2,
     type FactV2,
+    type HeaderV2,
     type RequirementsV2,
 } from './document-v2'
 import {
@@ -30,7 +31,7 @@ import {
     type ScreenContextInputsV2,
 } from './document-v2-context'
 import { completionWitnessed } from './screen-context'
-import { manualDirectionFacts, unresolvedSafetyNotes } from './screen-facts'
+import { isManualCheckFact, manualDirectionFacts, unresolvedSafetyNotes } from './screen-facts'
 import { screenFacts } from './screen-context'
 import type { AppIntent } from './screen'
 import type { ScreenKindV2, ScreenUiStateV2, TextRefV2 } from './document-v2'
@@ -44,6 +45,8 @@ export type VerdictV2 = 'pass' | 'refuse' | 'cannot_verify'
  */
 export interface DocumentMaterialV2 {
     inputs: ScreenContextInputsV2
+    /** Server-only compatibility mode; never added to the public document or request. */
+    legacyDirections?: true
     step: ManualStep | null
     stepIndex: number
     stepCount: number
@@ -84,6 +87,16 @@ export interface DocumentMaterialV2 {
     diagram: number[]
 }
 
+/** One placement rule: saved titles are the single fallback direction; action manuals keep their title in the header. */
+export function guideHeaderTextV2(material: DocumentMaterialV2): Pick<HeaderV2, 'title' | 'subtitle'> {
+    if (material.step === null) return { title: { kind: 'literal', text: 'This step' }, subtitle: null }
+    const savedTitle = !material.legacyDirections && material.facts.some((fact) => fact.factId === 'title')
+    return {
+        title: { kind: 'bound', key: 'step-position' },
+        subtitle: savedTitle ? null : { kind: 'bound', key: 'step-title' },
+    }
+}
+
 const intent = <I extends AppIntent['intent']>(
     name: I,
     target: Extract<AppIntent, { intent: I }>['target'],
@@ -98,6 +111,7 @@ const CITATION_LOAD_BUDGET = 600
  * fit the cap and a bounded citation load; otherwise it is the page-level table (one entry per manual page, at most
  * `LIMITS.manualPages`), which still cites every reference's page. Nothing is ever silently dropped.
  */
+
 function sourceRegistry(
     diagram: readonly DocumentSourceV2[],
     published: readonly FactV2[],
@@ -306,18 +320,21 @@ function usedInputs(raw: ScreenContextInputsV2): ScreenContextInputsV2 {
     }
 }
 
-export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterialV2 {
+export function documentMaterialV2(raw: ScreenContextInputsV2, legacyDirections = false): DocumentMaterialV2 {
     const inputs = usedInputs(raw)
     const { session, result } = inputs
     const facts = screenFacts(session)
     const stepBound = isStepBoundV2(inputs)
     const stepIndex = facts && inputs.stepId ? facts.steps.findIndex((step) => step.stepId === inputs.stepId) : -1
     const step = stepIndex >= 0 && facts ? (facts.steps[stepIndex] ?? null) : null
-    const manual = session !== null && step !== null && stepBound ? manualDirectionFacts(session, step.stepId) : []
+    const manual =
+        session !== null && step !== null && stepBound
+            ? manualDirectionFacts(session, step.stepId, legacyDirections || inputs.kind !== 'guide')
+            : []
     const published: FactV2[] = manual.map((fact) => ({
         factId: fact.factId,
         kind: fact.kind,
-        basis: fact.basis,
+        basis: !legacyDirections && inputs.kind === 'guide' && isManualCheckFact(fact) ? 'direction' : fact.basis,
         text: fact.text,
         sourceRefs: fact.sourceRefs.slice(0, 100).map((ref) => ({ pageId: ref.pageId, region: ref.region })),
     }))
@@ -407,6 +424,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2): DocumentMaterial
             ? (step?.parts ?? []).flatMap((part) => (knownPart(part.partId) ? [part.partId] : []))
             : [...new Set((facts?.parts ?? []).flatMap((part) => (knownPart(part.partId) ? [part.partId] : [])))]
     return {
+        ...(legacyDirections ? { legacyDirections: true as const } : {}),
         inputs,
         step,
         stepIndex,

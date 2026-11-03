@@ -152,6 +152,18 @@ export const manualStepSchema = z
         stepId: idSchema,
         order: positiveIntegerSchema,
         title: titleSchema,
+        /** Optional for manuals saved before plain-language procedures were captured. */
+        actions: z
+            .array(
+                z.strictObject({
+                    actionId: idSchema,
+                    instruction: z.string().trim().min(1).max(90),
+                    sourceRefs: knownSourceRefsSchema,
+                }),
+            )
+            .max(6)
+            .nullable()
+            .optional(),
         kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove']).nullable().optional(),
         requirements: z
             .strictObject({
@@ -189,6 +201,11 @@ export const manualStepSchema = z
         safetyNotes: z.array(safetyNoteSchema).max(100).nullable().optional(),
     })
     .superRefine((step, ctx) => {
+        rejectDuplicates(
+            (step.actions ?? []).map((action) => action.actionId),
+            'step action',
+            ctx,
+        )
         rejectDuplicates(
             (step.safetyNotes ?? []).map((note) => note.noteId),
             'safety note',
@@ -439,6 +456,7 @@ function allSourceRefs(parts: ManualPart[], steps: ManualStep[]): SourceRef[] {
             ...factRefs(step.connection),
             ...step.visibleChecks.flatMap((check) => factRefs(check.description)),
             ...(step.safetyNotes ?? []).flatMap((note) => factRefs(note.note)),
+            ...(step.actions?.flatMap((action) => action.sourceRefs) ?? []),
             ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ]),
     ]

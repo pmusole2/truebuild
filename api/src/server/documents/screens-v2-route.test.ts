@@ -47,7 +47,7 @@ function send(
     body.set('metadata', JSON.stringify(metadata))
     if (options.files) body.set('extra', new Blob(['x'], { type: 'image/png' }), 'x.png')
     return Promise.resolve(
-        app.request(`/api/screens/v2${options.query ?? '?guideRepair=1'}`, {
+        app.request(`/api/screens/v2${options.query ?? '?guideRepair=1&stepActions=1'}`, {
             method: 'POST',
             headers: { 'x-truebuild-key': options.key ?? KEY },
             body,
@@ -75,6 +75,22 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
                 metadata: { source: 'generated', evidence: 'synthetic-fixture', model: null, effort: null },
             })
             expect(body.value.document!.metadata.timing.totalMs).toBeNull()
+        },
+    )
+
+    it.each(['', '?guideRepair=1', '?guideRepair=1&stepActions=1', '?stepActions=1&stepActions=1'])(
+        'keeps strict installed-client document material isolated for capability %s',
+        async (query) => {
+            const app = fixtureApp({ GENERATIVE_UI: 'off' })
+            const inputs = documentInputs('guide', demoSession({ safety: false }))
+            const response = await send(app, generate(inputs), { query })
+            const result = screensV2ResultSchema.parse(await response.json())
+            if (result.status !== 'ok') throw new Error('expected ok')
+            const capable = query === '?guideRepair=1&stepActions=1'
+            const expected = buildDocumentContext(inputs, !capable).material
+            expect(result.value.document!.facts).toEqual(expected.facts)
+            expect(result.value.document!.requirements).toEqual(expected.requirements)
+            expect(result.value.document!.sources).toEqual(expected.sources)
         },
     )
 
@@ -161,7 +177,7 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
         expect(cancelled.value.progress).toBeNull()
         expect((await send(app, { ...common, requestId: 'old-job' }, { query: '' })).status).toBe(200)
         await vi.waitFor(async () => {
-            const capable = await read('?guideRepair=1')
+            const capable = await read('?guideRepair=1&stepActions=1')
             const legacy = await read('')
             expect(capable.documents[0]?.metadata).toMatchObject({ source: 'generated', repaired: true })
             expect(legacy.documents[0]?.metadata).toMatchObject({ source: 'fallback', repaired: false })

@@ -309,6 +309,8 @@ it('keeps the same refused photo, immutable question and independently cited ans
     expect(within(answerCard).queryByText('The reverse face is hidden.')).toBeNull()
     await fireEvent.press(within(checkCard).getByRole('button', { name: 'See it in the manual' }))
     await fireEvent.press(within(answerCard).getByRole('button', { name: 'See it in the manual' }))
+    expect(within(checkCard).queryByRole('header', { name: 'See it in the manual' })).toBeNull()
+    expect(within(answerCard).queryByRole('header', { name: 'See it in the manual' })).toBeNull()
     expect(within(checkCard).getByText('Picture from your manual · Page 1')).toBeTruthy()
     expect(within(answerCard).getByText('Picture from your manual · Page 2')).toBeTruthy()
     expect(within(sheet).queryByText('Looks right')).toBeNull()

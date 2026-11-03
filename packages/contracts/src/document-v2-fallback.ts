@@ -62,10 +62,12 @@ import {
     READING_KEEP_V2,
     READING_STOP_V2,
     documentMaterialV2,
+    guideHeaderTextV2,
     type DocumentMaterialV2,
 } from './document-v2-material'
 import { cameraAccessV2, moreScopedV2, resultOfKindV2, type ScreenContextInputsV2 } from './document-v2-context'
 import { assembleDocumentV2, type AssembleDeps, type DocumentFacts } from './document-v2-assemble'
+import { isManualCheckFact, isManualDirectionFact } from './screen-facts'
 import type { AppIntent, ScreenIcon } from './screen'
 
 type Node = ScreenNodeV2
@@ -199,9 +201,7 @@ function titleOf(material: DocumentMaterialV2): Built {
                 subtitle: inputs.uiState?.review?.currentQuestion ? bound('review-position') : null,
             }
         case 'guide':
-            return material.step
-                ? { title: bound('step-position'), subtitle: bound('step-title') }
-                : { title: lit('This step'), subtitle: null }
+            return guideHeaderTextV2(material)
         case 'camera':
             return inputs.uiState?.camera?.mode === 'manual-page'
                 ? { title: lit('Photograph a page'), subtitle: null }
@@ -301,6 +301,33 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
     const required = manual.filter((fact) => !isSafety(fact) && requiredIds.has(fact.factId))
     const optional = manual.filter((fact) => !isSafety(fact) && !requiredIds.has(fact.factId))
     const guide = material.inputs.kind === 'guide'
+    if (guide && !material.legacyDirections) {
+        const directions = manual.filter(isManualDirectionFact)
+        const checks = manual.filter(isManualCheckFact)
+        const detail = manual.filter(
+            (fact) => !isSafety(fact) && !isManualDirectionFact(fact) && !isManualCheckFact(fact),
+        )
+        return [
+            ...(safety.length > 0
+                ? [section('Safety', nest(pack(entries(safety, true), (children) => card(children, 'caution'))))]
+                : []),
+            ...(directions.length > 0
+                ? [section('Directions', nest(pack(entries(directions, false), (children) => card(children))))]
+                : []),
+            ...(checks.length > 0
+                ? [section('Check your work', nest(pack(entries(checks, false), (children) => card(children))), true)]
+                : []),
+            ...(detail.length > 0
+                ? [
+                      section(
+                          'More detail',
+                          nest(pack(entries(detail, false), (children) => card(children))),
+                          !detail.some((fact) => requiredIds.has(fact.factId)),
+                      ),
+                  ]
+                : []),
+        ]
+    }
     const directions = guide ? [...required, ...optional] : required
     return [
         ...(safety.length > 0
@@ -683,7 +710,7 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
             return [
                 ...heroImage(material),
                 // Keep the step heading readable beside the actual source-backed direction facts below it.
-                ...(material.step === null ? [] : [text(bound('step-title'))]),
+                ...(material.legacyDirections && material.step !== null ? [text(bound('step-title'))] : []),
                 ...(material.step === null ? [] : [{ type: 'Progress', binding: 'step', label: null } as Node]),
                 ...partNodes(material),
                 ...factNodes(material, true),

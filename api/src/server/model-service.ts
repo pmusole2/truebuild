@@ -710,9 +710,14 @@ export function createModelHandlers(options: {
                 : { precomputeConcurrency: options.precomputeConcurrency }),
         })
 
-    const createDocuments = (guideRepair: boolean, waitCopy: 1 | 2): ReturnType<typeof createDocumentService> =>
+    const createDocuments = (
+        guideRepair: boolean,
+        legacyDirections = false,
+        waitCopy: 1 | 2 = 2,
+    ): ReturnType<typeof createDocumentService> =>
         createDocumentService({
             guideRepair,
+            legacyDirections,
             waitCopy,
             provider: provider?.generateDocument ? provider : null,
             fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
@@ -727,14 +732,18 @@ export function createModelHandlers(options: {
     // SingleFlight and precompute registry separate: a 55s client must never wait for a capable client's repair.
     const screenService = createScreens(true)
     const legacyScreenService = createScreens(false)
-    const documentService = createDocuments(true, 2)
-    const legacyDocumentService = createDocuments(false, 2)
-    const oldCopyDocumentService = createDocuments(true, 1)
-    const oldCopyLegacyDocumentService = createDocuments(false, 1)
+    const oldCopyDocumentService = createDocuments(true, false, 1)
+    const oldCopyLegacyDocumentService = createDocuments(false, false, 1)
+    const oldCopyCompatibleDocuments = createDocuments(true, true, 1)
+    const oldCopyCompatibleLegacyDocuments = createDocuments(false, true, 1)
     const allowsWaitCopy = (request: Request): boolean => {
         const values = new URL(request.url).searchParams.getAll('waitCopy')
         return values.length === 1 && values[0] === '2'
     }
+    const documentService = createDocuments(true)
+    const legacyDocumentService = createDocuments(false)
+    const compatibleDocuments = createDocuments(true, true)
+    const compatibleLegacyDocuments = createDocuments(false, true)
     const allowsGuideRepair = (request: Request): boolean => {
         const values = new URL(request.url).searchParams.getAll('guideRepair')
         return values.length === 1 && values[0] === '1'
@@ -748,6 +757,10 @@ export function createModelHandlers(options: {
                 legacyDocumentService,
                 oldCopyDocumentService,
                 oldCopyLegacyDocumentService,
+                oldCopyCompatibleDocuments,
+                oldCopyCompatibleLegacyDocuments,
+                compatibleDocuments,
+                compatibleLegacyDocuments,
                 screenService,
                 legacyScreenService,
             ]) {
@@ -938,13 +951,20 @@ export function createModelHandlers(options: {
             route: 'parse',
             present: (value, request) => {
                 const publicValue = asPublic(value)
-                if (new URL(request.url).searchParams.get('stepKinds') === 'remove') return publicValue
-                // Old installed clients reject `remove`; adapt only the wire value, leaving canonical/cache data intact.
+                const query = new URL(request.url).searchParams
+                const removal = query.get('stepKinds') === 'remove'
+                const actions = query.getAll('stepActions').length === 1 && query.get('stepActions') === '1'
+                // Old installed clients have strict step schemas. Project only the response; preserve canonical data.
                 return {
                     ...publicValue,
-                    steps: publicValue.steps.map((step) =>
-                        step.kind === 'remove' ? { ...step, kind: 'adjust' as const } : step,
-                    ),
+                    steps: publicValue.steps.map((step) => {
+                        const { actions: procedure, ...legacy } = step
+                        return {
+                            ...legacy,
+                            ...(actions && procedure !== undefined ? { actions: procedure } : {}),
+                            ...(step.kind === 'remove' && !removal ? { kind: 'adjust' as const } : {}),
+                        }
+                    }),
                 }
             },
             progress: true,
@@ -1148,13 +1168,21 @@ export function createModelHandlers(options: {
         const legacyDocumentsCurrent = legacyDocumentService.observe(manualId, revision)
         const oldCopyCurrent = oldCopyDocumentService.observe(manualId, revision)
         const oldCopyLegacyCurrent = oldCopyLegacyDocumentService.observe(manualId, revision)
+        const oldCopyCompatibleCurrent = oldCopyCompatibleDocuments.observe(manualId, revision)
+        const oldCopyCompatibleLegacyCurrent = oldCopyCompatibleLegacyDocuments.observe(manualId, revision)
+        const compatibleCurrent = compatibleDocuments.observe(manualId, revision)
+        const compatibleLegacyCurrent = compatibleLegacyDocuments.observe(manualId, revision)
         return (
             current &&
             legacyCurrent &&
             documentsCurrent &&
             legacyDocumentsCurrent &&
             oldCopyCurrent &&
-            oldCopyLegacyCurrent
+            oldCopyLegacyCurrent &&
+            oldCopyCompatibleCurrent &&
+            oldCopyCompatibleLegacyCurrent &&
+            compatibleCurrent &&
+            compatibleLegacyCurrent
         )
     }
     const questionSyncWaitMs = options.questionSyncWaitMs ?? 8_000
@@ -1468,13 +1496,23 @@ export function createModelHandlers(options: {
         try {
             const guideRepair = allowsGuideRepair(request)
             const waitCopy = allowsWaitCopy(request)
+            const actionFlags = new URL(request.url).searchParams.getAll('stepActions')
+            const stepActions = actionFlags.length === 1 && actionFlags[0] === '1'
             const selectedDocuments = waitCopy
-                ? guideRepair
-                    ? documentService
-                    : legacyDocumentService
-                : guideRepair
-                  ? oldCopyDocumentService
-                  : oldCopyLegacyDocumentService
+                ? stepActions
+                    ? guideRepair
+                        ? documentService
+                        : legacyDocumentService
+                    : guideRepair
+                      ? compatibleDocuments
+                      : compatibleLegacyDocuments
+                : stepActions
+                  ? guideRepair
+                      ? oldCopyDocumentService
+                      : oldCopyLegacyDocumentService
+                  : guideRepair
+                    ? oldCopyCompatibleDocuments
+                    : oldCopyCompatibleLegacyDocuments
             const route = Math.min(
                 guideRepair ? MAX_DEADLINE_MS : LEGACY_GUIDE_ROUTE_MS,
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,

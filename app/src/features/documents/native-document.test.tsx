@@ -1052,7 +1052,7 @@ describe('the actual v2 catalog renderer', () => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs)
         const direction = inputs.session!.reviewedSteps[0]!.title
-        document.header.subtitle = { kind: 'literal', text: direction }
+        // The contracts author the saved title once as its fallback direction; the renderer does not infer duplicates.
         const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
         expect(screen.getAllByText(direction)).toHaveLength(1)
         await fireEvent(screen.getByTestId('bottom-bar'), 'layout', {

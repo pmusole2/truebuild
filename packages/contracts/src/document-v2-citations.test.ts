@@ -313,9 +313,11 @@ describe('the plan over complete documents keeps every mandatory citation witnes
 
     it('keeps independent disclosures useful on a complete guide without hiding its mandatory safety', () => {
         const inputs = inputsFor('guide')
-        // The disclosures cite a separate step region, unclaimed by the now-visible direction citations.
+        // The disclosures cite a check region, independent of the visible procedure sources.
         const optionalRef = { pageId: 'demo-page-1', region: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }
-        inputs.session!.reviewedSteps[0]!.sourceRefs.push(optionalRef)
+        const orientation = inputs.session!.reviewedSteps[0]!.orientation
+        if (orientation.state !== 'known') throw new Error('fixture orientation must be known')
+        orientation.sourceRefs.push(optionalRef)
         inputs.session!.reviewedSteps[0]!.safetyNotes = [
             {
                 noteId: 'n1',

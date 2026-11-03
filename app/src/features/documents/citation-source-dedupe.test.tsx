@@ -99,7 +99,7 @@ it('uses the production plan when a manual-page opener comes after fact citation
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
-it.each(['More detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
+it.each(['Hidden detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
     const closed = (title: string, node: ScreenNodeV2): ScreenNodeV2 => ({
         type: 'Section',
         title: { kind: 'literal', text: title },
@@ -110,22 +110,24 @@ it.each(['More detail', 'Parts'])('keeps one opener per reference when %s opens 
     // This region is not already reachable from the visible fixture facts.
     await renderSources(
         [
-            closed('More detail', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
+            closed('Hidden detail', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
             closed('Parts', { type: 'ManualPage', sources: [0], label: null, fit: 'contain', initiallyOpen: false }),
         ],
         true,
     )
-    // One visible fact region plus one distinct page reference, regardless of which source section opens first.
-    const second = first === 'More detail' ? 'Parts' : 'More detail'
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
-    await fireEvent.press(screen.getByRole('button', { name: first }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
-    await fireEvent.press(screen.getByRole('button', { name: second }))
+    // The visible Directions section offers the fact region (source 0, its saved title direction) and the body offers
+    // the distinct page reference (source 1): one opener each. The closed sections repeat source 0, so opening or
+    // closing them never adds a second opener for that reference.
+    const second = first === 'Hidden detail' ? 'Parts' : 'Hidden detail'
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
     await fireEvent.press(screen.getByRole('button', { name: first }))
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
     await fireEvent.press(screen.getByRole('button', { name: second }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
+    await fireEvent.press(screen.getByRole('button', { name: first }))
+    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
+    await fireEvent.press(screen.getByRole('button', { name: second }))
+    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
 })
 
 it('replans the single source affordance when its section opens and restores it when closed', async () => {

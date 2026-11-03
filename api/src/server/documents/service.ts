@@ -1,6 +1,7 @@
 import {
     SCREEN_CATALOG_V2_VERSION,
     assembleDocumentV2,
+    isManualDirectionFact,
     canonicalJson,
     buildFallbackProposalV2,
     manualDirectionFacts,
@@ -74,6 +75,8 @@ export interface DocumentServiceOptions {
     waitCopy?: 1 | 2
     /** API routes set this from the query capability; in-process callers retain the existing repair behavior. */
     guideRepair?: boolean
+    /** Preserve the previous facts/requirements for installed clients with strict local verification. */
+    legacyDirections?: boolean
     precomputeConcurrency?: number
     now?: () => Date
 }
@@ -239,12 +242,14 @@ export function createDocumentService(options: DocumentServiceOptions): Document
     const jobs = new PrecomputeRegistry(options.precomputeConcurrency ?? 4)
     const mode = policy.generativeUi
     const issued = new ScreenCache<IssuedDocument>(1_024)
+    const contextFor = (inputs: ScreenContextInputsV2): DocumentContext =>
+        buildDocumentContext(inputs, options.legacyDirections === true)
     const evidence: DocumentMetadataV2['evidence'] = options.runtimeMode === 'fixture' ? 'synthetic-fixture' : 'live'
 
     const preparedItems = (request: PrecomputeRequest): ReturnType<typeof precomputeItems> =>
         (mode === 'off' ? [] : precomputeItems(request)).filter((item) => mode !== 'steps' || item.kind === 'guide')
     const jobContextKey = (request: PrecomputeRequest): string =>
-        sha256(canonicalJson(preparedItems(request).map((item) => buildDocumentContext(item.inputs).bound.contextKey)))
+        sha256(canonicalJson(preparedItems(request).map((item) => contextFor(item.inputs).bound.contextKey)))
 
     /** Model-output cache key: the grounded content plus the model/effort/prompt that produced it. */
     function cacheKey(context: DocumentContext): string {
@@ -273,6 +278,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                           : stagePolicy.effort,
                 prompt: DOCUMENT_PROMPT_VERSION,
                 waitCopy: options.waitCopy ?? 2,
+                legacyDirections: options.legacyDirections === true,
                 catalog: SCREEN_CATALOG_V2_VERSION,
             }),
         )
@@ -634,7 +640,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         waiter?: AbortSignal,
         background = false,
     ): Promise<ScreenDocumentV2> {
-        const context = buildDocumentContext(inputs)
+        const context = contextFor(inputs)
         if (mode === 'off' || (mode === 'steps' && context.inputs.kind !== 'guide')) {
             return deterministic(context, 'disabled')
         }
@@ -648,11 +654,12 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         }
         if (
             context.inputs.kind === 'guide' &&
-            !context.material.facts.some(
-                (fact) =>
-                    fact.kind !== 'safety' &&
-                    fact.kind !== 'title' &&
-                    (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+            !context.material.facts.some((fact) =>
+                context.material.legacyDirections
+                    ? fact.kind !== 'safety' &&
+                      fact.kind !== 'title' &&
+                      (fact.basis === 'direction' || fact.basis === 'unclassified-step')
+                    : isManualDirectionFact(fact),
             )
         ) {
             // No authored Guide can meet its instruction floor without inventing a direction: skip the paid call.
@@ -726,7 +733,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         mode,
         generate,
         jobContextKey,
-        fallback: (inputs, reason) => deterministic(buildDocumentContext(inputs), reason),
+        fallback: (inputs, reason) => deterministic(contextFor(inputs), reason),
         observe: (manualId, revision) => guard.observe(manualId, revision),
         resolveStepScreen(session, stepId, screen): StepScreenContext | 'mismatch' | null {
             const known = issued.get(screen.screenId)
@@ -741,8 +748,11 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 return 'mismatch'
             }
             // Re-verified against THIS request's manual: a fact is reported only if the manual still states it so.
-            const current = new Map(manualDirectionFacts(session, stepId).map((fact) => [fact.factId, fact.text]))
-            const shown = known.shown === null ? undefined : resolveShownV2(known.shown, session, stepId)
+            const legacyFacts = options.legacyDirections === true || known.kind !== 'guide'
+            const current = new Map(
+                manualDirectionFacts(session, stepId, legacyFacts).map((fact) => [fact.factId, fact.text]),
+            )
+            const shown = known.shown === null ? undefined : resolveShownV2(known.shown, session, stepId, legacyFacts)
             return {
                 screenId: screen.screenId,
                 contextKey: screen.contextKey,
@@ -757,7 +767,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
             // What is prepared is what was asked for, bounded by the mode: `off` prepares nothing and `steps` only guides.
             const prepared = preparedItems(request).map((item) => ({
                 ...item,
-                context: buildDocumentContext(item.inputs),
+                context: contextFor(item.inputs),
             }))
             const progress = jobs.start(
                 {

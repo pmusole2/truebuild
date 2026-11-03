@@ -395,7 +395,7 @@ export class ModelApiClient {
 
         return this.post({
             // Query parameters are ignored by old APIs and do not alter their strict metadata or CORS contract.
-            path: '/api/manuals/parse?stepKinds=remove',
+            path: '/api/manuals/parse?stepKinds=remove&stepActions=1',
             requestId: ctx.requestId,
             binding,
             form,
@@ -1443,6 +1443,7 @@ function everyRefInside(parsed: ParsedManual, pageIds: ReadonlySet<string>): boo
             ...step.visibleChecks.flatMap((check) =>
                 check.description.state === 'known' ? check.description.sourceRefs : [],
             ),
+            ...(step.actions?.flatMap((action) => action.sourceRefs) ?? []),
             ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ]),
     ]

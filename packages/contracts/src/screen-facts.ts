@@ -21,16 +21,22 @@ function known<T>(fact: Fact<T>): { value: T; sourceRefs: SourceRef[] } | null {
     return fact.state === 'known' ? { value: fact.value, sourceRefs: copyRefs(fact.sourceRefs) } : null
 }
 
+/** Procedure facts use stable IDs and existing wire kinds so older strict document schemas stay valid. */
+export function isManualDirectionFact(fact: Pick<ManualFact, 'factId'>): boolean {
+    return fact.factId === 'title' || fact.factId.startsWith('action:')
+}
+
+/** Completed conditions are checks, never procedure instructions. */
+export function isManualCheckFact(fact: { kind: string }): boolean {
+    return fact.kind === 'orientation' || fact.kind === 'connection' || fact.kind === 'check'
+}
+
 /**
- * Every known safety note and physical direction of a step, in manual order: explicit safety notes first, then the
- * unclassified title, selected alternative, orientation, connection, visible checks and correction actions.
- *
- * A step with an explicit safety classification (`safetyNotes` is an array, possibly empty) requires exactly its known
- * safety notes; its other directions are available (`direction`) but not required. A step that was never classified
- * (older data, no field) cannot be assumed to have no hazard, so every known direction is conservatively required
- * (`unclassified-step`): no keyword list decides what is safety-relevant.
+ * The procedure is the supplied actions, or the title for saved steps without them. Completed conditions remain
+ * separate facts, and only reviewed fixes are available. Legacy mode is solely the server's old-client projection.
+ * Explicit safety and unclassified detail keep their conservative non-Guide requirements.
  */
-export function manualDirectionFacts(session: ManualSession, stepId: string): ManualFact[] {
+export function manualDirectionFacts(session: ManualSession, stepId: string, legacy = false): ManualFact[] {
     const step = stepsOf(session).find((candidate) => candidate.stepId === stepId)
     if (step === undefined) return []
     const basis = step.safetyNotes == null ? ('unclassified-step' as const) : ('direction' as const)
@@ -47,7 +53,7 @@ export function manualDirectionFacts(session: ManualSession, stepId: string): Ma
             })
         }
     }
-    if (step.safetyNotes == null && step.sourceRefs.length > 0) {
+    if ((legacy ? step.safetyNotes == null : (step.actions?.length ?? 0) === 0) && step.sourceRefs.length > 0) {
         facts.push({
             factId: 'title',
             kind: 'title',
@@ -55,6 +61,18 @@ export function manualDirectionFacts(session: ManualSession, stepId: string): Ma
             text: step.title,
             sourceRefs: copyRefs(step.sourceRefs),
         })
+    }
+    if (!legacy) {
+        for (const action of step.actions ?? []) {
+            facts.push({
+                factId: `action:${action.actionId}`,
+                // Keep the established instruction wire kind; the action: namespace identifies procedure entries.
+                kind: 'correction',
+                basis,
+                text: action.instruction,
+                sourceRefs: copyRefs(action.sourceRefs),
+            })
+        }
     }
     const selected = (step.alternatives ?? []).find((item) => item.alternativeId === step.selectedAlternativeId)
     if (selected !== undefined) {
@@ -98,7 +116,7 @@ export function manualDirectionFacts(session: ManualSession, stepId: string): Ma
             })
         }
     }
-    for (const action of step.correction?.actions ?? []) {
+    for (const action of (legacy || step.correction?.reviewed === true ? step.correction?.actions : []) ?? []) {
         facts.push({
             factId: `correction:${action.actionId}`,
             kind: 'correction',
@@ -110,9 +128,9 @@ export function manualDirectionFacts(session: ManualSession, stepId: string): Ma
     return facts
 }
 
-/** The facts every screen of this step must show. A step or session without them returns an empty list. */
+/** Legacy screen requirements retain their conservative facts; the v2 Guide publishes its own explicit groups. */
 export function requiredManualFacts(session: ManualSession, stepId: string): ManualFact[] {
-    return manualDirectionFacts(session, stepId).filter(isRequiredManualFact)
+    return manualDirectionFacts(session, stepId, true).filter(isRequiredManualFact)
 }
 
 /** Safety notes the extraction could not read: unresolved, never shown as a fact, resolved only by a clearer page. */

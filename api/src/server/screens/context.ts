@@ -431,7 +431,7 @@ export function buildContext(inputs: ScreenInputs): GroundingContext {
     // Every known safety note and direction of the step with its own actual sources: the mandatory payload.
     const manualFacts =
         session !== null && step !== null && STEP_KINDS.has(inputs.kind)
-            ? manualDirectionFacts(session, step.stepId)
+            ? manualDirectionFacts(session, step.stepId, true)
             : []
 
     const citedPageIds = new Set(table.refs.map((ref) => ref.pageId))

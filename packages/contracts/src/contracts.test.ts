@@ -6,6 +6,7 @@ import {
     createDemoManual,
     isCurrentResult,
     manualSessionSchema,
+    manualStepSchema,
     matchesBinding,
     normalizedBoxSchema,
     parsedManualSchema,
@@ -49,6 +50,38 @@ describe('manual trust boundaries', () => {
             value.rawExtraction = null
         }
         expect(manualSessionSchema.safeParse(value).success).toBe(false)
+    })
+
+    it('round-trips optional source-backed step actions and enforces count, length and identity bounds', () => {
+        const step = demo().reviewedSteps[0]!
+        const action = { actionId: 'a1', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }
+        const withActions = { ...step, actions: [action] }
+        expect(manualStepSchema.parse(withActions)).toEqual(withActions)
+        expect(manualStepSchema.parse(step)).not.toHaveProperty('actions')
+        expect(
+            manualStepSchema.safeParse({
+                ...step,
+                actions: Array.from({ length: 6 }, (_, i) => ({
+                    ...action,
+                    actionId: `a${i}`,
+                    instruction: 'x'.repeat(90),
+                })),
+            }).success,
+        ).toBe(true)
+        for (const actions of [
+            Array.from({ length: 7 }, (_, i) => ({ ...action, actionId: `a${i}` })),
+            [{ ...action, instruction: 'x'.repeat(91) }],
+            [action, action],
+            [{ ...action, sourceRefs: [] }],
+        ]) {
+            expect(manualStepSchema.safeParse({ ...step, actions }).success).toBe(false)
+        }
+        const session = demo()
+        session.reviewedSteps[0] = {
+            ...step,
+            actions: [{ ...action, sourceRefs: [{ pageId: 'missing', region: null }] }],
+        }
+        expect(manualSessionSchema.safeParse(session).success).toBe(false)
     })
 
     it('provides an isolated deterministic synthetic reviewed manual', () => {

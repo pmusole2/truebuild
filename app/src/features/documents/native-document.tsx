@@ -27,6 +27,7 @@ import {
     SCREEN_WAIT_COPY_V2,
     screenFacts,
     citationPlanV2,
+    isManualDirectionFact,
     sourceKeyV2,
     variantsOfV2,
     visitVariantNodesV2,
@@ -184,6 +185,8 @@ type Environment = {
     loaded: () => void
     omittedDuplicates: ReadonlySet<string>
     citations: Readonly<Record<string, CitationPlanEntryV2>>
+    /** Number of each shown action in Directions (by node path); the list reads 1, 2, 3 in document order. */
+    actionNumbers: Readonly<Record<string, number>>
     planSources: readonly DocumentSourceV2[]
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
@@ -325,7 +328,6 @@ function duplicateFactPaths(
     const citationsByFact = new Map<string, Set<number>>()
     const resultText = new Map<string, { refs: Set<string>; indexes: Set<number> }>()
     let nativeResumeCard = false
-    let guideTitleFactShown = false
     const key = (ref: ScreenDocumentV2['sources'][number]): string =>
         JSON.stringify([
             ref.pageId,
@@ -335,13 +337,6 @@ function duplicateFactPaths(
         if (node.type === 'Section' && node.collapsible && !node.initiallyOpen && !containsSafety(node, document))
             return
         const live = bindings.live
-        if (
-            document.kind === 'guide' &&
-            node.type === 'Text' &&
-            node.content.kind === 'fact' &&
-            node.content.factId === 'title'
-        )
-            guideTitleFactShown = true
         if (
             document.kind === 'home' &&
             node.type === 'ManualList' &&
@@ -386,14 +381,6 @@ function duplicateFactPaths(
         node.children.forEach((child, index) => {
             const next = `${at}.${index}`
             if (
-                guideTitleFactShown &&
-                child.type === 'Text' &&
-                child.content.kind === 'bound' &&
-                child.content.key === 'step-title'
-            ) {
-                // Keep the full fact and its citation in the body; the generic title binding adds no new words.
-                omitted.add(next)
-            } else if (
                 nativeResumeCard &&
                 child.type === 'Text' &&
                 child.content.kind === 'literal' &&
@@ -433,6 +420,104 @@ function duplicateFactPaths(
     }
     visit(body, path)
     return omitted
+}
+
+/**
+ * The Guide's procedure actions, numbered 1, 2, 3 in document order by the shared direction rule. The saved title
+ * direction and reviewed fixes take no number, and a repeat already omitted takes none either. Only the number is
+ * added; the instruction's own words are shown unchanged.
+ */
+function actionNumbers(
+    document: ScreenDocumentV2,
+    variant: ScreenVariantV2,
+    prefix: string,
+    omitted: ReadonlySet<string>,
+): Record<string, number> {
+    const numbers: Record<string, number> = {}
+    if (document.kind !== 'guide') return numbers
+    let next = 0
+    visitVariantNodesV2(variant, prefix, ({ node, path, hidden }) => {
+        if (hidden || !path.startsWith(`${prefix}body`) || omitted.has(path) || node.type !== 'Text') return
+        if (node.content.kind !== 'fact') return
+        const factId = node.content.factId
+        const fact = document.facts.find((item) => item.factId === factId)
+        if (fact !== undefined && isManualDirectionFact(fact) && fact.factId !== 'title') numbers[path] = ++next
+    })
+    return numbers
+}
+
+/**
+ * At most one source opener per section: the first opener of a section that shows anything draws every reference
+ * that section shows, in document order, and its other openers draw nothing. Each reference keeps its exact region.
+ * A nested section scopes its own openers, so a closed section's references stay behind its own disclosure. Openers
+ * outside every section (such as independent result cards) keep the planner's affordances.
+ */
+function oneOpenerPerSection(
+    variant: ScreenVariantV2,
+    prefix: string,
+    plan: Readonly<Record<string, CitationPlanEntryV2>>,
+    sources: readonly DocumentSourceV2[],
+): Record<string, CitationPlanEntryV2> {
+    const sections: string[] = []
+    const openers: string[] = []
+    visitVariantNodesV2(variant, prefix, ({ node, path }) => {
+        if (!path.startsWith(`${prefix}body`)) return
+        if (node.type === 'Section') sections.push(path)
+        else if (
+            plan[path] !== undefined &&
+            (node.type === 'ManualPage' || (node.type === 'Citation' && node.display !== 'thumbnail'))
+        )
+            openers.push(path)
+    })
+    const scopeOf = (path: string): string =>
+        sections.reduce(
+            (best, section) => (path.startsWith(`${section}.`) && section.length > best.length ? section : best),
+            '',
+        )
+    const scopes = new Map<string, string[]>()
+    for (const path of openers) {
+        const scope = scopeOf(path)
+        if (scope !== '') scopes.set(scope, [...(scopes.get(scope) ?? []), path])
+    }
+    const planned: Record<string, CitationPlanEntryV2> = { ...plan }
+    const combine = (paths: string[]): void => {
+        const shown = paths.find((path) => planned[path]!.show.length > 0)
+        if (shown === undefined) return
+        const all = [...new Set(paths.flatMap((path) => planned[path]!.show))]
+        for (const path of paths)
+            planned[path] =
+                path === shown
+                    ? { show: all, repeated: planned[path]!.repeated }
+                    : { show: [], repeated: [...planned[path]!.repeated, ...planned[path]!.show] }
+    }
+    for (const paths of scopes.values()) combine(paths)
+    // Outside sections, combine only adjacent sibling openers sharing a page; independent cards stay independent.
+    const adjacent = (node: ScreenNodeV2, path: string): void => {
+        if (node.type === 'Section' || !('children' in node)) return
+        let run: string[] = []
+        const pages = new Set<string>()
+        const flush = (): void => {
+            combine(run)
+            run = []
+            pages.clear()
+        }
+        node.children.forEach((child, index) => {
+            const at = `${path}.${index}`
+            if (!openers.includes(at)) {
+                flush()
+                adjacent(child, at)
+                return
+            }
+            const refs = planned[at]!.show.flatMap((source) => sources[source]?.pageId ?? [])
+            if (refs.length === 0) return
+            if (run.length > 0 && !refs.some((page) => pages.has(page))) flush()
+            run.push(at)
+            refs.forEach((page) => pages.add(page))
+        })
+        flush()
+    }
+    adjacent(variant.body, `${prefix}body`)
+    return planned
 }
 
 /** The held photo's own path and every path above it. */
@@ -764,6 +849,7 @@ function Disclosure({
     controlledOpen,
     onOpenChange,
     forced,
+    opener,
     children,
     mark,
 }: {
@@ -772,12 +858,15 @@ function Disclosure({
     controlledOpen?: boolean
     onOpenChange?: (open: boolean) => void
     forced?: boolean
+    /** A source opener is a small caption-sized link, never a heading of the document. */
+    opener?: boolean
     children: ReactNode
     mark: string
 }): ReactElement {
     const [localOpen, setOpen] = useState(initiallyOpen)
     const large = useLargeText()
     const open = controlledOpen ?? localOpen
+    const shown = large && title === MANUAL_OPENER ? MANUAL_OPENER_SHORT : title
     return (
         <View nativeID={mark} style={styles.stack}>
             <Pressable
@@ -792,7 +881,7 @@ function Disclosure({
                 }}
                 style={styles.touch}
             >
-                <Heading>{large && title === MANUAL_OPENER ? MANUAL_OPENER_SHORT : title}</Heading>
+                {opener === true ? <Caption>{shown}</Caption> : <Heading>{shown}</Heading>}
             </Pressable>
             {open || forced === true ? children : null}
         </View>
@@ -991,7 +1080,7 @@ function Sources({
     if (session === undefined) return null
     const planned = environment.citations[path]
     const refs = [...new Set(planned?.show ?? node.sources)].flatMap((index) => {
-        const source = environment.document.sources[index]
+        const source = environment.planSources[index]
         return source === undefined ? [] : [source]
     })
     if (refs.length === 0) return null
@@ -1026,6 +1115,7 @@ function Sources({
         <Disclosure
             title={documentText(environment.document, environment.bindings, node.label) || MANUAL_OPENER}
             initiallyOpen={node.type === 'ManualPage' && node.initiallyOpen}
+            opener
             mark={marked(environment, path)}
         >
             {pictures(node.type === 'ManualPage' && node.fit === 'cover' ? 'frame' : 'page')}
@@ -1616,20 +1706,31 @@ function NodeContent({
                 label: Label,
                 caption: Caption,
             }[node.role]
+            const line = (
+                <Typography
+                    tone={
+                        node.emphasis === 'quiet' && node.tone === 'neutral' ? 'muted' : (tone[node.tone] as TextTone)
+                    }
+                    style={{
+                        textAlign: node.align === 'start' ? 'left' : node.align === 'end' ? 'right' : 'center',
+                    }}
+                >
+                    {text(node.content)}
+                </Typography>
+            )
+            const number = environment.actionNumbers[path]
             return (
                 <View nativeID={mark} style={{ alignItems: node.align === 'start' ? 'stretch' : align[node.align] }}>
-                    <Typography
-                        tone={
-                            node.emphasis === 'quiet' && node.tone === 'neutral'
-                                ? 'muted'
-                                : (tone[node.tone] as TextTone)
-                        }
-                        style={{
-                            textAlign: node.align === 'start' ? 'left' : node.align === 'end' ? 'right' : 'center',
-                        }}
-                    >
-                        {text(node.content)}
-                    </Typography>
+                    {number === undefined ? (
+                        line
+                    ) : (
+                        <View style={styles.numbered}>
+                            <Typography tone="muted" style={{ textAlign: 'left' }}>
+                                {`${number}.`}
+                            </Typography>
+                            <View style={styles.numberedText}>{line}</View>
+                        </View>
+                    )}
                 </View>
             )
         }
@@ -2073,19 +2174,6 @@ export function NativeDocumentRenderer({
     )
     const subtitle = selected.variant.header.subtitle
     const subtitleText = documentText(document, bindings, subtitle).trim().replace(/\s+/gu, ' ')
-    let instructionInBody = false
-    if (document.kind === 'guide' && subtitleText !== '') {
-        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
-            if (
-                !hidden &&
-                path.startsWith(`${selected.prefix}body`) &&
-                !omitted.has(path) &&
-                node.type === 'Text' &&
-                documentText(document, bindings, node.content).trim().replace(/\s+/gu, ' ') === subtitleText
-            )
-                instructionInBody = true
-        })
-    }
     // Use the authored wait indicator when present; text-only variants receive the same scene in their body.
     let waitIndicator = false
     let bodyWaitHeading: string | null = null
@@ -2142,6 +2230,7 @@ export function NativeDocumentRenderer({
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
         omittedDuplicates: omitted,
+        actionNumbers: actionNumbers(document, selected.variant, selected.prefix, omitted),
         planSources,
         sections,
         sectionChanged: (path, open): void => {
@@ -2150,10 +2239,15 @@ export function NativeDocumentRenderer({
                 values: { ...(held.id === bodyPage ? held.values : {}), [path]: open },
             }))
         },
-        citations: citationPlanV2(plannedVariant, selected.prefix, planSources, {
-            includeManualPages: true,
-            lowPriorityPaths,
-        }),
+        citations: oneOpenerPerSection(
+            plannedVariant,
+            selected.prefix,
+            citationPlanV2(plannedVariant, selected.prefix, planSources, {
+                includeManualPages: true,
+                lowPriorityPaths,
+            }),
+            planSources,
+        ),
         leading: null,
         trailing: null,
         guidePillPaths: new Set<string>(),
@@ -2267,7 +2361,7 @@ export function NativeDocumentRenderer({
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
                             <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            {subtitle === null || subtitleText === '' || instructionInBody ? null : (
+                            {subtitle === null || subtitleText === '' ? null : (
                                 <Caption>{documentText(document, bindings, subtitle)}</Caption>
                             )}
                         </View>
@@ -2370,6 +2464,8 @@ function GuidePieces({ environment }: { environment: Environment }): ReactElemen
 const styles = StyleSheet.create({
     stack: { gap: space.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+    numbered: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
+    numberedText: { flex: 1, minWidth: 0 },
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },
     touch: { minHeight: touchTarget, justifyContent: 'center', alignSelf: 'stretch', flexShrink: 0 },

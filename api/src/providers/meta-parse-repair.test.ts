@@ -282,7 +282,7 @@ describe('bounded parse repair', () => {
         expect(fetch).toHaveBeenCalledTimes(1)
     })
 
-    it.each(['step', 'registry part', 'required part', 'visible check', 'step order'] as const)(
+    it.each(['step', 'registry part', 'required part', 'visible check', 'step order', 'action'] as const)(
         'keeps the first extraction when a lower-score repair does not preserve %s',
         async (omission) => {
             const { input, clean } = await fixture()
@@ -294,7 +294,11 @@ describe('bounded parse repair', () => {
                 second.steps.splice(1)
                 second.parts.splice(1)
             } else if (omission === 'required part') second.steps[1]!.parts.shift()
-            else if (omission === 'step order') {
+            else if (omission === 'action') {
+                first.steps[0]!.actions = [
+                    { actionId: 'a1', instruction: 'Turn the panel.', sourceRefs: first.steps[0]!.sourceRefs },
+                ]
+            } else if (omission === 'step order') {
                 second.steps.reverse().forEach((step, index) => {
                     step.order = index + 1
                 })
