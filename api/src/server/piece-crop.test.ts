@@ -47,6 +47,10 @@ it('anchors the seed to ink in the hint even when a larger neighbour scores high
     expect(y * 300).toBeLessThanOrEqual(145)
     expect((y + h) * 300).toBeGreaterThanOrEqual(155)
     expect((x + w) * 360).toBeLessThan(121)
+    // A hint over blank paper must not borrow the neighbouring component exposed only by padding.
+    expect(
+        await refinePieceCrop({ bytes, mimeType: 'image/png', width: 360, height: 300 }, [0.5, 0.2, 0.1, 0.1]),
+    ).toBeNull()
 })
 
 it('keeps the whole connected part when its centre lies outside the clipped hint', async () => {
