@@ -458,6 +458,63 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     })
 })
 
+it('keeps the excluded Phone support outside the requested Frame / Walking machine boundary', async () => {
+    const bodies: unknown[] = []
+    const provider = createMetaProvider({
+        apiKey: 'synthetic-pieces-provider-key',
+        fetchImpl: guardModelFetch(async (_url, init): Promise<Response> => {
+            bodies.push(JSON.parse(String(init?.body)) as unknown)
+            return wonderResponse([{ ...spec('frame'), name: 'Phone support' }])
+        }),
+    })
+    const handler = createPieceHandler({
+        auth: new SharedKeyAuth({ sharedSecret: 'pieces-test-key' }),
+        runtimeMode: 'meta',
+        provider,
+        work: createBackgroundWork(new ModelCallCounter(), new ConcurrencyGate(8)),
+        deadlineMs: 45_000,
+    })
+    const response = await handler(
+        pieceRequest(
+            {
+                requestId: 'exclusion-precedence',
+                contentHash: 'a'.repeat(64),
+                parts: [
+                    {
+                        ...part('frame'),
+                        name: 'Frame / Walking machine',
+                        pageId: null,
+                        notPartOfThisPiece: ['Phone support'],
+                    },
+                ],
+                pages: [],
+            },
+            Buffer.alloc(0),
+        ),
+    )
+    expect(response.status).toBe(200)
+    const result = pieceBatchResultSchema.parse(await response.json())
+    expect(result.results[0]).toMatchObject({
+        id: 'frame',
+        name: 'Frame / Walking machine',
+        status: 'invalid',
+        piece: null,
+        issueCodes: ['piece:name_mismatch'],
+    })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toHaveProperty(
+        'input.0.content.0.text',
+        expect.stringContaining('"notPartOfThisPiece":["Phone support"]'),
+    )
+    expect(bodies[0]).toHaveProperty(
+        'instructions',
+        expect.stringContaining(
+            "these exclusions always take precedence, even for connected profiles in the requested piece's own drawing or cutout",
+        ),
+    )
+    expect(bodies[0]).toHaveProperty('instructions', expect.not.stringContaining('even if a name excludes it'))
+})
+
 it('sends no crop image for a blank drawing and still asks Wonder for the name-only geometry', async () => {
     const blankPage = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#eeeeee' } })
         .png()

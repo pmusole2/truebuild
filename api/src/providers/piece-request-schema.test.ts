@@ -18,12 +18,12 @@ it('does not treat shadows or expected product features as evidence for undersid
     )
 })
 
-it('keeps a connected functional profile even when small while exclusions remove only separate loose items', () => {
+it('keeps non-excluded connected functional profiles even when small', () => {
     expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
         'Ignore other inventory pieces, loose separate items and silhouettes even when visible in the crop',
     )
     expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
-        "a connected functional profile visibly attached in the requested piece's own drawing or cutout is part of this piece even when small",
+        "a connected functional profile visibly attached in the requested piece's own drawing or cutout is part of this piece even when small, unless excluded by notPartOfThisPiece",
     )
 })
 
@@ -43,8 +43,8 @@ it('keeps broad figure context from absorbing neighbouring items', () => {
     expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain('do not absorb neighbouring items from it')
 })
 
-it('bumps the geometry prompt version so cached v8 manifests refresh', () => {
-    expect(PIECE_GEOMETRY_PROMPT_VERSION).toBe(9)
+it('bumps the geometry prompt version so cached v9 manifests refresh', () => {
+    expect(PIECE_GEOMETRY_PROMPT_VERSION).toBe(10)
 })
 
 it('accepts optional bounded inventory exclusions as data while rejecting malformed or oversized lists', () => {
