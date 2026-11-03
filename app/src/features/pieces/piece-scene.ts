@@ -80,19 +80,30 @@ function geometry(part: PieceSpec['parts'][number]): BufferGeometry {
     }
 }
 
-/** Closed, bounded-resolution parts only: no loaders, scripts, URLs or unbounded tessellation. */
-export function createPieceObject(piece: PieceSpec): Group {
+/**
+ * Closed shapes in the caller's own frame, with no centring. A caller that shares one world frame across several groups
+ * (step motion) keeps that frame; a piece centres itself below.
+ */
+export function createShapeGroup(parts: readonly PieceSpec['parts'][number][], color: string): Group {
     const object = new Group()
     try {
-        for (const part of piece.parts) {
-            const mesh = new Mesh(
-                geometry(part),
-                new MeshStandardMaterial({ color: piece.color, roughness: 0.58, metalness: 0.14 }),
-            )
+        for (const part of parts) {
+            const mesh = new Mesh(geometry(part), new MeshStandardMaterial({ color, roughness: 0.58, metalness: 0.14 }))
             mesh.position.set(...part.position)
             mesh.rotation.set(...part.rotation)
             object.add(mesh)
         }
+        return object
+    } catch (error) {
+        disposePieceObject(object)
+        throw error
+    }
+}
+
+/** Closed, bounded-resolution parts only: no loaders, scripts, URLs or unbounded tessellation. */
+export function createPieceObject(piece: PieceSpec): Group {
+    const object = createShapeGroup(piece.parts, piece.color)
+    try {
         const center = new Box3().setFromObject(object).getCenter(new Vector3())
         object.position.sub(center)
         // Keep centering inside a pivot so dragging rotates around the piece, not its source coordinates.
@@ -121,7 +132,7 @@ export function disposePieceObject(object: Group): void {
 }
 
 /** expo-gl owns the context. This adapter supplies only the canvas members Three r160 uses on native. */
-function canvasFor(gl: ExpoWebGLRenderingContext): HTMLCanvasElement {
+export function canvasFor(gl: ExpoWebGLRenderingContext): HTMLCanvasElement {
     if (gl.canvas) return gl.canvas as HTMLCanvasElement
     const canvas = {
         width: gl.drawingBufferWidth,

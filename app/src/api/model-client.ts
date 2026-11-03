@@ -16,6 +16,8 @@ import {
     screensResultSchema,
     segmentEventSchema,
     SUPPORTED_STEP_EXTENSIONS,
+    stepMotionRequestSchema,
+    stepMotionResultSchema,
     type ApiResult,
     type CaptureBinding,
     type CheckResult,
@@ -30,6 +32,8 @@ import {
     type ScreenKind,
     type ScreensResult,
     type SegmentEvent,
+    type StepMotionRequest,
+    type StepMotionResult,
 } from '@truebuild/contracts'
 import {
     MAX_PARSE_PAGES,
@@ -314,6 +318,9 @@ async function readProgressStream(
     const failed = (result as { status?: unknown } | null)?.status === 'unavailable'
     return { status: failed ? 502 : 200, text: JSON.stringify(result) }
 }
+
+/** A known refusal before model dispatch can be retried on a later visit; unknown outcomes must never be resent. */
+export type StepMotionAttempt = StepMotionResult | { status: 'not_sent' | 'unknown' }
 
 export class ModelApiClient {
     private readonly baseUrl: string
@@ -903,6 +910,63 @@ export class ModelApiClient {
             return result.success ? result.data : null
         } catch {
             return null
+        } finally {
+            releaseMultipartImages(form)
+            guard.dispose()
+        }
+    }
+
+    /** Additive endpoint: an older server's 404 is an absent hint, with no fallback or retry. */
+    async stepMotion(
+        request: StepMotionRequest,
+        pageUris: Readonly<Record<string, string>>,
+    ): Promise<StepMotionAttempt> {
+        if (this.consent !== null && !(await this.allowed(undefined, false))) return { status: 'not_sent' }
+        const valid = stepMotionRequestSchema.safeParse(request)
+        if (!valid.success) return { status: 'not_sent' }
+        const guard = createCallGuard(MODEL_PIECES_TIMEOUT_MS, undefined)
+        const form = new FormData()
+        let sent = false
+        try {
+            const page = valid.data.page
+            const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
+            if (bytes === null || bytes.byteLength > LIMITS.imageBytes) return { status: 'not_sent' }
+            appendMultipartImage(form, `page:${page.pageId}`, { ...page, bytes }, page.pageId)
+            form.append('metadata', JSON.stringify(valid.data))
+            sent = true
+            const response = await awaitStopped(
+                this.fetchImpl(new URL('/api/step-motion', this.baseUrl).toString(), this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            const text = await readBoundedText(response, guard.signal, guard.checkpoint, 500_000)
+            if (!response.ok) {
+                if ([400, 401, 404, 429].includes(response.status)) return { status: 'not_sent' }
+                const failure: unknown = JSON.parse(text)
+                if (
+                    typeof failure === 'object' &&
+                    failure !== null &&
+                    'notDispatched' in failure &&
+                    failure.notDispatched === true
+                )
+                    return { status: 'not_sent' }
+                if (
+                    typeof failure === 'object' &&
+                    failure !== null &&
+                    'code' in failure &&
+                    ['unconfigured', 'busy', 'cache_capacity', 'budget_exhausted'].includes(String(failure.code))
+                )
+                    return { status: 'not_sent' }
+                return { status: 'unknown' }
+            }
+            const parsed = stepMotionResultSchema.safeParse(JSON.parse(text))
+            return parsed.success && (parsed.data.scene === null || parsed.data.scene.stepId === request.stepId)
+                ? parsed.data
+                : { status: 'unknown' }
+        } catch (error) {
+            if (error instanceof Error && ['ai_consent_required', 'request_stopped'].includes(error.message))
+                return { status: 'not_sent' }
+            return { status: sent ? 'unknown' : 'not_sent' }
         } finally {
             releaseMultipartImages(form)
             guard.dispose()

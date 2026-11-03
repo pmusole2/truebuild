@@ -9,6 +9,7 @@ import {
     sourceRefSchema,
     PIECE_SPEC_LIMITS,
     pieceSpecSchema,
+    stepMotionResultSchema,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
@@ -370,6 +371,7 @@ const requestedPieceSchema = pieceSpecSchema.extend({
 })
 
 export const metaOutputSchemas = {
+    stepMotion: strictSchema(z.toJSONSchema(stepMotionResultSchema, { target: 'draft-7', io: 'input' })),
     pieces: strictSchema(
         z.toJSONSchema(
             z.strictObject({

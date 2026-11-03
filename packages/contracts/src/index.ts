@@ -847,3 +847,4 @@ export * from './piece-spec'
 export * from './piece-generation'
 
 export * from './manual-session-extensions'
+export * from './step-motion'

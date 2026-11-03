@@ -33,6 +33,8 @@ import {
     type ManualPieceInput,
     manualPieceInputSchema,
     pieceIdSchema,
+    stepMotionRequestSchema,
+    type StepMotionRequest,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
@@ -83,6 +85,7 @@ import {
 } from './meta-schemas'
 import { DOCUMENT_INSTRUCTIONS, DOCUMENT_LANGUAGE_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
 import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
+import { STEP_MOTION_INSTRUCTIONS } from './step-motion-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
 import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
 
@@ -272,6 +275,10 @@ export interface AnswerQuestionInput extends CheckStepInput {
 }
 
 export interface MetaProvider {
+    generateStepMotion?(
+        input: { request: StepMotionRequest; image: ObservationImage },
+        signal: AbortSignal,
+    ): Promise<ScreenGeneration>
     generatePieces?(
         input: {
             requestId: string
@@ -890,6 +897,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             case 'document':
                 return 'screens'
             case 'pieces':
+            case 'stepMotion':
                 return 'step-pages'
         }
     }
@@ -926,15 +934,17 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                   ? SCREEN_INSTRUCTIONS
                   : operation === 'pieces'
                     ? PIECE_GEOMETRY_INSTRUCTIONS
-                    : operation === 'document'
-                      ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
-                          ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
-                          : DOCUMENT_INSTRUCTIONS
-                      : operation === 'overlay'
-                        ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
-                        : withLayout
-                          ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
-                          : INSTRUCTIONS
+                    : operation === 'stepMotion'
+                      ? STEP_MOTION_INSTRUCTIONS
+                      : operation === 'document'
+                        ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
+                            ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
+                            : DOCUMENT_INSTRUCTIONS
+                        : operation === 'overlay'
+                          ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
+                          : withLayout
+                            ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
+                            : INSTRUCTIONS
         const baseInstructions =
             language === undefined
                 ? operationInstructions
@@ -950,25 +960,51 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             type: 'input_image',
             image_url: `data:image/jpeg;base64,${Buffer.from(image.bytes).toString('base64')}`,
         })
-        const content = [
-            { type: 'input_text', text: JSON.stringify({ manualContext: stable }) },
-            ...(textOnly ? [] : manualImages.map(imagePart)),
-            {
-                type: 'input_text',
-                text: JSON.stringify({
-                    operation,
-                    step,
-                    requestId,
-                    binding,
-                    question,
-                    target,
-                    // Per-request, so the shared instruction prefix stays identical across check and ask.
-                    ...(verdictOnly && operation === 'check' ? { verdictOnly: VERDICT_ONLY_INSTRUCTIONS } : {}),
-                    ...(typeof dynamic === 'object' && dynamic !== null ? dynamic : {}),
-                }),
-            },
-            ...observation.map(imagePart),
-        ]
+        const content =
+            operation === 'stepMotion'
+                ? [
+                      {
+                          type: 'input_text',
+                          text: JSON.stringify({
+                              instructionText: stable.instructionText,
+                              sourceRefs: stable.sourceRefs,
+                          }),
+                      },
+                      ...images.map(imagePart),
+                      {
+                          type: 'input_text',
+                          text: JSON.stringify({
+                              requestId,
+                              stepId: stable.stepId,
+                              readingLanguage: stable.readingLanguage,
+                              parts: stable.parts,
+                              actions: stable.actions,
+                              orientation: stable.orientation,
+                              connection: stable.connection,
+                          }),
+                      },
+                  ]
+                : [
+                      { type: 'input_text', text: JSON.stringify({ manualContext: stable }) },
+                      ...(textOnly ? [] : manualImages.map(imagePart)),
+                      {
+                          type: 'input_text',
+                          text: JSON.stringify({
+                              operation,
+                              step,
+                              requestId,
+                              binding,
+                              question,
+                              target,
+                              // Per-request, so the shared instruction prefix stays identical across check and ask.
+                              ...(verdictOnly && operation === 'check'
+                                  ? { verdictOnly: VERDICT_ONLY_INSTRUCTIONS }
+                                  : {}),
+                              ...(typeof dynamic === 'object' && dynamic !== null ? dynamic : {}),
+                          }),
+                      },
+                      ...observation.map(imagePart),
+                  ]
         const format = {
             type: 'json_schema',
             name: `truebuild_${operation}`,
@@ -1034,9 +1070,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
                 },
                 // One short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
-                2,
+                operation === 'stepMotion' ? 1 : 2,
                 transportObservation,
-                2,
+                operation === 'stepMotion' ? 1 : 2,
             )
 
             // Even a response that settles beyond the absolute deadline retains explicit body custody.
@@ -1571,6 +1607,29 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     return { value, telemetry }
                 },
             )
+        },
+
+        async generateStepMotion(input, signal): Promise<ScreenGeneration> {
+            const request = stepMotionRequestSchema.safeParse(input.request)
+            if (!request.success) throw new MetaProviderError('invalid_input')
+            return execute(PIECES_DEADLINE_MS, signal, async (deadline): Promise<ScreenGeneration> => {
+                const images = await validateAndNormalizeImages([input.image], deadline.signal, 1)
+                const { page: _page, figureBox: _box, manualHash: _hash, ...context } = request.data
+                return dispatchDetailed(
+                    'stepMotion',
+                    context,
+                    images,
+                    z.unknown(),
+                    deadline,
+                    'muse-wonder-1.0',
+                    false,
+                    undefined,
+                    false,
+                    'step-pages',
+                    false,
+                    'high',
+                )
+            })
         },
 
         async generatePieces(input, signal): Promise<ScreenGeneration> {

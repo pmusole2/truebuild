@@ -74,6 +74,7 @@ import { ViewerScrollView } from '../pieces/viewer-scroll-lock'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
 import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
+import { GuideStepMotion } from '../step-motion/guide-step-motion'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
 import Animated from 'react-native-reanimated'
@@ -2391,6 +2392,15 @@ export function NativeDocumentRenderer({
     environment.trailing = (
         <>
             {document.kind === 'guide' ? <GuidePieces environment={environment} /> : null}
+            {document.kind === 'guide' && bindings.session?.manualId === document.bound.manualId ? (
+                <GuideStepMotion
+                    session={bindings.session}
+                    stepId={document.bound.stepId}
+                    pageUris={bindings.pageUris}
+                    active={scope.active && !attention && selected.name === 'ready'}
+                    readOnly={bindings.readOnly === true}
+                />
+            ) : null}
             {bindings.inspect && document.kind !== 'judge' ? (
                 <Judge
                     environment={environment}

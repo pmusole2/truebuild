@@ -15,6 +15,7 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/session', 'GET'],
     ['/api/manuals/parse', 'POST'],
     ['/api/pieces', 'POST'],
+    ['/api/step-motion', 'POST'],
     ['/api/checks', 'POST'],
     ['/api/checks/second-opinion', 'POST'],
     ['/api/checks/overlay', 'POST'],
@@ -75,6 +76,7 @@ const routes = new Hono<ApiEnv>()
         }),
     )
     .post('/api/pieces', (context): Promise<Response> => context.get('runtime').model.pieces(context.req.raw))
+    .post('/api/step-motion', (context): Promise<Response> => context.get('runtime').model.stepMotion(context.req.raw))
     .post('/api/manuals/parse', (context): Promise<Response> => dispatch(context, 'parse'))
     .post('/api/checks/second-opinion', (context): Promise<Response> =>
         context.get('runtime').model.secondOpinion(context.req.raw),

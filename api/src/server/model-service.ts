@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { retryableNetworkFailure, retryAfterDeadline } from '../providers/meta-transport'
 import { admission } from './request-clock'
 import { createPieceHandler } from './pieces'
+import { createStepMotionHandler } from './step-motion'
 
 import {
     checkResultSchema,
@@ -675,6 +676,7 @@ export function createModelHandlers(options: {
 }): {
     parse: Handler
     pieces: Handler
+    stepMotion: Handler
     check: Handler
     secondOpinion: Handler
     overlay: Handler
@@ -1860,6 +1862,12 @@ export function createModelHandlers(options: {
         }
     }
     return {
+        stepMotion: createStepMotionHandler({
+            auth,
+            provider,
+            runtimeMode: options.runtimeMode ?? 'meta',
+            work: createBackgroundWork(counter, gate),
+        }),
         pieces: createPieceHandler({
             auth,
             provider,
