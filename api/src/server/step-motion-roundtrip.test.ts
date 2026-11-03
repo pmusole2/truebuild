@@ -8,7 +8,11 @@ import { createRuntimeFromEnvironment } from './model-runtime'
 import { createFixtureProvider } from '../providers/fixture'
 import { documentInputs } from '../test-support/document-inputs'
 import { LibraryStorage, type KeyValueStorage } from '../../../app/src/features/capture/library'
-import { motionRequestForStep } from '../../../app/src/features/step-motion/step-motion-registry'
+import {
+    motionRequestForStep,
+    stepMotionCacheKey as deviceCacheKey,
+} from '../../../app/src/features/step-motion/step-motion-registry'
+import { stepMotionCacheKey as serverCacheKey } from './step-motion'
 import { BoundedApiClient, SIMULATED_LABEL } from '../../../app/src/api/client'
 
 const digest = (bytes: Uint8Array): Promise<string> => Promise.resolve(createHash('sha256').update(bytes).digest('hex'))
@@ -28,7 +32,7 @@ it('round-trips both step fields through fixture parse, library, shared projecti
         baseUrl: 'http://localhost',
         mode: 'fixture',
         secret: key,
-        fetch: async (url, init) => api.request(url, init),
+        fetch: async (url, init): Promise<Response> => api.request(url, init),
     })
     const parsed = await client.parse(
         { kind: 'manual', manualId: session.manualId, revision: session.revision },
@@ -69,7 +73,7 @@ it('round-trips both step fields through fixture parse, library, shared projecti
     const metadata = screensV2GenerateRequest('hash-roundtrip', documentInputs('guide', saved), (text) =>
         createHash('sha256').update(text).digest('hex'),
     )
-    const send = (value: unknown): Promise<Response> => {
+    const send = async (value: unknown): Promise<Response> => {
         const form = new FormData()
         form.set('metadata', JSON.stringify(value))
         return api.request('/api/screens/v2?waitCopy=2&stepFields=actions,sourceText', {
@@ -86,4 +90,14 @@ it('round-trips both step fields through fixture parse, library, shared projecti
     expect(motion.instructionText).toBe(step.sourceText)
     expect(motion.actions).toEqual(step.actions.map((action) => action.instruction))
     expect(motion.sourceRefs).toEqual(step.sourceRefs)
+    expect(deviceCacheKey(motion).split('/').at(-1)).toBe(serverCacheKey(motion))
+    const lookup = new FormData()
+    lookup.set('metadata', JSON.stringify({ ...motion, cacheOnly: true }))
+    const accepted = await api.request('/api/step-motion?cacheOnly=1', {
+        method: 'POST',
+        headers: { 'x-truebuild-key': key },
+        body: lookup,
+    })
+    expect(accepted.status).toBe(404)
+    expect(await accepted.json()).toMatchObject({ code: 'cache_miss' })
 })

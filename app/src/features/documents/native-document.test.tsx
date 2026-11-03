@@ -1050,10 +1050,19 @@ describe('the actual v2 catalog renderer', () => {
 
     it.each([
         { label: 'a legacy Guide with no stepActions echo', legacy: true, shown: 1 },
-        { label: 'a numbered Guide with the stepActions echo', legacy: false, shown: 2 },
-    ])('repeats a subtitle that matches a body instruction only for $label', async ({ legacy, shown }) => {
+        { label: 'a numbered Guide with the stepActions echo', legacy: false, shown: 3 },
+    ])('guards duplicate bound titles and subtitles only for $label', async ({ legacy, shown }) => {
         const { inputs, bindings } = await setup()
-        const document = compose(inputs)
+        const document = compose(inputs, [
+            {
+                type: 'Text',
+                content: { kind: 'bound', key: 'step-title' },
+                role: 'body',
+                emphasis: 'normal',
+                tone: 'neutral',
+                align: 'start',
+            },
+        ])
         const direction = inputs.session!.reviewedSteps[0]!.title
         document.header.subtitle = { kind: 'literal', text: direction }
         if (legacy) delete document.metadata.stepActions

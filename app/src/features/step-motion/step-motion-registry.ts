@@ -3,6 +3,7 @@ import {
     paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionRequestSchema,
+    stepMotionCacheContent,
     stepMotionResultSchema,
     type ManualSession,
     type ManualStep,
@@ -19,7 +20,7 @@ type Generate = (
 ) => Promise<StepMotionAttempt | null>
 
 export function stepMotionCacheKey(request: StepMotionRequest, version = STEP_MOTION_PROMPT_VERSION): string {
-    return `truebuild/step-motion/${sha256Hex(canonicalJson([request.manualHash, request.stepId, request.readingLanguage, version]))}`
+    return `truebuild/step-motion/${sha256Hex(canonicalJson([version, stepMotionCacheContent(request)]))}`
 }
 
 /** A review action is plain text or an action object; each contributes its instruction text and anything else is ignored. */

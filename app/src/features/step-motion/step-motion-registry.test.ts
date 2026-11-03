@@ -98,6 +98,34 @@ describe('step motion device registry', () => {
         expect(request.figureBox).toBeNull()
     })
 
+    it('keys both caches by scene content, preserving only request and lookup identity', async () => {
+        const request = motionRequestForStep(createDemoManual(), 'step-1', 'original')!
+        const generate = vi.fn(async () => ({ scene: null }))
+        const registry = new StepMotionRegistry(storage(), generate)
+        await registry.load(request, {})
+        await registry.load({ ...request, requestId: 'revisit', cacheOnly: true }, {})
+        expect(generate).toHaveBeenCalledTimes(1)
+        const edits = [
+            { instructionText: 'Press the part.' },
+            { actions: ['Press the part.'] },
+            { parts: [] },
+            { orientation: null },
+            { connection: null },
+            {
+                sourceRefs: [{ pageId: request.page.pageId, region: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 } }],
+                figureBox: paddedStepFigureBox([0.1, 0.1, 0.5, 0.5]),
+            },
+            { page: { ...request.page, width: request.page.width + 1 } },
+        ]
+        for (const edit of edits) {
+            const changed = { ...request, ...edit }
+            expect(stepMotionCacheKey(changed)).not.toBe(stepMotionCacheKey(request))
+        }
+        const changed = { ...request, ...edits[0]! }
+        await registry.load(changed, {})
+        expect(generate).toHaveBeenCalledTimes(2)
+    })
+
     it('coalesces requests and persists null or unknown outcomes before sending, so revisits never resend', async () => {
         const request = motionRequestForStep(createDemoManual(), 'step-1', 'request-1')!
         const disk = storage()

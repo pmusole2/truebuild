@@ -190,6 +190,29 @@ it('caches one call per step/language/version and sends verbatim manual text bef
     expect(stepMotionTextBytes({ ...metadata, readingLanguage: 'es' })).toBe(wireTextBytes(bodies[1]!))
 })
 
+it('misses a cached scene after its instruction content changes under the same page hash', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene })
+    expect((await handler(await request())).status).toBe(200)
+    expect((await handler(await request({ requestId: 'another-reader' }))).status).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect((await handler(await request({ instructionText: 'Press the part.' }))).status).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it('keeps a post-dispatch failure terminal so revisits and cache reads never pay again', async () => {
+    const { handler, fetchImpl, counter } = setup(null, 8, () =>
+        Response.json({ error: 'unavailable' }, { status: 503 }),
+    )
+    for (const overrides of [{}, { cacheOnly: true }, { requestId: 'revisit' }]) {
+        const result = await handler(await request(overrides))
+        expect(result.status).toBe(200)
+        expect(await result.json()).toEqual({ scene: null })
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(counter.used).toBe(1)
+})
+
 it.each([
     null,
     { ...scene, movers: [{ ...scene.movers[0], motion: { kind: 'screw', axis: [0, 0, 2], travel: 0.1, turns: 1 } }] },

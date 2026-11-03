@@ -347,7 +347,7 @@ function projectEchoedSteps(value: unknown, echoed: ReadonlySet<StepExtension>):
     return { ...value, steps: value.steps.map((step: unknown) => projectStepExtensions(step, echoed)) }
 }
 
-function parsedManualValue(echoed: ReadonlySet<StepExtension>, pageIds: ReadonlySet<string>) {
+function parsedManualValue(echoed: ReadonlySet<StepExtension>, pageIds: ReadonlySet<string>): z.ZodType<ParsedManual> {
     return z.preprocess(
         (value) => sanitizeManualStepActions(projectEchoedSteps(value, echoed), pageIds),
         parsedManualSchema,

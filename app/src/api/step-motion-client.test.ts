@@ -80,7 +80,9 @@ describe('step motion additive client', () => {
         const first = new ModelApiClient({ baseUrl: 'https://fixture.example', secret: '', fetch })
         const second = new ModelApiClient({ baseUrl: 'https://fixture.example', secret: '', fetch })
         expect(await first.stepMotion(request, pageUris)).toEqual({ status: 'not_sent' })
-        expect(await second.stepMotion(request, pageUris)).toEqual({ status: 'not_sent' })
+        const next = motionRequestForStep(createDemoManual(), 'step-2', 'motion-2')!
+        expect(next.stepId).not.toBe(request.stepId)
+        expect(await second.stepMotion(next, pageUris)).toEqual({ status: 'not_sent' })
         expect(fetch).toHaveBeenCalledTimes(1)
     })
 

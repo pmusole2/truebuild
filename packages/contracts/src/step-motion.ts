@@ -128,3 +128,9 @@ export const stepMotionRequestSchema = z
             context.addIssue({ code: 'custom', message: 'Part ids must be unique' })
     })
 export type StepMotionRequest = z.infer<typeof stepMotionRequestSchema>
+
+/** All scene evidence is cache identity; transport ids and cache-only lookup do not change its meaning. */
+export function stepMotionCacheContent(request: StepMotionRequest): Omit<StepMotionRequest, 'requestId' | 'cacheOnly'> {
+    const { requestId: _requestId, cacheOnly: _cacheOnly, ...content } = request
+    return content
+}

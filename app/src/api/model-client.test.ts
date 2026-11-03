@@ -982,26 +982,27 @@ it('rejects new parse citations outside supplied pages', async () => {
     ).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
 })
 
-it('applies only the optional step fields the parse response echoes in its header', async () => {
+it.each([false, true])('applies only echoed optional parse fields (SSE: %s)', async (stream) => {
     const value = structuredClone(session.rawExtraction!)
     value.steps[0] = { ...value.steps[0]!, sourceText: 'Turn the panel.', actions: null }
     const body = { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }
     const firstStep = (result: Awaited<ReturnType<ModelApiClient['parse']>>): unknown =>
         result.status === 'ok' ? result.value.steps[0] : null
-
-    const unechoed = scripted(() => jsonResponse(200, body))
-    const absent = await client(unechoed.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    const response = (echo?: string): Response =>
+        new Response(stream ? `data: ${JSON.stringify({ type: 'result', result: body })}\n\n` : JSON.stringify(body), {
+            headers: {
+                'content-type': stream ? 'text/event-stream' : 'application/json',
+                ...(echo === undefined ? {} : { 'x-truebuild-step-fields': echo }),
+            },
+        })
+    const context = { requestId: REQUEST_ID, ...(stream ? { onProgress: (): void => {} } : {}) }
+    const unechoed = scripted(() => response())
+    const absent = await client(unechoed.fetch).parse(manualBinding, session.pages, [source], context)
     expect(absent).toMatchObject({ status: 'ok' })
     expect(firstStep(absent)).not.toHaveProperty('sourceText')
     expect(firstStep(absent)).not.toHaveProperty('actions')
 
-    const echoed = scripted(
-        () =>
-            new Response(JSON.stringify(body), {
-                status: 200,
-                headers: { 'content-type': 'application/json', 'x-truebuild-step-fields': 'actions, sourceText' },
-            }),
-    )
-    const kept = await client(echoed.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    const echoed = scripted(() => response('actions, sourceText'))
+    const kept = await client(echoed.fetch).parse(manualBinding, session.pages, [source], context)
     expect(firstStep(kept)).toMatchObject({ sourceText: 'Turn the panel.', actions: null })
 })

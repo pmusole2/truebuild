@@ -5,6 +5,7 @@ import {
     LIMITS,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionRequestSchema,
+    stepMotionCacheContent,
     stepMotionResultSchema,
     type StepMotionRequest,
     type StepMotionResult,
@@ -53,12 +54,9 @@ export function estimatedStepMotionCostUsd(usage: {
     return ((inputTokens - cachedTokens) * 4 + cachedTokens * 0.2 + outputTokens * 20) / 1_000_000
 }
 
-export function stepMotionCacheKey(
-    request: Pick<StepMotionRequest, 'manualHash' | 'stepId' | 'readingLanguage'>,
-    promptVersion = STEP_MOTION_PROMPT_VERSION,
-): string {
+export function stepMotionCacheKey(request: StepMotionRequest, promptVersion = STEP_MOTION_PROMPT_VERSION): string {
     return createHash('sha256')
-        .update(canonicalJson([request.manualHash, request.stepId, request.readingLanguage, promptVersion]))
+        .update(canonicalJson([promptVersion, stepMotionCacheContent(request)]))
         .digest('hex')
 }
 
