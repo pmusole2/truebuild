@@ -3,6 +3,7 @@ import {
     screenContextJsonV2,
     screenManualJsonV2,
     screenStageV2,
+    SUPPORTED_STEP_EXTENSIONS,
     verifyDocumentAgainstInputsV2,
     type ManualSession,
     type ScreenContextInputsV2,
@@ -173,7 +174,10 @@ function validRequest(metadata: ModelScreensV2Metadata, requestId: string): bool
 
 export function documentMatchesInputs(document: ScreenDocumentV2, inputs: ScreenContextInputsV2): boolean {
     try {
-        return verifyDocumentAgainstInputsV2(document, outgoingInputs(inputs), sha256Hex, { legacyWaitCopy: true }).length === 0
+        return (
+            verifyDocumentAgainstInputsV2(document, outgoingInputs(inputs), sha256Hex, { legacyWaitCopy: true })
+                .length === 0
+        )
     } catch {
         return false
     }
@@ -316,14 +320,20 @@ export async function postDocuments(options: {
     try {
         checkpoint()
         response = await awaitStopped(
-            options.fetch(new URL('/api/screens/v2?guideRepair=1&waitCopy=2&stepActions=1', baseUrl).toString(), {
-                method: 'POST',
-                headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
-                body: form,
-                credentials: 'omit',
-                redirect: 'error',
-                signal: guard.signal,
-            }),
+            options.fetch(
+                new URL(
+                    `/api/screens/v2?guideRepair=1&waitCopy=2&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
+                    baseUrl,
+                ).toString(),
+                {
+                    method: 'POST',
+                    headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
+                    body: form,
+                    credentials: 'omit',
+                    redirect: 'error',
+                    signal: guard.signal,
+                },
+            ),
             guard.signal,
             discardResponse,
         )

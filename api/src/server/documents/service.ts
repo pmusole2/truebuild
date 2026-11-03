@@ -83,6 +83,8 @@ export interface DocumentServiceOptions {
 
 export interface PrecomputeRequest {
     session: ManualSession
+    /** Hash identity retained separately from the processing session. */
+    identitySession?: ManualSession | null | undefined
     focusKey: string | null
     uiState: ScreenUiStateV2 | null | undefined
     completedStepIds: readonly string[] | undefined
@@ -165,7 +167,15 @@ export function precomputeItems(request: PrecomputeRequest): {
     const { session, uiState } = request
     const reviewed = session.reviewStatus === 'reviewed'
     const steps = reviewed ? session.reviewedSteps : (session.rawExtraction?.steps ?? [])
-    const common = { session, stepId: null, captureId: null, result: null, failure: null, uiState } as const
+    const common = {
+        session,
+        identitySession: request.identitySession,
+        stepId: null,
+        captureId: null,
+        result: null,
+        failure: null,
+        uiState,
+    } as const
     const items: ReturnType<typeof precomputeItems> = [
         { key: 'reading', kind: 'reading', stepId: null, order: 0, inputs: { ...common, kind: 'reading' } },
         ...steps.map((step, index) => ({
@@ -190,7 +200,7 @@ export function precomputeItems(request: PrecomputeRequest): {
             },
         })
     }
-    const sessionless = { ...common, session: null }
+    const sessionless = { ...common, session: null, identitySession: null }
     if (uiState?.judge || uiState?.sections) {
         items.push({
             key: 'judge',

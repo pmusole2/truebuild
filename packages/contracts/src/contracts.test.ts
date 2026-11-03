@@ -76,6 +76,8 @@ describe('manual trust boundaries', () => {
             ...step,
             actions: [{ ...action, sourceRefs: [{ pageId: 'missing', region: null }] }],
         }
+        expect(manualSessionSchema.parse(session).reviewedSteps[0]!.actions).toBeNull()
+        session.reviewedSteps[0] = { ...step, sourceRefs: [{ pageId: 'missing', region: null }] }
         expect(manualSessionSchema.safeParse(session).success).toBe(false)
     })
 

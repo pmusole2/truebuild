@@ -418,6 +418,34 @@ describe('inactive direct Meta transport', (): void => {
         })
     })
 
+    it.each([true, false])('drops bad optional parse actions without repair (valid action: %s)', async (keepValid) => {
+        const input = await validInput()
+        const extraction = structuredClone(input.session.rawExtraction!)
+        const step = extraction.steps[0]!
+        const good = { actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }
+        step.actions = [
+            { ...good, actionId: 'blank', instruction: '  ' },
+            { ...good, actionId: 'missing-page', sourceRefs: [{ pageId: 'unknown-page', region: null }] },
+            ...(keepValid ? [good, { ...good, instruction: 'An ignored duplicate.' }] : []),
+        ]
+        Object.assign(step, { sourceText: 'An optional field from a later provider.' })
+        const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+            asRequestedMetaResponse(Response.json(responseBody(extraction)), init),
+        )
+        const provider = createMetaProvider({ apiKey: 'synthetic', fetchImpl })
+        const parsed = await provider.parseManual(
+            {
+                requestId: input.requestId,
+                binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
+                pages: input.sourceImages,
+            },
+            signal(),
+        )
+        expect(parsed.steps[0]!.actions).toEqual(keepValid ? [good] : null)
+        expect(parsed.steps[0]).not.toHaveProperty('sourceText')
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
     it('sends text-and-diagram Parse guidance for every reviewed-manual field', async (): Promise<void> => {
         const input = await validInput()
         // This response is a transport fixture; only the outgoing request instructions are under test.

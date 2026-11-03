@@ -46,6 +46,8 @@ export interface StepPieceV2 {
 export interface ScreenContextInputsV2 {
     kind: ScreenKindV2
     session: ManualSession | null
+    /** Server-only, validated wire snapshot for hashing; never used as composition or provider grounding. */
+    identitySession?: ManualSession | null | undefined
     stepId: string | null
     captureId: string | null
     result: ScreenResultInput | null
@@ -367,12 +369,16 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
 
 /** The exact bytes whose SHA-256 is `ScreenBound.contextKey` of a version 2 document. */
 export function screenContextJsonV2(inputs: ScreenContextInputsV2): string {
-    return canonicalJson(screenContextPartsV2(inputs))
+    return canonicalJson(screenContextPartsV2(identityInputsV2(inputs)))
 }
 
 /** The bytes whose SHA-256 identifies composition content independent of manual id, revision and review state. */
 export function screenContentJsonV2(inputs: ScreenContextInputsV2): string {
-    return canonicalJson(screenContextPartsV2(inputs).content)
+    return canonicalJson(screenContextPartsV2(identityInputsV2(inputs)).content)
+}
+
+function identityInputsV2(inputs: ScreenContextInputsV2): ScreenContextInputsV2 {
+    return inputs.identitySession === undefined ? inputs : { ...inputs, session: inputs.identitySession }
 }
 
 /**

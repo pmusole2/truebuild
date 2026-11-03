@@ -9,11 +9,13 @@ import {
     LIMITS,
     matchesBinding,
     parsedManualSchema,
+    sanitizeManualStepActions,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
     questionResultSchema,
     screensResultSchema,
     segmentEventSchema,
+    SUPPORTED_STEP_EXTENSIONS,
     type ApiResult,
     type CaptureBinding,
     type CheckResult,
@@ -396,12 +398,12 @@ export class ModelApiClient {
 
         return this.post({
             // Query parameters are ignored by old APIs and do not alter their strict metadata or CORS contract.
-            path: '/api/manuals/parse?stepKinds=remove&stepActions=1',
+            path: `/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
             requestId: ctx.requestId,
             binding,
             form,
             timeoutMs: MODEL_PARSE_TIMEOUT_MS,
-            valueSchema: parsedManualSchema,
+            valueSchema: z.preprocess((value) => sanitizeManualStepActions(value, pageIds), parsedManualSchema),
             accepts: (value: ParsedManual): boolean => everyRefInside(value, pageIds),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,

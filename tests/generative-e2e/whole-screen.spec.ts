@@ -42,7 +42,8 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
         (request) =>
-            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1` && request.method() === 'POST',
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            request.method() === 'POST',
         { timeout: 60_000 },
     )
     const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
@@ -62,7 +63,11 @@ async function prepareGuide(page: Page, alreadyHome = false): Promise<void> {
     await page.getByTestId('home-add').click()
     await photographPage(page, true)
     const parse = page
-        .waitForResponse((response) => response.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1`)
+        .waitForResponse(
+            (response) =>
+                response.url() ===
+                `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText`,
+        )
         .then(async (response) => ({ status: response.status(), body: await response.json() }))
     await readManualWithConsent(page)
     expect((await parse).status).toBe(200)

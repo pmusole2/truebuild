@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     buildFallbackProposalV2,
+    createDemoManual,
     documentMaterialV2,
     manualChecksInitiallyOpen,
     manualDirectionGroups,
@@ -24,6 +25,58 @@ function forStep(session: ManualSession, stepId: string): ScreenContextInputsV2 
 }
 
 describe('one source-backed Directions rule across recorded manuals', () => {
+    it.each([true, false].flatMap((classified) => [true, false].map((actions) => ({ classified, actions }))))(
+        'keeps reviewed fixes and the selected alternative in More detail (classified=$classified, actions=$actions)',
+        ({ classified, actions }) => {
+            const session = createDemoManual()
+            const step = session.reviewedSteps[0]!
+            step.safetyNotes = classified ? [] : null
+            step.actions = actions
+                ? [{ actionId: 'lift', instruction: 'Lift the panel.', sourceRefs: step.sourceRefs }]
+                : null
+            step.alternatives = [
+                {
+                    alternativeId: 'chosen',
+                    title: 'First path',
+                    description: 'Use the first opening.',
+                    sourceRefs: step.sourceRefs,
+                },
+                {
+                    alternativeId: 'other',
+                    title: 'Second path',
+                    description: 'Use the second opening.',
+                    sourceRefs: step.sourceRefs,
+                },
+            ]
+            step.selectedAlternativeId = 'chosen'
+            expect(manualSessionSchema.safeParse(session).success).toBe(true)
+            const facts = manualDirectionFacts(session, step.stepId)
+            const directions = actions ? ['action:lift'] : ['title', 'orientation', 'connection']
+            const detail = ['alternative:chosen', 'correction:turn-panel']
+            expect(manualDirectionGroups(facts).directions.map((fact) => fact.factId)).toEqual(directions)
+            expect(facts.filter((fact) => detail.includes(fact.factId)).map((fact) => fact.text)).toEqual([
+                'First path. Use the first opening.',
+                step.correction!.actions[0]!.instruction,
+            ])
+            expect(facts.some((fact) => fact.factId === 'alternative:other')).toBe(false)
+            const material = documentMaterialV2(forStep(session, step.stepId), false)
+            const proposal = buildFallbackProposalV2(material)
+            const section = (title: string): ScreenNodeV2 =>
+                descendants(proposal.body).find(
+                    (node) => node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === title,
+                )!
+            const ids = (node: ScreenNodeV2): string[] =>
+                descendants(node).flatMap((child) =>
+                    child.type === 'Text' && child.content.kind === 'fact' ? [child.content.factId] : [],
+                )
+            expect(ids(section('Directions'))).toEqual(directions)
+            expect(ids(section('More detail'))).toEqual(detail)
+            expect(ids(section('Check your work')).some((id) => detail.includes(id))).toBe(false)
+            expect(section('More detail')).toMatchObject({ collapsible: classified, initiallyOpen: !classified })
+            for (const id of detail) expect(material.requirements.facts.includes(id)).toBe(!classified)
+        },
+    )
+
     it('preserves the conservative legacy mandatory payload outside the new Guide', () => {
         const session = manualSessionSchema.parse(recorded[0]!.session)
         const step = session.reviewedSteps.find((item) => item.stepId === recorded[0]!.stepId)!

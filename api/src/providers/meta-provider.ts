@@ -14,6 +14,7 @@ import {
     LIMITS,
     manualBindingSchema,
     manualSessionSchema,
+    sanitizeManualStepActions,
     questionTargetSchema,
     type AiEffort,
     type CaptureBinding,
@@ -1435,6 +1436,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         language: parsed.language ?? DEFAULT_PARSE_LANGUAGE,
                         sourcePages: parsed.pages.map((source): ManualPage => source.page),
                     }
+                    const allowedPageIds = new Set(context.sourcePages.map((page) => page.pageId))
+                    const parseOutputSchema = z.preprocess(
+                        (value) => sanitizeManualStepActions(value, allowedPageIds),
+                        providerParseSchema,
+                    )
                     const firstAttemptMs = parseFirstAttemptTimeoutMs(parsed.pages.length, overallMs)
                     let lastTelemetry: VerifiedCallTelemetry | undefined
                     const remainingRepairMs = (): number =>
@@ -1448,7 +1454,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                                     'parse',
                                     context,
                                     images,
-                                    providerParseSchema,
+                                    parseOutputSchema,
                                     attemptDeadline,
                                     extractionModel,
                                     false,

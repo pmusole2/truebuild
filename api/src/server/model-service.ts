@@ -13,6 +13,8 @@ import {
     manualSessionSchema,
     matchesBinding,
     parsedManualSchema,
+    requestedStepExtensions,
+    sanitizeManualStepActions,
     questionResultSchema,
     screenContextJsonV2,
     screenManualJsonV2,
@@ -99,6 +101,35 @@ import {
 } from './screens/service'
 
 const segmentPromptSchema = modelSegmentMetadataSchema.shape.prompt
+
+// This snapshot is opaque and used only for canonical identity. The full session schema runs immediately afterward,
+// before any processing; its extension projection must not change the session the client signed.
+const wireScreensV2MetadataSchema = z.strictObject({
+    ...modelScreensV2MetadataSchema.shape,
+    session: z.custom<ManualSession | null>(
+        (value) => value === null || (typeof value === 'object' && !Array.isArray(value)),
+    ),
+})
+
+function documentInputs(
+    metadata: ModelScreensV2Metadata,
+    identitySession?: ManualSession | null,
+): ScreenContextInputsV2 {
+    return {
+        kind: metadata.kind ?? 'home',
+        session: metadata.session,
+        identitySession,
+        stepId: metadata.stepId,
+        captureId: metadata.captureId,
+        result: metadata.result,
+        failure: metadata.failure,
+        completedStepIds: metadata.completedStepIds,
+        uiState: metadata.uiState,
+        ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
+        ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
+        ...(metadata.stepPieces == null ? {} : { stepPieces: metadata.stepPieces }),
+    }
+}
 
 type Identity = { requestId: string; binding: ManualBinding | CaptureBinding }
 type ScreensValue = Extract<z.infer<typeof screensResultSchema>, { status: 'ok' }>['value']
@@ -813,6 +844,8 @@ export function createModelHandlers(options: {
             path?: string
             /** The value as published: the fixture runtime strips what a provider claimed about itself. */
             present?: (value: T, request: Request) => T
+            /** Parse only: optional procedure entries cannot invalidate the rest of the extraction. */
+            normalize?: (value: T, metadata: M) => unknown
         } = {},
     ): Handler {
         const run = async (
@@ -851,7 +884,7 @@ export function createModelHandlers(options: {
                     execution.deadline,
                 )
                 execution.check()
-                const value = output.safeParse(raw)
+                const value = output.safeParse(policy.normalize ? policy.normalize(raw, metadata) : raw)
                 if (!value.success || !validate(value.data, metadata)) {
                     throw new AdmissionError('invalid_output', 502)
                 }
@@ -949,11 +982,13 @@ export function createModelHandlers(options: {
         {
             repairable: true,
             route: 'parse',
+            normalize: (value, metadata) =>
+                sanitizeManualStepActions(value, new Set(metadata.pages.map((page) => page.pageId))),
             present: (value, request) => {
                 const publicValue = asPublic(value)
                 const query = new URL(request.url).searchParams
                 const removal = query.get('stepKinds') === 'remove'
-                const actions = query.getAll('stepActions').length === 1 && query.get('stepActions') === '1'
+                const actions = requestedStepExtensions(query).has('actions')
                 // Old installed clients have strict step schemas. Project only the response; preserve canonical data.
                 return {
                     ...publicValue,
@@ -1496,8 +1531,7 @@ export function createModelHandlers(options: {
         try {
             const guideRepair = allowsGuideRepair(request)
             const waitCopy = allowsWaitCopy(request)
-            const actionFlags = new URL(request.url).searchParams.getAll('stepActions')
-            const stepActions = actionFlags.length === 1 && actionFlags[0] === '1'
+            const stepActions = requestedStepExtensions(new URL(request.url).searchParams).has('actions')
             const selectedDocuments = waitCopy
                 ? stepActions
                     ? guideRepair
@@ -1518,40 +1552,45 @@ export function createModelHandlers(options: {
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
             )
             execution = admit(request, auth, route, allowedOrigins)
+            let identitySession: ManualSession | null | undefined
             const parsed = await readModelMultipart(
                 request,
                 modelScreensV2MetadataSchema,
                 MODEL_METADATA_MAX_BYTES + 65_536,
                 execution.deadline,
+                MODEL_METADATA_MAX_BYTES,
+                (value) => {
+                    const wire = wireScreensV2MetadataSchema.safeParse(value)
+                    if (!wire.success) throw new ModelBodyError(400)
+                    try {
+                        if (
+                            wire.data.session !== null &&
+                            sha256(screenManualJsonV2(wire.data.session)) !== wire.data.manualHash
+                        ) {
+                            throw new ModelBodyError(400)
+                        }
+                        if (
+                            wire.data.op === 'generate' &&
+                            sha256(screenContextJsonV2(documentInputs(wire.data))) !== wire.data.contextKey
+                        ) {
+                            throw new ModelBodyError(400)
+                        }
+                    } catch {
+                        throw new ModelBodyError(400)
+                    }
+                    identitySession = wire.data.session
+                },
             )
             exactModelFiles(parsed.files, [], false)
             metadata = parsed.metadata
             execution.check()
-            if (metadata.session !== null && sha256(screenManualJsonV2(metadata.session)) !== metadata.manualHash) {
-                throw new AdmissionError('invalid_input', 400)
-            }
-            const inputs: ScreenContextInputsV2 = {
-                kind: metadata.kind ?? 'home',
-                session: metadata.session,
-                stepId: metadata.stepId,
-                captureId: metadata.captureId,
-                result: metadata.result,
-                failure: metadata.failure,
-                completedStepIds: metadata.completedStepIds,
-                uiState: metadata.uiState,
-                ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
-                ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
-                ...(metadata.stepPieces == null ? {} : { stepPieces: metadata.stepPieces }),
-            }
+            const inputs = documentInputs(metadata, identitySession)
             let value: Extract<z.infer<typeof screensV2ResultSchema>, { status: 'ok' }>['value'] = {
                 document: null,
                 progress: null,
                 documents: [],
             }
             if (metadata.op === 'generate') {
-                if (sha256(screenContextJsonV2(inputs)) !== metadata.contextKey) {
-                    throw new AdmissionError('invalid_input', 400)
-                }
                 supersedeFollowUps(metadata.session)
                 try {
                     const active = execution
@@ -1571,6 +1610,7 @@ export function createModelHandlers(options: {
                     ...value,
                     progress: selectedDocuments.precompute({
                         session: metadata.session!,
+                        identitySession,
                         focusKey: metadata.focusKey,
                         uiState: metadata.uiState,
                         completedStepIds: metadata.completedStepIds,
@@ -1584,6 +1624,7 @@ export function createModelHandlers(options: {
                     metadata.want,
                     selectedDocuments.jobContextKey({
                         session: metadata.session!,
+                        identitySession,
                         focusKey: null,
                         uiState: metadata.uiState,
                         completedStepIds: metadata.completedStepIds,
@@ -1599,6 +1640,7 @@ export function createModelHandlers(options: {
                         metadata.binding!.revision,
                         selectedDocuments.jobContextKey({
                             session: metadata.session!,
+                            identitySession,
                             focusKey: null,
                             uiState: metadata.uiState,
                             completedStepIds: metadata.completedStepIds,

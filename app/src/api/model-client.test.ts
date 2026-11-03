@@ -945,6 +945,22 @@ it('preserves bounded server parse failure messages through non-success HTTP res
     ).toMatchObject({ status: 'unavailable', message: 'Split into 8 pages.' })
 })
 
+it.each([false, true])('drops optional actions with unresolved pages (valid action: %s)', async (hasGood) => {
+    const value = structuredClone(session.rawExtraction!)
+    const good = { actionId: 'good', instruction: 'Turn the panel.', sourceRefs: value.steps[0]!.sourceRefs }
+    value.steps[0]!.actions = [
+        { actionId: 'bad', instruction: 'Turn it.', sourceRefs: [{ pageId: 'missing', region: null }] },
+        ...(hasGood ? [good] : []),
+    ]
+    const run = scripted(() =>
+        jsonResponse(200, { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }),
+    )
+    const result = await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('expected usable extraction')
+    expect(result.value.steps[0]!.actions).toEqual(hasGood ? [good] : null)
+})
+
 it('rejects new parse citations outside supplied pages', async () => {
     const value = structuredClone(session.rawExtraction!)
     value.steps[0]!.alternatives = ['a', 'b'].map((alternativeId) => ({
