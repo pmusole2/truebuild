@@ -410,6 +410,7 @@ describe('v2 document transport', () => {
         expect(fetch).toHaveBeenCalledTimes(1)
         const [url, init] = fetch.mock.calls[0]!
         expect(new URL(url).pathname).toBe('/api/screens/v2')
+        expect(new URL(url).searchParams.get('guideRepair')).toBe('1')
         expect(init).toMatchObject({
             credentials: 'omit',
             redirect: 'error',

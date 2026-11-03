@@ -60,6 +60,11 @@ export interface AiPolicy {
 export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 /** One geometry batch (Muse Wonder high, up to eight pieces) from background slot to response; the route allows queueing and crops on top. */
 export const PIECES_DEADLINE_MS = 90_000
+/** Guide composition includes reasoning and JSON; geometry retains the separate 48k step-page policy cap. */
+export const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000
+/** Installed clients stop at 55s; leave room to validate and return the single attempt. */
+export const LEGACY_GUIDE_DEADLINE_MS = 45_000
+export const LEGACY_GUIDE_ROUTE_MS = 50_000
 /** Parse has its own 165 s ceiling; the route factory separately allows its return margin. */
 const MAX_PARSE_BUDGET_MS = PARSE_DEFAULT_OVERALL_MS
 const MIN_OUTPUT_TOKENS = 16
@@ -226,6 +231,7 @@ export function describeAiPolicy(policy: AiPolicy): Record<string, unknown> {
                         effort,
                         ...(quickCheckEffort === undefined ? {} : { quickCheckEffort }),
                         maxOutputTokens,
+                        ...(stage === 'step-pages' ? { documentMaxOutputTokens: DOCUMENT_MAX_OUTPUT_TOKENS } : {}),
                         deadlineMs,
                         model,
                         provisional,

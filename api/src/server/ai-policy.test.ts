@@ -35,6 +35,14 @@ describe('AI policy', (): void => {
         expect(stages.overlay.model).toBe('muse-wonder-1.0')
     })
 
+    it('exposes the 8k document cap while keeping the 48k geometry stage cap', (): void => {
+        const policy = aiPolicyFromEnvironment({}, defaults)
+        expect(policy.stages['step-pages'].maxOutputTokens).toBe(48_000)
+        expect(describeAiPolicy(policy)).toMatchObject({
+            stages: { 'step-pages': { maxOutputTokens: 48_000, documentMaxOutputTokens: 8_000 } },
+        })
+    })
+
     it('raises output headroom on the long stages without claiming a provider maximum', (): void => {
         const { stages } = aiPolicyFromEnvironment({}, defaults)
         expect(stages.parse.maxOutputTokens).toBeGreaterThan(24_000)

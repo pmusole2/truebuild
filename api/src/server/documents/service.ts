@@ -35,7 +35,7 @@ import { BudgetError } from '../budget'
 import { createDeadline, RequestStoppedError } from '../deadline'
 import { withinModelDeadline } from '../model-multipart'
 import { admission } from '../request-clock'
-import { MAX_DEADLINE_MS, type AiPolicy, type GenerativeUiMode } from '../ai-policy'
+import { LEGACY_GUIDE_DEADLINE_MS, MAX_DEADLINE_MS, type AiPolicy, type GenerativeUiMode } from '../ai-policy'
 import { PrecomputeRegistry, ScreenCache, SingleFlight, StaleGuard, StaleRevisionError } from '../screens/store'
 import type { BackgroundWork, StepScreenContext } from '../screens/service'
 import { buildDocumentContext, sha256, type DocumentContext } from './context'
@@ -70,6 +70,8 @@ export interface DocumentServiceOptions {
     runtimeMode: 'fixture' | 'meta'
     work: BackgroundWork
     cache?: ScreenCache<CachedDocument>
+    /** API routes set this from the query capability; in-process callers retain the existing repair behavior. */
+    guideRepair?: boolean
     precomputeConcurrency?: number
     now?: () => Date
 }
@@ -397,7 +399,10 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
     async function generateWithModel(context: DocumentContext, signal: AbortSignal): Promise<Made> {
         const stagePolicy = policy.stages[context.stage]
-        const workBudgetMs = Math.min(MAX_DEADLINE_MS, stagePolicy.deadlineMs * 2 + 2_000)
+        const legacyGuide = context.inputs.kind === 'guide' && options.guideRepair === false
+        const workBudgetMs = legacyGuide
+            ? Math.min(LEGACY_GUIDE_DEADLINE_MS, stagePolicy.deadlineMs)
+            : Math.min(MAX_DEADLINE_MS, stagePolicy.deadlineMs * 2 + 2_000)
         const workStarted = performance.now()
         if ((provider === null || !generateDocument) && fixture === null) {
             return { document: deterministic(context, 'unconfigured'), cached: null }
@@ -486,7 +491,9 @@ export function createDocumentService(options: DocumentServiceOptions): Document
             const attemptMs =
                 context.inputs.kind === 'guide' && fixture === null
                     ? workBudgetMs - (performance.now() - workStarted)
-                    : stagePolicy.deadlineMs
+                    : legacyGuide
+                      ? workBudgetMs
+                      : stagePolicy.deadlineMs
             if (attemptMs <= 0) throw new RequestStoppedError('timeout')
             dispatched += 1
             const deadline = createDeadline(attemptMs, active)
@@ -583,7 +590,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 logRejection(context, 'initial', evaluated.issues)
                 rejectedIssues = evaluated.issues.length
                 // Result already shows the app's verdict/photo shell; rejected background composition never delays it.
-                if (context.inputs.kind === 'result') return failure('invalid_output')
+                if (context.inputs.kind === 'result' || legacyGuide) return failure('invalid_output')
                 repaired = true
                 try {
                     const value = await attempt(evaluated.issues)

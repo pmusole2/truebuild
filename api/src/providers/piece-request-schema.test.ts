@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { manualPieceInputSchema, PIECE_SPEC_LIMITS, pieceSpecSchema } from '@truebuild/contracts'
 import { metaOutputSchemas } from './meta-schemas'
-import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
+import { PIECE_GEOMETRY_INSTRUCTIONS, PIECE_GEOMETRY_PROMPT_VERSION } from './piece-prompt'
 
 it('folds only surface detail into primitives so flat silhouettes stay extrudes and integral members stay distinct', () => {
     expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
@@ -16,6 +16,35 @@ it('does not treat shadows or expected product features as evidence for undersid
     expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
         'Shadows, dark undersides and expected product features are not evidence: add no legs, feet, posts or supports beneath a piece unless the drawing clearly draws them as separate members of this piece.',
     )
+})
+
+it('keeps a connected functional profile even when small while exclusions remove only separate loose items', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'Ignore other inventory pieces, loose separate items and silhouettes even when visible in the crop',
+    )
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        "a connected functional profile visibly attached in the requested piece's own drawing or cutout is part of this piece even when small",
+    )
+})
+
+it('models flat wavy or scalloped mounted plates as one continuous extruded outline, not thin posts or lobes', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'flat wavy or scalloped mounted plates and cradles use one continuous extruded outline that follows the edge, not separate thin posts or lobes',
+    )
+})
+
+it('keeps the surface-detail fold from removing functional plate outlines and connected clips or bases', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'this surface-detail rule does not remove integral structural members, functional plate outlines or connected clips and bases',
+    )
+})
+
+it('keeps broad figure context from absorbing neighbouring items', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain('do not absorb neighbouring items from it')
+})
+
+it('bumps the geometry prompt version so cached v8 manifests refresh', () => {
+    expect(PIECE_GEOMETRY_PROMPT_VERSION).toBe(9)
 })
 
 it('accepts optional bounded inventory exclusions as data while rejecting malformed or oversized lists', () => {

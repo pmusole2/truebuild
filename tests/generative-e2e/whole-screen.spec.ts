@@ -6,6 +6,12 @@ import { modelScreensV2MetadataSchema, screensV2ResultSchema } from '@truebuild/
 const API = 'http://127.0.0.1:3101'
 const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
 
+function isDocumentUrl(value: string): boolean {
+    const url = new URL(value)
+    const capability = url.searchParams.getAll('guideRepair')
+    return url.origin === API && url.pathname === '/api/screens/v2' && capability.length === 1 && capability[0] === '1'
+}
+
 async function photographPage(page: Page, first: boolean): Promise<void> {
     await page.getByTestId(first ? 'take-page-photo' : 'add-page').click()
     await expect(page.getByTestId('camera-shutter')).toBeEnabled()
@@ -81,14 +87,14 @@ test('a complete document owns the frame; off stays local and full publishes hon
 }) => {
     let documentRequests = 0
     page.on('request', (request) => {
-        if (request.url() === `${API}/api/screens/v2`) documentRequests++
+        if (isDocumentUrl(request.url())) documentRequests++
     })
     // Consume the first complete response before navigating. Chromium may discard a response body when its route leaves.
     const firstDocument =
         mode !== 'off'
             ? page
                   .waitForResponse(async (response) => {
-                      if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                      if (!isDocumentUrl(response.url()) || response.status() !== 200) return false
                       const published = screensV2ResultSchema.parse(await response.json())
                       return (
                           published.status === 'ok' &&
@@ -205,7 +211,7 @@ test('a closer look, slow question and retained More use the same photo; a fresh
         mode !== 'off'
             ? page
                   .waitForResponse(async (response) => {
-                      if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                      if (!isDocumentUrl(response.url()) || response.status() !== 200) return false
                       const request = response.request()
                       const body = request.postDataBuffer()
                       if (body === null) return false

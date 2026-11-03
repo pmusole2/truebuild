@@ -80,7 +80,13 @@ import {
 } from './model-multipart'
 import { withResolvedLayout } from './layout'
 import { SEGMENT_PROMPT_LIMIT } from '@truebuild/contracts'
-import { aiPolicyFromEnvironment, MAX_DEADLINE_MS, PIECES_DEADLINE_MS, type AiPolicy } from './ai-policy'
+import {
+    aiPolicyFromEnvironment,
+    LEGACY_GUIDE_ROUTE_MS,
+    MAX_DEADLINE_MS,
+    PIECES_DEADLINE_MS,
+    type AiPolicy,
+} from './ai-policy'
 import { PARSE_ROUTE_MARGIN_MS } from './parse-budget'
 import { readBoundedJson, InvalidBodyError } from './json-body'
 import { DuplicateQuestionError, QuestionJobs, type QuestionIdentity, type StoredResponse } from './question-jobs'
@@ -690,34 +696,51 @@ export function createModelHandlers(options: {
     )
     const overlayTickets = new SecondOpinionTickets(undefined, () => true)
     const layout = options.layout === true
-    const screenService = createScreenService({
-        provider: provider?.generateScreen ? provider : null,
-        // Synthetic screen sources run in the fixture runtime only, even when one is injected elsewhere.
-        fixtureGenerator: options.runtimeMode === 'fixture' ? (options.screenFixtures ?? null) : null,
-        policy,
-        runtimeMode: options.runtimeMode ?? 'meta',
-        work: createBackgroundWork(counter, gate),
-        ...(options.precomputeConcurrency === undefined
-            ? {}
-            : { precomputeConcurrency: options.precomputeConcurrency }),
-    })
+    const createScreens = (guideRepair: boolean): ScreenService =>
+        createScreenService({
+            guideRepair,
+            provider: provider?.generateScreen ? provider : null,
+            // Synthetic screen sources run in the fixture runtime only, even when one is injected elsewhere.
+            fixtureGenerator: options.runtimeMode === 'fixture' ? (options.screenFixtures ?? null) : null,
+            policy,
+            runtimeMode: options.runtimeMode ?? 'meta',
+            work: createBackgroundWork(counter, gate),
+            ...(options.precomputeConcurrency === undefined
+                ? {}
+                : { precomputeConcurrency: options.precomputeConcurrency }),
+        })
 
-    const documentService = createDocumentService({
-        provider: provider?.generateDocument ? provider : null,
-        fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
-        policy,
-        runtimeMode: options.runtimeMode ?? 'meta',
-        work: createBackgroundWork(counter, gate),
-        ...(options.precomputeConcurrency === undefined
-            ? {}
-            : { precomputeConcurrency: options.precomputeConcurrency }),
-    })
+    const createDocuments = (guideRepair: boolean): ReturnType<typeof createDocumentService> =>
+        createDocumentService({
+            guideRepair,
+            provider: provider?.generateDocument ? provider : null,
+            fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
+            policy,
+            runtimeMode: options.runtimeMode ?? 'meta',
+            work: createBackgroundWork(counter, gate),
+            ...(options.precomputeConcurrency === undefined
+                ? {}
+                : { precomputeConcurrency: options.precomputeConcurrency }),
+        })
+    // Capability is outside strict metadata so a new app also works with an old API. Keep each mode's cache,
+    // SingleFlight and precompute registry separate: a 55s client must never wait for a capable client's repair.
+    const screenService = createScreens(true)
+    const legacyScreenService = createScreens(false)
+    const documentService = createDocuments(true)
+    const legacyDocumentService = createDocuments(false)
+    const allowsGuideRepair = (request: Request): boolean => {
+        const values = new URL(request.url).searchParams.getAll('guideRepair')
+        return values.length === 1 && values[0] === '1'
+    }
     const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
     /** A version 2 document (guide or camera) names itself first; any other screen id is a version 1 page. */
     const stepScreens: Pick<ScreenService, 'resolveStepScreen'> = {
         resolveStepScreen: (session, stepId, screen) => {
-            const v2 = documentService.resolveStepScreen(session, stepId, screen)
-            return v2 !== null ? v2 : screenService.resolveStepScreen(session, stepId, screen)
+            for (const service of [documentService, legacyDocumentService, screenService, legacyScreenService]) {
+                const resolved = service.resolveStepScreen(session, stepId, screen)
+                if (resolved !== null) return resolved
+            }
+            return null
         },
     }
 
@@ -1106,7 +1129,10 @@ export function createModelHandlers(options: {
     /** A newer revision of either screen generation supersedes older work; an older one is stale. */
     const observeRevision = (manualId: string, revision: number): boolean => {
         const current = screenService.observe(manualId, revision)
-        return documentService.observe(manualId, revision) && current
+        const legacyCurrent = legacyScreenService.observe(manualId, revision)
+        const documentsCurrent = documentService.observe(manualId, revision)
+        const legacyDocumentsCurrent = legacyDocumentService.observe(manualId, revision)
+        return current && legacyCurrent && documentsCurrent && legacyDocumentsCurrent
     }
     const questionSyncWaitMs = options.questionSyncWaitMs ?? 8_000
     const storedResponse = (request: Request, stored: StoredResponse): Response =>
@@ -1293,8 +1319,10 @@ export function createModelHandlers(options: {
         let execution: Execution | undefined
         let metadata: ModelScreensMetadata | undefined
         try {
+            const guideRepair = allowsGuideRepair(request)
+            const selectedScreens = guideRepair ? screenService : legacyScreenService
             const route = Math.min(
-                MAX_DEADLINE_MS,
+                guideRepair ? MAX_DEADLINE_MS : LEGACY_GUIDE_ROUTE_MS,
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
             )
             execution = admit(request, auth, route, allowedOrigins)
@@ -1327,19 +1355,19 @@ export function createModelHandlers(options: {
                 try {
                     const active = execution
                     const document = await admission.run({ start: active.startedAt }, () =>
-                        screenService.generate(inputs, active.deadline.signal),
+                        selectedScreens.generate(inputs, active.deadline.signal),
                     )
                     value = { ...value, document }
                 } catch (error) {
                     execution.check()
                     // A slow generation never blocks the screen: the deterministic composition is returned instead.
                     if (!(error instanceof RequestStoppedError)) throw error
-                    value = { ...value, document: screenService.fallback(inputs, 'timeout') }
+                    value = { ...value, document: selectedScreens.fallback(inputs, 'timeout') }
                 }
             } else if (metadata.op === 'precompute') {
-                value = { ...value, progress: screenService.precompute(metadata.session!, metadata.focusStepId) }
+                value = { ...value, progress: selectedScreens.precompute(metadata.session!, metadata.focusStepId) }
             } else if (metadata.op === 'progress') {
-                const read = screenService.progress(
+                const read = selectedScreens.progress(
                     metadata.binding!.manualId,
                     metadata.binding!.revision,
                     metadata.want,
@@ -1348,7 +1376,7 @@ export function createModelHandlers(options: {
             } else {
                 value = {
                     ...value,
-                    progress: screenService.cancel(metadata.binding!.manualId, metadata.binding!.revision),
+                    progress: selectedScreens.cancel(metadata.binding!.manualId, metadata.binding!.revision),
                 }
             }
             execution.check()
@@ -1415,8 +1443,10 @@ export function createModelHandlers(options: {
         let execution: Execution | undefined
         let metadata: ModelScreensV2Metadata | undefined
         try {
+            const guideRepair = allowsGuideRepair(request)
+            const selectedDocuments = guideRepair ? documentService : legacyDocumentService
             const route = Math.min(
-                MAX_DEADLINE_MS,
+                guideRepair ? MAX_DEADLINE_MS : LEGACY_GUIDE_ROUTE_MS,
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
             )
             execution = admit(request, auth, route, allowedOrigins)
@@ -1458,20 +1488,20 @@ export function createModelHandlers(options: {
                 try {
                     const active = execution
                     const document = await admission.run({ start: active.startedAt }, () =>
-                        documentService.generate(inputs, active.deadline.signal),
+                        selectedDocuments.generate(inputs, active.deadline.signal),
                     )
                     value = { ...value, document }
                 } catch (error) {
                     execution.check()
                     // A slow generation never blocks the screen: the complete deterministic document is returned.
                     if (!(error instanceof RequestStoppedError)) throw error
-                    value = { ...value, document: documentService.fallback(inputs, 'timeout') }
+                    value = { ...value, document: selectedDocuments.fallback(inputs, 'timeout') }
                 }
             } else if (metadata.op === 'precompute') {
                 supersedeFollowUps(metadata.session)
                 value = {
                     ...value,
-                    progress: documentService.precompute({
+                    progress: selectedDocuments.precompute({
                         session: metadata.session!,
                         focusKey: metadata.focusKey,
                         uiState: metadata.uiState,
@@ -1480,11 +1510,11 @@ export function createModelHandlers(options: {
                     }),
                 }
             } else if (metadata.op === 'progress') {
-                const read = documentService.progress(
+                const read = selectedDocuments.progress(
                     metadata.binding!.manualId,
                     metadata.binding!.revision,
                     metadata.want,
-                    documentService.jobContextKey({
+                    selectedDocuments.jobContextKey({
                         session: metadata.session!,
                         focusKey: null,
                         uiState: metadata.uiState,
@@ -1496,10 +1526,10 @@ export function createModelHandlers(options: {
             } else {
                 value = {
                     ...value,
-                    progress: documentService.cancel(
+                    progress: selectedDocuments.cancel(
                         metadata.binding!.manualId,
                         metadata.binding!.revision,
-                        documentService.jobContextKey({
+                        selectedDocuments.jobContextKey({
                             session: metadata.session!,
                             focusKey: null,
                             uiState: metadata.uiState,

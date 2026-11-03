@@ -40,6 +40,7 @@ describe('screens request', () => {
         expect(fetch).toHaveBeenCalledTimes(1)
         const [url, init] = fetch.mock.calls[0]!
         expect(new URL(url).pathname).toBe('/api/screens')
+        expect(new URL(url).searchParams.get('guideRepair')).toBe('1')
         const form = init.body as FormData
         expect(form.get('metadata')).toBeTypeOf('string')
         expect(form.has('observation')).toBe(false)

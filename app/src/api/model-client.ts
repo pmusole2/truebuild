@@ -765,7 +765,7 @@ export class ModelApiClient {
         let owned: Response | undefined
         try {
             checkpoint()
-            const url = new URL('/api/screens', this.baseUrl).toString()
+            const url = new URL('/api/screens?guideRepair=1', this.baseUrl).toString()
             owned = await awaitStopped(
                 this.fetchImpl(url, this.init(form, guard.signal)),
                 guard.signal,

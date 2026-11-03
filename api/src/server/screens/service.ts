@@ -13,7 +13,8 @@ import {
 
 import { BudgetError } from '../budget'
 import { admission } from '../request-clock'
-import { RequestStoppedError } from '../deadline'
+import { createDeadline, RequestStoppedError } from '../deadline'
+import { withinModelDeadline } from '../model-multipart'
 import {
     MetaProviderError,
     type CallTelemetry,
@@ -23,7 +24,13 @@ import {
 } from '../../providers/meta-provider'
 import { SCREEN_PROMPT_VERSION } from '../../providers/screen-prompt'
 import type { ShownScreen } from '../../providers/shown-screen'
-import type { AiPolicy, GenerativeUiMode, PolicyStage } from '../ai-policy'
+import {
+    LEGACY_GUIDE_DEADLINE_MS,
+    MAX_DEADLINE_MS,
+    type AiPolicy,
+    type GenerativeUiMode,
+    type PolicyStage,
+} from '../ai-policy'
 import { shellScreen, Tally } from './required'
 import { buildContext, canonicalJson, sha256, type Decision, type GroundingContext, type ScreenInputs } from './context'
 import { finalize, groundProposal, validateProposal, withRequiredContent, type FinalScreen } from './ground'
@@ -75,6 +82,8 @@ export interface ScreenServiceOptions {
     runtimeMode: 'fixture' | 'meta'
     work: BackgroundWork
     cache?: ScreenCache<CachedGeneration>
+    /** API routes set this from the query capability; in-process callers retain the existing repair behavior. */
+    guideRepair?: boolean
     precomputeConcurrency?: number
     now?: () => Date
 }
@@ -369,6 +378,11 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
     async function generateWithModel(context: GroundingContext, signal: AbortSignal): Promise<Made> {
         const stage = stageOf(context.kind)
         const stagePolicy = policy.stages[stage]
+        const legacyGuide = context.kind === 'guide' && options.guideRepair === false
+        const workBudgetMs = legacyGuide
+            ? Math.min(LEGACY_GUIDE_DEADLINE_MS, stagePolicy.deadlineMs)
+            : Math.min(MAX_DEADLINE_MS, stagePolicy.deadlineMs * 2 + 2_000)
+        const workStarted = performance.now()
         const generateScreen = provider?.generateScreen
         if ((provider === null || !generateScreen) && fixture === null) {
             return { document: deterministic(context, 'unconfigured'), cached: null }
@@ -435,35 +449,57 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
 
         /** One call of the model (or of the synthetic generator). A rejected call reports what it observed. */
         const attempt = async (repairIssues?: readonly string[]): Promise<unknown> => {
+            const attemptMs =
+                context.kind === 'guide' && fixture === null
+                    ? workBudgetMs - (performance.now() - workStarted)
+                    : legacyGuide
+                      ? workBudgetMs
+                      : stagePolicy.deadlineMs
+            if (attemptMs <= 0) throw new RequestStoppedError('timeout')
             dispatched += 1
-            if (fixture !== null) {
-                const bounded = AbortSignal.any([signal, AbortSignal.timeout(stagePolicy.deadlineMs)])
-                return fixture(
-                    {
-                        kind: context.kind,
-                        manualId: context.bound.manualId,
-                        revision: context.bound.revision,
-                        stepId: context.bound.stepId,
-                        decision: context.decision,
-                        attempt: repairIssues === undefined ? 1 : 2,
-                        view: context.view,
-                        copy: { titles: headerTitles(context), instructions: instructionCopy(context) },
-                    },
-                    bounded,
-                )
-            }
-            const call = (): Promise<ScreenGeneration> =>
-                generateScreen!.call(provider, repairIssues === undefined ? base : { ...base, repairIssues }, signal)
-            const generation = await (repairIssues === undefined ? call() : work.repair(call)).catch(
-                (error: unknown) => {
-                    // A call that answered but was unusable still spent time and tokens; report them honestly.
+            const deadline = createDeadline(attemptMs, signal)
+            try {
+                deadline.checkpoint()
+                if (fixture !== null) {
+                    return await withinModelDeadline(
+                        fixture(
+                            {
+                                kind: context.kind,
+                                manualId: context.bound.manualId,
+                                revision: context.bound.revision,
+                                stepId: context.bound.stepId,
+                                decision: context.decision,
+                                attempt: repairIssues === undefined ? 1 : 2,
+                                view: context.view,
+                                copy: { titles: headerTitles(context), instructions: instructionCopy(context) },
+                            },
+                            deadline.signal,
+                        ),
+                        deadline,
+                    )
+                }
+                const call = (): Promise<ScreenGeneration> =>
+                    generateScreen!.call(
+                        provider,
+                        repairIssues === undefined ? base : { ...base, repairIssues },
+                        deadline.signal,
+                        context.kind === 'guide' ? attemptMs : undefined,
+                    )
+                const generation = await withinModelDeadline(
+                    repairIssues === undefined ? call() : work.repair(call),
+                    deadline,
+                ).catch((error: unknown) => {
                     if (error instanceof MetaProviderError && error.telemetry) telemetry.push(error.telemetry)
                     throw error
-                },
-            )
-            telemetry.push(generation.telemetry)
-            return generation.value
+                })
+                telemetry.push(generation.telemetry)
+                deadline.checkpoint()
+                return generation.value
+            } finally {
+                deadline.dispose()
+            }
         }
+
         const isMalformed = (error: unknown): boolean =>
             error instanceof MetaProviderError && error.code === 'invalid_output' && error.detail === 'malformed'
 
@@ -479,6 +515,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
             if (!evaluated.ok) {
                 // The single repair covers structural AND semantic rejection of a completed answer; then whole fallback.
                 if (evaluated.terminal === true) return failure(evaluated.reason)
+                if (legacyGuide) return failure('invalid_output')
                 repaired = true
                 try {
                     evaluated = evaluate(context, await attempt(evaluated.issues), timed)
@@ -510,7 +547,7 @@ export function createScreenService(options: ScreenServiceOptions): ScreenServic
 
         try {
             if (fixture !== null) return await run()
-            return await work.run({ deadlineMs: Math.min(105_000, stagePolicy.deadlineMs * 2 + 2_000), signal }, run)
+            return await work.run({ deadlineMs: workBudgetMs, signal }, run)
         } catch (error) {
             // A cancelled provider call reports a generic stop; the abort reason says why it was stopped.
             return failure(signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error))

@@ -617,21 +617,26 @@ describe('service: a live provider', () => {
     })
 
     it.each([
-        { delays: [50_000], source: 'generated', repaired: false },
-        { delays: [30_000, 50_000], source: 'generated', repaired: true },
-        { delays: [60_000, 40_000], source: 'fallback', repaired: true },
+        { guideRepair: false, delays: [40_000], source: 'generated', repaired: false },
+        { guideRepair: false, delays: [50_000], source: 'fallback', repaired: false },
+        { guideRepair: true, delays: [50_000], source: 'generated', repaired: false },
+        { guideRepair: true, delays: [30_000, 50_000], source: 'generated', repaired: true },
+        { guideRepair: true, delays: [60_000, 40_000], source: 'fallback', repaired: true },
     ])(
-        'shares the existing Guide budget through the real provider across attempts lasting $delays ms',
-        async ({ delays, source, repaired }) => {
+        'enforces Guide capability $guideRepair through the real provider across attempts lasting $delays ms',
+        async ({ guideRepair, delays, source, repaired }) => {
             vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
             const signals: AbortSignal[] = []
+            const caps: unknown[] = []
             try {
                 const service = createDocumentService({
+                    guideRepair,
                     provider: createMetaProvider({
                         apiKey: 'synthetic-free-provider',
                         policy: policyFor(),
                         fetchImpl: async (_url, init) => {
                             signals.push(init!.signal as AbortSignal)
+                            caps.push((JSON.parse(String(init!.body)) as Record<string, unknown>).max_output_tokens)
                             const index = signals.length - 1
                             await new Promise((resolve) => setTimeout(resolve, delays[index]))
                             return Response.json({
@@ -665,6 +670,7 @@ describe('service: a live provider', () => {
                 await vi.advanceTimersByTimeAsync(92_001)
                 expect((await pending).metadata).toMatchObject({ source, repaired })
                 expect(signals).toHaveLength(delays.length)
+                expect(caps).toEqual(delays.map(() => 8_000))
                 if (source === 'fallback') expect(signals.at(-1)!.aborted).toBe(true)
             } finally {
                 vi.useRealTimers()

@@ -36,6 +36,7 @@ import { z } from 'zod'
 
 import {
     aiPolicyFromEnvironment,
+    DOCUMENT_MAX_OUTPUT_TOKENS,
     MAX_DEADLINE_MS,
     PIECES_DEADLINE_MS,
     type AiPolicy,
@@ -286,7 +287,7 @@ export interface MetaProvider {
     checkStep(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
     secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
-    generateScreen?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
+    generateScreen?(input: ScreenGenerationInput, signal: AbortSignal, deadlineMs?: number): Promise<ScreenGeneration>
     /** Version 2 document. The service may supply its remaining shared budget; the absolute route ceiling still applies. */
     generateDocument?(input: ScreenGenerationInput, signal: AbortSignal, deadlineMs?: number): Promise<ScreenGeneration>
     overlay?(input: OverlayInput, signal: AbortSignal): Promise<OverlayGeneration>
@@ -958,7 +959,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             stream: streamingParse,
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
-            max_output_tokens: stagePolicy.maxOutputTokens,
+            max_output_tokens:
+                (operation === 'document' || operation === 'screen') && stage === 'step-pages'
+                    ? DOCUMENT_MAX_OUTPUT_TOKENS
+                    : stagePolicy.maxOutputTokens,
             reasoning: { effort, ...(streamingParse ? { summary: 'auto' } : {}) },
             prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
             instructions:
@@ -1482,27 +1486,31 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             return checkWithModel(input, signal, secondaryModel, true)
         },
 
-        async generateScreen(input, signal): Promise<ScreenGeneration> {
+        async generateScreen(input, signal, deadlineMs): Promise<ScreenGeneration> {
             const stagePolicy = policy.stages[input.stage]
-            return execute(stagePolicy.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
-                const { value, telemetry } = await dispatchDetailed(
-                    'screen',
-                    { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
-                    [],
-                    z.unknown(),
-                    deadline,
-                    stagePolicy.model,
-                    false,
-                    input.repairIssues === undefined
-                        ? undefined
-                        : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
-                    false,
-                    input.stage,
-                    false,
-                    generationEffort(input),
-                )
-                return { value, telemetry }
-            })
+            return execute(
+                deadlineMs ?? stagePolicy.deadlineMs,
+                signal,
+                async (deadline): Promise<ScreenGeneration> => {
+                    const { value, telemetry } = await dispatchDetailed(
+                        'screen',
+                        { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
+                        [],
+                        z.unknown(),
+                        deadline,
+                        stagePolicy.model,
+                        false,
+                        input.repairIssues === undefined
+                            ? undefined
+                            : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
+                        false,
+                        input.stage,
+                        false,
+                        generationEffort(input),
+                    )
+                    return { value, telemetry }
+                },
+            )
         },
 
         async generatePieces(input, signal): Promise<ScreenGeneration> {
