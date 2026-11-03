@@ -12,6 +12,12 @@ it('folds only surface detail into primitives so flat silhouettes stay extrudes 
     )
 })
 
+it('does not treat shadows or expected product features as evidence for underside supports', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'Shadows, dark undersides and expected product features are not evidence: add no legs, feet, posts or supports beneath a piece unless the drawing clearly draws them as separate members of this piece.',
+    )
+})
+
 it('accepts optional bounded inventory exclusions as data while rejecting malformed or oversized lists', () => {
     const part = { id: 'panel', name: 'Panel', quantity: 1, label: null, dimensions: null, pageId: null }
     expect(manualPieceInputSchema.safeParse(part).success).toBe(true)

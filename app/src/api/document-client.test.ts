@@ -9,10 +9,10 @@ import {
     questionResultSchema,
     type ScreenContextInputsV2,
 } from '@truebuild/contracts'
-import { type ScreensV2Result, screensV2GenerateRequest } from '@truebuild/contracts/model'
+import { MODEL_ROUTE_TIMEOUT_MAX_MS, type ScreensV2Result, screensV2GenerateRequest } from '@truebuild/contracts/model'
 import { createHeroResponse } from '@truebuild/contracts/hero'
 import { sha256Hex } from '../features/documents/sha256'
-import { ModelApiClient, type ModelFetch } from './model-client'
+import { MODEL_STEP_PAGE_TIMEOUT_MS, ModelApiClient, type ModelFetch } from './model-client'
 import {
     DOCUMENT_RESPONSE_MAX_BYTES,
     documentJobContextKey,
@@ -64,6 +64,41 @@ describe('portable document SHA256', () => {
 })
 
 describe('v2 document transport', () => {
+    it('keeps a Guide request alive for the bounded server generation and repair, then accepts its reply', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        let deliver: ((response: Response) => void) | undefined
+        const fetch = vi.fn<ModelFetch>(
+            () =>
+                new Promise((resolve) => {
+                    deliver = resolve
+                }),
+        )
+        try {
+            const pending = client(fetch).screensV2(metadata, { requestId: 'v2-1' })
+            await vi.advanceTimersByTimeAsync(MODEL_ROUTE_TIMEOUT_MAX_MS)
+            expect(fetch).toHaveBeenCalledTimes(1)
+            expect(fetch.mock.calls[0]![1].signal?.aborted).toBe(false)
+            deliver?.(Response.json(envelope()))
+            expect(await pending).toMatchObject({ status: 'ok', value: { document: { screenId: document.screenId } } })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('still aborts a hung Guide once after the route ceiling and transport margin', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        const fetch = vi.fn<ModelFetch>(() => new Promise(() => undefined))
+        try {
+            const pending = client(fetch).screensV2(metadata, { requestId: 'v2-1' })
+            await vi.advanceTimersByTimeAsync(MODEL_STEP_PAGE_TIMEOUT_MS + 1)
+            expect(await pending).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
+            expect(fetch).toHaveBeenCalledTimes(1)
+            expect(fetch.mock.calls[0]![1].signal?.aborted).toBe(true)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('binds contextual More to the immutable companion question and authoritative answer facts', async () => {
         const companionAnswer = {
             question: 'Which way does the groove face?',

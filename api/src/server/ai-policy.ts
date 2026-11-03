@@ -1,3 +1,4 @@
+import { MODEL_ROUTE_TIMEOUT_MAX_MS } from '@truebuild/contracts/model'
 import { PARSE_DEFAULT_OVERALL_MS, describeParseBudget } from './parse-budget'
 import {
     AI_EFFORTS,
@@ -56,7 +57,7 @@ export interface AiPolicy {
 }
 
 /** Longest deadline `createDeadline` accepts. */
-export const MAX_DEADLINE_MS = 105_000
+export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 /** One geometry batch (Muse Wonder high, up to eight pieces) from background slot to response; the route allows queueing and crops on top. */
 export const PIECES_DEADLINE_MS = 90_000
 /** Parse has its own 165 s ceiling; the route factory separately allows its return margin. */

@@ -32,6 +32,7 @@ import {
     MAX_PARSE_PAGES,
     PARSE_SPLIT_MESSAGE,
     MODEL_METADATA_MAX_BYTES,
+    MODEL_STEP_PAGE_TIMEOUT_MS,
     modelCheckMetadataSchema,
     modelOverlayMetadataSchema,
     modelOverlayJobMetadataSchema,
@@ -69,7 +70,7 @@ import {
     type CallGuard,
 } from './transport'
 
-export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
+export { MODEL_METADATA_MAX_BYTES, MODEL_STEP_PAGE_TIMEOUT_MS } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 // Outlast the 165s parse budget and 170s route, so the server's own timeout answer arrives first.
 export const MODEL_PARSE_TIMEOUT_MS = 175_000
@@ -85,7 +86,6 @@ export const MODEL_QUESTION_COLLECT_TIMEOUT_MS = 10_000
 export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
 // Paid baseline: Spark low screens 17s, quick-check medium 31s; outlast the server's 30s limit.
 export const MODEL_SCREEN_TIMEOUT_MS = 35_000
-export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
 /** Geometry batches are the slowest model call; a timeout is an unknown outcome, so the registry never resends it. */
 export const MODEL_PIECES_TIMEOUT_MS = 120_000
 /** Eight cutouts of up to 360k characters each, plus piece specs; the default 1 MB limit cannot hold a full batch. */

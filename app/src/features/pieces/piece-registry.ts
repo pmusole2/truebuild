@@ -202,7 +202,8 @@ export function stepPiecesForStep(
     })
 }
 
-function geometryPart(part: PieceRequestPart): ManualPieceInput {
+/** The wire request part for a registry part: its internal part id is dropped, and the input is never mutated. */
+export function geometryPart(part: PieceRequestPart): ManualPieceInput {
     const { partId: _partId, ...wire } = part
     return wire
 }

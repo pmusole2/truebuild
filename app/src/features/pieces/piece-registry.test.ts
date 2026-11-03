@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
     createDemoManual,
+    manualPieceInputSchema,
     PIECE_GEOMETRY_PROMPT_VERSION,
     type PieceBatchResult,
     type PieceSpec,
 } from '@truebuild/contracts'
 import type { KeyValueStorage } from '../capture/library'
 import {
+    geometryPart,
     manualPieceContentHash,
     manualPieceInputOf,
     manualPieceInputs,
@@ -14,6 +16,7 @@ import {
     stepPiecesForStep,
     type PieceGenerationPort,
     type PieceManualInput,
+    type PieceRequestPart,
 } from './piece-registry'
 
 const CUTOUT = 'data:image/png;base64,iVBORw0KGgo='
@@ -599,5 +602,16 @@ describe('piece registry', () => {
         expect(late.pieces.length).toBeGreaterThan(0)
         expect(registry.pin('hidden-page', hash).pieces.length).toBeGreaterThan(0)
         expect(registry.pin('different-manual', 'd'.repeat(64)).pieces).toHaveLength(0)
+    })
+
+    it('projects a registry part to the exact wire request, dropping only the internal part id and leaving the input unchanged', () => {
+        const part: PieceRequestPart = { ...manual.parts[0]!, partId: 'parse-0', notPartOfThisPiece: ['Part 1'] }
+        const before = structuredClone(part)
+        const wire = geometryPart(part)
+        expect(wire).toEqual({ ...manual.parts[0], notPartOfThisPiece: ['Part 1'] })
+        expect(wire).not.toHaveProperty('partId')
+        expect(manualPieceInputSchema.safeParse(wire).success).toBe(true)
+        expect(manualPieceInputSchema.safeParse(part).success).toBe(false)
+        expect(part).toEqual(before)
     })
 })

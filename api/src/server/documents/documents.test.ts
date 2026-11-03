@@ -32,6 +32,7 @@ import type { BackgroundWork } from '../screens/service'
 import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
 import sparseGuides from './fixtures/guide-wire-replay.json'
+import containerOnlyGuide from './fixtures/guide-container-graph.json'
 import { guideQualityIssues } from './guide-quality'
 import { normalizeDocumentWire } from './normalize-wire'
 import { createDocumentService, precomputeItems, type DocumentService, type DocumentServiceOptions } from './service'
@@ -899,7 +900,23 @@ describe('Guide usability floor', () => {
                 sourceRefs: [{ pageId: 'demo-page-1', region: null }],
             },
         ])
+        // Exact completed P12 wire: every node is a container, with absent children and self references.
+        // The source-backed direction above exists; deletion-only normalization cannot author its missing Text.
+        expect(containerOnlyGuide.nodes).toHaveLength(20)
+        expect(new Set(containerOnlyGuide.nodes.map((node) => node.type))).toEqual(new Set(['Card', 'Row']))
+        const normalized = normalizeDocumentWire(containerOnlyGuide, context)
+        expect(normalized.value).toMatchObject({ nodes: [] })
+        expect(normalized.issueCodes).toContain('normalization.refs.n12:unknown_reference')
+        expect(evaluateWire(normalized.value, context)).toEqual({ ok: false, issues: ['nodes:too_small'] })
+
+        // A complete bottom-up table using the very same retained facts passes the unchanged strict and quality gates.
         const complete = goodWire('guide', session)
+        complete.nodes.reverse()
+        const defined = new Set<string>()
+        for (const node of complete.nodes) {
+            expect(node.children?.every((id) => defined.has(id)) ?? true).toBe(true)
+            defined.add(node.id)
+        }
         const evaluated = evaluateWire(complete, context)
         expect(evaluated.ok).toBe(true)
         if (!evaluated.ok) throw new Error('Battery correction must pass strict validation')
