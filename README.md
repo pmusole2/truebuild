@@ -9,6 +9,9 @@ not provide enough evidence. Review AI output against the original manual.
 - **Health:** https://truebuild-suhsi.sevalla.app/health
 - **Privacy:** https://truebuild-suhsi.sevalla.app/privacy
 - **TestFlight:** `<TestFlight public link>`
+- **Demo video:** `<demo video link>`
+
+Built for the Meta hackathon with Meta's Muse Spark, Muse Wonder and SAM models through the Meta API.
 
 ## Try the flow
 
@@ -44,8 +47,8 @@ from validated material. Fallback documents retain their fallback label.
 
 The production app uses **steps** mode: guide documents are generated, while the other screens
 use the built-in composition. The code also supports `full` and `off` modes. Piece geometry uses
-a bounded vocabulary of boxes, cylinders, cones, spheres, toruses, and capsules, rendered by the
-app's own 3D viewer.
+a bounded vocabulary of boxes, cylinders, cones, spheres, toruses, and capsules, plus lathe
+(revolved profile) and extrude (flat outline) parts, rendered by the app's own 3D viewer.
 
 ## Architecture
 
@@ -55,6 +58,8 @@ app's own 3D viewer.
   results, and applies per-client and global limits.
 - **Shared Zod contracts** in `packages/contracts/`: typed requests, results, UI documents,
   and geometry.
+- **Deployment**: the API runs on Sevalla from `api/Dockerfile`; the iOS app ships through EAS
+  (TestFlight builds and over-the-air updates).
 - **SSE streaming**: manual parsing sends progress and a final result; segmentation streams its
   events. Fifteen-second comment keepalives keep idle streams active.
 
@@ -97,6 +102,47 @@ The shared fixture key above is public test configuration. Production builds rej
 For an API mock that exercises the Meta request protocol without inference, the main Playwright
 suite starts `api/scripts/mock-server.ts` with its required `--test-only` flag.
 
+## Run locally with a Meta API key
+
+Copy the example environment and fill in the two empty secrets. The file is gitignored; never
+commit it.
+
+```sh
+cp .env.example .env
+# set MODEL_API_KEY (Meta API key) and API_SHARED_SECRET (any long random string)
+npm run doctor      # optional: one GET to https://api.meta.ai/v1/models, no inference
+npm run start:api   # listens on PORT (3001 by default)
+```
+
+Then start the app against it, using the same shared secret:
+
+```sh
+cd app
+EXPO_NO_DOTENV=1 \
+EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3001 \
+EXPO_PUBLIC_API_SECRET=<your API_SHARED_SECRET> \
+EXPO_PUBLIC_PROVIDER_MODE=meta \
+EXPO_PUBLIC_GENERATIVE_UI=steps \
+npm run web -- --localhost --port 8091
+```
+
+Live mode sends your manual pages and photos to Meta's API and uses your key's quota. The comments
+in [`.env.example`](.env.example) describe every documented setting, including the per-day call
+limits.
+
+### Environment variables
+
+API server (`.env`): `PROVIDER_MODE`, `MODEL_API_KEY`, `API_SHARED_SECRET`, `PORT`, `MODEL_SPARK`,
+`MODEL_PARSE`, `MODEL_SECOND_OPINION`, `MODEL_SAM`, `MODEL_CHECK_CONTEXT`, `MODEL_LAYOUT`,
+`MODEL_LAYOUT_WONDER`, `MODEL_CALL_LIMIT_PER_DAY`, `MODEL_CALL_LIMIT_PER_CLIENT_DAY`,
+`PARSE_LIMIT_PER_HOUR`, `CHECK_TIMEOUT_MS`, `CORS_ORIGINS`, and the optional tuning names listed at
+the end of `.env.example` (`GENERATIVE_UI`, `MODEL_SEGMENTS`, concurrency, and per-stage
+`AI_MODEL_*`, `AI_EFFORT_*`, `AI_DEADLINE_*_MS`, `AI_MAX_OUTPUT_*` overrides).
+
+App (Expo, read at build time): `EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_API_SECRET`,
+`EXPO_PUBLIC_PROVIDER_MODE`, `EXPO_PUBLIC_GENERATIVE_UI`. Other `EXPO_PUBLIC_*` flags are test and
+fixture switches that production builds reject.
+
 ## Production over-the-air updates
 
 `npm run ota:production --workspace @truebuild/app` publishes JavaScript and asset changes to the
@@ -125,3 +171,10 @@ TRUEBUILD_E2E_GENERATIVE_UI=off npx playwright test --config playwright.generati
 These checks use fixtures and mocks, and require no model credential. For a live setup, keep
 `MODEL_API_KEY` on the API server only. The app's `EXPO_PUBLIC_API_SECRET` is a shared demo access
 key visible in its bundle; it is not a Meta credential or user authentication.
+
+`gate-check/truebuild-gate-check/` holds the early standalone smoke scripts used to confirm Meta API
+access. Unlike the checks above, they make live, billable calls and need `MODEL_API_KEY`.
+
+## License
+
+[MIT](LICENSE) © 2026 Prince Musole
