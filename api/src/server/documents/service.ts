@@ -35,7 +35,7 @@ import { BudgetError } from '../budget'
 import { createDeadline, RequestStoppedError } from '../deadline'
 import { withinModelDeadline } from '../model-multipart'
 import { admission } from '../request-clock'
-import type { AiPolicy, GenerativeUiMode } from '../ai-policy'
+import { MAX_DEADLINE_MS, type AiPolicy, type GenerativeUiMode } from '../ai-policy'
 import { PrecomputeRegistry, ScreenCache, SingleFlight, StaleGuard, StaleRevisionError } from '../screens/store'
 import type { BackgroundWork, StepScreenContext } from '../screens/service'
 import { buildDocumentContext, sha256, type DocumentContext } from './context'
@@ -397,6 +397,8 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
     async function generateWithModel(context: DocumentContext, signal: AbortSignal): Promise<Made> {
         const stagePolicy = policy.stages[context.stage]
+        const workBudgetMs = Math.min(MAX_DEADLINE_MS, stagePolicy.deadlineMs * 2 + 2_000)
+        const workStarted = performance.now()
         if ((provider === null || !generateDocument) && fixture === null) {
             return { document: deterministic(context, 'unconfigured'), cached: null }
         }
@@ -479,8 +481,15 @@ export function createDocumentService(options: DocumentServiceOptions): Document
          * the revision superseded) is dropped here, so nothing of it is repaired, published or cached.
          */
         const attempt = async (repairIssues?: readonly string[]): Promise<unknown> => {
+            // A Guide's primary and optional repair share the existing work ceiling. A slow completed primary may
+            // use more than one old 45s slice; a repair can use only what remains, never a fresh full budget.
+            const attemptMs =
+                context.inputs.kind === 'guide' && fixture === null
+                    ? workBudgetMs - (performance.now() - workStarted)
+                    : stagePolicy.deadlineMs
+            if (attemptMs <= 0) throw new RequestStoppedError('timeout')
             dispatched += 1
-            const deadline = createDeadline(stagePolicy.deadlineMs, active)
+            const deadline = createDeadline(attemptMs, active)
             const callAbort = new AbortController()
             const stop = (): void => callAbort.abort(deadline.signal.reason)
             deadline.signal.addEventListener('abort', stop, { once: true })
@@ -606,10 +615,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
         try {
             if (fixture !== null) return await run()
-            return await work.run(
-                { deadlineMs: Math.min(105_000, stagePolicy.deadlineMs * 2 + 2_000), signal: active },
-                run,
-            )
+            return await work.run({ deadlineMs: workBudgetMs, signal: active }, run)
         } catch (error) {
             // A cancelled provider call reports a generic stop; the abort reason says why it was stopped.
             return failure(signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error))

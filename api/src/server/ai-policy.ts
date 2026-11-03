@@ -132,7 +132,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
         },
         // t5: Spark low quick-check 17.4 s / camera 23.0 s; quick-check medium 30.8 s. User-selected 30 s deadline.
         screens: { effort: 'low', maxOutputTokens: 32_000, deadlineMs: 30_000, model: defaults.verdictModel },
-        // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; retain the 45 s attempt deadline.
+        // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; Guide shares both 45 s slices plus the margin.
         'step-pages': { effort: 'medium', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
         // t5: Spark low verdict 7.96 s; keep low and use the runtime's requested 12 s limit.
         verdict: {
