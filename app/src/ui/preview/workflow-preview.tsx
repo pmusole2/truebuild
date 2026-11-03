@@ -53,6 +53,7 @@ export const INERT_WORKFLOW_CONTROLLER = Object.freeze({
     parse: resolveNothing,
     questionChanged: doNothing,
     rename: resolveNothing,
+    setReadingLanguage: resolveNothing,
     restore: resolveNothing,
     step: resolveNothing,
     targetChanged: doNothing,

@@ -23,7 +23,7 @@ import { useJudge } from '../screens/judge-context'
 import { CompareNavigationContext, type CompareNavigation } from '../screens/compare-flow'
 import { resolveIntent, type ResolvedIntent } from '../screens/intents'
 import { useNavigationPreparation, useWorkflowActions } from './native-routes'
-import { readingLanguage, setReadingLanguage } from './reading-language'
+import { rereadPrompt } from './reading-language'
 import { useMoreState, type MoreMode } from './screen-header'
 import type { QuickProgress } from '../screens/quick-progress'
 import { documentInputs } from './document-inputs'
@@ -168,12 +168,8 @@ export function DocumentSurface({
         document: ScreenDocumentV2
         arrivedAt: number | null
     } | null>(null)
-    const [language, setLanguage] = useState(() =>
-        entry === undefined ? 'en' : readingLanguage(entry.session.manualId),
-    )
-    useEffect(() => {
-        setLanguage(entry === undefined ? 'en' : readingLanguage(entry.session.manualId))
-    }, [entry?.session.manualId])
+    const language = entry?.session.readingLanguage ?? 'en'
+    const languagePrompt = entry === undefined ? null : rereadPrompt(entry.session)
     const effectiveKind =
         kind === 'home' && state.storageReadOnly
             ? 'error'
@@ -513,7 +509,7 @@ export function DocumentSurface({
                     more.hide()
                 },
                 refresh: reading.retry,
-                language: entry === undefined ? 'en' : readingLanguage(entry.session.manualId),
+                language,
                 contextualMore: effectiveKind === 'more' && contextualMore,
             },
         })
@@ -662,9 +658,20 @@ export function DocumentSurface({
         },
         language: {
             value: language,
+            disabled: busy,
+            ...(languagePrompt === null
+                ? {}
+                : {
+                      reread: {
+                          prompt: languagePrompt,
+                          onPress: (): void => {
+                              dismissOverlays()
+                              void controller.parse(language)
+                          },
+                      },
+                  }),
             onChange: (value): void => {
-                if (entry !== undefined) setReadingLanguage(entry.session.manualId, value)
-                setLanguage(value)
+                void controller.setReadingLanguage(value)
             },
         },
         inspect: judge.showBuilt,

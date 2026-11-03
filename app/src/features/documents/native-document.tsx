@@ -39,7 +39,8 @@ import {
 import { AppButton, IconButton } from '../../ui/button'
 import { BlueprintLoader } from '../../ui/blueprint-loader'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
-import { SegmentedControl, SettingRow, TextField } from '../../ui/fields'
+import { SettingRow, TextField } from '../../ui/fields'
+import { ReadingLanguagePicker } from '../../ui/reading-language-picker'
 import { Icon } from '../../ui/icons'
 import { ProgressBar } from '../../ui/progress'
 import { Card } from '../../ui/surface'
@@ -1798,7 +1799,12 @@ function NodeContent({
         case 'Choice':
             return (
                 <View nativeID={mark} style={styles.stack}>
-                    {node.prompt === null ? null : <Heading>{text(node.prompt)}</Heading>}
+                    {node.prompt === null ||
+                    (node.options.mode === 'bound' &&
+                        node.options.binding === 'language' &&
+                        bindings.language !== undefined) ? null : (
+                        <Heading>{text(node.prompt)}</Heading>
+                    )}
                     {node.options.mode === 'intents' ? (
                         node.options.items.map((item, index) => (
                             <Action
@@ -1832,21 +1838,26 @@ function NodeContent({
                     ) : node.options.mode === 'bound' &&
                       node.options.binding === 'language' &&
                       bindings.language !== undefined ? (
-                        <SegmentedControl
-                            label={text(node.prompt) || 'Read in'}
-                            options={[
-                                { value: 'en', label: 'English' },
-                                { value: 'es', label: 'Spanish' },
-                                { value: 'fr', label: 'French' },
-                                { value: 'de', label: 'German' },
-                                { value: 'pt-BR', label: 'Portuguese' },
-                            ]}
-                            value={bindings.language.value}
-                            disabled={!mutationsEnabled(bindings)}
-                            onChange={(value): void => {
-                                if (mutationsEnabled(bindings)) bindings.language?.onChange(value)
-                            }}
-                        />
+                        <View style={{ gap: space.sm }}>
+                            <ReadingLanguagePicker
+                                label={text(node.prompt) || 'Reading language'}
+                                value={bindings.language.value}
+                                disabled={!mutationsEnabled(bindings) || bindings.language.disabled === true}
+                                onChange={(value): void => {
+                                    if (mutationsEnabled(bindings)) bindings.language?.onChange(value)
+                                }}
+                            />
+                            {bindings.language.reread === undefined ? null : (
+                                <>
+                                    <Body>{bindings.language.reread.prompt}</Body>
+                                    <AppButton
+                                        label="Re-read"
+                                        disabled={!mutationsEnabled(bindings) || bindings.language.disabled === true}
+                                        onPress={bindings.language.reread.onPress}
+                                    />
+                                </>
+                            )}
+                        </View>
                     ) : null}
                 </View>
             )

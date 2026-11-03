@@ -9,7 +9,6 @@ import { useCoachAttention, useCoachScope } from '../onboarding/coach-provider'
 import type { LibraryEntry } from './library'
 import { PageImage } from './page-media'
 import { plainNotice } from './plain-copy'
-import { readingLanguage } from './reading-language'
 import { ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import type { WorkflowScreenProps } from './workflow-types'
@@ -47,7 +46,7 @@ export function ReadingScreen({
     // Only the stream's own output phase is named; every other reading phase keeps the calm known-page line.
     const laying = state.pending?.startsWith('Reading manual pages: laying out steps') === true
     const read = (): void => {
-        void controller.parse(readingLanguage(entry.session.manualId))
+        void controller.parse(entry.session.readingLanguage ?? 'en')
     }
     const stop = (): void => {
         setConfirming(false)

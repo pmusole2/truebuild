@@ -4,6 +4,7 @@ import {
     allowedLiteralsV2,
     availableBoundKeysV2 as availableBoundKeys,
     coachTargetsForV2,
+    documentLanguageV2,
     documentMaterialV2,
     intentAllowedV2,
     manualDisplayTitleV2,
@@ -124,6 +125,8 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
         dynamic: {
             document: {
                 kind: inputs.kind,
+                /** The code the manual text is in (`en` unless the manual was parsed in another language). */
+                language: documentLanguageV2(used.session),
                 requirements: material.requirements,
                 /** Every factId the ready screen must state: the requirements plus a quick check's overview steps. */
                 readyFacts: ready.facts,

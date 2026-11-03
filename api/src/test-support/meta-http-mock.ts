@@ -6,6 +6,24 @@ import sharp from 'sharp'
 import { AI_EFFORTS, createDemoManual, parsedManualSchema } from '@truebuild/contracts'
 
 export const MOCK_PROVIDER_KEY = '<synthetic>'
+// Authored fixture copy, never evidence of a model translating a real manual.
+const PORTUGUESE_COPY: Readonly<Record<string, string>> = {
+    'Stand the side panel upright': 'Coloque o painel lateral na vertical',
+    'Groove faces inward toward the divider.': 'A ranhura fica voltada para dentro, em direção à divisória.',
+    'Keep the panel free before seating the divider.': 'Mantenha o painel livre antes de encaixar a divisória.',
+    'The inward-facing groove is visible.': 'A ranhura voltada para dentro está visível.',
+    'Turn the panel so the groove faces inward.': 'Gire o painel para que a ranhura fique voltada para dentro.',
+    'Seat the divider in the groove': 'Encaixe a divisória na ranhura',
+    'Divider is horizontal and square to the upright panel.': 'A divisória fica horizontal e perpendicular ao painel.',
+    'Divider edge rests inside the panel groove.': 'A borda da divisória fica dentro da ranhura do painel.',
+    'Divider is fully seated with no visible gap.': 'A divisória está totalmente encaixada, sem folga visível.',
+    'Lift the divider and reseat its edge inside the groove.': 'Levante a divisória e recoloque a borda na ranhura.',
+    'Side panel': 'Painel lateral',
+    'Divider shelf': 'Prateleira divisória',
+    'TEST MOCK ONLY: synthetic provider-boundary result.': 'SIMULAÇÃO: resultado sintético do provedor.',
+    'TEST MOCK ONLY: consult the cited diagram.': 'SIMULAÇÃO: consulte o diagrama citado.',
+    'TEST MOCK: no real visual evaluation': 'SIMULAÇÃO: sem avaliação visual real',
+}
 /** The documented-protocol simulator restates the default policy independently of production code. */
 export function defaultWire(
     operation: string,
@@ -612,14 +630,22 @@ export async function startMetaMock(
                                       ? []
                                       : ['TEST MOCK: no real visual evaluation'],
                           }
+            const localized: typeof value =
+                stable.language === 'pt-BR'
+                    ? JSON.parse(
+                          JSON.stringify(value, (_key, text: unknown): unknown =>
+                              typeof text === 'string' ? (PORTUGUESE_COPY[text] ?? text) : text,
+                          ),
+                      )
+                    : value
             if (!secondary) requests.push({ path: '/v1/responses', operation })
             // A strict schema admits exactly its listed properties, so a faithful model emits no others (a verdict-only
             // check has no geometry property to fill).
             const allowed = request.text.format.schema.properties
             const emitted =
                 allowed && typeof allowed === 'object'
-                    ? Object.fromEntries(Object.entries(value).filter(([key]) => key in allowed))
-                    : value
+                    ? Object.fromEntries(Object.entries(localized).filter(([key]) => key in allowed))
+                    : localized
             const response = {
                 ...responseEnvelope(request.model, 'completed', [], {}),
                 output: [

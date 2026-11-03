@@ -475,6 +475,83 @@ describe('inactive direct Meta transport', (): void => {
         )
     })
 
+    it.each(['check', 'question'] as const)(
+        'requests %s prose in the successfully parsed language',
+        async (operation): Promise<void> => {
+            const input = await validInput()
+            input.session.parsedLanguage = 'pt-BR'
+            input.session.readingLanguage = 'fr'
+            const output =
+                operation === 'check'
+                    ? result
+                    : {
+                          answer: 'Use the cited visible edge.',
+                          sourceRefs: result.sourceRefs,
+                          missingEvidence: [],
+                      }
+            await localServer(jsonResponder(responseBody(output)), async (transport): Promise<void> => {
+                if (operation === 'check') await transport.provider.checkStep(input, signal())
+                else
+                    await transport.provider.answerQuestion(
+                        { ...input, question: 'Which way?', target: { kind: 'point', x: 0.3, y: 0.4 } },
+                        signal(),
+                    )
+                expect(transport.bodies[0]).toMatchObject({
+                    instructions: expect.stringContaining('Write model-authored prose in pt-BR'),
+                })
+            })
+        },
+    )
+
+    it('keeps legacy and explicit English outbound instructions identical without language rules', async () => {
+        for (const operation of ['check', 'question', 'document'] as const) {
+            const instructions: string[] = []
+            const input = await validInput()
+            const output =
+                operation === 'check'
+                    ? result
+                    : operation === 'question'
+                      ? { answer: 'Use the cited visible edge.', sourceRefs: result.sourceRefs, missingEvidence: [] }
+                      : {}
+            const provider = createMetaProvider({
+                apiKey: 'synthetic',
+                fetchImpl: async (_url, init) => {
+                    const body = JSON.parse(String(init?.body)) as { instructions: string }
+                    instructions.push(body.instructions)
+                    return Response.json(responseBody(output))
+                },
+            })
+            for (const language of [undefined, 'en', 'fr', 'not-a-language'] as const) {
+                if (operation === 'document') {
+                    await provider.generateDocument!(
+                        {
+                            requestId: 'english-instructions',
+                            stage: 'screens',
+                            stable: {},
+                            dynamic: { document: { kind: 'guide', ...(language ? { language } : {}) } },
+                        },
+                        signal(),
+                    )
+                } else if (language !== 'not-a-language') {
+                    input.session.parsedLanguage = language
+                    if (operation === 'check') await provider.checkStep(input, signal())
+                    else
+                        await provider.answerQuestion(
+                            { ...input, question: 'Which way?', target: { kind: 'point', x: 0.3, y: 0.4 } },
+                            signal(),
+                        )
+                }
+            }
+            expect(instructions[1]).toBe(instructions[0])
+            expect(instructions[0]).not.toMatch(/Language: document\.language|Write model-authored prose in/u)
+            expect(instructions[2]).not.toBe(instructions[0])
+            if (operation === 'document') {
+                expect(instructions[2]).toContain('Language: document.language')
+                expect(instructions[3]).toBe(instructions[0])
+            } else expect(instructions[2]).toContain('Write model-authored prose in fr')
+        }
+    })
+
     it('answers an observation-bound question with cited output', async (): Promise<void> => {
         const answer = { answer: 'Use the cited visible edge.', sourceRefs: result.sourceRefs, missingEvidence: [] }
 

@@ -56,6 +56,7 @@ function spies(): { controller: WorkflowController; nav: ScreenNav; extras: Requ
         parse: vi.fn(),
         questionChanged: vi.fn(),
         rename: vi.fn(),
+        setReadingLanguage: vi.fn(),
         restore: vi.fn(),
         step: vi.fn(),
         targetChanged: vi.fn(),

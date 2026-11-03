@@ -681,6 +681,8 @@ export function useWorkflowActions(): {
             questionChanged: (question): void => {
                 if (available()) controller.questionChanged(question)
             },
+            setReadingLanguage: (language) =>
+                available() ? controller.setReadingLanguage(language) : Promise.resolve(),
             rename: (title) => (available() ? controller.rename(title) : Promise.resolve()),
             restore: () => (available() ? controller.restore() : Promise.resolve()),
             step: (index) => (available() ? controller.step(index) : Promise.resolve()),

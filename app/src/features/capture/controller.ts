@@ -545,6 +545,7 @@ export class CaptureController {
                 updatedAt: new Date(this.now()).toISOString(),
                 parts: [],
                 rawExtraction: null,
+                parsedLanguage: undefined,
                 reviewedSteps: [],
                 reviewStatus: 'unreviewed',
                 extractionSourcePageIds: [],
@@ -675,7 +676,18 @@ export class CaptureController {
             contentHash: await this.ports.digest(image.bytes),
         }
     }
-    async parse(language = 'en'): Promise<void> {
+    async setReadingLanguage(language: string): Promise<void> {
+        const entry = this.current
+        if (entry === undefined || this.state.pending !== null || this.saving || this.state.storageReadOnly) return
+        const result = parseLanguageSchema.safeParse(language)
+        if (!result.success) {
+            this.publish({ notice: 'Enter a language code such as en, fr or pt-BR.' })
+            return
+        }
+        if (entry.session.readingLanguage === result.data) return
+        await this.persist(this.replacement({ ...entry, session: { ...entry.session, readingLanguage: result.data } }))
+    }
+    async parse(language = this.current?.session.readingLanguage ?? 'en'): Promise<void> {
         const entry = this.current
         if (
             entry === undefined ||
@@ -755,6 +767,7 @@ export class CaptureController {
                     updatedAt: new Date(this.now()).toISOString(),
                     parts: working.parts,
                     rawExtraction: parsed,
+                    parsedLanguage: parsedLanguage.data,
                     reviewedSteps: [...working.steps].sort((a, b) => a.order - b.order),
                     reviewStatus: 'unreviewed',
                     extractionSourcePageIds: entry.session.pages.map((p) => p.pageId),

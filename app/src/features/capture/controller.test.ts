@@ -1909,3 +1909,104 @@ it('validates parse language before reading and propagates a valid requested lan
     await controller.parse('es')
     expect(language).toBe('es')
 })
+
+it('persists each manual reading preference across fresh storage and preserves extraction provenance until success', async () => {
+    const { controller, data, calls } = setup()
+    controllers.push(controller)
+    await controller.restore()
+    await controller.createManual()
+    await controller.importPages(async () => [photo])
+    const firstId = controller.current!.session.manualId
+    await controller.setReadingLanguage('pt-BR')
+    expect(calls).toHaveLength(0)
+    const restored = new CaptureController({
+        storage: storage(data).store,
+        client: new ModelApiClient({
+            baseUrl: 'https://api.example.test',
+            secret: '',
+            fetch: async (): Promise<Response> => {
+                throw new Error('offline')
+            },
+        }),
+        normalize: async (): Promise<typeof image> => image,
+        digest,
+        id: (): string => 'restored',
+    })
+    controllers.push(restored)
+    await restored.restore()
+    await restored.open(firstId, 'pages')
+    expect(restored.current!.session.readingLanguage).toBe('pt-BR')
+    await controller.parse()
+    expect(controller.current!.session.parsedLanguage).toBe('pt-BR')
+    await controller.setReadingLanguage('fr')
+    expect(controller.current!.session.parsedLanguage).toBe('pt-BR')
+    await controller.createManual()
+    expect(controller.current!.session.readingLanguage).toBeUndefined()
+    await controller.open(firstId, 'pages')
+    expect(controller.current!.session.readingLanguage).toBe('fr')
+    await restored.restore()
+    await restored.open(firstId, 'pages')
+    const extraction = restored.current!.session.rawExtraction
+    await restored.parse()
+    expect(restored.getSnapshot().notice).not.toBeNull()
+    expect(restored.current!.session.parsedLanguage).toBe('pt-BR')
+    expect(restored.current!.session.rawExtraction).toEqual(extraction)
+    await controller.importPages(async () => [photo])
+    expect(controller.current!.session.parsedLanguage).toBeUndefined()
+    expect(controller.current!.session.readingLanguage).toBe('fr')
+})
+
+it.each(['preference', 're-read'] as const)(
+    'retains saved language and extraction when saving a %s fails',
+    async (operation) => {
+        const { controller, kv } = setup()
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        const before = controller.current!.session
+        await controller.setReadingLanguage('es')
+        vi.spyOn(kv, 'setItem').mockRejectedValue(new Error('disk full'))
+        if (operation === 'preference') await controller.setReadingLanguage('de')
+        else await controller.parse()
+        expect(controller.current!.session.readingLanguage).toBe('es')
+        expect(controller.current!.session.parsedLanguage).toBe('en')
+        expect(controller.current!.session.revision).toBe(before.revision)
+        expect(controller.current!.session.rawExtraction).toEqual(before.rawExtraction)
+        expect(controller.getSnapshot().storageReadOnly).toBe(true)
+    },
+)
+
+it('does not relabel a previous extraction when re-reading is canceled', async () => {
+    let hold = false
+    const { controller } = setup(async (_url, init) => {
+        const metadata = modelParseMetadataSchema.parse(JSON.parse(String((init.body as FormData).get('metadata'))))
+        if (hold) {
+            await new Promise<void>((_resolve, reject) => {
+                init.signal?.addEventListener('abort', () => reject(new Error('canceled')), { once: true })
+            })
+        }
+        return Response.json({
+            status: 'ok',
+            mode: 'model',
+            requestId: metadata.requestId,
+            binding: metadata.binding,
+            value: parsed(metadata.pages[0]!.pageId),
+        })
+    })
+    controllers.push(controller)
+    await controller.restore()
+    await controller.createManual()
+    await controller.importPages(async () => [photo])
+    await controller.parse()
+    const extraction = controller.current!.session.rawExtraction
+    await controller.setReadingLanguage('fr')
+    hold = true
+    const pending = controller.parse()
+    controller.cancel()
+    await pending
+    expect(controller.current!.session.readingLanguage).toBe('fr')
+    expect(controller.current!.session.parsedLanguage).toBe('en')
+    expect(controller.current!.session.rawExtraction).toEqual(extraction)
+})

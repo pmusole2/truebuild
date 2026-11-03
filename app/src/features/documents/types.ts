@@ -66,7 +66,12 @@ export type FrameBindings = {
     readonly insetTop?: number
     readonly operationNotice?: string | null
     readonly answeredQuestion?: string | null
-    readonly language?: { readonly value: string; readonly onChange: (value: string) => void }
+    readonly language?: {
+        readonly value: string
+        readonly onChange: (value: string) => void
+        readonly disabled?: boolean
+        readonly reread?: { readonly prompt: string; readonly onPress: () => void }
+    }
     /**
      * The piece registry the context was composed for: resolves each native piece node by id. Absent, or an id it no
      * longer holds: the viewer shows its fallback card (no geometry is drawn and nothing throws).

@@ -95,6 +95,130 @@ async function openMore(page: Page): Promise<void> {
     await expect(page.getByTestId('more-sheet').getByRole('heading', { name: 'More', exact: true })).toBeVisible()
 }
 
+test('reading language: narrow Settings labels fit, choice survives reload, and only Re-read parses again', async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 320, height: 568 })
+    await page.addInitScript(() => {
+        const original = window.fetch.bind(window)
+        const observed: string[] = []
+        Object.assign(window, { readingLanguagesSent: observed })
+        window.fetch = (input, init): ReturnType<typeof fetch> => {
+            if (String(input).includes('/api/manuals/parse') && init?.body instanceof FormData) {
+                const metadata = init.body.get('metadata')
+                if (typeof metadata === 'string') {
+                    const value: unknown = JSON.parse(metadata)
+                    if (
+                        value !== null &&
+                        typeof value === 'object' &&
+                        'language' in value &&
+                        typeof value.language === 'string'
+                    ) {
+                        observed.push(value.language)
+                    }
+                }
+            }
+            return original(input, init)
+        }
+    })
+    let parses = 0
+    page.on('request', (request) => {
+        if (request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST') {
+            parses++
+        }
+    })
+    await openFreshLibrary(page)
+    expect((await addTwoPagesAndRead(page)).status()).toBe(200)
+    await startBuilding(page)
+    await openMore(page)
+    const sheet = page.getByTestId('more-sheet')
+    await sheet.getByRole('button', { name: 'Settings', exact: true }).click()
+    const picker = sheet.getByRole('radiogroup', { name: 'Reading language', exact: true })
+    await expect(picker).toBeVisible()
+    for (const name of ['English', 'Spanish', 'French', 'German', 'Portuguese']) {
+        const option = picker.getByRole('radio', { name, exact: true })
+        await option.scrollIntoViewIfNeeded()
+        await expect(option).toBeVisible()
+        expect(
+            await option.evaluate((element) => {
+                const label = element.querySelector('[dir]') ?? element
+                const rect = label.getBoundingClientRect()
+                return label.scrollWidth <= label.clientWidth && rect.left >= 0 && rect.right <= innerWidth
+            }),
+        ).toBe(true)
+    }
+    // Keep the short-phone flow above/below; use extra height only to frame all requested capture content at 320px.
+    await page.getByTestId('close-sheet').click()
+    await expect(sheet).toBeHidden()
+    await page.setViewportSize({ width: 320, height: 844 })
+    await openMore(page)
+    await sheet.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(sheet.getByText('Manual language', { exact: true })).toBeVisible()
+    await expect(sheet.getByText('The language TrueBuild reads and writes in', { exact: true })).toBeVisible()
+    await picker.locator('..').evaluate((element) => element.scrollIntoView({ block: 'center' }))
+    await page.screenshot({ path: '.local/prompt17b/more-manual-language-320.png' })
+    await picker.getByRole('radio', { name: 'Portuguese', exact: true }).click()
+    await expect(
+        sheet.getByText(
+            'This manual was read in English. Re-read in Portuguese? This resets your corrections and build progress.',
+            { exact: true },
+        ),
+    ).toBeVisible()
+    await expect(picker.getByRole('radio', { name: 'Portuguese', exact: true })).toBeChecked()
+    expect(parses).toBe(1)
+    const reread = sheet.getByRole('button', { name: 'Re-read', exact: true })
+    await reread.evaluate((element) => element.parentElement?.scrollIntoView({ block: 'center' }))
+    await expect(reread).toBeVisible()
+    await page.screenshot({ path: '.local/prompt17b/reread-portuguese-320.png' })
+    await page.setViewportSize({ width: 320, height: 568 })
+    await page.reload()
+    await expect(page.getByTestId('guide-primary')).toBeVisible({ timeout: 60_000 })
+    await openMore(page)
+    await sheet.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(sheet.getByRole('radio', { name: 'Portuguese', exact: true })).toBeChecked()
+    expect(parses).toBe(1)
+    const response = page.waitForResponse(
+        (result) =>
+            result.url() === `${API}/api/manuals/parse?stepKinds=remove` && result.request().method() === 'POST',
+    )
+    await sheet.getByRole('button', { name: 'Re-read', exact: true }).click()
+    expect((await response).status()).toBe(200)
+    await expect(page.getByRole('heading', { name: 'Quick check', exact: true })).toBeVisible({ timeout: 120_000 })
+    expect(parses).toBe(2)
+    // The pass-through observer starts fresh on reload; only the explicit re-read is sent in this page lifetime.
+    expect(
+        await page.evaluate(() => (window as unknown as { readingLanguagesSent: string[] }).readingLanguagesSent),
+    ).toEqual(['pt-BR'])
+    await page.getByTestId('quick-check-start').click()
+    await expect(page).toHaveURL(/\/guide\//u)
+    await expect(
+        page.getByText('Coloque o painel lateral na vertical', { exact: true }).filter({ visible: true }).first(),
+    ).toBeVisible()
+    await page.getByRole('button', { name: 'Take photo', exact: true }).click()
+    await expect(page.getByTestId('camera-shutter')).toBeEnabled({ timeout: 60_000 })
+    await page.getByTestId('camera-shutter').click()
+    await expect(
+        page
+            .getByText('SIMULAÇÃO: resultado sintético do provedor.', { exact: true })
+            .filter({ visible: true })
+            .first(),
+    ).toBeVisible({
+        timeout: 60_000,
+    })
+    await openMore(page)
+    await sheet.getByRole('button', { name: 'Ask about this step', exact: true }).click()
+    await page
+        .getByRole('button', { name: 'Choose a point in your photo. Double tap to choose the middle.', exact: true })
+        .click()
+    await page.getByLabel('Your question', { exact: true }).fill('Qual é a direção desta peça?')
+    await page.getByRole('button', { name: 'Ask', exact: true }).click()
+    await expect(
+        page.getByText('SIMULAÇÃO: consulte o diagrama citado.', { exact: false }).filter({ visible: true }).first(),
+    ).toBeVisible({
+        timeout: 60_000,
+    })
+})
+
 test('real path: pages are read by the API, the plan is started, the guide restores after reload, and a check returns the scenario verdict', async ({
     page,
 }) => {

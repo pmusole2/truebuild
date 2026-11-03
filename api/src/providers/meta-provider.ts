@@ -79,7 +79,7 @@ import {
     providerVerdictSchema,
     metaVerdictOutputSchema,
 } from './meta-schemas'
-import { DOCUMENT_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
+import { DOCUMENT_INSTRUCTIONS, DOCUMENT_LANGUAGE_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
 import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
 import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
@@ -503,6 +503,7 @@ function stepContext(input: CheckStepInput, step: ManualStep): Record<string, un
         step,
         plan: { steps: input.session.reviewedSteps },
         parts: input.session.parts,
+        ...(input.session.parsedLanguage === undefined ? {} : { language: input.session.parsedLanguage }),
         sourcePages: input.sourceImages.map((source): ManualPage => source.page),
         imageOrder: ['source pages in sourcePages order', 'last image is the bound observation'],
         // The generated step screen the person is looking at, bound by the server to this revision, step and facts.
@@ -891,7 +892,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         const stagePolicy = policy.stages[stage]
         const streamingParse = operation === 'parse' && model === 'muse-spark-1.3'
         const { requestId, binding, step, question, target, dynamic, ...stable } = context
-        const language = operation === 'parse' && typeof stable.language === 'string' ? stable.language : undefined
+        const language = typeof stable.language === 'string' ? stable.language : undefined
+        const documentLanguage =
+            operation === 'document'
+                ? z.object({ document: z.object({ language: parseLanguageSchema }) }).safeParse(dynamic)
+                : undefined
         const operationInstructions =
             operation === 'parse'
                 ? PARSE_INSTRUCTIONS
@@ -900,7 +905,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                   : operation === 'pieces'
                     ? PIECE_GEOMETRY_INSTRUCTIONS
                     : operation === 'document'
-                      ? DOCUMENT_INSTRUCTIONS
+                      ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
+                          ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
+                          : DOCUMENT_INSTRUCTIONS
                       : operation === 'overlay'
                         ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
                         : withLayout
@@ -909,7 +916,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         const baseInstructions =
             language === undefined
                 ? operationInstructions
-                : `${operationInstructions} ${parseLanguageInstructions(language)}`
+                : operation === 'parse'
+                  ? `${operationInstructions} ${parseLanguageInstructions(language)}`
+                  : (operation === 'check' || operation === 'question') && language !== 'en'
+                    ? `${operationInstructions} Write model-authored prose in ${language}, the manual's successfully parsed reading language. This applies to reason, answer and missingEvidence. Keep JSON keys, enum values, identifiers, citations and geometry unchanged. Never translate source quotations or invent facts.`
+                    : operationInstructions
         const manualImages = operation === 'parse' ? images : images.slice(0, -1)
         const textOnly = operation === 'screen' || operation === 'document'
         const observation = operation === 'parse' || textOnly ? [] : images.slice(-1)

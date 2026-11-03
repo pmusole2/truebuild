@@ -7,7 +7,7 @@ import { FixedBottomBar } from '../../ui/bottom-bar'
 import { MoreSheet } from '../../ui/sheet'
 import { Card, Stack } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction } from '../../ui/text'
-import { SegmentedControl, TextField } from '../../ui/fields'
+import { TextField } from '../../ui/fields'
 import { SkeletonCard } from '../../ui/skeleton'
 import { Icon } from '../../ui/icons'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
@@ -18,7 +18,8 @@ import { useLoadEntrance } from '../../ui/motion'
 import { pagesCandidates } from '../onboarding/coach-inventory'
 import { useCoachAttention, useCoachScope, useCoachScreen } from '../onboarding/coach-provider'
 import { PRIVACY_COPY } from './privacy-copy'
-import { setReadingLanguage } from './reading-language'
+import { ReadingLanguagePicker } from '../../ui/reading-language-picker'
+import { rereadPrompt } from './reading-language'
 import type { LibraryEntry } from './library'
 import { PageImage } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
@@ -26,29 +27,6 @@ import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import type { WorkflowScreenProps } from './workflow-types'
 const MAX_PAGES = 20
 
-// Common reading languages by name; the codes are the ones the reader already accepts.
-const LANGUAGES = [
-    {
-        value: 'en',
-        label: 'English',
-    },
-    {
-        value: 'es',
-        label: 'Spanish',
-    },
-    {
-        value: 'fr',
-        label: 'French',
-    },
-    {
-        value: 'de',
-        label: 'German',
-    },
-    {
-        value: 'pt-BR',
-        label: 'Portuguese',
-    },
-] as const
 export type PagesScreenProps = WorkflowScreenProps &
     ChromeProps & {
         entry: LibraryEntry
@@ -78,7 +56,8 @@ export function PagesScreen({
     const internalMore = useMoreState()
     const more = moreProp ?? internalMore
     const [title, setTitle] = useState(entry.session.title)
-    const [language, setLanguage] = useState('en')
+    const language = entry.session.readingLanguage ?? 'en'
+    const prompt = rereadPrompt(entry.session)
     const [sheet, setSheet] = useState<Sheet>({
         kind: 'settings',
     })
@@ -139,7 +118,6 @@ export function PagesScreen({
                 busy: state.pending !== null && state.pending.startsWith('Reading'),
                 disabled: busy,
                 onPress: (): void => {
-                    setReadingLanguage(entry.session.manualId, language)
                     void controller.parse(language)
                 },
             }
@@ -299,16 +277,28 @@ export function PagesScreen({
                             editable={!state.storageReadOnly}
                         />
                         <Stack gap="xs">
-                            <Heading>Reading language</Heading>
-                            <SegmentedControl
+                            <ReadingLanguagePicker
                                 label="Reading language"
-                                options={LANGUAGES}
+                                disabled={busy}
                                 value={language}
                                 onChange={(code): void => {
-                                    setLanguage(code)
+                                    void controller.setReadingLanguage(code)
                                 }}
                             />
                         </Stack>
+                        {prompt === null ? null : (
+                            <Stack gap="sm">
+                                <Body>{prompt}</Body>
+                                <AppButton
+                                    label="Re-read"
+                                    disabled={busy}
+                                    onPress={(): void => {
+                                        close()
+                                        void controller.parse(language)
+                                    }}
+                                />
+                            </Stack>
+                        )}
                         {entry.session.rawExtraction === null ? null : (
                             <AppButton
                                 label="Go to questions"
