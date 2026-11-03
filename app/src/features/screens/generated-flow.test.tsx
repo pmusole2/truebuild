@@ -663,6 +663,7 @@ describe('J1: show how Meta AI built this', () => {
     it('names a block and where it came from when it is tapped, while the layer is on', async () => {
         await atGuideWithJudge()
         await showDetails()
+        await fireEvent.press(guide().getByRole('button', { name: 'Check your work' }))
         const fact = guide().getByText('Groove faces inward toward the divider.')
         await fireEvent(fact, 'touchEnd', { stopPropagation: jest.fn() })
         expect(await guide().findByText('Text · generated')).toBeTruthy()
@@ -1255,7 +1256,7 @@ describe('mandatory manual facts stay visible whatever happened to the document'
         expect(screen.getAllByText(WARNING)).toHaveLength(1)
     })
 
-    it('shows every known direction of a step that was never classified, even with no document at all', async () => {
+    it('keeps saved instructions visible and unclassified checks available in their own section without a document', async () => {
         const value = unclassified()
         const { view } = await mount([value], { screens: { failing: ['guide'] } })
         await press('Continue building')
@@ -1263,7 +1264,13 @@ describe('mandatory manual facts stay visible whatever happened to the document'
         const orientation = value.session.reviewedSteps[0]!.orientation
         const text = orientation.state === 'known' ? orientation.value.description : null
         expect(text).not.toBeNull()
-        expect(await screen.findByText(text!)).toBeTruthy()
+        expect(screen.getByText(value.session.reviewedSteps[0]!.title)).toBeTruthy()
+        expect(screen.getByText(text!)).toBeTruthy()
+        const checks = screen.getByRole('button', { name: 'Check your work' })
+        expect(checks.props.accessibilityState.expanded).toBe(true)
+        await fireEvent.press(checks)
+        expect(screen.getByRole('button', { name: 'Check your work' }).props.accessibilityState.expanded).toBe(false)
+        expect(screen.getByText(text!)).toBeTruthy()
     })
 
     it('keeps safety visible once in the complete local document when generation is off', async () => {

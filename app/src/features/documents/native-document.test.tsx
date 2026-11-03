@@ -87,7 +87,7 @@ function compose(
     extras: ScreenNodeV2[] = [],
     source: 'generated' | 'fallback' = 'generated',
 ): ScreenDocumentV2 {
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, false)
     const proposal = buildFallbackProposalV2(material)
     return screenDocumentV2Schema.parse(
         assembleDocumentV2(
@@ -196,7 +196,7 @@ function heldPages(
 }
 /** A valid composition of these inputs with every variant's body edited alike, so the held photo never moves. */
 function composeEdited(inputs: ScreenContextInputsV2, edit: (body: ScreenNodeV2) => ScreenNodeV2): ScreenDocumentV2 {
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, false)
     const proposal = buildFallbackProposalV2(material)
     proposal.body = edit(proposal.body)
     for (const { name, variant } of variantsOfV2(proposal)) if (name !== 'ready') variant.body = edit(variant.body)
@@ -788,7 +788,7 @@ describe('the actual v2 catalog renderer', () => {
             )
             expect(screen.getByText('This manual picture is unavailable.')).toBeTruthy()
             expect(screen.queryByTestId('guide-hero-frame')).toBeNull()
-            await fireEvent.press(screen.getAllByRole('button', { name: 'See it in the manual' })[0]!)
+            await fireEvent.press(screen.getAllByRole('link', { name: 'See it in the manual' })[0]!)
             expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
         },
     )
@@ -838,8 +838,8 @@ describe('the actual v2 catalog renderer', () => {
         // The same page is already cited by the step overview: one shared opener replaces repeated tile links.
         const sideTile = screen.getByTestId('part-tile-side-panel')
         expect(within(sideTile).queryByTestId('diagram-0')).toBeNull()
-        expect(within(sideTile).queryByRole('button', { name: 'See it in the manual: Side panel' })).toBeNull()
-        const openers = screen.getAllByRole('button', { name: /^See it in the manual(?:$|:)/u })
+        expect(within(sideTile).queryByRole('link', { name: 'See it in the manual: Side panel' })).toBeNull()
+        const openers = screen.getAllByRole('link', { name: /^See it in the manual(?:$|:)/u })
         expect(openers).toHaveLength(1)
         await fireEvent.press(openers[0]!)
         expect(screen.getByTestId('diagram-0')).toBeTruthy()
@@ -880,10 +880,10 @@ describe('the actual v2 catalog renderer', () => {
         )
         const tile = within(screen.getByTestId('part-tile-side-panel'))
         expect(tile.queryByTestId('part-hero-side-panel')).toBeNull()
-        await fireEvent.press(tile.getByRole('button', { name: 'See it in the manual: Side panel' }))
+        await fireEvent.press(tile.getByRole('link', { name: 'See it in the manual: Side panel' }))
         expect(tile.getByTestId('diagram-0')).toBeTruthy()
         expect(tile.getByText('Picture from your manual · Page 2')).toBeTruthy()
-        expect(tile.getByRole('button', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
+        expect(tile.getByRole('link', { name: 'Hide the manual page: Side panel' })).toBeTruthy()
     })
 
     it('uses the explicit part drawing instead of the name citation and hides crops without a drawing box', async () => {
@@ -1052,7 +1052,7 @@ describe('the actual v2 catalog renderer', () => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs)
         const direction = inputs.session!.reviewedSteps[0]!.title
-        document.header.subtitle = { kind: 'literal', text: direction }
+        // The contracts author the saved title once as its fallback direction; the renderer does not infer duplicates.
         const view = await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
         expect(screen.getAllByText(direction)).toHaveLength(1)
         await fireEvent(screen.getByTestId('bottom-bar'), 'layout', {
@@ -1246,7 +1246,7 @@ describe('the actual v2 catalog renderer', () => {
                     pages === 'published' ? [held.result, held.answer] : [compose(inputs), compose(held.answerInputs)]
                 const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
                 await loadHeldPhoto()
-                const openers = (): TestInstance[] => screen.getAllByRole('button', { name: 'See it in the manual' })
+                const openers = (): TestInstance[] => screen.getAllByRole('link', { name: 'See it in the manual' })
                 const image = screen.getByTestId('frozen-photo-image')
                 for (const opener of openers()) await fireEvent.press(opener)
                 expect(openers().map((opener) => opener.props.accessibilityState.expanded)).not.toContain(false)
@@ -1265,7 +1265,7 @@ describe('the actual v2 catalog renderer', () => {
             const answer = composeEdited(answerInputs, withOpener)
             const view = await render(wrap(<DocumentRenderer document={result} bindings={bindings} />))
             await loadHeldPhoto()
-            const opener = (): TestInstance => screen.getAllByRole('button', { name: 'See it in the manual' })[0]!
+            const opener = (): TestInstance => screen.getAllByRole('link', { name: 'See it in the manual' })[0]!
             await fireEvent.press(opener())
             expect(opener().props.accessibilityState.expanded).toBe(true)
             const image = screen.getByTestId('frozen-photo-image')
@@ -1547,7 +1547,7 @@ describe('the actual v2 catalog renderer', () => {
         })
         await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
         expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
-        const material = documentMaterialV2(inputs)
+        const material = documentMaterialV2(inputs, false)
         const proposal = buildFallbackProposalV2(material)
         for (const { variant } of variantsOfV2(proposal)) {
             if (variant.body.type === 'Scroll' && variant.body.children[0]?.type === 'Stack') {
@@ -1701,7 +1701,7 @@ describe('the actual v2 catalog renderer', () => {
         await fireEvent(screen.getByTestId('frozen-photo-image'), 'load')
         expect(screen.getByText(check.reason)).toBeTruthy()
         expect(screen.getByText(check.missingEvidence[0]!)).toBeTruthy()
-        expect(screen.getAllByRole('button', { name: 'See it in the manual' }).length).toBeGreaterThan(0)
+        expect(screen.getAllByRole('link', { name: 'See it in the manual' }).length).toBeGreaterThan(0)
         expect(trigger).toHaveBeenCalledWith('warning')
         await view.rerender(wrap(<DocumentRenderer document={document} bindings={{ ...liveBindings }} />, haptics))
         expect(trigger).toHaveBeenCalledTimes(1)
@@ -1756,11 +1756,11 @@ describe('the actual v2 catalog renderer', () => {
         'shares a result sentence with a manual fact only when their citation sets are equal: %s',
         async (sourceCase) => {
             const { inputs, bindings } = await setup(true)
-            const initial = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+            const initial = documentMaterialV2(inputs, false).facts.find((item) => item.kind === 'orientation')!
             const extra = { pageId: initial.sourceRefs[0]!.pageId, region: { x: 0, y: 0, width: 0.5, height: 0.5 } }
             const orientation = inputs.session!.reviewedSteps[0]!.orientation
             if (sourceCase === 'manual-extra' && orientation.state === 'known') orientation.sourceRefs.push(extra)
-            const fact = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+            const fact = documentMaterialV2(inputs, false).facts.find((item) => item.kind === 'orientation')!
             const check = {
                 ...bindings.live!.state.check!,
                 reason: fact.text,
@@ -1807,7 +1807,7 @@ describe('the actual v2 catalog renderer', () => {
 
     it('deduplicates repeated facts and their own citation controls by fact id', async () => {
         const { inputs, bindings } = await setup()
-        const material = documentMaterialV2(inputs)
+        const material = documentMaterialV2(inputs, false)
         const fact = material.facts.find((item) => item.sourceRefs.length > 0 && item.kind === 'orientation')!
         const citation = material.sources.findIndex((item) => item.pageId === fact.sourceRefs[0]!.pageId)
         const duplicate: ScreenNodeV2[] = [
@@ -1829,7 +1829,7 @@ describe('the actual v2 catalog renderer', () => {
 
     it('keeps a safety warning even when the held verdict repeats its exact cited sentence', async () => {
         const { inputs, bindings } = await setup(true)
-        const fact = documentMaterialV2(inputs).facts.find((item) => item.kind === 'orientation')!
+        const fact = documentMaterialV2(inputs, false).facts.find((item) => item.kind === 'orientation')!
         inputs.session!.reviewedSteps[0]!.safetyNotes = [
             {
                 noteId: 'keep-warning',
@@ -1856,7 +1856,7 @@ describe('the actual v2 catalog renderer', () => {
 
     it('keeps the fact citation when an earlier repeated statement had no citation control', async () => {
         const { inputs, bindings } = await setup()
-        const material = documentMaterialV2(inputs)
+        const material = documentMaterialV2(inputs, false)
         const fact = material.facts.find((item) => item.kind === 'orientation')!
         const bare: ScreenNodeV2 = {
             type: 'Text',
@@ -1870,7 +1870,7 @@ describe('the actual v2 catalog renderer', () => {
         expect(screen.getAllByText(fact.text)).toHaveLength(1)
         // One citation affordance per exact source on the screen: every demo fact cites the same
         // page region, so one button offers it however many facts cite it (source access preserved).
-        expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+        expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
         expect(material.facts.length).toBeGreaterThan(1)
     })
 

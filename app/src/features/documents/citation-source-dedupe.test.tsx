@@ -48,7 +48,7 @@ async function renderSources(extra: ScreenNodeV2[] = [], separateFactRegion = fa
         failure: null,
         uiState: { capture: { captureId: 'cap-1', reusable: true, target: null, questionDraftPresent: false } },
     }
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, false)
     const proposal = buildFallbackProposalV2(material)
     if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
     if (separateFactRegion) {
@@ -71,6 +71,7 @@ async function renderSources(extra: ScreenNodeV2[] = [], separateFactRegion = fa
         live: null,
         session,
         pageUris: {},
+        pageImageStatus: 'unavailable',
         capture: null,
         marks: [],
         heroMode: 'inline',
@@ -96,10 +97,10 @@ it('renders one citation affordance per exact source, however many facts cite it
 
 it('uses the production plan when a manual-page opener comes after fact citations', async () => {
     await renderSources([{ type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: false }])
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
-it.each(['More detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
+it.each(['Hidden detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
     const closed = (title: string, node: ScreenNodeV2): ScreenNodeV2 => ({
         type: 'Section',
         title: { kind: 'literal', text: title },
@@ -110,22 +111,28 @@ it.each(['More detail', 'Parts'])('keeps one opener per reference when %s opens 
     // This region is not already reachable from the visible fixture facts.
     await renderSources(
         [
-            closed('More detail', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
+            closed('Hidden detail', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
             closed('Parts', { type: 'ManualPage', sources: [0], label: null, fit: 'contain', initiallyOpen: false }),
         ],
         true,
     )
-    // One visible fact region plus one distinct page reference, regardless of which source section opens first.
-    const second = first === 'More detail' ? 'Parts' : 'More detail'
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    // Saved Directions now group the title and orientation: one opener offers both exact references.
+    // When Parts opens, its ManualPage owns the page reference, leaving the exact region in Directions.
+    // That yields two distinct openers; a repeated Citation never adds a duplicate reference.
+    const second = first === 'Hidden detail' ? 'Parts' : 'Hidden detail'
+    const missing = screen.queryAllByText('This manual picture is unavailable.').length
+    await fireEvent.press(screen.getByRole('link', { name: 'See it in the manual' }))
+    expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(missing + 2)
+    await fireEvent.press(screen.getByRole('link', { name: 'See it in the manual' }))
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
     await fireEvent.press(screen.getByRole('button', { name: first }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(first === 'Parts' ? 2 : 1)
     await fireEvent.press(screen.getByRole('button', { name: second }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(2)
     await fireEvent.press(screen.getByRole('button', { name: first }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(first === 'Parts' ? 1 : 2)
     await fireEvent.press(screen.getByRole('button', { name: second }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
 it('replans the single source affordance when its section opens and restores it when closed', async () => {
@@ -138,14 +145,14 @@ it('replans the single source affordance when its section opens and restores it 
             children: [{ type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: false }],
         },
     ])
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
     await fireEvent.press(screen.getByRole('button', { name: 'Parts' }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
     await fireEvent.press(screen.getByRole('button', { name: 'Parts' }))
-    expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
 it('shares a page opener across part tiles and factual citations that reference that exact source', async () => {
     await renderSources()
-    expect(screen.getAllByRole('button', { name: /^See it in the manual(?:$|:)/u })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: /^See it in the manual(?:$|:)/u })).toHaveLength(1)
 })

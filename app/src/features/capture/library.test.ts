@@ -193,6 +193,34 @@ describe('durable manual library', () => {
         }
     })
 
+    it('restores a step action and drops a newer optional step field, but never an unrelated unknown key', async () => {
+        const kv = memory()
+        const store = new LibraryStorage(kv, digest)
+        const manual = await entry()
+        await store.save([manual], [{ assetId: manual.session.pages[0]!.assetId, bytes: new Uint8Array([1, 4, 9]) }])
+        const saved = JSON.parse(kv.data.get('truebuild/library/v1')!) as {
+            entries: { session: { reviewedSteps: Record<string, unknown>[] } }[]
+        }
+        const step = saved.entries[0]!.session.reviewedSteps[0]!
+        const actions = [
+            {
+                actionId: 'turn-1',
+                instruction: 'Turn the panel so the groove faces inward.',
+                sourceRefs: manual.session.reviewedSteps[0]!.sourceRefs,
+            },
+        ]
+        step.actions = actions
+        step.sourceText = 'Text a newer build saved.'
+        kv.data.set('truebuild/library/v1', JSON.stringify(saved))
+        const restored = await new LibraryStorage(kv, digest).restore()
+        expect(restored.readOnly).toBe(false)
+        expect(restored.entries[0]!.session.reviewedSteps[0]!.actions).toEqual(actions)
+        expect(restored.entries[0]!.session.reviewedSteps[0]).not.toHaveProperty('sourceText')
+        step.mysteryField = 'unrelated'
+        kv.data.set('truebuild/library/v1', JSON.stringify(saved))
+        expect((await new LibraryStorage(kv, digest).restore()).readOnly).toBe(true)
+    })
+
     it('chunks a large image and cleans removed assets only after a durable manifest commit', async () => {
         const kv = memory()
         const store = new LibraryStorage(kv, digest)

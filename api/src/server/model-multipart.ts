@@ -44,6 +44,7 @@ export async function readModelMultipart<T>(
     maxBytes: number,
     deadline: Deadline,
     metadataMaxBytes: number = MODEL_METADATA_MAX_BYTES,
+    verifyRawMetadata?: (value: unknown) => void,
 ): Promise<{ metadata: T; files: Map<string, File> }> {
     const reader = request.body?.getReader()
     let released = false
@@ -113,6 +114,8 @@ export async function readModelMultipart<T>(
         } catch {
             throw new ModelBodyError(400)
         }
+        // Identity checks must see the exact JSON bytes' values before schema preprocessing projects extensions.
+        verifyRawMetadata?.(value)
         // A parse-specific rejection may carry a safe split message before the generic file-count limit rejects it.
         // Body and metadata byte ceilings already hold; every accepted request still passes the entry checks below.
         const parsed = schema.safeParse(value)

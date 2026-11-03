@@ -40,7 +40,10 @@ describe('recorded sparse Guide responses', () => {
             const evaluated = evaluateWire(normalized.value, context)
             expect(evaluated.ok, row.recordedResponse).toBe(true)
             if (!evaluated.ok) throw new Error(`Recorded strict replay failed: ${row.recordedResponse}`)
-            expect(guideQualityIssues(evaluated.proposal, context), row.recordedResponse).toEqual(row.qualityIssues)
+            // The saved-title placement rule also rejects these historical duplicate-title headers.
+            expect(guideQualityIssues(evaluated.proposal, context), row.recordedResponse).toEqual([
+                ...new Set(['guide_quality:title_not_bound', ...row.qualityIssues]),
+            ])
         }
     })
 })

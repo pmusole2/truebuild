@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import {
+    boundedActionInstruction,
+    isRecord,
+    projectStepExtensions,
+    SUPPORTED_STEP_EXTENSIONS,
+    type StepExtension,
+} from './manual-session-extensions'
 import { parseLanguageSchema } from './reading-language'
 
 import { layoutSchema } from './layout'
@@ -147,11 +154,25 @@ export type VisibleCheck = z.infer<typeof visibleCheckSchema>
 export type CorrectionAction = z.infer<typeof correctionActionSchema>
 export type CorrectionPlan = z.infer<typeof correctionPlanSchema>
 
+const stepActionSchema = z.strictObject({
+    actionId: idSchema,
+    instruction: z.string().trim().min(1).transform(boundedActionInstruction),
+    sourceRefs: knownSourceRefsSchema,
+})
+
+export { SUPPORTED_STEP_EXTENSIONS }
+
 export const manualStepSchema = z
     .strictObject({
         stepId: idSchema,
         order: positiveIntegerSchema,
         title: titleSchema,
+        /** Optional for manuals saved before plain-language procedures were captured. */
+        actions: z
+            .array(stepActionSchema)
+            .transform((actions) => actions.slice(0, 6))
+            .nullable()
+            .optional(),
         kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove']).nullable().optional(),
         requirements: z
             .strictObject({
@@ -190,6 +211,11 @@ export const manualStepSchema = z
     })
     .superRefine((step, ctx) => {
         rejectDuplicates(
+            (step.actions ?? []).map((action) => action.actionId),
+            'step action',
+            ctx,
+        )
+        rejectDuplicates(
             (step.safetyNotes ?? []).map((note) => note.noteId),
             'safety note',
             ctx,
@@ -220,6 +246,53 @@ export const manualStepSchema = z
     })
 
 export type ManualStep = z.infer<typeof manualStepSchema>
+
+/** Extension fields this schema models; a registered name outside this set is projected away before strict parsing. */
+const MODELED_STEP_EXTENSIONS: ReadonlySet<StepExtension> = new Set(
+    SUPPORTED_STEP_EXTENSIONS.filter((name) => name in manualStepSchema.shape),
+)
+
+function cleanStepActions(step: unknown, allowedPageIds: ReadonlySet<string> | undefined): unknown {
+    if (!isRecord(step) || step.actions === undefined || step.actions === null) return step
+    if (!Array.isArray(step.actions)) return { ...step, actions: null }
+    const seen = new Set<string>()
+    const kept = step.actions.filter((entry: unknown): boolean => {
+        const parsed = stepActionSchema.safeParse(entry)
+        if (!parsed.success) return false
+        if (allowedPageIds !== undefined && !parsed.data.sourceRefs.every((ref) => allowedPageIds.has(ref.pageId))) {
+            return false
+        }
+        if (seen.has(parsed.data.actionId)) return false
+        seen.add(parsed.data.actionId)
+        return true
+    })
+    return { ...step, actions: kept.length === 0 ? null : kept }
+}
+
+/**
+ * Prepares one raw step for the strict step schema: unmodeled registered fields (`sourceText` today) are projected
+ * away, and optional `actions` entries that cannot be trusted are dropped so they never fail the manual. Dropped:
+ * invalid entries, entries citing a page outside `allowedPageIds` (when given), and a repeated actionId after the
+ * first valid entry. A step left with none has `actions: null`. Every other field keeps its strict validation.
+ */
+export function sanitizeOptionalStepActions(step: unknown, allowedPageIds?: ReadonlySet<string>): unknown {
+    return cleanStepActions(projectStepExtensions(step, MODELED_STEP_EXTENSIONS), allowedPageIds)
+}
+
+/** `sanitizeOptionalStepActions` over a manual's steps, `reviewedSteps` and `rawExtraction.steps`. */
+export function sanitizeManualStepActions(value: unknown, allowedPageIds?: ReadonlySet<string>): unknown {
+    if (!isRecord(value)) return value
+    const steps = (items: unknown): unknown =>
+        Array.isArray(items) ? items.map((step) => sanitizeOptionalStepActions(step, allowedPageIds)) : items
+    return {
+        ...value,
+        ...(value.steps === undefined ? {} : { steps: steps(value.steps) }),
+        ...(value.reviewedSteps === undefined ? {} : { reviewedSteps: steps(value.reviewedSteps) }),
+        ...(isRecord(value.rawExtraction)
+            ? { rawExtraction: { ...value.rawExtraction, steps: steps(value.rawExtraction.steps) } }
+            : {}),
+    }
+}
 
 /** Validate every link by identity and order; the public numeric Fact shape stays unchanged. */
 export function hasValidQuantityEvidence(
@@ -408,7 +481,7 @@ export const checkFollowUpsSchema = z.strictObject({
 })
 export type CheckFollowUps = z.infer<typeof checkFollowUpsSchema>
 
-export const parsedManualSchema = z
+const strictParsedManualSchema = z
     .strictObject({
         ...modelProvenance,
         parts: z.array(manualPartSchema).max(256),
@@ -421,6 +494,12 @@ export const parsedManualSchema = z
             ctx.addIssue({ code: 'custom', message: 'Extraction cannot mark a correction human-reviewed' })
         }
     })
+
+/** Optional step extensions cannot invalidate an otherwise usable extraction. Keep the strict provider shape. */
+export const parsedManualSchema = Object.assign(
+    z.preprocess((value) => sanitizeManualStepActions(value), strictParsedManualSchema),
+    { shape: strictParsedManualSchema.shape },
+)
 
 export type ParsedManual = z.infer<typeof parsedManualSchema>
 
@@ -439,12 +518,13 @@ function allSourceRefs(parts: ManualPart[], steps: ManualStep[]): SourceRef[] {
             ...factRefs(step.connection),
             ...step.visibleChecks.flatMap((check) => factRefs(check.description)),
             ...(step.safetyNotes ?? []).flatMap((note) => factRefs(note.note)),
+            ...(step.actions?.flatMap((action) => action.sourceRefs) ?? []),
             ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ]),
     ]
 }
 
-export const manualSessionSchema = z
+const strictManualSessionSchema = z
     .strictObject({
         manualId: idSchema,
         title: titleSchema,
@@ -512,6 +592,22 @@ export const manualSessionSchema = z
             }
         }
     })
+
+function sessionPageIds(value: unknown): ReadonlySet<string> {
+    const pages = isRecord(value) && Array.isArray(value.pages) ? value.pages : []
+    return new Set(
+        pages.flatMap((page: unknown) => (isRecord(page) && typeof page.pageId === 'string' ? [page.pageId] : [])),
+    )
+}
+
+/**
+ * Keep the shape available to page schemas while projecting future optional fields and cleaning optional actions
+ * before strict validation. Actions are checked against this session's own pages.
+ */
+export const manualSessionSchema = Object.assign(
+    z.preprocess((value) => sanitizeManualStepActions(value, sessionPageIds(value)), strictManualSessionSchema),
+    { shape: strictManualSessionSchema.shape },
+)
 
 export type ManualSession = z.infer<typeof manualSessionSchema>
 
@@ -749,3 +845,5 @@ export * from './document-v2-layout-template-compile'
 export * from './overlay-job-fixtures'
 export * from './piece-spec'
 export * from './piece-generation'
+
+export * from './manual-session-extensions'

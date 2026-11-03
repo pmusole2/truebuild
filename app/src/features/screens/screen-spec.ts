@@ -10,6 +10,7 @@ import {
     type ScreenUiState,
 } from '@truebuild/contracts'
 import type { ModelScreensMetadata } from '@truebuild/contracts/model'
+import { outgoingManualSession } from '../../api/outgoing-session'
 
 /** Everything one `/api/screens` generate call is about. The same value keys the cache and the in-flight share. */
 export type ScreenSpec = {
@@ -25,11 +26,14 @@ export type ScreenSpec = {
     readonly uiState?: ScreenUiState | null
 }
 
-/** The exact inputs the server derives its grounding and context key from, built from this one request. */
+/**
+ * The exact inputs the server derives its grounding and context key from, built from this one request. The session is
+ * the outgoing projection the request carries, so the expected key is the one the server computes from what it received.
+ */
 export function contextInputsOf(spec: ScreenSpec): ScreenContextInputs {
     return {
         kind: spec.kind,
-        session: spec.session,
+        session: spec.session === null ? null : outgoingManualSession(spec.session),
         stepId: spec.stepId,
         captureId: spec.captureId,
         result: spec.result,

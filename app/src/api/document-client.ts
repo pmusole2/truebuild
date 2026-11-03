@@ -3,6 +3,7 @@ import {
     screenContextJsonV2,
     screenManualJsonV2,
     screenStageV2,
+    SUPPORTED_STEP_EXTENSIONS,
     verifyDocumentAgainstInputsV2,
     type ManualSession,
     type ScreenContextInputsV2,
@@ -21,6 +22,7 @@ import {
     type ScreensV2Result,
 } from '@truebuild/contracts/model'
 import type { ModelFetch, ModelRequestContext } from './model-client'
+import { outgoingInputs, outgoingManualSession } from './outgoing-session'
 import { sha256Hex } from '../features/documents/sha256'
 import {
     awaitStopped,
@@ -87,23 +89,25 @@ export function documentPrecomputeInputs(request: JobInputs): { key: string; inp
 }
 
 export function documentJobContextKey(request: JobInputs): string {
-    return sha256Hex(
-        canonicalJson(documentPrecomputeInputs(request).map((item) => sha256Hex(screenContextJsonV2(item.inputs)))),
-    )
+    // The server keys the job by the projected session it received, so the client keys it the same way.
+    const outgoing = documentPrecomputeInputs({ ...request, session: outgoingManualSession(request.session) })
+    return sha256Hex(canonicalJson(outgoing.map((item) => sha256Hex(screenContextJsonV2(item.inputs)))))
 }
 
 export function documentRequest(request: ScreensV2Request, requestId: string): ModelScreensV2Metadata {
-    if (request.op === 'generate') return screensV2GenerateRequest(requestId, request.inputs, sha256Hex)
+    if (request.op === 'generate') return screensV2GenerateRequest(requestId, outgoingInputs(request.inputs), sha256Hex)
     if (request.op === 'progress' && request.jobContextKey !== documentJobContextKey(request))
         throw new Error('stale_document_job')
+    // Every identity of the request is computed from the same projected session the server receives.
+    const session = outgoingManualSession(request.session)
     return {
         mode: 'model',
         requestId,
         op: request.op,
         kind: null,
         binding: { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
-        session: request.session,
-        manualHash: sha256Hex(screenManualJsonV2(request.session)),
+        session,
+        manualHash: sha256Hex(screenManualJsonV2(session)),
         stepId: null,
         captureId: null,
         result: null,
@@ -170,7 +174,10 @@ function validRequest(metadata: ModelScreensV2Metadata, requestId: string): bool
 
 export function documentMatchesInputs(document: ScreenDocumentV2, inputs: ScreenContextInputsV2): boolean {
     try {
-        return verifyDocumentAgainstInputsV2(document, inputs, sha256Hex, { legacyWaitCopy: true }).length === 0
+        return (
+            verifyDocumentAgainstInputsV2(document, outgoingInputs(inputs), sha256Hex, { legacyWaitCopy: true })
+                .length === 0
+        )
     } catch {
         return false
     }
@@ -313,14 +320,20 @@ export async function postDocuments(options: {
     try {
         checkpoint()
         response = await awaitStopped(
-            options.fetch(new URL('/api/screens/v2?guideRepair=1&waitCopy=2', baseUrl).toString(), {
-                method: 'POST',
-                headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
-                body: form,
-                credentials: 'omit',
-                redirect: 'error',
-                signal: guard.signal,
-            }),
+            options.fetch(
+                new URL(
+                    `/api/screens/v2?guideRepair=1&waitCopy=2&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
+                    baseUrl,
+                ).toString(),
+                {
+                    method: 'POST',
+                    headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
+                    body: form,
+                    credentials: 'omit',
+                    redirect: 'error',
+                    signal: guard.signal,
+                },
+            ),
             guard.signal,
             discardResponse,
         )

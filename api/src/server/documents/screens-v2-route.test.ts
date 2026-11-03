@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
     SCREEN_KINDS_V2,
     buildFallbackProposalV2,
+    verifyDocumentAgainstInputsV2,
     type ScreenContextInputsV2,
     type ScreenKindV2,
 } from '@truebuild/contracts'
@@ -47,7 +48,7 @@ function send(
     body.set('metadata', JSON.stringify(metadata))
     if (options.files) body.set('extra', new Blob(['x'], { type: 'image/png' }), 'x.png')
     return Promise.resolve(
-        app.request(`/api/screens/v2${options.query ?? '?guideRepair=1'}`, {
+        app.request(`/api/screens/v2${options.query ?? '?guideRepair=1&waitCopy=2&stepActions=1'}`, {
             method: 'POST',
             headers: { 'x-truebuild-key': options.key ?? KEY },
             body,
@@ -77,6 +78,63 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
             expect(body.value.document!.metadata.timing.totalMs).toBeNull()
         },
     )
+
+    it.each([
+        ['', false],
+        ['?guideRepair=1', false],
+        ['?guideRepair=1&stepActions=1', true],
+        ['?stepActions=1&stepActions=1', false],
+        ['?guideRepair=1&stepFields=actions,sourceText', true],
+        ['?guideRepair=1&stepFields=unknown,actions', true],
+        ['?guideRepair=1&stepFields=sourceText,unknown', false],
+        ['?waitCopy=2', false],
+        ['?waitCopy=2&stepFields=actions', true],
+        ['?guideRepair=1&waitCopy=2', false],
+        ['?guideRepair=1&waitCopy=2&stepFields=actions,sourceText', true],
+    ] as const)(
+        'keeps strict installed-client document material isolated for capability %s',
+        async (query, capable) => {
+            const app = fixtureApp({ GENERATIVE_UI: 'off' })
+            const inputs = documentInputs('guide', demoSession({ safety: false }))
+            const step = inputs.session!.reviewedSteps[0]!
+            step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
+            const response = await send(app, generate(inputs), { query })
+            const result = screensV2ResultSchema.parse(await response.json())
+            if (result.status !== 'ok') throw new Error('expected ok')
+            const expected = buildDocumentContext(inputs, !capable).material
+            expect(result.value.document!.facts).toEqual(expected.facts)
+            expect(result.value.document!.requirements).toEqual(expected.requirements)
+            expect(result.value.document!.sources).toEqual(expected.sources)
+            expect(result.value.document!.metadata.stepActions).toBe(capable ? 1 : undefined)
+            expect(result.waitCopy).toBe(query.includes('waitCopy=2') ? 2 : undefined)
+            expect(
+                verifyDocumentAgainstInputsV2(result.value.document!, inputs, sha256Hex, {
+                    legacyWaitCopy: !query.includes('waitCopy=2'),
+                }),
+            ).toEqual([])
+        },
+    )
+
+    it('checks full wire hashes before ignoring future step fields, retaining the response identity', async () => {
+        const app = fixtureApp({ GENERATIVE_UI: 'off' })
+        const inputs = documentInputs('guide', demoSession({ safety: false }))
+        const step = inputs.session!.reviewedSteps[0]!
+        step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
+        Object.assign(step, { sourceText: 'The original printed procedure.' })
+        Object.assign(inputs.session!.rawExtraction!.steps[0]!, { sourceText: 'Retained extraction text.' })
+        const metadata = generate(inputs, 'full-wire-identity')
+        const response = await send(app, metadata)
+        expect(response.status).toBe(200)
+        const result = screensV2ResultSchema.parse(await response.json())
+        if (result.status !== 'ok' || result.value.document === null) throw new Error('expected document')
+        expect(result.value.document.bound.contextKey).toBe(metadata.contextKey)
+        expect(verifyDocumentAgainstInputsV2(result.value.document, inputs, sha256Hex)).toEqual([])
+        expect((await send(app, { ...metadata, manualHash: '0'.repeat(64) })).status).toBe(400)
+        expect((await send(app, { ...metadata, contextKey: '0'.repeat(64) })).status).toBe(400)
+        const changed = structuredClone(metadata.session!)
+        Object.assign(changed.reviewedSteps[0]!, { sourceText: 'Changed after signing.' })
+        expect((await send(app, { ...metadata, session: changed })).status).toBe(400)
+    })
 
     it('binds the request to the full state: a wrong manual hash or context key is refused', async () => {
         const app = fixtureApp()
@@ -161,7 +219,7 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
         expect(cancelled.value.progress).toBeNull()
         expect((await send(app, { ...common, requestId: 'old-job' }, { query: '' })).status).toBe(200)
         await vi.waitFor(async () => {
-            const capable = await read('?guideRepair=1')
+            const capable = await read('?guideRepair=1&waitCopy=2&stepActions=1')
             const legacy = await read('')
             expect(capable.documents[0]?.metadata).toMatchObject({ source: 'generated', repaired: true })
             expect(legacy.documents[0]?.metadata).toMatchObject({ source: 'fallback', repaired: false })
@@ -171,6 +229,9 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
     it('precomputes, reports progress with first pages early, and cancels', async () => {
         const app = fixtureApp()
         const session = demoSession()
+        const step = session.reviewedSteps[0]!
+        step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
+        Object.assign(step, { sourceText: 'The original printed procedure.' })
         const base = generate(documentInputs('guide', session))
         const common = {
             mode: 'model',
@@ -195,6 +256,10 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
             const read = await (await send(app, { ...common, op: 'progress', want: ['guide:step-1'] })).json()
             expect(read.value.documents).toHaveLength(1)
             expect(read.value.documents[0].bound.stepId).toBe('step-1')
+            expect(read.value.documents[0].bound.contextKey).toBe(base.contextKey)
+            expect(
+                verifyDocumentAgainstInputsV2(read.value.documents[0], documentInputs('guide', session), sha256Hex),
+            ).toEqual([])
         })
         const cancelled = await (await send(app, { ...common, op: 'cancel' })).json()
         expect(cancelled.status).toBe('ok')

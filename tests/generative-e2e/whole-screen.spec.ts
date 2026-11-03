@@ -9,7 +9,15 @@ const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
 function isDocumentUrl(value: string): boolean {
     const url = new URL(value)
     const capability = url.searchParams.getAll('guideRepair')
-    return url.origin === API && url.pathname === '/api/screens/v2' && capability.length === 1 && capability[0] === '1'
+    const actions = url.searchParams.getAll('stepActions')
+    return (
+        url.origin === API &&
+        url.pathname === '/api/screens/v2' &&
+        capability.length === 1 &&
+        capability[0] === '1' &&
+        actions.length === 1 &&
+        actions[0] === '1'
+    )
 }
 
 async function photographPage(page: Page, first: boolean): Promise<void> {
@@ -33,7 +41,9 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 /** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
-        (request) => request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST',
+        (request) =>
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            request.method() === 'POST',
         { timeout: 60_000 },
     )
     const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
@@ -53,7 +63,11 @@ async function prepareGuide(page: Page, alreadyHome = false): Promise<void> {
     await page.getByTestId('home-add').click()
     await photographPage(page, true)
     const parse = page
-        .waitForResponse((response) => response.url() === `${API}/api/manuals/parse?stepKinds=remove`)
+        .waitForResponse(
+            (response) =>
+                response.url() ===
+                `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText`,
+        )
         .then(async (response) => ({ status: response.status(), body: await response.json() }))
     await readManualWithConsent(page)
     expect((await parse).status).toBe(200)
@@ -89,21 +103,32 @@ test('a complete document owns the frame; off stays local and full publishes hon
     page.on('request', (request) => {
         if (isDocumentUrl(request.url())) documentRequests++
     })
-    // Consume the first complete response before navigating. Chromium may discard a response body when its route leaves.
+    // Keep the parsed Guide response: an unrelated route can leave while Chromium is reading its response body.
+    let firstPublished: ReturnType<typeof screensV2ResultSchema.parse> | null = null
     const firstDocument =
         mode !== 'off'
             ? page
                   .waitForResponse(async (response) => {
                       if (!isDocumentUrl(response.url()) || response.status() !== 200) return false
+                      const request = response.request()
+                      const body = request.postDataBuffer()
+                      if (body === null) return false
+                      const form = await new Response(new Uint8Array(body), {
+                          headers: { 'content-type': request.headers()['content-type']! },
+                      }).formData()
+                      const metadata = modelScreensV2MetadataSchema.parse(JSON.parse(String(form.get('metadata'))))
+                      if (metadata.op === 'generate' && metadata.kind !== 'guide') return false
+                      if (!['generate', 'precompute', 'progress'].includes(metadata.op)) return false
                       const published = screensV2ResultSchema.parse(await response.json())
-                      return (
+                      const complete =
                           published.status === 'ok' &&
                           [published.value.document, ...published.value.documents].some(
-                              (document) => document?.metadata.source === 'generated',
+                              (document) => document?.kind === 'guide' && document.metadata.source === 'generated',
                           )
-                      )
+                      if (complete) firstPublished = published
+                      return complete
                   })
-                  .then((response) => response.json())
+                  .then(() => firstPublished)
             : null
     await page.goto('/')
     await acceptAiConsentOnce(page)
@@ -132,8 +157,15 @@ test('a complete document owns the frame; off stays local and full publishes hon
     await expect(
         page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
     ).toBeVisible()
-    // Guide directions are visible immediately, including explicitly classified directions.
-    await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
+    // Saved title, orientation and connection stay visible; this classified fixture starts its checks closed.
+    const guide = page.getByTestId('guide-screen')
+    await expect(guide.getByText('Stand the side panel upright', { exact: true })).toBeVisible()
+    await expect(guide.getByText('Groove faces inward toward the divider.', { exact: true })).toBeVisible()
+    const checks = guide.getByRole('button', { name: 'Check your work', exact: true })
+    await expect(checks).toHaveAttribute('aria-expanded', 'false')
+    await checks.click()
+    await expect(checks).toHaveAttribute('aria-expanded', 'true')
+    await expect(guide.getByText('Groove faces inward toward the divider.', { exact: true })).toBeVisible()
     if (mode !== 'off') {
         expect(documentRequests).toBeGreaterThan(0)
     } else expect(documentRequests).toBe(0)

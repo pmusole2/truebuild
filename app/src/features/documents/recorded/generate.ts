@@ -98,7 +98,7 @@ async function publish(): Promise<void> {
         const evaluated = evaluateProposal(proposal, buildDocumentContext(inputs))
         if (!evaluated.ok) throw new Error(`${name}: server gate: ${evaluated.issues.join(',')}`)
         const document = assembleDocumentV2(
-            documentMaterialV2(inputs),
+            documentMaterialV2(inputs, false),
             proposal,
             syntheticDocumentFactsV2(runtime.authoring),
             { sha256Hex, now: () => new Date(runtime.authoring.recordedAt) },

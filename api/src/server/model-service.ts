@@ -13,6 +13,8 @@ import {
     manualSessionSchema,
     matchesBinding,
     parsedManualSchema,
+    requestedStepExtensions,
+    sanitizeManualStepActions,
     questionResultSchema,
     screenContextJsonV2,
     screenManualJsonV2,
@@ -99,6 +101,35 @@ import {
 } from './screens/service'
 
 const segmentPromptSchema = modelSegmentMetadataSchema.shape.prompt
+
+// This snapshot is opaque and used only for canonical identity. The full session schema runs immediately afterward,
+// before any processing; its extension projection must not change the session the client signed.
+const wireScreensV2MetadataSchema = z.strictObject({
+    ...modelScreensV2MetadataSchema.shape,
+    session: z.custom<ManualSession | null>(
+        (value) => value === null || (typeof value === 'object' && !Array.isArray(value)),
+    ),
+})
+
+function documentInputs(
+    metadata: ModelScreensV2Metadata,
+    identitySession?: ManualSession | null,
+): ScreenContextInputsV2 {
+    return {
+        kind: metadata.kind ?? 'home',
+        session: metadata.session,
+        identitySession,
+        stepId: metadata.stepId,
+        captureId: metadata.captureId,
+        result: metadata.result,
+        failure: metadata.failure,
+        completedStepIds: metadata.completedStepIds,
+        uiState: metadata.uiState,
+        ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
+        ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
+        ...(metadata.stepPieces == null ? {} : { stepPieces: metadata.stepPieces }),
+    }
+}
 
 type Identity = { requestId: string; binding: ManualBinding | CaptureBinding }
 type ScreensValue = Extract<z.infer<typeof screensResultSchema>, { status: 'ok' }>['value']
@@ -710,9 +741,14 @@ export function createModelHandlers(options: {
                 : { precomputeConcurrency: options.precomputeConcurrency }),
         })
 
-    const createDocuments = (guideRepair: boolean, waitCopy: 1 | 2): ReturnType<typeof createDocumentService> =>
+    const createDocuments = (
+        guideRepair: boolean,
+        legacyDirections = false,
+        waitCopy: 1 | 2 = 2,
+    ): ReturnType<typeof createDocumentService> =>
         createDocumentService({
             guideRepair,
+            legacyDirections,
             waitCopy,
             provider: provider?.generateDocument ? provider : null,
             fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
@@ -727,14 +763,18 @@ export function createModelHandlers(options: {
     // SingleFlight and precompute registry separate: a 55s client must never wait for a capable client's repair.
     const screenService = createScreens(true)
     const legacyScreenService = createScreens(false)
-    const documentService = createDocuments(true, 2)
-    const legacyDocumentService = createDocuments(false, 2)
-    const oldCopyDocumentService = createDocuments(true, 1)
-    const oldCopyLegacyDocumentService = createDocuments(false, 1)
+    const oldCopyDocumentService = createDocuments(true, false, 1)
+    const oldCopyLegacyDocumentService = createDocuments(false, false, 1)
+    const oldCopyCompatibleDocuments = createDocuments(true, true, 1)
+    const oldCopyCompatibleLegacyDocuments = createDocuments(false, true, 1)
     const allowsWaitCopy = (request: Request): boolean => {
         const values = new URL(request.url).searchParams.getAll('waitCopy')
         return values.length === 1 && values[0] === '2'
     }
+    const documentService = createDocuments(true)
+    const legacyDocumentService = createDocuments(false)
+    const compatibleDocuments = createDocuments(true, true)
+    const compatibleLegacyDocuments = createDocuments(false, true)
     const allowsGuideRepair = (request: Request): boolean => {
         const values = new URL(request.url).searchParams.getAll('guideRepair')
         return values.length === 1 && values[0] === '1'
@@ -748,6 +788,10 @@ export function createModelHandlers(options: {
                 legacyDocumentService,
                 oldCopyDocumentService,
                 oldCopyLegacyDocumentService,
+                oldCopyCompatibleDocuments,
+                oldCopyCompatibleLegacyDocuments,
+                compatibleDocuments,
+                compatibleLegacyDocuments,
                 screenService,
                 legacyScreenService,
             ]) {
@@ -800,6 +844,8 @@ export function createModelHandlers(options: {
             path?: string
             /** The value as published: the fixture runtime strips what a provider claimed about itself. */
             present?: (value: T, request: Request) => T
+            /** Parse only: optional procedure entries cannot invalidate the rest of the extraction. */
+            normalize?: (value: T, metadata: M) => unknown
         } = {},
     ): Handler {
         const run = async (
@@ -838,7 +884,7 @@ export function createModelHandlers(options: {
                     execution.deadline,
                 )
                 execution.check()
-                const value = output.safeParse(raw)
+                const value = output.safeParse(policy.normalize ? policy.normalize(raw, metadata) : raw)
                 if (!value.success || !validate(value.data, metadata)) {
                     throw new AdmissionError('invalid_output', 502)
                 }
@@ -936,15 +982,24 @@ export function createModelHandlers(options: {
         {
             repairable: true,
             route: 'parse',
+            normalize: (value, metadata) =>
+                sanitizeManualStepActions(value, new Set(metadata.pages.map((page) => page.pageId))),
             present: (value, request) => {
                 const publicValue = asPublic(value)
-                if (new URL(request.url).searchParams.get('stepKinds') === 'remove') return publicValue
-                // Old installed clients reject `remove`; adapt only the wire value, leaving canonical/cache data intact.
+                const query = new URL(request.url).searchParams
+                const removal = query.get('stepKinds') === 'remove'
+                const actions = requestedStepExtensions(query).has('actions')
+                // Old installed clients have strict step schemas. Project only the response; preserve canonical data.
                 return {
                     ...publicValue,
-                    steps: publicValue.steps.map((step) =>
-                        step.kind === 'remove' ? { ...step, kind: 'adjust' as const } : step,
-                    ),
+                    steps: publicValue.steps.map((step) => {
+                        const { actions: procedure, ...legacy } = step
+                        return {
+                            ...legacy,
+                            ...(actions && procedure !== undefined ? { actions: procedure } : {}),
+                            ...(step.kind === 'remove' && !removal ? { kind: 'adjust' as const } : {}),
+                        }
+                    }),
                 }
             },
             progress: true,
@@ -1148,13 +1203,21 @@ export function createModelHandlers(options: {
         const legacyDocumentsCurrent = legacyDocumentService.observe(manualId, revision)
         const oldCopyCurrent = oldCopyDocumentService.observe(manualId, revision)
         const oldCopyLegacyCurrent = oldCopyLegacyDocumentService.observe(manualId, revision)
+        const oldCopyCompatibleCurrent = oldCopyCompatibleDocuments.observe(manualId, revision)
+        const oldCopyCompatibleLegacyCurrent = oldCopyCompatibleLegacyDocuments.observe(manualId, revision)
+        const compatibleCurrent = compatibleDocuments.observe(manualId, revision)
+        const compatibleLegacyCurrent = compatibleLegacyDocuments.observe(manualId, revision)
         return (
             current &&
             legacyCurrent &&
             documentsCurrent &&
             legacyDocumentsCurrent &&
             oldCopyCurrent &&
-            oldCopyLegacyCurrent
+            oldCopyLegacyCurrent &&
+            oldCopyCompatibleCurrent &&
+            oldCopyCompatibleLegacyCurrent &&
+            compatibleCurrent &&
+            compatibleLegacyCurrent
         )
     }
     const questionSyncWaitMs = options.questionSyncWaitMs ?? 8_000
@@ -1468,52 +1531,66 @@ export function createModelHandlers(options: {
         try {
             const guideRepair = allowsGuideRepair(request)
             const waitCopy = allowsWaitCopy(request)
+            const stepActions = requestedStepExtensions(new URL(request.url).searchParams).has('actions')
             const selectedDocuments = waitCopy
-                ? guideRepair
-                    ? documentService
-                    : legacyDocumentService
-                : guideRepair
-                  ? oldCopyDocumentService
-                  : oldCopyLegacyDocumentService
+                ? stepActions
+                    ? guideRepair
+                        ? documentService
+                        : legacyDocumentService
+                    : guideRepair
+                      ? compatibleDocuments
+                      : compatibleLegacyDocuments
+                : stepActions
+                  ? guideRepair
+                      ? oldCopyDocumentService
+                      : oldCopyLegacyDocumentService
+                  : guideRepair
+                    ? oldCopyCompatibleDocuments
+                    : oldCopyCompatibleLegacyDocuments
             const route = Math.min(
                 guideRepair ? MAX_DEADLINE_MS : LEGACY_GUIDE_ROUTE_MS,
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
             )
             execution = admit(request, auth, route, allowedOrigins)
+            let identitySession: ManualSession | null | undefined
             const parsed = await readModelMultipart(
                 request,
                 modelScreensV2MetadataSchema,
                 MODEL_METADATA_MAX_BYTES + 65_536,
                 execution.deadline,
+                MODEL_METADATA_MAX_BYTES,
+                (value) => {
+                    const wire = wireScreensV2MetadataSchema.safeParse(value)
+                    if (!wire.success) throw new ModelBodyError(400)
+                    try {
+                        if (
+                            wire.data.session !== null &&
+                            sha256(screenManualJsonV2(wire.data.session)) !== wire.data.manualHash
+                        ) {
+                            throw new ModelBodyError(400)
+                        }
+                        if (
+                            wire.data.op === 'generate' &&
+                            sha256(screenContextJsonV2(documentInputs(wire.data))) !== wire.data.contextKey
+                        ) {
+                            throw new ModelBodyError(400)
+                        }
+                    } catch {
+                        throw new ModelBodyError(400)
+                    }
+                    identitySession = wire.data.session
+                },
             )
             exactModelFiles(parsed.files, [], false)
             metadata = parsed.metadata
             execution.check()
-            if (metadata.session !== null && sha256(screenManualJsonV2(metadata.session)) !== metadata.manualHash) {
-                throw new AdmissionError('invalid_input', 400)
-            }
-            const inputs: ScreenContextInputsV2 = {
-                kind: metadata.kind ?? 'home',
-                session: metadata.session,
-                stepId: metadata.stepId,
-                captureId: metadata.captureId,
-                result: metadata.result,
-                failure: metadata.failure,
-                completedStepIds: metadata.completedStepIds,
-                uiState: metadata.uiState,
-                ...(metadata.companionAnswer == null ? {} : { companionAnswer: metadata.companionAnswer }),
-                ...(metadata.pieces == null ? {} : { pieces: metadata.pieces }),
-                ...(metadata.stepPieces == null ? {} : { stepPieces: metadata.stepPieces }),
-            }
+            const inputs = documentInputs(metadata, identitySession)
             let value: Extract<z.infer<typeof screensV2ResultSchema>, { status: 'ok' }>['value'] = {
                 document: null,
                 progress: null,
                 documents: [],
             }
             if (metadata.op === 'generate') {
-                if (sha256(screenContextJsonV2(inputs)) !== metadata.contextKey) {
-                    throw new AdmissionError('invalid_input', 400)
-                }
                 supersedeFollowUps(metadata.session)
                 try {
                     const active = execution
@@ -1533,6 +1610,7 @@ export function createModelHandlers(options: {
                     ...value,
                     progress: selectedDocuments.precompute({
                         session: metadata.session!,
+                        identitySession,
                         focusKey: metadata.focusKey,
                         uiState: metadata.uiState,
                         completedStepIds: metadata.completedStepIds,
@@ -1546,6 +1624,7 @@ export function createModelHandlers(options: {
                     metadata.want,
                     selectedDocuments.jobContextKey({
                         session: metadata.session!,
+                        identitySession,
                         focusKey: null,
                         uiState: metadata.uiState,
                         completedStepIds: metadata.completedStepIds,
@@ -1561,6 +1640,7 @@ export function createModelHandlers(options: {
                         metadata.binding!.revision,
                         selectedDocuments.jobContextKey({
                             session: metadata.session!,
+                            identitySession,
                             focusKey: null,
                             uiState: metadata.uiState,
                             completedStepIds: metadata.completedStepIds,

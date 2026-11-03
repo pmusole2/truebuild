@@ -332,7 +332,7 @@ it.each([
             const loadedUri = loadedImage.props.source.uri as string
             expect(loadedUri).toMatch(/^data:image\/jpeg;base64,/u)
             const capture = state.capture
-            const sourceDisclosure = screen.getAllByRole('button', { name: 'See it in the manual' })[0]!
+            const sourceDisclosure = screen.getAllByRole('link', { name: 'See it in the manual' })[0]!
             await fireEvent.press(sourceDisclosure)
             expect(screen.getAllByTestId('diagram-0').length).toBeGreaterThan(0)
             await waitFor(() => expect(server.requests).toHaveLength(1))

@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http'
 
 import {
     createDemoManual,
+    FIXTURE_EVIDENCE,
     manualStepSchema,
     parsedManualSchema,
     type CheckResult,
@@ -100,13 +101,17 @@ async function setup(): Promise<{
     }
 }
 
-function request(state: Awaited<ReturnType<typeof setup>>, mutate?: (form: FormData) => void): Request {
+function request(
+    state: Awaited<ReturnType<typeof setup>>,
+    mutate?: (form: FormData) => void,
+    path = '/api/checks',
+): Request {
     const form = new FormData()
     form.set('metadata', JSON.stringify(state.metadata))
     form.set('source-0', new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'source.png')
     form.set('observation', new Blob([new Uint8Array(state.bytes)], { type: 'image/png' }), 'observation.png')
     mutate?.(form)
-    return new Request('http://127.0.0.1:3001/api/checks', {
+    return new Request(`http://127.0.0.1:3001${path}`, {
         method: 'POST',
         headers: {
             'x-truebuild-key': state.key,
@@ -286,6 +291,137 @@ describe('protected model composition', (): void => {
         expect((await handlers.question(question)).status).toBe(200)
         expect(parsedSources).toBe(1)
         expect(questionCalls).toBe(1)
+    })
+
+    it('accepts action/sourceText sessions on check, question, overlay and v1 screens without exposing future fields', async () => {
+        const state = await setup()
+        const step = state.metadata.session.reviewedSteps[0]!
+        step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
+        Object.assign(step, { sourceText: 'Future printed procedure.' })
+        Object.assign(state.metadata.session.rawExtraction!.steps[0]!, { sourceText: 'Future extraction text.' })
+        const checkInput = vi.fn<MetaProvider['checkStep']>(async (input) => {
+            expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
+            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            return checked
+        })
+        const questionInput = vi.fn<MetaProvider['answerQuestion']>(async (input) => {
+            expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
+            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            return { answer: 'Synthetic answer', sourceRefs: [], missingEvidence: [] }
+        })
+        const overlayInput = vi.fn<NonNullable<MetaProvider['overlay']>>(async (input) => {
+            expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
+            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            return {
+                value: { observedRegion: null, layout: undefined, nextPartRegion: undefined, targetRegion: undefined },
+                evidence: FIXTURE_EVIDENCE,
+            }
+        })
+        const handlers = createModelHandlers({
+            ...state,
+            counter: new ModelCallCounter(4),
+            runtimeMode: 'fixture',
+            followUps: { overlay: true, segments: false },
+            provider: { ...provider(checkInput), answerQuestion: questionInput, overlay: overlayInput },
+            samProvider: null,
+        })
+        const checkedResponse = await handlers.check(request(state))
+        expect(checkedResponse.status).toBe(200)
+        const checkedBody = await checkedResponse.json()
+        const question = await handlers.question(
+            request(state, (form) => {
+                form.set(
+                    'metadata',
+                    JSON.stringify({
+                        ...state.metadata,
+                        question: 'Which way?',
+                        target: { kind: 'part', partId: 'side-panel' },
+                    }),
+                )
+            }),
+        )
+        expect(question.status).toBe(200)
+        const overlay = await handlers.overlay(
+            request(state, (form) => {
+                form.set(
+                    'metadata',
+                    JSON.stringify({ ...state.metadata, overlayToken: checkedBody.value.followUps.overlay.token }),
+                )
+            }),
+        )
+        expect(overlay.status).toBe(200)
+        const screens = await handlers.screens(
+            request(state, (form) => {
+                form.delete('source-0')
+                form.delete('observation')
+                form.set(
+                    'metadata',
+                    JSON.stringify({
+                        mode: 'model',
+                        requestId: 'extension-v1',
+                        op: 'generate',
+                        kind: 'guide',
+                        binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+                        session: state.metadata.session,
+                        stepId: step.stepId,
+                        captureId: null,
+                        result: null,
+                        failure: null,
+                        focusStepId: null,
+                        want: [],
+                    }),
+                )
+            }),
+        )
+        expect(screens.status).toBe(200)
+        expect(checkInput).toHaveBeenCalledTimes(1)
+        expect(questionInput).toHaveBeenCalledTimes(1)
+        expect(overlayInput).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts parse output carrying actions and sourceText, dropping optional bad actions before admission', async () => {
+        const state = await setup()
+        const extraction = structuredClone(state.metadata.session.rawExtraction!)
+        const step = extraction.steps[0]!
+        const good = { actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }
+        step.actions = [
+            {
+                actionId: 'unknown-page',
+                instruction: 'Turn the panel.',
+                sourceRefs: [{ pageId: 'missing', region: null }],
+            },
+            good,
+        ]
+        Object.assign(step, { sourceText: 'Future printed procedure.' })
+        const handlers = createModelHandlers({
+            ...state,
+            provider: { ...provider(async () => checked), parseManual: async () => extraction },
+            samProvider: null,
+        })
+        const response = await handlers.parse(
+            request(
+                state,
+                (form) => {
+                    form.delete('observation')
+                    form.set(
+                        'metadata',
+                        JSON.stringify({
+                            mode: 'model',
+                            requestId: 'extension-parse',
+                            binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
+                            pages: state.metadata.session.pages,
+                        }),
+                    )
+                },
+                '/api/manuals/parse?stepFields=actions',
+            ),
+        )
+        expect(response.status).toBe(200)
+        const body: unknown = await response.json()
+        expect(JSON.stringify(body)).not.toContain('sourceText')
+        expect(body).toMatchObject({
+            value: { steps: expect.arrayContaining([expect.objectContaining({ actions: [good] })]) },
+        })
     })
 
     it('withholds late success after cancellation and retains the consumed attempt', async (): Promise<void> => {
@@ -1096,15 +1232,19 @@ function parseRequest(state: Awaited<ReturnType<typeof setup>>, signal?: AbortSi
 
 describe('parse removal compatibility at the response boundary', () => {
     // 941de77's actual parse contract differs only in this enum; preserve its strict shape and refinements.
-    const oldParsedManual = parsedManualSchema.safeExtend({
-        steps: z
-            .array(
-                manualStepSchema.safeExtend({
-                    kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
-                }),
-            )
-            .max(200),
-    })
+    const oldParsedManual = z
+        .strictObject({
+            ...parsedManualSchema.shape,
+            steps: z
+                .array(
+                    manualStepSchema.safeExtend({
+                        actions: z.never().optional(),
+                        kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
+                    }),
+                )
+                .max(200),
+        })
+        .refine((value) => parsedManualSchema.safeParse(value).success)
 
     it.each([
         { stream: false, capable: false },
@@ -1114,7 +1254,12 @@ describe('parse removal compatibility at the response boundary', () => {
     ])('preserves removal meaning for $stream streaming / $capable capable clients', async ({ stream, capable }) => {
         const state = await setup()
         const canonical = parsed()
-        canonical.steps[0] = { ...canonical.steps[0]!, title: 'Remove the divider', kind: 'remove' }
+        canonical.steps[0] = {
+            ...canonical.steps[0]!,
+            title: 'Remove the divider',
+            kind: 'remove',
+            actions: [{ actionId: 'a1', instruction: 'Lift the divider.', sourceRefs: canonical.steps[0]!.sourceRefs }],
+        }
         expect(oldParsedManual.safeParse(canonical).success).toBe(false)
         const original = structuredClone(canonical)
         const handlers = createModelHandlers({
@@ -1134,7 +1279,7 @@ describe('parse removal compatibility at the response boundary', () => {
         headers.delete('content-type')
         if (stream) headers.set('accept', 'text/event-stream')
         const response = await handlers.parse(
-            new Request(`${base.url}${capable ? '?stepKinds=remove' : ''}`, {
+            new Request(`${base.url}${capable ? '?stepKinds=remove&stepActions=1' : ''}`, {
                 headers,
                 method: 'POST',
                 body: await base.formData(),
@@ -1150,9 +1295,12 @@ describe('parse removal compatibility at the response boundary', () => {
             : ((await response.json()) as { value: unknown })
         expect(parsedManualSchema.parse(wire.value)).toEqual({
             ...original,
-            steps: original.steps.map((step) =>
-                step.kind === 'remove' && !capable ? { ...step, kind: 'adjust' } : step,
-            ),
+            steps: original.steps.map((step) => {
+                const { actions, ...legacy } = step
+                return capable
+                    ? { ...legacy, ...(actions === undefined ? {} : { actions }) }
+                    : { ...legacy, ...(step.kind === 'remove' ? { kind: 'adjust' } : {}) }
+            }),
         })
         expect(oldParsedManual.safeParse(wire.value).success).toBe(!capable)
         expect(canonical).toEqual(original)

@@ -418,6 +418,34 @@ describe('inactive direct Meta transport', (): void => {
         })
     })
 
+    it.each([true, false])('drops bad optional parse actions without repair (valid action: %s)', async (keepValid) => {
+        const input = await validInput()
+        const extraction = structuredClone(input.session.rawExtraction!)
+        const step = extraction.steps[0]!
+        const good = { actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }
+        step.actions = [
+            { ...good, actionId: 'blank', instruction: '  ' },
+            { ...good, actionId: 'missing-page', sourceRefs: [{ pageId: 'unknown-page', region: null }] },
+            ...(keepValid ? [good, { ...good, instruction: 'An ignored duplicate.' }] : []),
+        ]
+        Object.assign(step, { sourceText: 'An optional field from a later provider.' })
+        const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+            asRequestedMetaResponse(Response.json(responseBody(extraction)), init),
+        )
+        const provider = createMetaProvider({ apiKey: 'synthetic', fetchImpl })
+        const parsed = await provider.parseManual(
+            {
+                requestId: input.requestId,
+                binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
+                pages: input.sourceImages,
+            },
+            signal(),
+        )
+        expect(parsed.steps[0]!.actions).toEqual(keepValid ? [good] : null)
+        expect(parsed.steps[0]).not.toHaveProperty('sourceText')
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
     it('sends text-and-diagram Parse guidance for every reviewed-manual field', async (): Promise<void> => {
         const input = await validInput()
         // This response is a transport fixture; only the outgoing request instructions are under test.
@@ -468,6 +496,19 @@ describe('inactive direct Meta transport', (): void => {
                     'List every unresolved item in the top-level unknowns array, including missing checks/citations and bounded-extraction omissions;',
                     'never silently omit parts or steps.',
                     'Any correction is unreviewed; reviewed must be false.',
+                    'Parse actions:',
+                    'one physical action per entry',
+                    'about 12 words or fewer',
+                    '120 characters',
+                    'at most 6 actions',
+                    'group related motions into one action',
+                    'conditional steps may start with If',
+                    'Write repeated actions in full',
+                    'On wordless pages',
+                    'If the figure and text disagree, follow the text',
+                    'Start each instruction with a verb',
+                    'selected reading language',
+                    'correction: null when the manual prints no fix',
                 ]) {
                     expect(transport.bodies[0]).toMatchObject({ instructions: expect.stringContaining(rule) })
                 }

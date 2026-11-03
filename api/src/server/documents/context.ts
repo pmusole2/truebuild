@@ -6,8 +6,11 @@ import {
     coachTargetsForV2,
     documentLanguageV2,
     documentMaterialV2,
+    guideHeaderTextV2,
     intentAllowedV2,
     manualDisplayTitleV2,
+    manualChecksInitiallyOpen,
+    manualDirectionGroups,
     resultOfKindV2,
     screenContentJsonV2,
     screenContextJsonV2,
@@ -79,8 +82,8 @@ function nativeNodes(inputs: ScreenContextInputsV2, material: DocumentMaterialV2
     ]
 }
 
-export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentContext {
-    const material = documentMaterialV2(inputs)
+export function buildDocumentContext(inputs: ScreenContextInputsV2, legacyDirections = false): DocumentContext {
+    const material = documentMaterialV2(inputs, legacyDirections)
     const { identity } = screenContextPartsV2(inputs)
     // The grounding reads the inputs as the document uses them (a global More has no manual, photo or result).
     const used = material.inputs
@@ -93,6 +96,7 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
         contextKey: sha256(screenContextJsonV2(inputs)),
     }
     const step = material.step
+    const groups = manualDirectionGroups(material.facts)
     const partNames = new Map(
         (facts?.parts ?? []).flatMap((part) => (part.name.state === 'known' ? [[part.partId, part.name.value]] : [])),
     )
@@ -135,18 +139,30 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 // Guide directions are needed even when explicit safety classification leaves no mandatory facts.
                 ...(used.kind === 'guide' && step !== null
                     ? {
-                          headerText: {
-                              title: { kind: 'bound', key: 'step-title' },
-                              subtitle: { kind: 'bound', key: 'step-position' },
-                          },
+                          headerText: legacyDirections
+                              ? {
+                                    title: { kind: 'bound', key: 'step-title' },
+                                    subtitle: { kind: 'bound', key: 'step-position' },
+                                }
+                              : guideHeaderTextV2(material),
+                          ...(legacyDirections ? { legacyDirections: true } : {}),
                           directionFacts: material.facts
-                              .filter(
-                                  (fact) =>
-                                      fact.kind !== 'safety' &&
-                                      fact.kind !== 'title' &&
-                                      (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+                              .filter((fact) =>
+                                  legacyDirections
+                                      ? fact.kind !== 'safety' &&
+                                        fact.kind !== 'title' &&
+                                        (fact.basis === 'direction' || fact.basis === 'unclassified-step')
+                                      : groups.directions.includes(fact),
                               )
                               .map((fact) => ({ kind: 'fact', factId: fact.factId })),
+                          ...(!legacyDirections
+                              ? {
+                                    checkInitiallyOpen: manualChecksInitiallyOpen(step),
+                                    checkFacts: material.facts
+                                        .filter((fact) => groups.checks.includes(fact))
+                                        .map((fact) => ({ kind: 'fact', factId: fact.factId })),
+                                }
+                              : {}),
                       }
                     : {}),
                 overview: material.overview,

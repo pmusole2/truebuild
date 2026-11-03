@@ -393,7 +393,9 @@ it('replaces Reading with Quick check, keeps Add in Back history, and explicitly
     await waitFor(() => expect(view.getPathname()).toBe('/guide/manual-navigation-1'))
     expect(controller.current?.session.reviewStatus).toBe('reviewed')
     await testRouter.back('/')
-    expect(calls).toEqual(['https://navigation.invalid/api/manuals/parse?stepKinds=remove'])
+    expect(calls).toEqual([
+        'https://navigation.invalid/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText',
+    ])
     expect(restore).toHaveBeenCalledTimes(1)
     expect(dispose).not.toHaveBeenCalled()
 })
@@ -635,8 +637,8 @@ it.each([
     await waitFor(() => expect(view.getPathname()).toBe('/check/english-manual'))
     expect(capturedLanguages).toEqual([language, language])
     expect(calls).toEqual([
-        'https://navigation.invalid/api/manuals/parse?stepKinds=remove',
-        'https://navigation.invalid/api/manuals/parse?stepKinds=remove',
+        'https://navigation.invalid/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText',
+        'https://navigation.invalid/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText',
     ])
 })
 
@@ -843,7 +845,7 @@ it('the main document ends a failed manual picture read instead of keeping a loa
         await act(async () => controller.open('navigation-manual', 'guide'))
         await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
         expect(await screen.findByText('This manual picture is unavailable.')).toBeTruthy()
-        await fireEvent.press((await screen.findAllByRole('button', { name: 'See it in the manual' }))[0]!)
+        await fireEvent.press((await screen.findAllByRole('link', { name: 'See it in the manual' }))[0]!)
         expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
         expect(screen.queryByText('Loading page…')).toBeNull()
         expect(calls).toHaveLength(0)

@@ -124,16 +124,24 @@ export function issueShownV2(document: ScreenDocumentV2): IssuedShownV2 {
 }
 
 /** Re-verifies an issued projection against the manual of the current request. Anything that fails is dropped. */
-export function resolveShownV2(issued: IssuedShownV2, session: ManualSession, stepId: string): ShownScreen | undefined {
-    const material = documentMaterialV2({
-        kind: 'guide',
-        session,
-        stepId,
-        captureId: null,
-        result: null,
-        failure: null,
-        uiState: null,
-    })
+export function resolveShownV2(
+    issued: IssuedShownV2,
+    session: ManualSession,
+    stepId: string,
+    legacyDirections = false,
+): ShownScreen | undefined {
+    const material = documentMaterialV2(
+        {
+            kind: 'guide',
+            session,
+            stepId,
+            captureId: null,
+            result: null,
+            failure: null,
+            uiState: null,
+        },
+        legacyDirections,
+    )
     const current = new Map(material.facts.filter((fact) => fact.basis !== 'result').map((fact) => [fact.factId, fact]))
     const manual = screenFacts(session)
     const step = material.step

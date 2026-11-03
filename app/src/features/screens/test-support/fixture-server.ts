@@ -456,7 +456,7 @@ export function documentForV2(
     inputs: ScreenContextInputsV2,
     options: DocumentFixtureServerOptions = {},
 ): ScreenDocumentV2 {
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, false)
     const generated = options.generated?.includes(inputs.kind) === true
     const recorded = options.recordedMetadata === true
     const proposal = buildFallbackProposalV2(material)

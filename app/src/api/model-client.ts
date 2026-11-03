@@ -3,16 +3,19 @@ import { documentUnavailable, postDocuments } from './document-client'
 import { aiConsent } from '../features/consent/consent-runtime'
 import type { AiConsentStore } from '../features/consent/consent-store'
 import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
+import { outgoingManualSession } from './outgoing-session'
 import {
     checkResultSchema,
     LIMITS,
     matchesBinding,
     parsedManualSchema,
+    sanitizeManualStepActions,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
     questionResultSchema,
     screensResultSchema,
     segmentEventSchema,
+    SUPPORTED_STEP_EXTENSIONS,
     type ApiResult,
     type CaptureBinding,
     type CheckResult,
@@ -395,12 +398,12 @@ export class ModelApiClient {
 
         return this.post({
             // Query parameters are ignored by old APIs and do not alter their strict metadata or CORS contract.
-            path: '/api/manuals/parse?stepKinds=remove',
+            path: `/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
             requestId: ctx.requestId,
             binding,
             form,
             timeoutMs: MODEL_PARSE_TIMEOUT_MS,
-            valueSchema: parsedManualSchema,
+            valueSchema: z.preprocess((value) => sanitizeManualStepActions(value, pageIds), parsedManualSchema),
             accepts: (value: ParsedManual): boolean => everyRefInside(value, pageIds),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
@@ -1279,7 +1282,7 @@ function screenMetadata(request: ScreenRequest, requestId: string): unknown {
                     request.session === null
                         ? null
                         : { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
-                session: request.session,
+                session: request.session === null ? null : outgoingManualSession(request.session),
                 stepId: request.stepId,
                 captureId: request.captureId,
                 result: request.result,
@@ -1292,7 +1295,7 @@ function screenMetadata(request: ScreenRequest, requestId: string): unknown {
                 ...base,
                 op: 'precompute',
                 binding: { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
-                session: request.session,
+                session: outgoingManualSession(request.session),
                 focusStepId: request.focusStepId,
             }
         case 'progress':
@@ -1443,6 +1446,7 @@ function everyRefInside(parsed: ParsedManual, pageIds: ReadonlySet<string>): boo
             ...step.visibleChecks.flatMap((check) =>
                 check.description.state === 'known' ? check.description.sourceRefs : [],
             ),
+            ...(step.actions?.flatMap((action) => action.sourceRefs) ?? []),
             ...(step.correction?.actions.flatMap((action) => action.sourceRefs) ?? []),
         ]),
     ]

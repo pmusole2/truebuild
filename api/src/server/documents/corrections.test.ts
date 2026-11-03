@@ -473,11 +473,15 @@ describe('the page a check names keeps its composition and is re-verified (store
         return session
     }
 
-    async function issue(session: ManualSession): Promise<{
+    async function issue(
+        session: ManualSession,
+        legacyDirections = false,
+    ): Promise<{
         service: DocumentService
         screen: { screenId: string; contextKey: string }
     }> {
         const service = createDocumentService({
+            legacyDirections,
             provider: null,
             runtimeMode: 'fixture',
             policy: policyFor(),
@@ -513,13 +517,35 @@ describe('the page a check names keeps its composition and is re-verified (store
         return value.shown
     }
 
+    it.each([false, true])('re-verifies issued facts with legacyDirections=%s', async (legacyDirections) => {
+        const session = withRegion()
+        session.rawExtraction = {
+            parts: session.parts,
+            unknowns: [],
+            steps: session.reviewedSteps.map((step) => ({
+                ...step,
+                safetyNotes: null,
+                correction: step.correction === null ? null : { ...step.correction, reviewed: false },
+            })),
+        }
+        session.reviewStatus = 'unreviewed'
+        session.reviewedSteps = []
+        expect(manualSessionSchema.safeParse(session).success).toBe(true)
+        const { service, screen } = await issue(session, legacyDirections)
+        const resolved = service.resolveStepScreen(session, 'step-1', screen)
+        if (resolved === null || resolved === 'mismatch') throw new Error('Expected issued screen')
+        expect(resolved.facts.some((fact) => fact.id === 'correction:turn-panel')).toBe(false)
+        expect(shownOf(resolved).blocks.some((block) => block.factIds?.includes('correction:turn-panel'))).toBe(false)
+    })
+
     it('preserves node order, layout, parts, the hero figure with the manual region, and the citations', async () => {
         const session = withRegion()
         const { service, screen } = await issue(session)
         const shown = shownOf(service.resolveStepScreen(session, 'step-1', screen))
         expect(shown.blocks[0]).toMatchObject({ path: 'body', type: 'Scroll', origin: 'generated' })
-        const types = shown.blocks.map((block) => block.type)
-        expect(types.indexOf('Image')).toBeLessThan(types.indexOf('Text'))
+        const safetyIndex = shown.blocks.findIndex((block) => block.factIds?.includes('safety:n1'))
+        expect(safetyIndex).toBeGreaterThanOrEqual(0)
+        expect(safetyIndex).toBeLessThan(shown.blocks.findIndex((block) => block.type === 'Image'))
         const hero = shown.blocks.find((block) => block.type === 'Image')!
         expect(hero.figure).toEqual({ source: 'page', refId: 'demo-page-1', fit: 'contain', region: REGION })
         const safety = shown.blocks.find((block) => block.factIds?.includes('safety:n1'))

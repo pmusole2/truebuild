@@ -1,0 +1,267 @@
+{
+    "provenance": "Recorded manual extraction from .local/drone-run/out/session.json; actions are handwritten fixture data.",
+    "session": {
+        "manualId": "manual-629ee6d7-814d-479e-8f7c-356e7539d856",
+        "title": "X-WIND",
+        "updatedAt": "2026-11-02T19:12:15.841Z",
+        "revision": 1,
+        "pages": [
+            {
+                "pageId": "page-4da0b6db-f05a-42e4-96eb-8b2626a429c3",
+                "assetId": "asset-1153f339-955f-418d-b5f0-149a70a5b26d",
+                "mimeType": "image/jpeg",
+                "width": 960,
+                "height": 1280,
+                "contentHash": "6a3a3cfd680482cc310f5f227ee5946a621af79cc7d47ba98d787298a89ff4a9"
+            },
+            {
+                "pageId": "page-deba9f57-cf6f-4ac7-a5fc-5bc77b40997e",
+                "assetId": "asset-ed772cd7-8be8-4a4c-a41c-bf6ef4404f7c",
+                "mimeType": "image/jpeg",
+                "width": 960,
+                "height": 1280,
+                "contentHash": "70818d47c9d034996fc6cd47b2fa595cbced334360a49fbfd02284a5b030dffe"
+            },
+            {
+                "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                "assetId": "asset-829a9e8b-cb44-4442-9efb-4ec8c6b1cee6",
+                "mimeType": "image/jpeg",
+                "width": 960,
+                "height": 1280,
+                "contentHash": "81c7ac2dc8c34cc1dc79dced7f97bed0778ad7bd736f64b3d46aec36ac963595"
+            },
+            {
+                "pageId": "page-d973a462-8357-453d-9a66-dd52f1550604",
+                "assetId": "asset-ed71c2c9-fd4c-457b-a24e-b6b375da351b",
+                "mimeType": "image/jpeg",
+                "width": 960,
+                "height": 1280,
+                "contentHash": "0b011c58cdf519e4f4ddfa2872cd72e117cc7308ff04fdc4b023a38d273b686e"
+            }
+        ],
+        "parts": [
+            {
+                "partId": "part-drone-kwind",
+                "name": {
+                    "state": "known",
+                    "value": "K-WIND drone",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-deba9f57-cf6f-4ac7-a5fc-5bc77b40997e",
+                            "region": {
+                                "x": 0,
+                                "y": 0,
+                                "width": 1,
+                                "height": 1
+                            }
+                        }
+                    ]
+                },
+                "label": "K-WIND*1 (Battery Included)",
+                "dimensions": null,
+                "inventoryQuantity": 1,
+                "drawingBox": [0.175, 0.19, 0.192, 0.11]
+            },
+            {
+                "partId": "part-fan-blade",
+                "name": {
+                    "state": "known",
+                    "value": "Fan blade",
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-deba9f57-cf6f-4ac7-a5fc-5bc77b40997e",
+                            "region": {
+                                "x": 0,
+                                "y": 0,
+                                "width": 1,
+                                "height": 1
+                            }
+                        }
+                    ]
+                },
+                "label": "Backup propeller A*2 B*2",
+                "dimensions": null,
+                "inventoryQuantity": 4,
+                "drawingBox": [0.19, 0.385, 0.155, 0.14]
+            }
+        ],
+        "rawExtraction": {
+            "parts": [
+                {
+                    "partId": "part-drone-kwind",
+                    "name": {
+                        "state": "known",
+                        "value": "K-WIND drone",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-deba9f57-cf6f-4ac7-a5fc-5bc77b40997e",
+                                "region": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "width": 1,
+                                    "height": 1
+                                }
+                            }
+                        ]
+                    },
+                    "label": "K-WIND*1 (Battery Included)",
+                    "dimensions": null,
+                    "inventoryQuantity": 1,
+                    "drawingBox": [0.175, 0.19, 0.192, 0.11]
+                },
+                {
+                    "partId": "part-fan-blade",
+                    "name": {
+                        "state": "known",
+                        "value": "Fan blade",
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-deba9f57-cf6f-4ac7-a5fc-5bc77b40997e",
+                                "region": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "width": 1,
+                                    "height": 1
+                                }
+                            }
+                        ]
+                    },
+                    "label": "Backup propeller A*2 B*2",
+                    "dimensions": null,
+                    "inventoryQuantity": 4,
+                    "drawingBox": [0.19, 0.385, 0.155, 0.14]
+                }
+            ],
+            "steps": [
+                {
+                    "stepId": "step-1-install-fan-blades",
+                    "order": 1,
+                    "title": "Install fan blades",
+                    "kind": "assembly",
+                    "requirements": {
+                        "orientation": true,
+                        "connection": true,
+                        "visibleChecks": true
+                    },
+                    "alternatives": null,
+                    "selectedAlternativeId": null,
+                    "parts": [
+                        {
+                            "partId": "part-drone-kwind",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                                        "region": {
+                                            "x": 0,
+                                            "y": 0,
+                                            "width": 1,
+                                            "height": 1
+                                        }
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        },
+                        {
+                            "partId": "part-fan-blade",
+                            "quantity": {
+                                "state": "known",
+                                "value": 1,
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                                        "region": {
+                                            "x": 0,
+                                            "y": 0,
+                                            "width": 1,
+                                            "height": 1
+                                        }
+                                    }
+                                ]
+                            },
+                            "quantityBasis": null
+                        }
+                    ],
+                    "orientation": {
+                        "state": "known",
+                        "value": {
+                            "partId": "part-fan-blade",
+                            "description": "Blade aligned with motor shaft and pressed straight down"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                                "region": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "width": 1,
+                                    "height": 1
+                                }
+                            }
+                        ]
+                    },
+                    "connection": {
+                        "state": "known",
+                        "value": {
+                            "partIds": ["part-fan-blade", "part-drone-kwind"],
+                            "description": "Fan blade mounted on motor shaft and seated in place"
+                        },
+                        "sourceRefs": [
+                            {
+                                "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                                "region": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "width": 1,
+                                    "height": 1
+                                }
+                            }
+                        ]
+                    },
+                    "visibleChecks": [
+                        {
+                            "checkId": "check-1-blade-seated",
+                            "description": {
+                                "state": "known",
+                                "value": "Fan blade present on motor shaft and seated after installation",
+                                "sourceRefs": [
+                                    {
+                                        "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                                        "region": {
+                                            "x": 0,
+                                            "y": 0,
+                                            "width": 1,
+                                            "height": 1
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "sourceRefs": [
+                        {
+                            "pageId": "page-4d69f379-5c96-42f8-b5c2-6a5546ca8d6c",
+                            "region": {
+                                "x": 0,
+                                "y": 0,
+                                "width": 1,
+                                "height": 1
+                            }
+                        }
+                    ],
+                    "correction": null,
+                    "safetyNotes": []
+                }
+            ],
+            "unknowns": [
+                "Ship bottom attachment to drone is shown in overview but no installation procedure is given in supplied pages",
+                "Battery removal using paddle and propeller removal tool procedure is shown but not extracted as assembly steps; only installation path is extracted"
+            ]
+        },
+        "reviewedSteps": [],
+        "reviewStatus": "unreviewed"
+    }
+}

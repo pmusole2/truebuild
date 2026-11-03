@@ -30,6 +30,7 @@ import { metaOutputSchemas } from '../../providers/meta-schemas'
 import { documentInputs, demoSession, fullUi, SAFETY_NOTE } from '../../test-support/document-inputs'
 import { aiPolicyFromEnvironment } from '../ai-policy'
 import type { BackgroundWork } from '../screens/service'
+import { buildContext as buildLegacyContext } from '../screens/context'
 import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
 import sparseGuides from './fixtures/guide-wire-replay.json'
@@ -825,8 +826,8 @@ describe('Guide usability floor', () => {
         const view = context.view.dynamic.document as Record<string, unknown>
         const headerText = headerV2Schema.pick({ title: true, subtitle: true }).parse(view.headerText)
         expect(headerText).toEqual({
-            title: { kind: 'bound', key: 'step-title' },
-            subtitle: { kind: 'bound', key: 'step-position' },
+            title: { kind: 'bound', key: 'step-position' },
+            subtitle: null,
         })
         expect(DOCUMENT_INSTRUCTIONS).toContain('document.headerText')
         const corrected: WireProposal = { ...complete, header: { ...complete.header, ...headerText } }
@@ -887,20 +888,12 @@ describe('Guide usability floor', () => {
         const view = context.view.dynamic.document as Record<string, unknown>
         expect(view).not.toHaveProperty('instructionText')
         const directions = bodyTextRefSchema.array().parse(view.directionFacts)
-        expect(directions).toEqual([
-            { kind: 'fact', factId: 'orientation' },
-            { kind: 'fact', factId: 'connection' },
-            { kind: 'fact', factId: 'check:groove-inward' },
-            { kind: 'fact', factId: 'correction:turn-panel' },
-        ])
+        expect(directions).toEqual(['title', 'orientation', 'connection'].map((factId) => ({ kind: 'fact', factId })))
         expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
         expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThan(34)
-        const corrected: WireProposal = {
-            ...titleOnly,
-            nodes: titleOnly.nodes.map((node) => (node.id === 'f3502' ? { ...node, content: directions[0]! } : node)),
-        }
+        const corrected = goodWire('guide', session)
         const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
         expect(evaluated.ok).toBe(true)
         if (!evaluated.ok) throw new Error('Supplied instruction must pass the strict gate')
@@ -908,29 +901,170 @@ describe('Guide usability floor', () => {
         expect((await liveService([corrected]).service.generate(inputs)).metadata.source).toBe('generated')
     })
 
-    it('rejects a legacy title fact as the sole instruction', () => {
-        const context = contextFor('guide', demoSession({ safety: false }))
+    it('accepts the saved title fallback while rejecting omitted, reordered actions and misplaced checks', () => {
+        const session = demoSession({ safety: false })
+        const inputs = documentInputs('guide', session)
+        const saved = buildDocumentContext(inputs)
+        expect(guideQualityIssues(buildFallbackProposalV2(saved.material), saved)).toEqual([])
+        const step = session.reviewedSteps[0]!
+        step.actions = [
+            { actionId: 'lift', instruction: 'Lift the panel.', sourceRefs: step.sourceRefs },
+            { actionId: 'turn', instruction: 'Turn the panel inward.', sourceRefs: step.sourceRefs },
+        ]
+        const context = buildDocumentContext(inputs)
         const proposal = buildFallbackProposalV2(context.material)
-        expect(context.material.facts.some((fact) => fact.factId === 'title')).toBe(true)
-        expect(
-            guideQualityIssues(
-                {
-                    ...proposal,
-                    body: {
-                        type: 'Text',
-                        content: { kind: 'fact', factId: 'title' },
-                        role: 'body',
-                        tone: 'neutral',
-                        emphasis: 'normal',
-                        align: 'start',
+        expect(guideQualityIssues(proposal, context)).toEqual([])
+        const altered = (change: (node: ScreenNodeV2) => ScreenNodeV2): ScreenProposalV2 => {
+            const walk = (node: ScreenNodeV2): ScreenNodeV2 =>
+                change('children' in node ? { ...node, children: node.children.map(walk) } : node)
+            return { ...proposal, body: walk(proposal.body) }
+        }
+        const hiddenDuplicate: ScreenProposalV2 = {
+            ...proposal,
+            body: {
+                type: 'Stack',
+                gap: 'md',
+                align: 'stretch',
+                children: [
+                    {
+                        type: 'Section',
+                        title: { kind: 'literal', text: 'More detail' },
+                        collapsible: true,
+                        initiallyOpen: false,
+                        children: [
+                            {
+                                type: 'Text',
+                                content: { kind: 'fact', factId: 'action:lift' },
+                                role: 'body',
+                                tone: 'neutral',
+                                emphasis: 'normal',
+                                align: 'start',
+                            },
+                        ],
                     },
-                },
-                context,
-            ),
-        ).toEqual(['guide_quality:instruction_text_missing'])
+                    proposal.body,
+                ],
+            },
+        }
+        expect(guideQualityIssues(hiddenDuplicate, context)).toContain('guide_quality:instruction_text_missing')
+        const swap = altered((node) =>
+            node.type === 'Text' && node.content.kind === 'fact' && node.content.factId.startsWith('action:')
+                ? {
+                      ...node,
+                      content: {
+                          kind: 'fact',
+                          factId: node.content.factId === 'action:lift' ? 'action:turn' : 'action:lift',
+                      },
+                  }
+                : node,
+        )
+        expect(guideQualityIssues(swap, context)).toContain('guide_quality:instruction_text_missing')
+        const omitted = altered((node) =>
+            node.type === 'Text' && node.content.kind === 'fact' && node.content.factId === 'action:turn'
+                ? { ...node, content: { kind: 'bound', key: 'step-title' } }
+                : node,
+        )
+        expect(guideQualityIssues(omitted, context)).toContain('guide_quality:instruction_text_missing')
+        const exposed = altered((node) =>
+            node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Check your work'
+                ? { ...node, initiallyOpen: false }
+                : node,
+        )
+        expect(guideQualityIssues(exposed, context)).toEqual(['guide_quality:checks_not_separate'])
+        const repeated = {
+            ...proposal,
+            body: {
+                type: 'Stack' as const,
+                gap: 'md' as const,
+                align: 'stretch' as const,
+                children: [
+                    proposal.body,
+                    {
+                        type: 'Text' as const,
+                        content: { kind: 'bound' as const, key: 'step-title' as const },
+                        role: 'body' as const,
+                        tone: 'neutral' as const,
+                        emphasis: 'normal' as const,
+                        align: 'start' as const,
+                    },
+                ],
+            },
+        }
+        expect(guideQualityIssues(repeated, context)).toEqual(['guide_quality:title_repeated'])
     })
 
-    it('uses the retained battery-removal correction when no orientation or connection was extracted', async () => {
+    it('never sends an unreviewed fix to either document layout or the legacy screens model', () => {
+        const session = demoSession({ safety: false })
+        const step = session.reviewedSteps[0]!
+        step.correction = {
+            reviewed: false,
+            actions: [
+                {
+                    actionId: 'unreviewed',
+                    instruction: 'Unreviewed fix must never reach a model.',
+                    sourceRefs: step.sourceRefs,
+                },
+            ],
+        }
+        session.reviewStatus = 'unreviewed'
+        session.rawExtraction = {
+            parts: session.parts,
+            steps: session.reviewedSteps.map((item) => ({
+                ...item,
+                correction: item.correction === null ? null : { ...item.correction, reviewed: false },
+            })),
+            unknowns: [],
+        }
+        session.reviewedSteps = []
+        const inputs = {
+            kind: 'guide' as const,
+            session,
+            stepId: step.stepId,
+            captureId: null,
+            result: null,
+            failure: null,
+        }
+        expect(manualSessionSchema.safeParse(session).success).toBe(true)
+        for (const legacy of [false, true]) {
+            expect(JSON.stringify(buildDocumentContext(inputs, legacy).view)).not.toContain(
+                'Unreviewed fix must never reach a model.',
+            )
+        }
+        expect(JSON.stringify(buildLegacyContext(inputs).view)).not.toContain(
+            'Unreviewed fix must never reach a model.',
+        )
+    })
+
+    it.each([false, true])(
+        'keeps warning facts first and visible before figures, parts and progress (legacy=%s)',
+        (legacy) => {
+            const context = buildDocumentContext(documentInputs('guide', demoSession()), legacy)
+            const proposal = buildFallbackProposalV2(context.material)
+            expect(guideQualityIssues(proposal, context)).toEqual([])
+            if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
+            const content = proposal.body.children[0]
+            if (content?.type !== 'Stack') throw new Error('fixture content must stack')
+            const [safety, ...rest] = content.children
+            if (safety?.type !== 'Section') throw new Error('safety must be first')
+            const below = {
+                ...proposal,
+                body: { ...proposal.body, children: [{ ...content, children: [...rest, safety] }] },
+            }
+            expect(guideQualityIssues(below, context)).toContain('guide_quality:safety_not_leading')
+            const folded = {
+                ...proposal,
+                body: {
+                    ...proposal.body,
+                    children: [
+                        { ...content, children: [{ ...safety, collapsible: true, initiallyOpen: false }, ...rest] },
+                    ],
+                },
+            }
+            expect(guideQualityIssues(folded, context)).toContain('guide_quality:safety_not_leading')
+        },
+    )
+
+    it('keeps a reviewed fix separate while using the saved title as its procedure', async () => {
         // Reduced shape of .local/prompt11/final/reviewed-session.json: no richer removal procedure was retained.
         const session = demoSession({ safety: false })
         const step = session.reviewedSteps[0]!
@@ -954,8 +1088,9 @@ describe('Guide usability floor', () => {
         const inputs = documentInputs('guide', session)
         const context = buildDocumentContext(inputs)
         const view = context.view.dynamic.document as Record<string, unknown>
-        expect(view.directionFacts).toEqual([{ kind: 'fact', factId: 'correction:action-step-5-check' }])
+        expect(view.directionFacts).toEqual([{ kind: 'fact', factId: 'title' }])
         expect(context.material.facts).toEqual([
+            { factId: 'title', kind: 'title', basis: 'direction', text: step.title, sourceRefs: step.sourceRefs },
             {
                 factId: 'correction:action-step-5-check',
                 kind: 'correction',
@@ -1018,19 +1153,14 @@ describe('Guide usability floor', () => {
         for (const classification of ['classified', 'legacy', 'safety-only'] as const) {
             if (classification === 'legacy') delete step.safetyNotes
             else step.safetyNotes = classification === 'safety-only' ? demoSession().reviewedSteps[0]!.safetyNotes : []
-            const unavailable = buildDocumentContext(inputs)
-            expect((unavailable.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([])
-            expect(guideQualityIssues(buildFallbackProposalV2(unavailable.material), unavailable)).toEqual([
-                'guide_quality:instruction_text_missing',
+            const saved = buildDocumentContext(inputs)
+            expect((saved.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([
+                { kind: 'fact', factId: 'title' },
             ])
-            const unused = liveService([])
-            const fallback = await unused.service.generate(inputs)
-            expect(unused.inputs).toHaveLength(0)
-            expect(fallback.metadata).toMatchObject({
-                source: 'fallback',
-                fallbackReason: 'missing_requirement',
-                usage: { inputTokens: null, outputTokens: null },
-            })
+            expect(guideQualityIssues(buildFallbackProposalV2(saved.material), saved)).toEqual([])
+            const generated = liveService([goodWire('guide', session)])
+            expect((await generated.service.generate(inputs)).metadata.source).toBe('generated')
+            expect(generated.inputs).toHaveLength(1)
         }
     })
 
@@ -1087,7 +1217,8 @@ describe('Guide usability floor', () => {
         }
         expect(guideQualityIssues(safetyOnly, safetyContext)).toEqual(['guide_quality:instruction_text_missing'])
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
-        expect([document.header.title, document.header.subtitle]).toContainEqual({ kind: 'bound', key: 'step-title' })
+        expect(document.header.title).toEqual({ kind: 'bound', key: 'step-position' })
+        expect(document.header.subtitle).toBeNull()
         // GuidePieces is native trailing chrome for both origins, keyed by this unchanged catalog.
         expect(inputs.stepPieces).toEqual([{ pieceId: 'walking-machine-468c09a8', quantity: 1 }])
         expect(log.mock.calls.map(([value]) => JSON.parse(String(value)))).toContainEqual(

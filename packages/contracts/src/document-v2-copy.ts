@@ -273,6 +273,7 @@ export const EMPTY_COPY_V2: Readonly<Partial<Record<ScreenKindV2, { heading: str
 const COMMON: readonly string[] = [
     'Safety',
     'Directions',
+    'Check your work',
     'More detail',
     'Details',
     'Manual pages',

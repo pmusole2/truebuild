@@ -1004,6 +1004,8 @@ export const carriedStatesV2Schema = z.strictObject(
 export type CarriedStatesV2 = z.infer<typeof carriedStatesV2Schema>
 
 export const documentMetadataV2Schema = z.strictObject({
+    /** Echoed only when the server applied the plain-action Guide layout. Absent means compatibility layout. */
+    stepActions: z.literal(1).optional(),
     /** `generated`: the model's accepted ready content. `fallback`: the complete deterministic document. */
     source: screenSourceSchema.exclude(['shell']),
     /** Server-owned origin of each component path (see `componentPathsV2`). Uniform with `source`. */
