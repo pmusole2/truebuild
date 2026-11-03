@@ -187,7 +187,7 @@ describe('guards that hold whatever a document asked for', () => {
     })
 
     it.each([
-        [{ loading: true }, 'Opening your manuals'],
+        [{ loading: true }, 'Opening…'],
         [{ pending: 'Preparing page 1 of 2…' }, 'Getting your photos ready'],
         [{ pending: 'Saving on this device…' }, 'Saving your progress'],
     ])('explains a blocked intent with the current activity', (state, reason) => {

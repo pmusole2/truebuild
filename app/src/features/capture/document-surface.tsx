@@ -405,7 +405,13 @@ export function DocumentSurface({
             const enabled = !busy && !state.storageReadOnly && entry?.session.reviewStatus === 'reviewed'
             return {
                 enabled,
-                reason: enabled ? null : 'Wait for the current request to finish.',
+                reason: enabled
+                    ? null
+                    : busy
+                      ? waitCopyV2('questions', activityOf(state.pending)).action
+                      : state.storageReadOnly
+                        ? 'Saving is paused until your builds open again.'
+                        : 'Confirm the manual facts first.',
                 run: (): void => {
                     if (enabled) requestQuestionPhoto()
                 },
@@ -499,6 +505,7 @@ export function DocumentSurface({
         if (effectiveKind === 'questions' && intent.intent === 'ask') {
             const ready =
                 !busy &&
+                !state.storageReadOnly &&
                 state.capture?.reusable === true &&
                 state.target !== null &&
                 state.question.trim() !== '' &&
@@ -508,8 +515,12 @@ export function DocumentSurface({
                 reason: ready
                     ? null
                     : busy
-                      ? 'Wait for the current request to finish.'
-                      : 'Choose a part and write your question.',
+                      ? waitCopyV2('answer', activityOf(state.pending)).action
+                      : state.storageReadOnly
+                        ? 'Saving is paused until your builds open again.'
+                        : entry?.session.reviewStatus !== 'reviewed'
+                          ? 'Confirm the manual facts first.'
+                          : 'Choose a part and write your question.',
                 run: (): void => {
                     if (ready) void controller.ask()
                 },

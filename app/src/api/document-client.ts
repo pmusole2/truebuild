@@ -313,7 +313,7 @@ export async function postDocuments(options: {
     try {
         checkpoint()
         response = await awaitStopped(
-            options.fetch(new URL('/api/screens/v2?guideRepair=1', baseUrl).toString(), {
+            options.fetch(new URL('/api/screens/v2?guideRepair=1&waitCopy=2', baseUrl).toString(), {
                 method: 'POST',
                 headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
                 body: form,

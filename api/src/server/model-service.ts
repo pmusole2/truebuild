@@ -710,9 +710,10 @@ export function createModelHandlers(options: {
                 : { precomputeConcurrency: options.precomputeConcurrency }),
         })
 
-    const createDocuments = (guideRepair: boolean): ReturnType<typeof createDocumentService> =>
+    const createDocuments = (guideRepair: boolean, waitCopy: 1 | 2): ReturnType<typeof createDocumentService> =>
         createDocumentService({
             guideRepair,
+            waitCopy,
             provider: provider?.generateDocument ? provider : null,
             fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,
             policy,
@@ -726,8 +727,14 @@ export function createModelHandlers(options: {
     // SingleFlight and precompute registry separate: a 55s client must never wait for a capable client's repair.
     const screenService = createScreens(true)
     const legacyScreenService = createScreens(false)
-    const documentService = createDocuments(true)
-    const legacyDocumentService = createDocuments(false)
+    const documentService = createDocuments(true, 2)
+    const legacyDocumentService = createDocuments(false, 2)
+    const oldCopyDocumentService = createDocuments(true, 1)
+    const oldCopyLegacyDocumentService = createDocuments(false, 1)
+    const allowsWaitCopy = (request: Request): boolean => {
+        const values = new URL(request.url).searchParams.getAll('waitCopy')
+        return values.length === 1 && values[0] === '2'
+    }
     const allowsGuideRepair = (request: Request): boolean => {
         const values = new URL(request.url).searchParams.getAll('guideRepair')
         return values.length === 1 && values[0] === '1'
@@ -736,7 +743,14 @@ export function createModelHandlers(options: {
     /** A version 2 document (guide or camera) names itself first; any other screen id is a version 1 page. */
     const stepScreens: Pick<ScreenService, 'resolveStepScreen'> = {
         resolveStepScreen: (session, stepId, screen) => {
-            for (const service of [documentService, legacyDocumentService, screenService, legacyScreenService]) {
+            for (const service of [
+                documentService,
+                legacyDocumentService,
+                oldCopyDocumentService,
+                oldCopyLegacyDocumentService,
+                screenService,
+                legacyScreenService,
+            ]) {
                 const resolved = service.resolveStepScreen(session, stepId, screen)
                 if (resolved !== null) return resolved
             }
@@ -1132,7 +1146,16 @@ export function createModelHandlers(options: {
         const legacyCurrent = legacyScreenService.observe(manualId, revision)
         const documentsCurrent = documentService.observe(manualId, revision)
         const legacyDocumentsCurrent = legacyDocumentService.observe(manualId, revision)
-        return current && legacyCurrent && documentsCurrent && legacyDocumentsCurrent
+        const oldCopyCurrent = oldCopyDocumentService.observe(manualId, revision)
+        const oldCopyLegacyCurrent = oldCopyLegacyDocumentService.observe(manualId, revision)
+        return (
+            current &&
+            legacyCurrent &&
+            documentsCurrent &&
+            legacyDocumentsCurrent &&
+            oldCopyCurrent &&
+            oldCopyLegacyCurrent
+        )
     }
     const questionSyncWaitMs = options.questionSyncWaitMs ?? 8_000
     const storedResponse = (request: Request, stored: StoredResponse): Response =>
@@ -1444,7 +1467,14 @@ export function createModelHandlers(options: {
         let metadata: ModelScreensV2Metadata | undefined
         try {
             const guideRepair = allowsGuideRepair(request)
-            const selectedDocuments = guideRepair ? documentService : legacyDocumentService
+            const waitCopy = allowsWaitCopy(request)
+            const selectedDocuments = waitCopy
+                ? guideRepair
+                    ? documentService
+                    : legacyDocumentService
+                : guideRepair
+                  ? oldCopyDocumentService
+                  : oldCopyLegacyDocumentService
             const route = Math.min(
                 guideRepair ? MAX_DEADLINE_MS : LEGACY_GUIDE_ROUTE_MS,
                 Math.max(policy.stages.screens.deadlineMs, policy.stages['step-pages'].deadlineMs) * 2 + 5_000,
@@ -1541,6 +1571,7 @@ export function createModelHandlers(options: {
             }
             execution.check()
             const body = screensV2ResultSchema.parse({
+                ...(waitCopy ? { waitCopy: 2 } : {}),
                 status: 'ok',
                 requestId: metadata.requestId,
                 mode: options.runtimeMode === 'fixture' ? 'fixture' : 'model',

@@ -175,7 +175,7 @@ const HOME_HEADING = 'Your builds'
 /** Why Add manual is unavailable, so a disabled primary action is never unexplained. */
 function addHint(state: WorkflowScreenProps['state']): string | null {
     if (state.loading) {
-        return waitCopyV2('home').heading
+        return waitCopyV2('home').action
     }
     if (state.storageReadOnly) {
         return 'Adding is paused until your saved builds open again.'

@@ -36,6 +36,7 @@ import sparseGuides from './fixtures/guide-wire-replay.json'
 import containerOnlyGuide from './fixtures/guide-container-graph.json'
 import { guideQualityIssues } from './guide-quality'
 import { normalizeDocumentWire } from './normalize-wire'
+import { ScreenCache } from '../screens/store'
 import { createDocumentService, precomputeItems, type DocumentService, type DocumentServiceOptions } from './service'
 
 afterEach(() => vi.restoreAllMocks())
@@ -1096,5 +1097,36 @@ describe('Guide usability floor', () => {
                 issueCodes: expect.arrayContaining(['guide_quality:instruction_text_missing']),
             }),
         )
+    })
+})
+
+describe('wait copy cache and job isolation', () => {
+    it('partitions a shared model cache and service job registries while preserving the client job hash', async () => {
+        const cache: NonNullable<DocumentServiceOptions['cache']> = new ScreenCache()
+        const legacy = fixtureService({}, { cache, waitCopy: 1 })
+        const modern = fixtureService({}, { cache, waitCopy: 2 })
+        const inputs = documentInputs('guide')
+        const a = await legacy.service.generate(inputs)
+        const b = await modern.service.generate(inputs)
+        expect(a.metadata.cacheHit).toBe(false)
+        expect(b.metadata.cacheHit).toBe(false)
+        expect(a.screenId).not.toBe(b.screenId)
+        expect((await legacy.service.generate(inputs)).screenId).toBe(a.screenId)
+        expect((await modern.service.generate(inputs)).screenId).toBe(b.screenId)
+        const request = {
+            session: demoSession(),
+            focusKey: null,
+            uiState: fullUi,
+            completedStepIds: undefined,
+            requestedKinds: ['guide'] as const,
+        }
+        expect(legacy.service.jobContextKey(request)).toBe(modern.service.jobContextKey(request))
+        const oldJob = legacy.service.precompute(request)
+        const newJob = modern.service.precompute(request)
+        legacy.service.cancel(request.session.manualId, request.session.revision, oldJob.contextKey)
+        expect(
+            modern.service.progress(request.session.manualId, request.session.revision, [], newJob.contextKey).progress,
+        ).toEqual(newJob)
+        modern.service.cancel(request.session.manualId, request.session.revision, newJob.contextKey)
     })
 })

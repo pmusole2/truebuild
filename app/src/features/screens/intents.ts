@@ -70,7 +70,7 @@ const STEP_KINDS: ReadonlySet<ScreenKind> = new Set(['guide', 'result', 'questio
 const PAGE_KINDS: ReadonlySet<ScreenKind> = new Set(['add', 'pages', 'reading'])
 
 function busyReason(state: WorkflowState, kind: ScreenKind): string | null {
-    if (state.loading) return waitCopyV2('home').heading
+    if (state.loading) return waitCopyV2('home').action
     if (state.storageReadOnly) return 'Saving is paused until your builds open again.'
     if (state.pending !== null) return plainPending(state.pending, kind)
     return null

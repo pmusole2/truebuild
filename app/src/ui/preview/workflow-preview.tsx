@@ -321,7 +321,7 @@ function DocumentFixture({
             if (intent.intent === 'navigate' && intent.target === 'back')
                 return {
                     enabled: !state.loading,
-                    reason: state.loading ? waitCopyV2('home').heading : null,
+                    reason: state.loading ? waitCopyV2('home').action : null,
                     run: more.open ? more.hide : doNothing,
                 }
             if (intent.intent === 'open-details' && intent.target === 'device-settings')

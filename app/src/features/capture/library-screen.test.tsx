@@ -262,7 +262,7 @@ describe('home title state', () => {
 
 describe('unavailable states', () => {
     it.each([
-        ['home-loading', {}, 'Opening your manuals'],
+        ['home-loading', {}, 'Opening…'],
         ['home-empty', { pending: 'Reading your pages…' }, 'Reading your manual. This can take a minute.'],
     ] as const)('%s disables Add manual, says why and never calls a controller', async (id, patch, hint) => {
         const { createManual, open, restore } = await setup(id, patch)
