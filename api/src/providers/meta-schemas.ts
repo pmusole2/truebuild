@@ -378,7 +378,7 @@ export const metaOutputSchemas = {
             { target: 'draft-7', io: 'input' },
         ),
     ),
-    parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7' })),
+    parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7', io: 'input' })),
     // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.
     check: strictSchema(
         z.toJSONSchema(

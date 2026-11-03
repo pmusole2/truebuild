@@ -81,8 +81,8 @@ const build = (inputs: ScreenContextInputsV2): ReturnType<typeof buildFallbackDo
     buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 describe('focused questions and answers retain complete step detail', () => {
-    it('keeps the saved direction visible, reviewed fixes separate and checks collapsed', () => {
-        const material = documentMaterialV2(inputsFor('guide', classifiedManual()))
+    it('keeps saved directions and warning-classified checks visible with reviewed fixes separate', () => {
+        const material = documentMaterialV2(inputsFor('guide', classifiedManual()), false)
         const correction = material.facts.find((fact) => fact.factId === 'correction:turn-panel')!
         correction.basis = 'unclassified-step'
         material.requirements.facts.push(correction.factId)
@@ -95,22 +95,29 @@ describe('focused questions and answers retain complete step detail', () => {
             if (!hidden && node.type === 'Text' && node.content.kind === 'fact') stated.push(node.content.factId)
         })
         expect(sections).toHaveLength(1)
-        expect(stated).toEqual(['safety:n1', 'title', 'correction:turn-panel'])
+        expect(stated).toEqual([
+            'safety:n1',
+            'title',
+            'orientation',
+            'connection',
+            'check:groove-inward',
+            'correction:turn-panel',
+        ])
     })
 
-    it('Guide preserves checklist and reviewed-fix text and citations behind their sections', () => {
+    it('Guide keeps warning-classified checks open and reviewed fixes available with their citations', () => {
         const inputs = inputsFor('guide', classifiedManual())
         const document = build(inputs)
         const stated = new Map<string, boolean>()
         const citations: number[] = []
         visitVariantNodesV2(document, '', ({ node, hidden }) => {
             if (node.type === 'Text' && node.content.kind === 'fact') stated.set(node.content.factId, hidden)
-            if (hidden && node.type === 'Citation') citations.push(...node.sources)
+            if (node.type === 'Citation') citations.push(...node.sources)
         })
         for (const [factId, text] of DIRECTIONS) {
             const fact = document.facts.find((entry) => entry.factId === factId)!
             expect(fact.text).toBe(text)
-            expect(stated.get(factId)).toBe(true)
+            expect(stated.get(factId)).toBe(factId.startsWith('correction:'))
             expect(citations).toEqual(expect.arrayContaining(sourceResolverV2(document.sources)(fact.sourceRefs)))
         }
         expect(stated.get('safety:n1')).toBe(false)
@@ -218,8 +225,7 @@ describe('focused questions and answers retain complete step detail', () => {
         '%s keeps its required facts visible and Guide checks separate',
         (kind) => {
             const document = build(inputsFor(kind))
-            const required =
-                kind === 'guide' ? ['title', 'correction:turn-panel'] : LEGACY_DIRECTIONS.map(([factId]) => factId)
+            const required = LEGACY_DIRECTIONS.map(([factId]) => factId)
             expect(document.requirements.facts).toEqual(expect.arrayContaining(required))
             for (const { name, variant, prefix } of variantsOfV2(document)) {
                 const visible: string[] = []
@@ -228,9 +234,9 @@ describe('focused questions and answers retain complete step detail', () => {
                         visible.push(node.content.factId)
                 })
                 expect(visible, name).toEqual(expect.arrayContaining(required))
-                if (kind === 'guide') expect(visible, name).not.toContain('orientation')
+                if (kind === 'guide') expect(visible, name).toContain('orientation')
             }
-            expect(documentMaterialV2(inputsFor(kind)).facts).toEqual(document.facts)
+            expect(documentMaterialV2(inputsFor(kind), false).facts).toEqual(document.facts)
         },
     )
 })

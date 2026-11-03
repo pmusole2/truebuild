@@ -8,7 +8,9 @@ import {
     documentMaterialV2,
     type ManualSession,
     type ScreenContextInputsV2,
+    type ScreenDocumentV2,
     type ScreenNodeV2,
+    verifyDocumentAgainstInputsV2,
 } from '@truebuild/contracts'
 import { ThemeProvider } from '../../theme/theme'
 import { DocumentRenderer } from './document-renderer'
@@ -63,8 +65,9 @@ function sessionWithSeparateRegions(): ManualSession {
 
 type Shape = (proposal: ReturnType<typeof buildFallbackProposalV2>) => void
 
-async function renderGuide(session: ManualSession, shape?: Shape): Promise<Awaited<ReturnType<typeof render>>> {
-    const inputs: ScreenContextInputsV2 = {
+/** The composed Guide: the plain-action layout (`stepActions: 1` echo), or the compatibility layout with no echo. */
+function guideInputs(session: ManualSession): ScreenContextInputsV2 {
+    return {
         kind: 'guide',
         session,
         stepId: 'step-1',
@@ -73,15 +76,27 @@ async function renderGuide(session: ManualSession, shape?: Shape): Promise<Await
         failure: null,
         uiState: { capture: { captureId: 'cap-1', reusable: true, target: null, questionDraftPresent: false } },
     }
-    const material = documentMaterialV2(inputs)
+}
+
+function composeGuide(session: ManualSession, shape: Shape | undefined, legacy: boolean): ScreenDocumentV2 {
+    const inputs = guideInputs(session)
+    const material = documentMaterialV2(inputs, legacy)
     const proposal = buildFallbackProposalV2(material)
     shape?.(proposal)
-    const document = assembleDocumentV2(
+    return assembleDocumentV2(
         material,
         proposal,
         { source: 'fallback', evidence: 'local-deterministic', fallbackReason: 'disabled' },
         { sha256Hex, now: () => new Date('2026-02-03T04:05:06.000Z') },
     )
+}
+
+async function renderGuide(
+    session: ManualSession,
+    shape?: Shape,
+    legacy = false,
+): Promise<Awaited<ReturnType<typeof render>>> {
+    const document = composeGuide(session, shape, legacy)
     const bindings: FrameBindings = {
         resolve: () => ({ enabled: true, reason: null, run: (): void => undefined }),
         live: null,
@@ -167,22 +182,68 @@ describe('step directions', () => {
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
     })
 
-    it('shows no numbers when the step has no actions', async () => {
+    it('numbers the saved title, orientation and connection as the Directions when the step has no actions', async () => {
         const session = createDemoManual()
         session.reviewedSteps[0]!.correction = null
         await renderGuide(session)
-        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual([])
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
+        expect(screen.getAllByText(session.reviewedSteps[0]!.title)).toHaveLength(1)
     })
 
-    it('shows a saved direction that is only the step title once, unnumbered', async () => {
+    it('shows a saved step title once, numbered as the first direction', async () => {
         const session = createDemoManual()
         const step = session.reviewedSteps[0]!
-        // An unclassified saved step with no actions: its title is the one required direction.
+        // An unclassified saved step with no actions: its title opens the Directions.
         step.safetyNotes = null
         step.correction = null
         await renderGuide(session)
         expect(screen.getAllByText(step.title)).toHaveLength(1)
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))[0]).toBe('1.')
+        expect(shownTexts().indexOf(step.title)).toBeGreaterThan(shownTexts().indexOf('1.'))
+    })
+
+    it('speaks each numbered direction as one item: its step number, then the exact instruction', async () => {
+        await renderGuide(sessionWithActions(ACTIONS))
+        ACTIONS.forEach((instruction, index) => {
+            expect(screen.getByLabelText(`Step ${index + 1}, ${instruction}`)).toBeTruthy()
+        })
+        expect(shownTexts()).toEqual(expect.arrayContaining(ACTIONS))
+    })
+
+    it('reports the Check your work disclosure as expanded, and collapses it on press', async () => {
+        await renderGuide(sessionWithActions(ACTIONS))
+        const check = screen.getByRole('button', { name: 'Check your work' })
+        expect(check.props.accessibilityState).toMatchObject({ expanded: true })
+        await fireEvent.press(check)
+        expect(screen.getByRole('button', { name: 'Check your work' }).props.accessibilityState).toMatchObject({
+            expanded: false,
+        })
+    })
+
+    it('leaves a compatibility document with no stepActions echo unnumbered, and it still verifies', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const document = composeGuide(session, undefined, true)
+        expect(document.metadata.stepActions).toBeUndefined()
+        expect(verifyDocumentAgainstInputsV2(document, guideInputs(session), sha256Hex)).toEqual([])
+        await renderGuide(session, undefined, true)
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual([])
+    })
+
+    it('draws a section source opener after its last numbered direction, even when a citation comes first', async () => {
+        await renderGuide(sessionWithActions(ACTIONS), (proposal) => {
+            const insertCitation = (node: ScreenNodeV2): void => {
+                if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Directions')
+                    node.children.unshift({ type: 'Citation', sources: [0], label: null, display: 'chip' })
+                else if ('children' in node) node.children.forEach(insertCitation)
+            }
+            insertCitation(proposal.body)
+        })
+        const texts = shownTexts()
+        // A caption-sized opener: its visible words are either the full opener or its short form.
+        const openers = texts.flatMap((text, index) => (text === OPENER || text === 'Manual page' ? [index] : []))
+        expect(openers).toHaveLength(1)
+        expect(openers[0]).toBeGreaterThan(texts.indexOf('3.'))
+        expect(openers[0]).toBeLessThan(texts.indexOf('Check your work'))
     })
 
     it('shows the step title once when the step has actions', async () => {
@@ -193,7 +254,7 @@ describe('step directions', () => {
 
     it('renders the manual opener as a small caption, never as a heading', async () => {
         await renderGuide(sessionWithActions(ACTIONS))
-        const openers = screen.getAllByRole('button', { name: OPENER })
+        const openers = screen.getAllByRole('link', { name: OPENER })
         expect(openers.length).toBeGreaterThan(0)
         for (const opener of openers) expect(within(opener).queryByRole('header')).toBeNull()
         expect(screen.queryByRole('header', { name: OPENER })).toBeNull()
@@ -204,7 +265,7 @@ describe('step directions', () => {
             if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
             proposal.body.children.push(partPictures(false))
         })
-        expect(screen.getAllByRole('button', { name: 'Part pictures' })).toHaveLength(1)
+        expect(screen.getAllByRole('link', { name: 'Part pictures' })).toHaveLength(1)
     })
 
     it('combines adjacent openers for distinct regions of the same page outside sections', async () => {
@@ -225,7 +286,7 @@ describe('step directions', () => {
                 })),
             )
         })
-        const openers = screen.getAllByRole('button', { name: 'Part pictures' })
+        const openers = screen.getAllByRole('link', { name: 'Part pictures' })
         expect(openers).toHaveLength(1)
         const missingPictures = screen.queryAllByText('This manual picture is unavailable.').length
         await fireEvent.press(openers[0]!)
@@ -267,7 +328,7 @@ describe('step directions', () => {
             proposal.body = wrapPart(proposal.body)
             expect(wrapped).toBe(true)
         })
-        const opener = screen.getByRole('button', { name: 'Part pictures' })
+        const opener = screen.getByRole('link', { name: 'Part pictures' })
         const missingPictures = screen.queryAllByText('This manual picture is unavailable.').length
         await fireEvent.press(opener)
         expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(missingPictures + 2)
@@ -278,8 +339,8 @@ describe('step directions', () => {
             if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
             proposal.body.children.push(partPictures(true))
         })
-        expect(screen.queryAllByRole('button', { name: 'Part pictures' })).toHaveLength(0)
+        expect(screen.queryAllByRole('link', { name: 'Part pictures' })).toHaveLength(0)
         await fireEvent.press(screen.getByRole('button', { name: 'Pictures' }))
-        expect(screen.getAllByRole('button', { name: 'Part pictures' })).toHaveLength(1)
+        expect(screen.getAllByRole('link', { name: 'Part pictures' })).toHaveLength(1)
     })
 })

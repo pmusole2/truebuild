@@ -52,7 +52,7 @@ describe('manual trust boundaries', () => {
         expect(manualSessionSchema.safeParse(value).success).toBe(false)
     })
 
-    it('round-trips optional source-backed step actions and enforces count, length and identity bounds', () => {
+    it('round-trips optional source-backed step actions and normalizes count and length while enforcing identity and evidence bounds', () => {
         const step = demo().reviewedSteps[0]!
         const action = { actionId: 'a1', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }
         const withActions = { ...step, actions: [action] }
@@ -64,16 +64,11 @@ describe('manual trust boundaries', () => {
                 actions: Array.from({ length: 6 }, (_, i) => ({
                     ...action,
                     actionId: `a${i}`,
-                    instruction: 'x'.repeat(90),
+                    instruction: 'x'.repeat(120),
                 })),
             }).success,
         ).toBe(true)
-        for (const actions of [
-            Array.from({ length: 7 }, (_, i) => ({ ...action, actionId: `a${i}` })),
-            [{ ...action, instruction: 'x'.repeat(91) }],
-            [action, action],
-            [{ ...action, sourceRefs: [] }],
-        ]) {
+        for (const actions of [[action, action], [{ ...action, sourceRefs: [] }]]) {
             expect(manualStepSchema.safeParse({ ...step, actions }).success).toBe(false)
         }
         const session = demo()

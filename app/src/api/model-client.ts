@@ -3,6 +3,7 @@ import { documentUnavailable, postDocuments } from './document-client'
 import { aiConsent } from '../features/consent/consent-runtime'
 import type { AiConsentStore } from '../features/consent/consent-store'
 import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
+import { outgoingManualSession } from './outgoing-session'
 import {
     checkResultSchema,
     LIMITS,
@@ -1279,7 +1280,7 @@ function screenMetadata(request: ScreenRequest, requestId: string): unknown {
                     request.session === null
                         ? null
                         : { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
-                session: request.session,
+                session: request.session === null ? null : outgoingManualSession(request.session),
                 stepId: request.stepId,
                 captureId: request.captureId,
                 result: request.result,
@@ -1292,7 +1293,7 @@ function screenMetadata(request: ScreenRequest, requestId: string): unknown {
                 ...base,
                 op: 'precompute',
                 binding: { kind: 'manual', manualId: request.session.manualId, revision: request.session.revision },
-                session: request.session,
+                session: outgoingManualSession(request.session),
                 focusStepId: request.focusStepId,
             }
         case 'progress':

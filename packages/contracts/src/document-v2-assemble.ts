@@ -93,6 +93,7 @@ export function assembleDocumentV2(
     )
     const metadata: DocumentMetadataV2 = {
         source: about.source,
+        ...(inputs.kind === 'guide' && !material.legacyDirections ? { stepActions: 1 as const } : {}),
         origins,
         sourceMap: sourceMapV2(shell),
         evidence: about.evidence,

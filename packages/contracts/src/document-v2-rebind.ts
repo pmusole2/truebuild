@@ -159,12 +159,14 @@ export function rebindGeneratedStatesV2(
 ): RebindResult {
     const unchanged: RebindResult = { document: target, carried: [] }
     if (target.metadata.source !== 'fallback' || target.kind !== inputs.kind) return unchanged
-    const usable = donors.filter(usableDonor)
+    const usable = donors.filter(
+        (donor) => usableDonor(donor) && donor.metadata.stepActions === target.metadata.stepActions,
+    )
     if (usable.length === 0) return unchanged
     // The target must be exactly the deterministic document of these inputs; otherwise there is nothing to rebind to.
     if (verifyDocumentAgainstInputsV2(target, inputs, deps.sha256Hex).length > 0) return unchanged
 
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, target.metadata.stepActions !== 1)
     const wanted = new Set(options.states ?? VARIANT_STATES)
     let current = target
     let carriedStates: CarriedStatesV2 = { ...target.metadata.carried }

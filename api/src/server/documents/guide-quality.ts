@@ -1,8 +1,8 @@
 import {
-    isManualCheckFact,
+    manualChecksInitiallyOpen,
+    manualDirectionGroups,
     canonicalJson,
     guideHeaderTextV2,
-    isManualDirectionFact,
     visitVariantNodesV2,
     type ScreenNodeV2,
     type ScreenProposalV2,
@@ -15,6 +15,7 @@ export function guideQualityIssues(proposal: ScreenProposalV2, context: Document
     if (context.inputs.kind !== 'guide') return []
     const issues: string[] = []
     const legacy = context.material.legacyDirections === true
+    const groups = manualDirectionGroups(context.material.facts)
     const boundHeader = legacy
         ? [proposal.header.title, proposal.header.subtitle].some(
               (ref) => ref?.kind === 'bound' && ref.key === 'step-title',
@@ -28,12 +29,27 @@ export function guideQualityIssues(proposal: ScreenProposalV2, context: Document
                 ? fact.kind !== 'safety' &&
                   fact.kind !== 'title' &&
                   (fact.basis === 'direction' || fact.basis === 'unclassified-step')
-                : isManualDirectionFact(fact),
+                : groups.directions.includes(fact),
         )
         .map((fact) => fact.factId)
     const seen: string[] = []
     let occurrences = 0
+    const pendingSafety = new Set(
+        context.material.facts.filter((fact) => fact.kind === 'safety').map((fact) => fact.factId),
+    )
+    let safetyMisplaced = false
     visitVariantNodesV2(proposal, '', ({ node, hidden, path }) => {
+        if (path.startsWith('body')) {
+            if (node.type === 'Text' && node.content.kind === 'fact' && pendingSafety.has(node.content.factId)) {
+                if (hidden) safetyMisplaced = true
+                pendingSafety.delete(node.content.factId)
+            } else if (
+                pendingSafety.size > 0 &&
+                (['Image', 'ManualPage', 'PieceTile', 'PieceViewer', 'PiecesGrid', 'Progress'].includes(node.type) ||
+                    (node.type === 'Text' && node.content.kind === 'fact'))
+            )
+                safetyMisplaced = true
+        }
         if (
             path.startsWith('body') &&
             node.type === 'Text' &&
@@ -61,15 +77,19 @@ export function guideQualityIssues(proposal: ScreenProposalV2, context: Document
         issues.push('guide_quality:instruction_text_missing')
         return issues
     }
+    if (safetyMisplaced || pendingSafety.size > 0) issues.push('guide_quality:safety_not_leading')
     if (legacy) return issues
-    const checks = new Set(context.material.facts.filter(isManualCheckFact).map((fact) => fact.factId))
+    const checks = new Set(groups.checks.map((fact) => fact.factId))
     const checked = new Set<string>()
     let misplaced = false
     let repeatedTitle = false
     const inspect = (node: ScreenNodeV2, inChecks = false, inDirections = false): void => {
         if (node.type === 'Section') {
             const title = node.title?.kind === 'literal' ? node.title.text : null
-            inChecks ||= title === 'Check your work' && node.collapsible && !node.initiallyOpen
+            inChecks ||=
+                title === 'Check your work' &&
+                node.collapsible &&
+                node.initiallyOpen === manualChecksInitiallyOpen(context.material.step)
             inDirections ||= title === 'Directions'
         }
         if (node.type === 'Text') {

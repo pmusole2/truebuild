@@ -26,6 +26,7 @@ import {
     interpretDocuments,
 } from '../../api/document-client'
 import type { ModelApiClient } from '../../api/model-client'
+import { outgoingInputs } from '../../api/outgoing-session'
 import { sha256Hex } from '../documents/sha256'
 import { recordedDocument } from './recorded-runtime'
 import { isResultLayoutDocument } from './result-layout-runtime'
@@ -75,10 +76,11 @@ const MAX_ENTRIES = DOCUMENT_CACHE_MAX_ENTRIES
 export const DOCUMENT_COLLECTION_DEADLINE_MS = 120_000
 
 export function documentKey(inputs: ScreenContextInputsV2): string {
+    const outgoing = outgoingInputs(inputs)
     return sha256Hex(
         canonicalJson([
-            screenContextJsonV2(inputs),
-            inputs.session === null ? null : screenManualJsonV2(inputs.session),
+            screenContextJsonV2(outgoing),
+            outgoing.session === null ? null : screenManualJsonV2(outgoing.session),
         ]),
     )
 }
@@ -241,7 +243,8 @@ export class DocumentStore {
         )
             return null
         const { document } = donor
-        const material = documentMaterialV2(inputs)
+        // The donor's body is reused, so the material must be composed in the same layout mode the donor was.
+        const material = documentMaterialV2(outgoingInputs(inputs), document.metadata.stepActions !== 1)
         const proposal = withShellStatesV2(material, {
             header: document.header,
             body: document.body,
@@ -706,7 +709,7 @@ export class DocumentStore {
             uiState: held.uiState,
             ...(held.hasStepPieces ? { stepPieces: stepPiecesForStep(session, stepId) } : {}),
         }
-        return held.screen.contextKey === sha256Hex(screenContextJsonV2(current)) ? held.screen : null
+        return held.screen.contextKey === sha256Hex(screenContextJsonV2(outgoingInputs(current))) ? held.screen : null
     }
     dispose(): void {
         if (this.disposed) return

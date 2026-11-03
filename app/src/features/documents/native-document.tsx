@@ -27,7 +27,7 @@ import {
     SCREEN_WAIT_COPY_V2,
     screenFacts,
     citationPlanV2,
-    isManualDirectionFact,
+    manualDirectionGroups,
     sourceKeyV2,
     variantsOfV2,
     visitVariantNodesV2,
@@ -99,6 +99,7 @@ const preparingAction = (bindings: FrameBindings, intent: ScreenVariantV2['bar']
 const FIXTURE_LABEL = 'Test fixture'
 // At accessibility text sizes the manual-page opener keeps to one line; its full wording stays the accessibility label.
 const MANUAL_OPENER = 'See it in the manual'
+const NO_MOVED_OPENERS: ReadonlySet<string> = new Set()
 const MANUAL_OPENER_SHORT = 'Manual page'
 const TIMING_LABELS = {
     timeToProviderMs: 'Before provider',
@@ -187,6 +188,10 @@ type Environment = {
     citations: Readonly<Record<string, CitationPlanEntryV2>>
     /** Number of each shown action in Directions (by node path); the list reads 1, 2, 3 in document order. */
     actionNumbers: Readonly<Record<string, number>>
+    /** Drawn source openers that a plain-action Guide shows after its section's last numbered direction, by section path. */
+    relocated: Readonly<Record<string, readonly RelocatedOpener[]>>
+    /** Paths of those relocated openers: they draw in their section's tail, never where they were authored. */
+    movedOpeners: ReadonlySet<string>
     planSources: readonly DocumentSourceV2[]
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
@@ -423,9 +428,10 @@ function duplicateFactPaths(
 }
 
 /**
- * The Guide's procedure actions, numbered 1, 2, 3 in document order by the shared direction rule. The saved title
- * direction and reviewed fixes take no number, and a repeat already omitted takes none either. Only the number is
- * added; the instruction's own words are shown unchanged.
+ * The Guide's Directions, numbered 1, 2, 3 in document order. The numbered facts are exactly the shared Directions group
+ * of the document's facts, so the renderer never infers which fact is a direction. A repeat already omitted takes no
+ * number. Only the number is added; the instruction's own words are shown unchanged. A compatibility document (no
+ * `stepActions` echo) keeps its own layout and is never numbered here.
  */
 function actionNumbers(
     document: ScreenDocumentV2,
@@ -434,16 +440,57 @@ function actionNumbers(
     omitted: ReadonlySet<string>,
 ): Record<string, number> {
     const numbers: Record<string, number> = {}
-    if (document.kind !== 'guide') return numbers
+    if (document.kind !== 'guide' || document.metadata.stepActions !== 1) return numbers
+    const directions = new Set(manualDirectionGroups(document.facts).directions.map((fact) => fact.factId))
     let next = 0
     visitVariantNodesV2(variant, prefix, ({ node, path, hidden }) => {
         if (hidden || !path.startsWith(`${prefix}body`) || omitted.has(path) || node.type !== 'Text') return
         if (node.content.kind !== 'fact') return
-        const factId = node.content.factId
-        const fact = document.facts.find((item) => item.factId === factId)
-        if (fact !== undefined && isManualDirectionFact(fact) && fact.factId !== 'title') numbers[path] = ++next
+        if (directions.has(node.content.factId)) numbers[path] = ++next
     })
     return numbers
+}
+
+type RelocatedOpener = { readonly path: string; readonly node: ScreenNodeV2 }
+
+/**
+ * A plain-action Guide draws each section's source opener once, after that section's last numbered direction, however the
+ * layout interleaves the citations. Only the opener that already draws is moved; its page and region do not change.
+ * Compatibility documents (no `stepActions` echo) keep their authored order.
+ */
+function relocatedOpeners(
+    document: ScreenDocumentV2,
+    variant: ScreenVariantV2,
+    prefix: string,
+    citations: Readonly<Record<string, CitationPlanEntryV2>>,
+    numbers: Readonly<Record<string, number>>,
+    omitted: ReadonlySet<string>,
+): { relocated: Record<string, RelocatedOpener[]>; moved: ReadonlySet<string> } {
+    const relocated: Record<string, RelocatedOpener[]> = {}
+    const moved = new Set<string>()
+    if (document.kind !== 'guide' || document.metadata.stepActions !== 1) return { relocated, moved }
+    const sections: string[] = []
+    const openers: RelocatedOpener[] = []
+    visitVariantNodesV2(variant, prefix, ({ node, path, hidden }) => {
+        if (hidden || !path.startsWith(`${prefix}body`) || omitted.has(path)) return
+        if (node.type === 'Section') sections.push(path)
+        else if (
+            (node.type === 'ManualPage' || (node.type === 'Citation' && node.display !== 'thumbnail')) &&
+            (citations[path]?.show.length ?? 0) > 0
+        )
+            openers.push({ path, node })
+    })
+    const numbered = Object.keys(numbers)
+    for (const opener of openers) {
+        const scope = sections.reduce(
+            (best, section) => (opener.path.startsWith(`${section}.`) && section.length > best.length ? section : best),
+            '',
+        )
+        if (scope === '' || !numbered.some((path) => path.startsWith(`${scope}.`))) continue
+        relocated[scope] = [...(relocated[scope] ?? []), opener]
+        moved.add(opener.path)
+    }
+    return { relocated, moved }
 }
 
 /**
@@ -865,15 +912,18 @@ function Disclosure({
 }): ReactElement {
     const [localOpen, setOpen] = useState(initiallyOpen)
     const large = useLargeText()
+    const { colors } = useTheme()
     const open = controlledOpen ?? localOpen
     const shown = large && title === MANUAL_OPENER ? MANUAL_OPENER_SHORT : title
     return (
         <View nativeID={mark} style={styles.stack}>
             <Pressable
                 testID="fact-source"
-                accessibilityRole="button"
+                accessibilityRole={opener === true ? 'link' : 'button'}
                 accessibilityLabel={title}
-                accessibilityState={{ expanded: open || forced === true }}
+                // A safety section is always open and cannot be collapsed; its state says so.
+                accessibilityState={{ expanded: open || forced === true, disabled: forced === true }}
+                aria-expanded={open || forced === true}
                 disabled={forced}
                 onPress={(): void => {
                     setOpen(!open)
@@ -881,9 +931,33 @@ function Disclosure({
                 }}
                 style={styles.touch}
             >
-                {opener === true ? <Caption>{shown}</Caption> : <Heading>{shown}</Heading>}
+                {opener === true ? (
+                    <SourceLinkText>{shown}</SourceLinkText>
+                ) : (
+                    <View style={styles.sectionTitle}>
+                        <Heading>{shown}</Heading>
+                        {forced === true ? null : (
+                            <View style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}>
+                                <Icon name="chevronRight" size="sm" color={colors.inkMuted} />
+                            </View>
+                        )}
+                    </View>
+                )}
             </Pressable>
             {open || forced === true ? children : null}
+        </View>
+    )
+}
+
+/** A source opener reads as a link: accent-coloured, underlined, with an arrow that points to the manual page. */
+function SourceLinkText({ children }: { children: string }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View style={styles.sourceLink}>
+            <Caption tone="accent" style={styles.underlined}>
+                {children}
+            </Caption>
+            <Icon name="arrowRight" size="sm" color={colors.accentInk} />
         </View>
     )
 }
@@ -1459,13 +1533,15 @@ function PieceTile({
                 <>
                     <Pressable
                         testID="fact-source"
-                        accessibilityRole="button"
+                        accessibilityRole="link"
                         accessibilityLabel={open ? `Hide the manual page: ${label}` : `${MANUAL_OPENER}: ${label}`}
                         accessibilityState={{ expanded: open }}
                         onPress={(): void => setOpen(!open)}
                         style={styles.touch}
                     >
-                        <Caption>{open ? 'Hide the manual page' : large ? MANUAL_OPENER_SHORT : MANUAL_OPENER}</Caption>
+                        <SourceLinkText>
+                            {open ? 'Hide the manual page' : large ? MANUAL_OPENER_SHORT : MANUAL_OPENER}
+                        </SourceLinkText>
                     </Pressable>
                     {open ? (
                         <SourceDiagrams refs={links} session={session} pageUris={bindings.pageUris} fit="page" />
@@ -1635,7 +1711,15 @@ function NodeContent({
                     {children}
                 </View>
             )
-        case 'Section':
+        case 'Section': {
+            const tail = (environment.relocated[path] ?? []).map((opener) => (
+                <Node
+                    key={opener.path}
+                    node={opener.node}
+                    environment={{ ...environment, movedOpeners: NO_MOVED_OPENERS }}
+                    path={opener.path}
+                />
+            ))
             return node.collapsible ? (
                 <Disclosure
                     title={text(node.title)}
@@ -1646,13 +1730,16 @@ function NodeContent({
                     mark={mark}
                 >
                     {children}
+                    {tail}
                 </Disclosure>
             ) : (
                 <View nativeID={mark} style={styles.stack}>
                     {node.title === null ? null : <Heading>{text(node.title)}</Heading>}
                     {children}
+                    {tail}
                 </View>
             )
+        }
         case 'Scroll':
             return (
                 <ViewerScrollView
@@ -1724,7 +1811,12 @@ function NodeContent({
                     {number === undefined ? (
                         line
                     ) : (
-                        <View style={styles.numbered}>
+                        // Grouped so a screen reader speaks one item; the visible number and words are unchanged.
+                        <View
+                            style={styles.numbered}
+                            accessible
+                            accessibilityLabel={`Step ${number}, ${text(node.content)}`}
+                        >
                             <Typography tone="muted" style={{ textAlign: 'left' }}>
                                 {`${number}.`}
                             </Typography>
@@ -1786,7 +1878,9 @@ function NodeContent({
             )
         case 'Citation':
         case 'ManualPage':
-            return <Sources node={node} environment={environment} path={path} />
+            return environment.movedOpeners.has(path) ? null : (
+                <Sources node={node} environment={environment} path={path} />
+            )
         case 'Image': {
             if (node.source.kind === 'capture')
                 return (
@@ -2222,6 +2316,24 @@ export function NativeDocumentRenderer({
             )
                 headerDuplicatePaths.add(path)
         })
+    const numbers = actionNumbers(document, selected.variant, selected.prefix, omitted)
+    const citations = oneOpenerPerSection(
+        plannedVariant,
+        selected.prefix,
+        citationPlanV2(plannedVariant, selected.prefix, planSources, {
+            includeManualPages: true,
+            lowPriorityPaths,
+        }),
+        planSources,
+    )
+    const { relocated, moved } = relocatedOpeners(
+        document,
+        selected.variant,
+        selected.prefix,
+        citations,
+        numbers,
+        omitted,
+    )
     const environment: Environment = {
         document,
         bindings,
@@ -2230,7 +2342,9 @@ export function NativeDocumentRenderer({
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
         omittedDuplicates: omitted,
-        actionNumbers: actionNumbers(document, selected.variant, selected.prefix, omitted),
+        actionNumbers: numbers,
+        relocated,
+        movedOpeners: moved,
         planSources,
         sections,
         sectionChanged: (path, open): void => {
@@ -2239,15 +2353,7 @@ export function NativeDocumentRenderer({
                 values: { ...(held.id === bodyPage ? held.values : {}), [path]: open },
             }))
         },
-        citations: oneOpenerPerSection(
-            plannedVariant,
-            selected.prefix,
-            citationPlanV2(plannedVariant, selected.prefix, planSources, {
-                includeManualPages: true,
-                lowPriorityPaths,
-            }),
-            planSources,
-        ),
+        citations,
         leading: null,
         trailing: null,
         guidePillPaths: new Set<string>(),
@@ -2466,6 +2572,9 @@ const styles = StyleSheet.create({
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     numbered: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
     numberedText: { flex: 1, minWidth: 0 },
+    sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
+    sourceLink: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: space.xxs },
+    underlined: { textDecorationLine: 'underline' },
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },
     touch: { minHeight: touchTarget, justifyContent: 'center', alignSelf: 'stretch', flexShrink: 0 },

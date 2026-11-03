@@ -313,18 +313,18 @@ describe('the plan over complete documents keeps every mandatory citation witnes
 
     it('keeps independent disclosures useful on a complete guide without hiding its mandatory safety', () => {
         const inputs = inputsFor('guide')
-        // The disclosures cite a check region, independent of the visible procedure sources.
+        // The disclosures cite a reviewed-fix region, independent of the visible procedure and warning sources.
         const optionalRef = { pageId: 'demo-page-1', region: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }
-        const orientation = inputs.session!.reviewedSteps[0]!.orientation
-        if (orientation.state !== 'known') throw new Error('fixture orientation must be known')
-        orientation.sourceRefs.push(optionalRef)
+        const correction = inputs.session!.reviewedSteps[0]!.correction
+        if (correction === null) throw new Error('fixture correction must be reviewed')
+        correction.actions[0]!.sourceRefs.push(optionalRef)
         inputs.session!.reviewedSteps[0]!.safetyNotes = [
             {
                 noteId: 'n1',
                 note: { state: 'known', value: SAFETY, sourceRefs: [{ pageId: 'demo-page-1', region: box }] },
             },
         ]
-        const material = documentMaterialV2(inputs)
+        const material = documentMaterialV2(inputs, false)
         const optionalPage = material.sources.findIndex((source) => sourceKeyV2(source) === sourceKeyV2(optionalRef))
         expect(optionalPage).toBeGreaterThanOrEqual(0)
         const proposal = buildFallbackProposalV2(material)

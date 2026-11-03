@@ -51,6 +51,24 @@ describe('screens request', () => {
         expect(init.headers).toMatchObject({ 'x-truebuild-key': 'public-demo-key-for-tests' })
     })
 
+    it('sends no unreviewed correction text and leaves the saved session exactly as it was', async () => {
+        const proposed = 'A proposed fix that no person has reviewed.'
+        const unreviewed = {
+            reviewed: false,
+            actions: [
+                { actionId: 'proposed', instruction: proposed, sourceRefs: session.reviewedSteps[0]!.sourceRefs },
+            ],
+        }
+        const saved = structuredClone(session)
+        saved.reviewedSteps[0] = { ...saved.reviewedSteps[0]!, correction: unreviewed }
+        const before = structuredClone(saved)
+        const fetch = vi.fn<ModelFetch>(async () => Response.json(ok(makeDocument())))
+        await client(fetch).screens({ ...generate, session: saved }, { requestId: 'r1' })
+        const form = fetch.mock.calls[0]![1].body as FormData
+        expect(String(form.get('metadata'))).not.toContain(proposed)
+        expect(saved).toEqual(before)
+    })
+
     it('accepts a document for exactly the identity it asked for and returns the fixture mode untouched', async () => {
         const fetch = vi.fn<ModelFetch>(async () => Response.json(ok(makeDocument())))
         const result = await client(fetch).screens(generate, { requestId: 'r1' })

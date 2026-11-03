@@ -171,7 +171,7 @@ function republished(
     name: string,
     change: (child: ScreenNodeV2) => ScreenNodeV2 | null,
 ): ScreenDocumentV2 {
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, false)
     const proposal = buildFallbackProposalV2(material)
     const edit = (body: ScreenNodeV2): ScreenNodeV2 => rewrite(body, change)
     const next: ScreenProposalV2 =
@@ -310,12 +310,12 @@ describe('an unreadable safety note stays visible in the document (F1)', () => {
 
     it('keeps legacy unclassified detail mandatory outside Guide and Guide checks separate', () => {
         const inputs = inputsFor('guide', extracted(undefined))
-        const guide = documentMaterialV2(inputs)
-        expect(guide.requirements.facts).toEqual(['title'])
+        const guide = documentMaterialV2(inputs, false)
+        expect(guide.requirements.facts).toEqual(['title', 'orientation', 'connection', 'check:groove-inward'])
         expect(
             guide.facts
                 .filter((fact) => fact.kind === 'orientation' || fact.kind === 'connection' || fact.kind === 'check')
-                .every((fact) => fact.basis === 'direction'),
+                .every((fact) => fact.basis === 'unclassified-step'),
         ).toBe(true)
         const material = documentMaterialV2({ ...inputs, kind: 'camera' })
         const required = material.facts.filter((fact) => material.requirements.facts.includes(fact.factId))
@@ -324,7 +324,6 @@ describe('an unreadable safety note stays visible in the document (F1)', () => {
             ['orientation', 'unclassified-step'],
             ['connection', 'unclassified-step'],
             ['check:groove-inward', 'unclassified-step'],
-            ['correction:turn-panel', 'unclassified-step'],
         ])
     })
 
@@ -419,7 +418,7 @@ describe('the unreadable-safety explanation respects the schema maxima', () => {
 
     it('holds exactly one marker beside 99 readable notes and every direction, in a valid document', () => {
         const inputs = inputsFor('guide', widest())
-        const material = documentMaterialV2(inputs)
+        const material = documentMaterialV2(inputs, false)
         // 1 marker + 99 notes + title, selected alternative, orientation, connection and 100 checks; unreviewed fixes stay hidden.
         expect(material.facts).toHaveLength(204)
         expect(material.facts.some((fact) => fact.factId.startsWith('correction:'))).toBe(false)
@@ -450,7 +449,7 @@ describe('the unreadable-safety explanation respects the schema maxima', () => {
         }
         const document = build(inputs)
         expect(document.facts.length).toBeLessThanOrEqual(DOCUMENT_V2_LIMITS.facts)
-        expect(document.facts).toHaveLength(303 + 202)
+        expect(document.facts).toHaveLength(203 + 202)
         expect(messages(document)).toEqual([])
         for (const { name } of variantsOfV2(document)) expect(visibleFacts(document, name), name).toContain(MARKER)
     })

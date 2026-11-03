@@ -1,7 +1,7 @@
 import {
     SCREEN_CATALOG_V2_VERSION,
     assembleDocumentV2,
-    isManualDirectionFact,
+    manualDirectionGroups,
     canonicalJson,
     buildFallbackProposalV2,
     manualDirectionFacts,
@@ -659,7 +659,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     ? fact.kind !== 'safety' &&
                       fact.kind !== 'title' &&
                       (fact.basis === 'direction' || fact.basis === 'unclassified-step')
-                    : isManualDirectionFact(fact),
+                    : manualDirectionGroups(context.material.facts).directions.includes(fact),
             )
         ) {
             // No authored Guide can meet its instruction floor without inventing a direction: skip the paid call.

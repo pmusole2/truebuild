@@ -31,7 +31,7 @@ import {
     type ScreenContextInputsV2,
 } from './document-v2-context'
 import { completionWitnessed } from './screen-context'
-import { isManualCheckFact, manualDirectionFacts, unresolvedSafetyNotes } from './screen-facts'
+import { manualDirectionFacts, unresolvedSafetyNotes } from './screen-facts'
 import { screenFacts } from './screen-context'
 import type { AppIntent } from './screen'
 import type { ScreenKindV2, ScreenUiStateV2, TextRefV2 } from './document-v2'
@@ -45,7 +45,7 @@ export type VerdictV2 = 'pass' | 'refuse' | 'cannot_verify'
  */
 export interface DocumentMaterialV2 {
     inputs: ScreenContextInputsV2
-    /** Server-only compatibility mode; never added to the public document or request. */
+    /** Material chosen from the document capability echo, or explicitly by the producing server. */
     legacyDirections?: true
     step: ManualStep | null
     stepIndex: number
@@ -87,7 +87,7 @@ export interface DocumentMaterialV2 {
     diagram: number[]
 }
 
-/** One placement rule: saved titles are the single fallback direction; action manuals keep their title in the header. */
+/** One placement rule: saved titles lead their fallback directions; action manuals keep their title in the header. */
 export function guideHeaderTextV2(material: DocumentMaterialV2): Pick<HeaderV2, 'title' | 'subtitle'> {
     if (material.step === null) return { title: { kind: 'literal', text: 'This step' }, subtitle: null }
     const savedTitle = !material.legacyDirections && material.facts.some((fact) => fact.factId === 'title')
@@ -320,7 +320,7 @@ function usedInputs(raw: ScreenContextInputsV2): ScreenContextInputsV2 {
     }
 }
 
-export function documentMaterialV2(raw: ScreenContextInputsV2, legacyDirections = false): DocumentMaterialV2 {
+export function documentMaterialV2(raw: ScreenContextInputsV2, legacyDirections = true): DocumentMaterialV2 {
     const inputs = usedInputs(raw)
     const { session, result } = inputs
     const facts = screenFacts(session)
@@ -334,7 +334,7 @@ export function documentMaterialV2(raw: ScreenContextInputsV2, legacyDirections 
     const published: FactV2[] = manual.map((fact) => ({
         factId: fact.factId,
         kind: fact.kind,
-        basis: !legacyDirections && inputs.kind === 'guide' && isManualCheckFact(fact) ? 'direction' : fact.basis,
+        basis: fact.basis,
         text: fact.text,
         sourceRefs: fact.sourceRefs.slice(0, 100).map((ref) => ({ pageId: ref.pageId, region: ref.region })),
     }))

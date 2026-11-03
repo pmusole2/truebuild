@@ -119,7 +119,7 @@ describe('accessibility text sizes', () => {
         async (fontScale, shown) => {
             setWindow(390, fontScale)
             await renderWith([{ type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: false }])
-            const opener = screen.getByRole('button', { name: 'See it in the manual' })
+            const opener = screen.getByRole('link', { name: 'See it in the manual' })
             expect(opener.props.accessibilityLabel).toBe('See it in the manual')
             expect(screen.queryByRole('header', { name: shown })).toBeNull()
             expect(screen.getByText(shown)).toBeTruthy()

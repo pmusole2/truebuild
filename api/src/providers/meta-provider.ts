@@ -8,6 +8,7 @@ import {
 import { createHash } from 'node:crypto'
 import {
     standardModelSchema,
+    withoutUnreviewedCorrections,
     type StandardModel,
     captureBindingSchema,
     LIMITS,
@@ -498,11 +499,17 @@ function stepContext(input: CheckStepInput, step: ManualStep): Record<string, un
         throw new MetaProviderError('invalid_input')
     }
 
+    const safeSession = withoutUnreviewedCorrections(input.session)
+    const modelStep = (item: ManualStep): ManualStep => {
+        const projected = { ...item, correction: item.correction?.reviewed === true ? item.correction : null }
+        delete projected.actions
+        return projected
+    }
     return {
         requestId: input.requestId,
         binding: input.binding,
-        step,
-        plan: { steps: input.session.reviewedSteps },
+        step: modelStep(step),
+        plan: { steps: safeSession.reviewedSteps.map(modelStep) },
         parts: input.session.parts,
         ...(input.session.parsedLanguage === undefined ? {} : { language: input.session.parsedLanguage }),
         sourcePages: input.sourceImages.map((source): ManualPage => source.page),
@@ -697,7 +704,7 @@ const PARSE_PART_IDENTITIES =
     'Parse inventory identities: Keep separate registry entries for distinct printed inventory labels or variants, even when they share one caption or grouped drawing. A group labelled A*2 B*2 describes two variants with two of each, not one generic four-piece part; retain each label in its name and label field. Link the variants the procedure actually uses, not an umbrella duplicate such as a generic accessory when it refers to those same labelled pieces. For assembly, replacement and removal, include the depicted host or base onto which a part is installed or from which it is removed as a step part when the supplied drawing clearly shows it being used. Use its source-grounded inventory name and printed or clearly depicted quantity; reuse its existing ID and carried quantity in later steps. Never invent an unseen host, a variant, or a quantity.'
 /** Plain-language procedure, used only by parse; check/ask instruction bytes remain unchanged. */
 const PARSE_ACTIONS =
-    'Parse actions: Capture the procedure as actions [{actionId, instruction, sourceRefs}] in the selected reading language, with at most 6 entries and 90 characters per instruction. They become numbered steps in the order they happen, with one physical action per entry. Start each instruction with a verb. Aim for about 12 words or fewer, using everyday words and the parts list name, with quantities when they matter. Add a short until cue only when it helps someone know they are done. Stay faithful to the manual text and figure: use a clearly depicted motion when text is terse, but never invent a step, part or tool; when neither supplies a concrete motion, keep the supported wording. Never use inspection jargon such as seated, corresponding, as shown in completed view, present, installed onto or fixed on, or equivalent jargon in another language. Keep orientation, connection and visibleChecks as short completed-state checklist statements, separate from actions. Return correction: null when the manual prints no fix; never add no-action or a made-up fix. Every action needs a unique actionId and supporting supplied page sourceRefs.'
+    'Parse actions: Capture the procedure as actions [{actionId, instruction, sourceRefs}] in the selected reading language, with at most 6 actions and 120 characters per instruction. If a step needs more, group related motions into one action. They become numbered steps in the order they happen, with one physical action per entry. Start each instruction with a verb; conditional steps may start with If followed by the condition and a verb. Aim for about 12 words or fewer, using everyday words and the parts list name, with quantities when they matter. Add a short until cue only when it helps someone know they are done. Stay faithful to the manual text and figure: use a clearly depicted motion when text is terse, but never invent a step, part or tool; when neither supplies a concrete motion, keep the supported wording. Never use inspection jargon such as seated, corresponding, as shown in completed view, present, installed onto or fixed on, or equivalent jargon in another language. Keep orientation, connection and visibleChecks as short completed-state checklist statements, separate from actions. Return correction: null when the manual prints no fix; never add no-action or a made-up fix. Write repeated actions in full with the relevant parts and sides, rather than only Repeat step N. On wordless pages, read actions from the figure and name parts from the parts list or by shape and colour; never invent quantities that are not shown. If the figure and text disagree, follow the text and put the figure difference in a check, never an action. Every action needs a unique actionId and supporting supplied page sourceRefs.'
 const PARSE_INSTRUCTIONS =
     INSTRUCTION_LINES.flatMap((line): string[] =>
         line.startsWith('Parse carried quantities')
@@ -1177,6 +1184,27 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 }
 
                 deadline.checkpoint()
+                if (
+                    operation === 'parse' &&
+                    typeof parsed === 'object' &&
+                    parsed !== null &&
+                    'steps' in parsed &&
+                    Array.isArray(parsed.steps)
+                ) {
+                    const overflow = parsed.steps.reduce(
+                        (count: number, step: unknown) =>
+                            count +
+                            (typeof step === 'object' &&
+                            step !== null &&
+                            'actions' in step &&
+                            Array.isArray(step.actions)
+                                ? Math.max(0, step.actions.length - 6)
+                                : 0),
+                        0,
+                    )
+                    if (overflow > 0)
+                        console.info(JSON.stringify({ event: 'parse_actions_clamped', omittedActions: overflow }))
+                }
                 const validated = schema.safeParse(parsed)
                 deadline.checkpoint()
                 const telemetry = emit(Math.max(0, performance.now() - received))

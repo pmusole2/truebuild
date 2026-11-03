@@ -67,7 +67,7 @@ import {
 } from './document-v2-material'
 import { cameraAccessV2, moreScopedV2, resultOfKindV2, type ScreenContextInputsV2 } from './document-v2-context'
 import { assembleDocumentV2, type AssembleDeps, type DocumentFacts } from './document-v2-assemble'
-import { isManualCheckFact, isManualDirectionFact } from './screen-facts'
+import { manualChecksInitiallyOpen, manualDirectionGroups } from './screen-facts'
 import type { AppIntent, ScreenIcon } from './screen'
 
 type Node = ScreenNodeV2
@@ -111,7 +111,7 @@ const card = (children: Node[], tone: Tone = 'neutral'): Node => ({
     padding: 'md',
     children,
 })
-const section = (title: string | null, children: Node[], collapsed = false): Node => ({
+const section = (title: string | null, children: Node[], collapsed = false): Extract<Node, { type: 'Section' }> => ({
     type: 'Section',
     title: title === null ? null : lit(title),
     collapsible: collapsed,
@@ -302,11 +302,9 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
     const optional = manual.filter((fact) => !isSafety(fact) && !requiredIds.has(fact.factId))
     const guide = material.inputs.kind === 'guide'
     if (guide && !material.legacyDirections) {
-        const directions = manual.filter(isManualDirectionFact)
-        const checks = manual.filter(isManualCheckFact)
-        const detail = manual.filter(
-            (fact) => !isSafety(fact) && !isManualDirectionFact(fact) && !isManualCheckFact(fact),
-        )
+        const { directions, checks } = manualDirectionGroups(manual)
+        const grouped = new Set([...directions, ...checks])
+        const detail = manual.filter((fact) => !isSafety(fact) && !grouped.has(fact))
         return [
             ...(safety.length > 0
                 ? [section('Safety', nest(pack(entries(safety, true), (children) => card(children, 'caution'))))]
@@ -315,7 +313,16 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
                 ? [section('Directions', nest(pack(entries(directions, false), (children) => card(children))))]
                 : []),
             ...(checks.length > 0
-                ? [section('Check your work', nest(pack(entries(checks, false), (children) => card(children))), true)]
+                ? [
+                      {
+                          ...section(
+                              'Check your work',
+                              nest(pack(entries(checks, false), (children) => card(children))),
+                              true,
+                          ),
+                          initiallyOpen: manualChecksInitiallyOpen(material.step),
+                      },
+                  ]
                 : []),
             ...(detail.length > 0
                 ? [
@@ -706,15 +713,21 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
                     : []),
             ]
         }
-        case 'guide':
+        case 'guide': {
+            const facts = factNodes(material, true)
+            const safety = facts.filter(
+                (node) => node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Safety',
+            )
             return [
+                ...safety,
                 ...heroImage(material),
                 // Keep the step heading readable beside the actual source-backed direction facts below it.
                 ...(material.legacyDirections && material.step !== null ? [text(bound('step-title'))] : []),
                 ...(material.step === null ? [] : [{ type: 'Progress', binding: 'step', label: null } as Node]),
                 ...partNodes(material),
-                ...factNodes(material, true),
+                ...facts.filter((node) => !safety.includes(node)),
             ]
+        }
         case 'camera': {
             const access = cameraAccessV2(ui?.camera)
             if (access !== 'ready') {
@@ -1220,7 +1233,8 @@ export function buildFallbackDocumentV2(
     deps: AssembleDeps & { reason: FallbackReasonV2; evidence: DocumentMetadataV2['evidence'] },
     observed: FallbackObservedV2 = {},
 ): ScreenDocumentV2 {
-    const material = documentMaterialV2(inputs)
+    // A local producer explicitly opts in and emits the same layout echo as the capable server.
+    const material = documentMaterialV2(inputs, false)
     return assembleDocumentV2(
         material,
         buildFallbackProposalV2(material, deps.reason),

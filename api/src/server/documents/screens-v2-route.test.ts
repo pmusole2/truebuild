@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
     SCREEN_KINDS_V2,
     buildFallbackProposalV2,
+    verifyDocumentAgainstInputsV2,
     type ScreenContextInputsV2,
     type ScreenKindV2,
 } from '@truebuild/contracts'
@@ -83,6 +84,8 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
         async (query) => {
             const app = fixtureApp({ GENERATIVE_UI: 'off' })
             const inputs = documentInputs('guide', demoSession({ safety: false }))
+            const step = inputs.session!.reviewedSteps[0]!
+            step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
             const response = await send(app, generate(inputs), { query })
             const result = screensV2ResultSchema.parse(await response.json())
             if (result.status !== 'ok') throw new Error('expected ok')
@@ -91,6 +94,8 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
             expect(result.value.document!.facts).toEqual(expected.facts)
             expect(result.value.document!.requirements).toEqual(expected.requirements)
             expect(result.value.document!.sources).toEqual(expected.sources)
+            expect(result.value.document!.metadata.stepActions).toBe(capable ? 1 : undefined)
+            expect(verifyDocumentAgainstInputsV2(result.value.document!, inputs, sha256Hex)).toEqual([])
         },
     )
 

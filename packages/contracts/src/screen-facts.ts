@@ -26,13 +26,52 @@ export function isManualDirectionFact(fact: Pick<ManualFact, 'factId'>): boolean
     return fact.factId === 'title' || fact.factId.startsWith('action:')
 }
 
-/** Completed conditions are checks, never procedure instructions. */
+/** Completed conditions are checks when explicit actions supply the procedure. */
 export function isManualCheckFact(fact: { kind: string }): boolean {
     return fact.kind === 'orientation' || fact.kind === 'connection' || fact.kind === 'check'
 }
 
+/** One grouping rule for saved procedures and newly extracted actions, shared by every Guide producer. */
+export function manualDirectionGroups<T extends { factId: string; kind: string }>(
+    facts: readonly T[],
+): { directions: T[]; checks: T[] } {
+    const hasActions = facts.some((fact) => fact.factId.startsWith('action:'))
+    return {
+        directions: facts.filter(
+            (fact) =>
+                isManualDirectionFact(fact) ||
+                (!hasActions && (fact.kind === 'orientation' || fact.kind === 'connection')),
+        ),
+        checks: facts.filter((fact) => (hasActions ? isManualCheckFact(fact) : fact.kind === 'check')),
+    }
+}
+
+/** Unknown safety classification and all printed warnings stay open; only an explicitly empty list may fold. */
+export function manualChecksInitiallyOpen(step: ManualStep | null): boolean {
+    return step?.safetyNotes == null || step.safetyNotes.length > 0
+}
+
+/** Model input projection: an unreviewed fix is never instruction evidence. */
+export function withoutUnreviewedCorrections(session: ManualSession): ManualSession {
+    const steps = (items: ManualStep[]): ManualStep[] =>
+        items.map((step) =>
+            step.correction !== null && !step.correction.reviewed ? { ...step, correction: null } : step,
+        )
+    return {
+        ...session,
+        reviewedSteps: steps(session.reviewedSteps),
+        rawExtraction:
+            session.rawExtraction === null
+                ? null
+                : {
+                      ...session.rawExtraction,
+                      steps: steps(session.rawExtraction.steps),
+                  },
+    }
+}
+
 /**
- * The procedure is the supplied actions, or the title for saved steps without them. Completed conditions remain
+ * The procedure is the supplied actions, or the title, orientation and connection for saved steps without them. Completed conditions remain
  * separate facts, and only reviewed fixes are available. Legacy mode is solely the server's old-client projection.
  * Explicit safety and unclassified detail keep their conservative non-Guide requirements.
  */
@@ -116,7 +155,7 @@ export function manualDirectionFacts(session: ManualSession, stepId: string, leg
             })
         }
     }
-    for (const action of (legacy || step.correction?.reviewed === true ? step.correction?.actions : []) ?? []) {
+    for (const action of (step.correction?.reviewed === true ? step.correction.actions : []) ?? []) {
         facts.push({
             factId: `correction:${action.actionId}`,
             kind: 'correction',

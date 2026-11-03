@@ -152,11 +152,14 @@ test('a complete document owns the frame; off stays local and full publishes hon
     await expect(
         page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
     ).toBeVisible()
-    // The saved procedure stays visible; completed conditions belong behind their own collapsed checklist.
+    // Saved title, orientation and connection stay visible; this classified fixture starts its checks closed.
     const guide = page.getByTestId('guide-screen')
     await expect(guide.getByText('Stand the side panel upright', { exact: true })).toBeVisible()
-    await expect(guide.getByText('Groove faces inward toward the divider.', { exact: true })).not.toBeVisible()
-    await guide.getByRole('button', { name: 'Check your work', exact: true }).click()
+    await expect(guide.getByText('Groove faces inward toward the divider.', { exact: true })).toBeVisible()
+    const checks = guide.getByRole('button', { name: 'Check your work', exact: true })
+    await expect(checks).toHaveAttribute('aria-expanded', 'false')
+    await checks.click()
+    await expect(checks).toHaveAttribute('aria-expanded', 'true')
     await expect(guide.getByText('Groove faces inward toward the divider.', { exact: true })).toBeVisible()
     if (mode !== 'off') {
         expect(documentRequests).toBeGreaterThan(0)

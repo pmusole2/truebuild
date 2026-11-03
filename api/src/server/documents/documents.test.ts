@@ -30,6 +30,7 @@ import { metaOutputSchemas } from '../../providers/meta-schemas'
 import { documentInputs, demoSession, fullUi, SAFETY_NOTE } from '../../test-support/document-inputs'
 import { aiPolicyFromEnvironment } from '../ai-policy'
 import type { BackgroundWork } from '../screens/service'
+import { buildContext as buildLegacyContext } from '../screens/context'
 import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
 import sparseGuides from './fixtures/guide-wire-replay.json'
@@ -887,7 +888,7 @@ describe('Guide usability floor', () => {
         const view = context.view.dynamic.document as Record<string, unknown>
         expect(view).not.toHaveProperty('instructionText')
         const directions = bodyTextRefSchema.array().parse(view.directionFacts)
-        expect(directions).toEqual([{ kind: 'fact', factId: 'title' }])
+        expect(directions).toEqual(['title', 'orientation', 'connection'].map((factId) => ({ kind: 'fact', factId })))
         expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
@@ -966,7 +967,7 @@ describe('Guide usability floor', () => {
         expect(guideQualityIssues(omitted, context)).toContain('guide_quality:instruction_text_missing')
         const exposed = altered((node) =>
             node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Check your work'
-                ? { ...node, initiallyOpen: true }
+                ? { ...node, initiallyOpen: false }
                 : node,
         )
         expect(guideQualityIssues(exposed, context)).toEqual(['guide_quality:checks_not_separate'])
@@ -991,6 +992,77 @@ describe('Guide usability floor', () => {
         }
         expect(guideQualityIssues(repeated, context)).toEqual(['guide_quality:title_repeated'])
     })
+
+    it('never sends an unreviewed fix to either document layout or the legacy screens model', () => {
+        const session = demoSession({ safety: false })
+        const step = session.reviewedSteps[0]!
+        step.correction = {
+            reviewed: false,
+            actions: [
+                {
+                    actionId: 'unreviewed',
+                    instruction: 'Unreviewed fix must never reach a model.',
+                    sourceRefs: step.sourceRefs,
+                },
+            ],
+        }
+        session.reviewStatus = 'unreviewed'
+        session.rawExtraction = {
+            parts: session.parts,
+            steps: session.reviewedSteps.map((item) => ({
+                ...item,
+                correction: item.correction === null ? null : { ...item.correction, reviewed: false },
+            })),
+            unknowns: [],
+        }
+        session.reviewedSteps = []
+        const inputs = {
+            kind: 'guide' as const,
+            session,
+            stepId: step.stepId,
+            captureId: null,
+            result: null,
+            failure: null,
+        }
+        expect(manualSessionSchema.safeParse(session).success).toBe(true)
+        for (const legacy of [false, true]) {
+            expect(JSON.stringify(buildDocumentContext(inputs, legacy).view)).not.toContain(
+                'Unreviewed fix must never reach a model.',
+            )
+        }
+        expect(JSON.stringify(buildLegacyContext(inputs).view)).not.toContain(
+            'Unreviewed fix must never reach a model.',
+        )
+    })
+
+    it.each([false, true])(
+        'keeps warning facts first and visible before figures, parts and progress (legacy=%s)',
+        (legacy) => {
+            const context = buildDocumentContext(documentInputs('guide', demoSession()), legacy)
+            const proposal = buildFallbackProposalV2(context.material)
+            expect(guideQualityIssues(proposal, context)).toEqual([])
+            if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
+            const content = proposal.body.children[0]
+            if (content?.type !== 'Stack') throw new Error('fixture content must stack')
+            const [safety, ...rest] = content.children
+            if (safety?.type !== 'Section') throw new Error('safety must be first')
+            const below = {
+                ...proposal,
+                body: { ...proposal.body, children: [{ ...content, children: [...rest, safety] }] },
+            }
+            expect(guideQualityIssues(below, context)).toContain('guide_quality:safety_not_leading')
+            const folded = {
+                ...proposal,
+                body: {
+                    ...proposal.body,
+                    children: [
+                        { ...content, children: [{ ...safety, collapsible: true, initiallyOpen: false }, ...rest] },
+                    ],
+                },
+            }
+            expect(guideQualityIssues(folded, context)).toContain('guide_quality:safety_not_leading')
+        },
+    )
 
     it('keeps a reviewed fix separate while using the saved title as its procedure', async () => {
         // Reduced shape of .local/prompt11/final/reviewed-session.json: no richer removal procedure was retained.

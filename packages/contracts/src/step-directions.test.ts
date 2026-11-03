@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
     buildFallbackProposalV2,
     documentMaterialV2,
-    isManualCheckFact,
-    isManualDirectionFact,
+    manualChecksInitiallyOpen,
+    manualDirectionGroups,
     manualDirectionFacts,
     manualSessionSchema,
     requiredManualFacts,
@@ -44,7 +44,7 @@ describe('one source-backed Directions rule across recorded manuals', () => {
         session.reviewedSteps = []
         expect(manualSessionSchema.safeParse(session).success).toBe(true)
         expect(requiredManualFacts(session, step.stepId).some((fact) => fact.factId === 'correction:legacy-fix')).toBe(
-            true,
+            false,
         )
         expect(manualDirectionFacts(session, step.stepId).some((fact) => fact.factId === 'correction:legacy-fix')).toBe(
             false,
@@ -90,10 +90,17 @@ describe('one source-backed Directions rule across recorded manuals', () => {
             }
             expect(manualSessionSchema.safeParse(session).success).toBe(true)
             const facts = manualDirectionFacts(session, step.stepId)
-            const expected = row.actions ? row.instructions : [step.title]
-            expect(facts.filter(isManualDirectionFact).map((fact) => fact.text)).toEqual(expected)
+            const groups = manualDirectionGroups(facts)
+            const expected = row.actions
+                ? row.instructions
+                : [
+                      step.title,
+                      ...(step.orientation.state === 'known' ? [step.orientation.value.description] : []),
+                      ...(step.connection.state === 'known' ? [step.connection.value.description] : []),
+                  ]
+            expect(groups.directions.map((fact) => fact.text)).toEqual(expected)
             expect(facts.some((fact) => fact.factId.startsWith('correction:'))).toBe(false)
-            const material = documentMaterialV2(forStep(session, step.stepId))
+            const material = documentMaterialV2(forStep(session, step.stepId), false)
             const proposal = buildFallbackProposalV2(material)
             expect(proposal.header.title).toEqual({ kind: 'bound', key: 'step-position' })
             expect(proposal.header.subtitle).toEqual(row.actions ? { kind: 'bound', key: 'step-title' } : null)
@@ -109,19 +116,17 @@ describe('one source-backed Directions rule across recorded manuals', () => {
                 descendants(node).flatMap((child) =>
                     child.type === 'Text' && child.content.kind === 'fact' ? [child.content.factId] : [],
                 )
-            expect(ids(directions)).toEqual(facts.filter(isManualDirectionFact).map((fact) => fact.factId))
+            expect(ids(directions)).toEqual(groups.directions.map((fact) => fact.factId))
             const directionSources = descendants(directions).flatMap((node) =>
                 node.type === 'Citation' ? node.sources : [],
             )
             expect(directionSources).toEqual(
                 expect.arrayContaining(
-                    sourceResolverV2(material.sources)(
-                        facts.filter(isManualDirectionFact).flatMap((fact) => fact.sourceRefs),
-                    ),
+                    sourceResolverV2(material.sources)(groups.directions.flatMap((fact) => fact.sourceRefs)),
                 ),
             )
-            expect(checks).toMatchObject({ collapsible: true, initiallyOpen: false })
-            expect(ids(checks)).toEqual(facts.filter(isManualCheckFact).map((fact) => fact.factId))
+            expect(checks).toMatchObject({ collapsible: true, initiallyOpen: manualChecksInitiallyOpen(step) })
+            expect(ids(checks)).toEqual(groups.checks.map((fact) => fact.factId))
             expect(ids(directions).some((id) => ids(checks).includes(id))).toBe(false)
             expect(material.facts.some((fact) => fact.text === 'Unreviewed fix must stay hidden.')).toBe(false)
         },

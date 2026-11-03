@@ -17,7 +17,7 @@ export function verifyDocumentAgainstInputsV2(
     sha256Hex?: (text: string) => string,
     options: WaitCompatibilityV2 = {},
 ): string[] {
-    const material = documentMaterialV2(inputs)
+    const material = documentMaterialV2(inputs, document.metadata.stepActions !== 1)
     const { identity } = screenContextPartsV2(inputs)
     const issues = new Set<string>()
     if (document.kind !== inputs.kind) issues.add('kind_mismatch')

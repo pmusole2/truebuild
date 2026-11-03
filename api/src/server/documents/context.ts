@@ -9,8 +9,8 @@ import {
     guideHeaderTextV2,
     intentAllowedV2,
     manualDisplayTitleV2,
-    isManualCheckFact,
-    isManualDirectionFact,
+    manualChecksInitiallyOpen,
+    manualDirectionGroups,
     resultOfKindV2,
     screenContentJsonV2,
     screenContextJsonV2,
@@ -96,6 +96,7 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2, legacyDirect
         contextKey: sha256(screenContextJsonV2(inputs)),
     }
     const step = material.step
+    const groups = manualDirectionGroups(material.facts)
     const partNames = new Map(
         (facts?.parts ?? []).flatMap((part) => (part.name.state === 'known' ? [[part.partId, part.name.value]] : [])),
     )
@@ -151,13 +152,14 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2, legacyDirect
                                       ? fact.kind !== 'safety' &&
                                         fact.kind !== 'title' &&
                                         (fact.basis === 'direction' || fact.basis === 'unclassified-step')
-                                      : isManualDirectionFact(fact),
+                                      : groups.directions.includes(fact),
                               )
                               .map((fact) => ({ kind: 'fact', factId: fact.factId })),
                           ...(!legacyDirections
                               ? {
+                                    checkInitiallyOpen: manualChecksInitiallyOpen(step),
                                     checkFacts: material.facts
-                                        .filter(isManualCheckFact)
+                                        .filter((fact) => groups.checks.includes(fact))
                                         .map((fact) => ({ kind: 'fact', factId: fact.factId })),
                                 }
                               : {}),

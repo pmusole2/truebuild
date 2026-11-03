@@ -843,7 +843,7 @@ it('the main document ends a failed manual picture read instead of keeping a loa
         await act(async () => controller.open('navigation-manual', 'guide'))
         await waitFor(() => expect(controller.getSnapshot().storageReadOnly).toBe(true))
         expect(await screen.findByText('This manual picture is unavailable.')).toBeTruthy()
-        await fireEvent.press((await screen.findAllByRole('button', { name: 'See it in the manual' }))[0]!)
+        await fireEvent.press((await screen.findAllByRole('link', { name: 'See it in the manual' }))[0]!)
         expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
         expect(screen.queryByText('Loading page…')).toBeNull()
         expect(calls).toHaveLength(0)

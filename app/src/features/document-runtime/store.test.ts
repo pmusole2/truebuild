@@ -15,7 +15,7 @@ import {
     type ScreenDocumentV2,
 } from '@truebuild/contracts'
 import type { ScreensV2Result } from '@truebuild/contracts/model'
-import { inputsFromDocumentMetadata } from '../../api/document-client'
+import { documentMatchesInputs, inputsFromDocumentMetadata } from '../../api/document-client'
 import type { ModelApiClient } from '../../api/model-client'
 import { sha256Hex } from '../documents/sha256'
 import { DOCUMENT_CACHE_MAX_BYTES, DocumentStore, localDocument } from './store'
@@ -34,7 +34,7 @@ const inputs: ScreenContextInputsV2 = {
     failure: null,
 }
 const fixture = (request: ScreenContextInputsV2): ScreenDocumentV2 => {
-    const material = documentMaterialV2(request)
+    const material = documentMaterialV2(request, false)
     return screenDocumentV2Schema.parse(
         assembleDocumentV2(
             material,
@@ -226,6 +226,49 @@ describe('whole-document runtime store', () => {
         }
     })
 
+    it.each([true, false])(
+        'preserves a network Guide during activity after outgoing correction projection (legacy=%s)',
+        async (legacy) => {
+            const manual = createDemoManual()
+            const raw = manual.rawExtraction!.steps[0]!
+            raw.correction = {
+                reviewed: false,
+                actions: [
+                    { actionId: 'proposal', instruction: 'A proposal awaiting review.', sourceRefs: raw.sourceRefs },
+                ],
+            }
+            const idle: ScreenContextInputsV2 = { ...inputs, session: manual }
+            const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) => {
+                const material = documentMaterialV2(inputsFromDocumentMetadata(metadata), legacy)
+                return ok(
+                    assembleDocumentV2(
+                        material,
+                        buildFallbackProposalV2(material),
+                        { source: 'generated', evidence: 'synthetic-fixture', fallbackReason: null },
+                        { sha256Hex, now: () => new Date('2026-01-01T00:00:00Z') },
+                    ),
+                    metadata.requestId,
+                )
+            })
+            const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'activity' })
+            try {
+                store.request(idle)
+                await vi.waitFor(() => expect(store.peek(idle)?.document.metadata.source).toBe('generated'))
+                const donor = store.peek(idle)!.document
+                expect(store.peek(inputsFromDocumentMetadata(screensV2.mock.calls[0]![0]))?.document).toBe(donor)
+                const busy = { ...idle, uiState: { busy: { activity: 'working' as const } } }
+                const preview = store.preview(busy).document
+                expect(preview.metadata.source).toBe('generated')
+                expect(preview.body).toEqual(donor.body)
+                expect(preview.metadata.stepActions).toBe(legacy ? undefined : 1)
+                expect(documentMatchesInputs(preview, busy)).toBe(true)
+                expect(screensV2).toHaveBeenCalledTimes(1)
+                expect(manual.rawExtraction!.steps[0]!.correction?.reviewed).toBe(false)
+            } finally {
+                store.dispose()
+            }
+        },
+    )
     it('keeps an individually oversized local document complete and uncached without dispatching or occupying a warmup flight', () => {
         const screensV2 = successful()
         const store = new DocumentStore({

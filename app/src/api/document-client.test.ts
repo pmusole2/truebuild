@@ -23,6 +23,7 @@ import { MODEL_ROUTE_TIMEOUT_MAX_MS, type ScreensV2Result, screensV2GenerateRequ
 import { createHeroResponse } from '@truebuild/contracts/hero'
 import { sha256Hex } from '../features/documents/sha256'
 import { MODEL_STEP_PAGE_TIMEOUT_MS, ModelApiClient, type ModelFetch } from './model-client'
+import { outgoingManualSession } from './outgoing-session'
 import {
     DOCUMENT_RESPONSE_MAX_BYTES,
     documentJobContextKey,
@@ -306,7 +307,7 @@ describe('v2 document transport', () => {
                 expect(fetch).toHaveBeenCalledTimes(1)
                 const sent = JSON.parse(String((fetch.mock.calls[0]![1].body as FormData).get('metadata')))
                 expect(sent).toEqual(request)
-                expect(sent.manualHash).toBe(sha256Hex(screenManualJsonV2(session)))
+                expect(sent.manualHash).toBe(sha256Hex(screenManualJsonV2(outgoingManualSession(session))))
             }
             const request = documentRequest(
                 { ...common, op: 'progress', want: [], jobContextKey: progress.contextKey },

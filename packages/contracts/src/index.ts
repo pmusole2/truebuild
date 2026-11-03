@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { boundedActionInstruction, projectManualSessionExtensions } from './manual-session-extensions'
 import { parseLanguageSchema } from './reading-language'
 
 import { layoutSchema } from './layout'
@@ -157,11 +158,11 @@ export const manualStepSchema = z
             .array(
                 z.strictObject({
                     actionId: idSchema,
-                    instruction: z.string().trim().min(1).max(90),
+                    instruction: z.string().trim().min(1).transform(boundedActionInstruction),
                     sourceRefs: knownSourceRefsSchema,
                 }),
             )
-            .max(6)
+            .transform((actions) => actions.slice(0, 6))
             .nullable()
             .optional(),
         kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove']).nullable().optional(),
@@ -462,7 +463,7 @@ function allSourceRefs(parts: ManualPart[], steps: ManualStep[]): SourceRef[] {
     ]
 }
 
-export const manualSessionSchema = z
+const strictManualSessionSchema = z
     .strictObject({
         manualId: idSchema,
         title: titleSchema,
@@ -530,6 +531,12 @@ export const manualSessionSchema = z
             }
         }
     })
+
+/** Keep the shape available to page schemas while projecting future optional fields before strict validation. */
+export const manualSessionSchema = Object.assign(
+    z.preprocess((value) => projectManualSessionExtensions(value), strictManualSessionSchema),
+    { shape: strictManualSessionSchema.shape },
+)
 
 export type ManualSession = z.infer<typeof manualSessionSchema>
 
@@ -767,3 +774,5 @@ export * from './document-v2-layout-template-compile'
 export * from './overlay-job-fixtures'
 export * from './piece-spec'
 export * from './piece-generation'
+
+export * from './manual-session-extensions'

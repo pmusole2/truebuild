@@ -1265,9 +1265,12 @@ describe('mandatory manual facts stay visible whatever happened to the document'
         const text = orientation.state === 'known' ? orientation.value.description : null
         expect(text).not.toBeNull()
         expect(screen.getByText(value.session.reviewedSteps[0]!.title)).toBeTruthy()
-        expect(screen.queryByText(text!)).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: 'Check your work' }))
-        expect(await screen.findByText(text!)).toBeTruthy()
+        expect(screen.getByText(text!)).toBeTruthy()
+        const checks = screen.getByRole('button', { name: 'Check your work' })
+        expect(checks.props.accessibilityState.expanded).toBe(true)
+        await fireEvent.press(checks)
+        expect(screen.getByRole('button', { name: 'Check your work' }).props.accessibilityState.expanded).toBe(false)
+        expect(screen.getByText(text!)).toBeTruthy()
     })
 
     it('keeps safety visible once in the complete local document when generation is off', async () => {
