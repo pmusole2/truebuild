@@ -79,7 +79,7 @@ import {
     providerVerdictSchema,
     metaVerdictOutputSchema,
 } from './meta-schemas'
-import { DOCUMENT_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
+import { DOCUMENT_INSTRUCTIONS, DOCUMENT_LANGUAGE_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
 import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
 import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
@@ -893,6 +893,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         const streamingParse = operation === 'parse' && model === 'muse-spark-1.3'
         const { requestId, binding, step, question, target, dynamic, ...stable } = context
         const language = typeof stable.language === 'string' ? stable.language : undefined
+        const documentLanguage =
+            operation === 'document'
+                ? z.object({ document: z.object({ language: parseLanguageSchema }) }).safeParse(dynamic)
+                : undefined
         const operationInstructions =
             operation === 'parse'
                 ? PARSE_INSTRUCTIONS
@@ -901,7 +905,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                   : operation === 'pieces'
                     ? PIECE_GEOMETRY_INSTRUCTIONS
                     : operation === 'document'
-                      ? DOCUMENT_INSTRUCTIONS
+                      ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
+                          ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
+                          : DOCUMENT_INSTRUCTIONS
                       : operation === 'overlay'
                         ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
                         : withLayout

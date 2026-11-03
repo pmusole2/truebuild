@@ -1,4 +1,9 @@
-import type { BusyActivityV2, ScreenContextInputsV2, ScreenKindV2 } from '@truebuild/contracts'
+import {
+    READING_LANGUAGE_CODES,
+    type BusyActivityV2,
+    type ScreenContextInputsV2,
+    type ScreenKindV2,
+} from '@truebuild/contracts'
 import { captureUiState, homeUiState, moreUiState, pagesUiState, reviewUiState } from '../screens/ui-state'
 import { publishableResult } from '../screens/screen-spec'
 import type { QuickProgress } from '../screens/quick-progress'
@@ -88,7 +93,7 @@ export function documentInputs(
                                       ...(moreContext ? (held ? captureUiState(state) : { capture: null }) : {}),
                                       ...(entry === undefined
                                           ? {}
-                                          : { language: { options: ['en', 'es', 'fr', 'de', 'pt-BR'] } }),
+                                          : { language: { options: [...READING_LANGUAGE_CODES] } }),
                                       settings: { storage: true as const },
                                   }
                                 : {}),

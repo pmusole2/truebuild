@@ -1,12 +1,7 @@
-const names: Readonly<Record<string, string>> = {
-    en: 'English',
-    es: 'Spanish',
-    fr: 'French',
-    de: 'German',
-    'pt-BR': 'Portuguese',
-}
+import { READING_LANGUAGES } from '@truebuild/contracts'
+
 export function languageName(code: string): string {
-    return names[code] ?? code
+    return READING_LANGUAGES.find((language) => language.code === code)?.label ?? code
 }
 export function rereadPrompt(session: {
     readingLanguage?: string

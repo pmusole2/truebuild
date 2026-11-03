@@ -1,4 +1,4 @@
-import type { ScreenKind, ScreenUiState } from '@truebuild/contracts'
+import { READING_LANGUAGE_CODES, type ScreenKind, type ScreenUiState } from '@truebuild/contracts'
 import { reviewedSession, type WorkflowState } from '../capture/controller'
 import type { LibraryEntry } from '../capture/library'
 import { stopFor } from '../capture/plain-copy'
@@ -9,9 +9,6 @@ import { manualDisplayTitle } from '../documents/manual-title'
 const MAX_TITLE = 200
 const MAX_REASON = 500
 const MAX_QUESTION_PARTS = 12
-
-/** The reading languages the Add screen offers; the codes are the ones the reader already accepts. */
-export const READING_LANGUAGE_CODES = ['en', 'es', 'fr', 'de', 'pt-BR'] as const
 
 const clip = (text: string, max: number): string => Array.from(text).slice(0, max).join('')
 

@@ -147,6 +147,16 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
             }),
         ).toBe(true)
     }
+    // Keep the short-phone flow above/below; use extra height only to frame all requested capture content at 320px.
+    await page.getByTestId('close-sheet').click()
+    await expect(sheet).toBeHidden()
+    await page.setViewportSize({ width: 320, height: 844 })
+    await openMore(page)
+    await sheet.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(sheet.getByText('Manual language', { exact: true })).toBeVisible()
+    await expect(sheet.getByText('The language TrueBuild reads and writes in', { exact: true })).toBeVisible()
+    await picker.locator('..').evaluate((element) => element.scrollIntoView({ block: 'center' }))
+    await page.screenshot({ path: '.local/prompt17b/more-manual-language-320.png' })
     await picker.getByRole('radio', { name: 'Portuguese', exact: true }).click()
     await expect(
         sheet.getByText(
@@ -156,9 +166,11 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
     ).toBeVisible()
     await expect(picker.getByRole('radio', { name: 'Portuguese', exact: true })).toBeChecked()
     expect(parses).toBe(1)
-    await picker.evaluate((element) => element.scrollIntoView({ block: 'center' }))
-    await picker.screenshot({ path: '.local/prompt17/settings-picker-320.png' })
-    await page.screenshot({ path: '.local/prompt17/settings-320.png' })
+    const reread = sheet.getByRole('button', { name: 'Re-read', exact: true })
+    await reread.evaluate((element) => element.parentElement?.scrollIntoView({ block: 'center' }))
+    await expect(reread).toBeVisible()
+    await page.screenshot({ path: '.local/prompt17b/reread-portuguese-320.png' })
+    await page.setViewportSize({ width: 320, height: 568 })
     await page.reload()
     await expect(page.getByTestId('guide-primary')).toBeVisible({ timeout: 60_000 })
     await openMore(page)

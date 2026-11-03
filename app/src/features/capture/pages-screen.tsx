@@ -277,7 +277,6 @@ export function PagesScreen({
                             editable={!state.storageReadOnly}
                         />
                         <Stack gap="xs">
-                            <Heading>Reading language</Heading>
                             <ReadingLanguagePicker
                                 label="Reading language"
                                 disabled={busy}

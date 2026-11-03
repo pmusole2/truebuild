@@ -1,17 +1,10 @@
 import type { ReactElement } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
+import { READING_LANGUAGES } from '@truebuild/contracts'
 import { useTheme } from '../theme/theme'
 import { radius, space, touchTarget } from '../theme/tokens'
 import { focusRingStyle, useFocusRing } from './focus'
-import { Body } from './text'
-
-const LANGUAGES = [
-    { value: 'en', label: 'English' },
-    { value: 'es', label: 'Spanish' },
-    { value: 'fr', label: 'French' },
-    { value: 'de', label: 'German' },
-    { value: 'pt-BR', label: 'Portuguese' },
-] as const
+import { Body, Caption } from './text'
 
 /** Stacked choices keep every language readable at phone widths and with larger text. */
 export function ReadingLanguagePicker({
@@ -26,16 +19,23 @@ export function ReadingLanguagePicker({
     readonly disabled?: boolean
 }): ReactElement {
     return (
-        <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.list}>
-            {LANGUAGES.map((option) => (
-                <LanguageChoice
-                    key={option.value}
-                    label={option.label}
-                    selected={value === option.value}
-                    disabled={disabled}
-                    onPress={(): void => onChange(option.value)}
-                />
-            ))}
+        <View style={styles.list}>
+            {/* The caption and hint are visual context; the radiogroup's label is what assistive tech announces. */}
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.list}>
+                <Caption>Manual language</Caption>
+                <Caption>The language TrueBuild reads and writes in</Caption>
+            </View>
+            <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.list}>
+                {READING_LANGUAGES.map((option) => (
+                    <LanguageChoice
+                        key={option.code}
+                        label={option.label}
+                        selected={value === option.code}
+                        disabled={disabled}
+                        onPress={(): void => onChange(option.code)}
+                    />
+                ))}
+            </View>
         </View>
     )
 }

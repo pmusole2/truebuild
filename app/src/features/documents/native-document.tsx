@@ -1729,7 +1729,12 @@ function NodeContent({
         case 'Choice':
             return (
                 <View nativeID={mark} style={styles.stack}>
-                    {node.prompt === null ? null : <Heading>{text(node.prompt)}</Heading>}
+                    {node.prompt === null ||
+                    (node.options.mode === 'bound' &&
+                        node.options.binding === 'language' &&
+                        bindings.language !== undefined) ? null : (
+                        <Heading>{text(node.prompt)}</Heading>
+                    )}
                     {node.options.mode === 'intents' ? (
                         node.options.items.map((item, index) => (
                             <Action

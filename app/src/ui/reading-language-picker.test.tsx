@@ -14,6 +14,10 @@ function Picker(): ReactElement {
 
 it('offers all five named languages as reachable radios and announces the selected choice', async () => {
     await render(<Picker />)
+    for (const copy of ['Manual language', 'The language TrueBuild reads and writes in']) {
+        expect(screen.queryByText(copy)).toBeNull()
+        expect(screen.getByText(copy, { includeHiddenElements: true })).toBeTruthy()
+    }
     for (const name of ['English', 'Spanish', 'French', 'German', 'Portuguese']) {
         expect(screen.getByRole('radio', { name })).toBeTruthy()
     }
