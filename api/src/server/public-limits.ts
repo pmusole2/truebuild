@@ -48,8 +48,10 @@ export class PublicModelCallCounter extends ModelCallCounter {
         return this.#calls
     }
 
-    runForClient<T>(request: Request, parse: boolean, work: () => T): T {
+    runForClient<T>(request: Request, parse: boolean, work: () => T, cacheOnly = false): T {
         return this.#client.run(clientIp(request), () => {
+            // Free result lookup must work after the last paid call. A real claim still checks this same client's quota.
+            if (cacheOnly && !parse) return work()
             const usage = this.#usage()
             this.#check(usage)
             if (parse) {

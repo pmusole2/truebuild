@@ -13,7 +13,7 @@ import {
     type ReactNode,
 } from 'react'
 import { AppState, Pressable, StyleSheet, View } from 'react-native'
-import { stepMotionSceneSchema, type StepMotionScene } from '@truebuild/contracts'
+import { stepMotionCopy, stepMotionSceneSchema, type StepMotionScene } from '@truebuild/contracts'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { BlueprintLoader } from '../../ui/blueprint-loader'
 import { useFeedback } from '../../ui/feedback'
@@ -30,7 +30,6 @@ const VIEWPORT_HEIGHT = 200
 const MIN_FRAME_MS = 1000 / 30 - 1
 // The piece viewer's startup window: a surface that never delivers a context resolves to nothing instead of a blank box.
 const STARTUP_MS = 5_000
-const LOADING_LABEL = 'Showing how it moves'
 // Scene identity changes restart the GL surface; a module counter keeps each identity's key unique.
 let sceneGeneration = 0
 
@@ -56,6 +55,7 @@ export type StepMotionHintProps = {
     readonly scene: unknown
     readonly loading?: boolean
     readonly active?: boolean
+    readonly readingLanguage?: string
     readonly onActionIndex?: (actionIndex: number | null) => void
 }
 
@@ -110,9 +110,11 @@ export function StepMotionHint({
     scene,
     loading = false,
     active = true,
+    readingLanguage = 'en',
     onActionIndex,
 }: StepMotionHintProps): ReactElement | null {
     const { colors } = useTheme()
+    const copy = stepMotionCopy(readingLanguage)
     const { reduceMotion } = useFeedback()
     const appActive = useAppActive()
     const parsed = useMemo(() => parseScene(scene), [scene])
@@ -268,7 +270,7 @@ export function StepMotionHint({
         if (!loading) return null
         return (
             <View testID="step-motion-hint" style={styles.root}>
-                <BlueprintLoader phase="piece" label={LOADING_LABEL} compact height={VIEWPORT_HEIGHT} />
+                <BlueprintLoader phase="piece" label={copy.loading} compact height={VIEWPORT_HEIGHT} />
             </View>
         )
     }
@@ -284,7 +286,7 @@ export function StepMotionHint({
                     <GLBoundary key={generation} onFail={fail}>
                         <Suspense
                             fallback={
-                                <BlueprintLoader phase="piece" label={LOADING_LABEL} compact height={VIEWPORT_HEIGHT} />
+                                <BlueprintLoader phase="piece" label={copy.loading} compact height={VIEWPORT_HEIGHT} />
                             }
                         >
                             <LazyGLView style={styles.gl} onContextCreate={create} onLayout={redraw} />
@@ -293,7 +295,7 @@ export function StepMotionHint({
                 ) : null}
             </View>
             <Caption>{parsed.caption}</Caption>
-            <Caption>Approximate</Caption>
+            <Caption>{copy.approximate}</Caption>
             {replayable ? (
                 <Pressable
                     testID="step-motion-replay"

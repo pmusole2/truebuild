@@ -67,11 +67,22 @@ async function appState(status: AppStateStatus): Promise<void> {
     })
 }
 
-function ui(props: { scene: unknown; reduceMotion?: boolean; active?: boolean }): React.JSX.Element {
+function ui(props: {
+    scene: unknown
+    reduceMotion?: boolean
+    active?: boolean
+    readingLanguage?: string
+    loading?: boolean
+}): React.JSX.Element {
     return (
         <ThemeProvider>
             <FeedbackProvider reduceMotion={props.reduceMotion ?? false}>
-                <StepMotionHint scene={props.scene} active={props.active ?? true} />
+                <StepMotionHint
+                    scene={props.scene}
+                    active={props.active ?? true}
+                    readingLanguage={props.readingLanguage}
+                    loading={props.loading}
+                />
             </FeedbackProvider>
         </ThemeProvider>
     )
@@ -148,6 +159,17 @@ it('renders nothing when no context arrives within the startup window', async ()
     expect(screen.getByTestId('step-motion-hint')).toBeTruthy()
     await advance(200)
     expect(screen.queryByTestId('step-motion-hint')).toBeNull()
+})
+
+it('uses the reading-language registry for loading and approximation copy, with an English fallback', async () => {
+    const view = await render(ui({ scene: null, loading: true, readingLanguage: 'fr' }))
+    expect(screen.getByText('Visualisation du mouvement')).toBeTruthy()
+    await view.rerender(ui({ scene, reduceMotion: true, readingLanguage: 'fr' }))
+    await createSurface()
+    expect(screen.getByText('Approximatif')).toBeTruthy()
+    expect(screen.queryByText('Approximate')).toBeNull()
+    await view.rerender(ui({ scene, reduceMotion: true, readingLanguage: 'zz' }))
+    expect(screen.getByText('Approximate')).toBeTruthy()
 })
 
 it('turning reduced motion off does not offer Replay before the three loops finish', async () => {

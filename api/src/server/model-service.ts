@@ -12,8 +12,10 @@ import {
     LIMITS,
     type ObservedCallTelemetry,
     manualSessionSchema,
+    manualStepSchema,
     matchesBinding,
     parsedManualSchema,
+    projectStepExtensions,
     requestedStepExtensions,
     sanitizeManualStepActions,
     questionResultSchema,
@@ -958,7 +960,7 @@ export function createModelHandlers(options: {
         }
     }
 
-    const parse = jsonHandler(
+    const parseRun = jsonHandler(
         parseRouteMetadataSchema,
         parsedManualSchema,
         policy.stages.parse.deadlineMs + PARSE_ROUTE_MARGIN_MS,
@@ -990,24 +992,34 @@ export function createModelHandlers(options: {
                 const publicValue = asPublic(value)
                 const query = new URL(request.url).searchParams
                 const removal = query.get('stepKinds') === 'remove'
-                const actions = requestedStepExtensions(query).has('actions')
+                const fields = requestedStepExtensions(query)
                 // Old installed clients have strict step schemas. Project only the response; preserve canonical data.
-                return {
+                return parsedManualSchema.parse({
                     ...publicValue,
-                    steps: publicValue.steps.map((step) => {
-                        const { actions: procedure, ...legacy } = step
-                        return {
-                            ...legacy,
-                            ...(actions && procedure !== undefined ? { actions: procedure } : {}),
+                    steps: publicValue.steps
+                        .map((step) => ({
+                            ...step,
                             ...(step.kind === 'remove' && !removal ? { kind: 'adjust' as const } : {}),
-                        }
-                    }),
-                }
+                        }))
+                        .map((step) => projectStepExtensions(step, fields)),
+                })
             },
             progress: true,
             deadlineFor: createParseDeadline,
         },
     )
+    const parse: Handler = async (request): Promise<Response> => {
+        const response = await parseRun(request)
+        if (response.ok) {
+            const fields = [...requestedStepExtensions(new URL(request.url).searchParams)].filter(
+                (name) => name in manualStepSchema.shape,
+            )
+            response.headers.set('x-truebuild-step-fields', fields.join(','))
+            response.headers.set('access-control-expose-headers', 'x-truebuild-step-fields')
+        }
+
+        return response
+    }
     const scopeHeaders = (metadata: ModelCheckMetadata): Record<string, string> => {
         const mode = options.checkContext ?? 'full'
         const selected =

@@ -41,7 +41,7 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
         (request) =>
-            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepFields=actions,sourceText` &&
             request.method() === 'POST',
         { timeout: 60_000 },
     )
@@ -79,8 +79,7 @@ async function addTwoPagesAndRead(page: Page): Promise<Response> {
     await page.getByRole('button', { name: 'Move page up', exact: true }).click()
     const parse = page.waitForResponse(
         (response) =>
-            response.url() ===
-                `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            response.url() === `${API}/api/manuals/parse?stepKinds=remove&stepFields=actions,sourceText` &&
             response.request().method() === 'POST',
     )
     await readManualWithConsent(page)
@@ -128,7 +127,7 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
     let parses = 0
     page.on('request', (request) => {
         if (
-            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            request.url() === `${API}/api/manuals/parse?stepKinds=remove&stepFields=actions,sourceText` &&
             request.method() === 'POST'
         ) {
             parses++
@@ -186,7 +185,7 @@ test('reading language: narrow Settings labels fit, choice survives reload, and 
     expect(parses).toBe(1)
     const response = page.waitForResponse(
         (result) =>
-            result.url() === `${API}/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=actions,sourceText` &&
+            result.url() === `${API}/api/manuals/parse?stepKinds=remove&stepFields=actions,sourceText` &&
             result.request().method() === 'POST',
     )
     await sheet.getByRole('button', { name: 'Re-read', exact: true }).click()

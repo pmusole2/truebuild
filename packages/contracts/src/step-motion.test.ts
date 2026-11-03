@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { stepMotionSceneSchema } from './step-motion'
+import { paddedStepFigureBox, stepMotionSceneSchema } from './step-motion'
+import { createDemoManual, manualStepSchema } from './index'
 
 const shape = {
     type: 'box',
@@ -21,6 +22,24 @@ const scene = (motion: unknown): object => ({
 })
 
 describe('step motion contract', () => {
+    it('keeps optional verbatim source text compatible with saved and wordless steps', () => {
+        const legacy = createDemoManual().rawExtraction!.steps[0]!
+        const sourceText = '  Tournez la pièce.\nSerrez-la.  '
+        expect(manualStepSchema.parse(legacy)).toEqual(legacy)
+        expect(manualStepSchema.parse({ ...legacy, sourceText }).sourceText).toBe(sourceText)
+        expect(manualStepSchema.parse({ ...legacy, sourceText: null }).sourceText).toBeNull()
+        expect(manualStepSchema.safeParse({ ...legacy, sourceText: 'x'.repeat(601) }).success).toBe(false)
+    })
+
+    it('accepts rounded unit axes without rewriting them and pads figure regions within the page', () => {
+        const rounded = scene({ ...motions[0], axis: [0.707, 0, 0.707] })
+        expect(stepMotionSceneSchema.parse(rounded)).toEqual(rounded)
+        const padded = paddedStepFigureBox([0.25, 0.25, 0.5, 0.5])
+        for (const [index, value] of [0.2, 0.2, 0.6, 0.6].entries()) expect(padded[index]).toBeCloseTo(value, 9)
+        const clipped = paddedStepFigureBox([0, 0.9, 0.2, 0.1])
+        expect(clipped[0]).toBe(0)
+        expect(clipped[1] + clipped[3]).toBe(1)
+    })
     it.each(motions)('accepts a bounded $kind scene and its finished geometry', (motion) => {
         expect(stepMotionSceneSchema.parse(scene(motion))).toEqual(scene(motion))
     })

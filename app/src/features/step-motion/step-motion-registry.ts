@@ -1,9 +1,11 @@
 import {
     canonicalJson,
+    paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionRequestSchema,
     stepMotionResultSchema,
     type ManualSession,
+    type ManualStep,
     type StepMotionRequest,
     type StepMotionScene,
 } from '@truebuild/contracts'
@@ -20,9 +22,29 @@ export function stepMotionCacheKey(request: StepMotionRequest, version = STEP_MO
     return `truebuild/step-motion/${sha256Hex(canonicalJson([request.manualHash, request.stepId, request.readingLanguage, version]))}`
 }
 
-function stringField(value: object, key: string): string | undefined {
-    const field: unknown = Reflect.get(value, key)
-    return typeof field === 'string' && field.length > 0 ? field : undefined
+/** A review action is plain text or an action object; each contributes its instruction text and anything else is ignored. */
+function actionTexts(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value.flatMap((action: unknown): string[] => {
+        const text: unknown =
+            typeof action === 'object' && action !== null ? Reflect.get(action, 'instruction') : action
+        return typeof text === 'string' && text.length > 0 ? [text] : []
+    })
+}
+
+/** Printed text outranks review actions, which outrank the raw title. Orientation and connection are sent separately. */
+function instructionTextOf(printed: string | null | undefined, actions: readonly string[], title: string): string {
+    if (printed !== null && printed !== undefined && printed.length > 0) return printed
+    return actions.length > 0 ? actions.join('\n') : title
+}
+
+/**
+ * The crop of the step's cited page: only its own cited region, padded. A whole-page citation sends no crop, so the
+ * server accepts it as the full page and no other picture on that page is selected.
+ */
+function figureBoxFor(step: ManualStep, pageId: string): [number, number, number, number] | null {
+    const region = step.sourceRefs.find((ref) => ref.pageId === pageId && ref.region !== null)?.region
+    return region ? paddedStepFigureBox([region.x, region.y, region.width, region.height]) : null
 }
 
 /** The raw parse remains the source. Supplementary directions never replace its printed text or figure citation. */
@@ -33,15 +55,15 @@ export function motionRequestForStep(
 ): StepMotionRequest | null {
     const step = session.rawExtraction?.steps.find((candidate) => candidate.stepId === stepId)
     if (step === undefined) return null
-    const ref = step.sourceRefs.find((candidate) => session.pages.some((page) => page.pageId === candidate.pageId))
+    // A cited region across all pages beats a whole-page citation, so the crop is never lost to an earlier full page.
+    const cited = step.sourceRefs.filter((candidate) => session.pages.some((page) => page.pageId === candidate.pageId))
+    const ref = cited.find((candidate) => candidate.region !== null) ?? cited[0]
     const page = session.pages.find((candidate) => candidate.pageId === ref?.pageId)
     if (ref === undefined || page === undefined) return null
-    // Older parses retain the title only. Future source-text fields are copied exactly when present.
-    const sourceText = [stringField(step, 'sourceText'), stringField(step, 'instructionText')].filter(
-        (value): value is string => value !== undefined,
-    )
     const reviewed = session.reviewedSteps.find((candidate) => candidate.stepId === stepId)
-    const actions: unknown = reviewed === undefined ? undefined : Reflect.get(reviewed, 'actions')
+    // Review actions when the reviewed entry carries them; an older or missing entry keeps the raw step's actions.
+    const reviewedActions = reviewed === undefined ? undefined : Reflect.get(reviewed, 'actions')
+    const actions = actionTexts(reviewedActions ?? Reflect.get(step, 'actions')).slice(0, 32)
     const parts = session.rawExtraction?.parts ?? session.parts
     const request = stepMotionRequestSchema.safeParse({
         requestId,
@@ -50,7 +72,7 @@ export function motionRequestForStep(
         ),
         stepId,
         readingLanguage: session.readingLanguage ?? 'en',
-        instructionText: [step.title, ...sourceText].join('\n'),
+        instructionText: instructionTextOf(step.sourceText, actions, step.title),
         sourceRefs: step.sourceRefs,
         parts: step.parts.flatMap((required) => {
             const part = parts.find((candidate) => candidate.partId === required.partId)
@@ -64,12 +86,11 @@ export function motionRequestForStep(
                   ]
                 : []
         }),
-        actions: Array.isArray(actions) && actions.every((action) => typeof action === 'string') ? actions : [],
+        actions,
         orientation: step.orientation.state === 'known' ? step.orientation.value.description : null,
         connection: step.connection.state === 'known' ? step.connection.value.description : null,
         page: { pageId: page.pageId, width: page.width, height: page.height, mimeType: page.mimeType },
-        // A source region can cite text rather than a figure. The cited full page keeps the drawing in context.
-        figureBox: null,
+        figureBox: figureBoxFor(step, page.pageId),
     })
     return request.success ? request.data : null
 }
@@ -121,7 +142,13 @@ export class StepMotionRegistry {
                 this.pending.delete(key)
                 return null
             }
-            const result = stepMotionResultSchema.safeParse(attempt)
+            // An ambiguous outcome may already have a finished scene on the server: one cache-only lookup reads it, never
+            // dispatches, and any miss, refusal or failure keeps the marker so the original uncertainty stays terminal.
+            const outcome =
+                attempt !== null && 'status' in attempt && attempt.status === 'unknown'
+                    ? await this.generate({ ...request, cacheOnly: true }, {})
+                    : attempt
+            const result = stepMotionResultSchema.safeParse(outcome)
             if (!result.success || (result.data.scene !== null && result.data.scene.stepId !== request.stepId))
                 return null
             await this.storage.setItem(key, JSON.stringify(result.data))

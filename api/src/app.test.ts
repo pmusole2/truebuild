@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createApp } from './app'
 import { createRuntimeFromEnvironment } from './server/model-runtime'
+import { PublicLimitError, PublicModelCallCounter } from './server/public-limits'
 
 const binding = { kind: 'capture', manualId: 'demo-divider', revision: 1, stepId: 'step-1', captureId: 'capture-1' }
 const payload = { mode: 'fixture', requestId: 'request-1', binding, scenario: 'correct' }
@@ -18,6 +19,66 @@ function app(environment: Record<string, string | undefined> = {}): ReturnType<t
 }
 
 describe('Hono HTTP boundary', (): void => {
+    it('allows cache-only motion reads after quota exhaustion without bypassing actual per-client claims', async () => {
+        const runtime = createRuntimeFromEnvironment({
+            PROVIDER_MODE: 'fixture',
+            API_SHARED_SECRET: 'truebuild-fixture-demo',
+            MODEL_CALL_LIMIT_PER_DAY: '1',
+        })
+        const api = createApp({ runtime, onDuration: (): void => {} })
+        runtime.counter.claim()
+        const form = new FormData()
+        form.set(
+            'metadata',
+            JSON.stringify({
+                requestId: 'cached-motion',
+                manualHash: 'a'.repeat(64),
+                stepId: 'step-1',
+                readingLanguage: 'en',
+                instructionText: 'Move the part.',
+                sourceRefs: [{ pageId: 'page-1', region: null }],
+                parts: [],
+                actions: [],
+                orientation: null,
+                connection: null,
+                page: { pageId: 'page-1', width: 1, height: 1, mimeType: 'image/png' },
+                figureBox: null,
+                cacheOnly: true,
+            }),
+        )
+        const response = await api.request('/api/step-motion?cacheOnly=1', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
+            body: form,
+        })
+        expect(response.status).toBe(404)
+        expect(await response.json()).toMatchObject({ code: 'cache_miss' })
+        expect(runtime.counter.used).toBe(1)
+
+        const claim = vi.spyOn(runtime.counter, 'claim')
+        const metadata: unknown = JSON.parse(String(form.get('metadata')))
+        if (typeof metadata !== 'object' || metadata === null) throw new Error('Expected fixture metadata')
+        form.set('metadata', JSON.stringify({ ...metadata, cacheOnly: false }))
+        form.set('page:page-1', new File([new Uint8Array([0])], 'page.png', { type: 'image/png' }))
+        const mismatched = await api.request('/api/step-motion?cacheOnly=1', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
+            body: form,
+        })
+        expect(mismatched.status).toBe(400)
+        expect(await mismatched.json()).toMatchObject({ notDispatched: true })
+        expect(claim).not.toHaveBeenCalled()
+        expect(runtime.counter.used).toBe(1)
+
+        const counter = new PublicModelCallCounter(10, 1)
+        const request = new Request('http://localhost/api/step-motion?cacheOnly=1', {
+            headers: { 'cf-connecting-ip': '192.0.2.1' },
+        })
+        counter.runForClient(request, false, () => counter.claim())
+        expect(() => counter.runForClient(request, false, () => counter.claim(), true)).toThrow(PublicLimitError)
+        expect(counter.used).toBe(1)
+    })
+
     it('limits parses per client without locking out a different client', async (): Promise<void> => {
         const api = app({ MODEL_CALL_LIMIT: '8' })
         const parse = async (ip: string, forwarded = '198.51.100.9'): Promise<Response> =>

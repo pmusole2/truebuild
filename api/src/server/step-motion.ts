@@ -9,18 +9,28 @@ import {
     type StepMotionRequest,
     type StepMotionResult,
 } from '@truebuild/contracts'
-import type { MetaProvider } from '../providers/meta-provider'
-import { PIECES_DEADLINE_MS } from './ai-policy'
+import { stepMotionTextBytes, type MetaProvider } from '../providers/meta-provider'
+import { STEP_MOTION_POLICY } from './ai-policy'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { BudgetError, ConcurrencyGate } from './budget'
 import { createDeadline, RequestStoppedError } from './deadline'
-import { exactModelFiles, ModelBodyError, modelFileBytes, readModelMultipart } from './model-multipart'
+import {
+    exactModelFiles,
+    ModelBodyError,
+    modelFileBytes,
+    readModelMultipart,
+    withinModelDeadline,
+} from './model-multipart'
 import { validateAndNormalizeImages, type ObservationImage } from './media'
 import type { BackgroundWork } from './screens/service'
 
 const EMPTY: StepMotionResult = { scene: null }
-/** No eviction within this process. Restarts/replicas have separate caches; the device marker survives restarts. */
+/** Completed entries are bounded; at most two additional entries can be in flight. Restarts/replicas have separate caches. */
 const CACHE_LIMIT = 1024
+interface CacheEntry {
+    pending: Promise<StepMotionResult>
+    completed: boolean
+}
 class BeforeMotionDispatch extends Error {
     constructor(readonly failure: unknown) {
         super('not_dispatched')
@@ -53,16 +63,24 @@ export function stepMotionCacheKey(
 }
 
 async function figure(request: StepMotionRequest, image: ObservationImage): Promise<ObservationImage> {
-    if (request.figureBox === null) return image
-    const [x, y, width, height] = request.figureBox
-    const left = Math.floor(x * image.width)
-    const top = Math.floor(y * image.height)
-    const { data, info } = await sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels })
-        .extract({
+    let pipeline = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels })
+    if (request.figureBox !== null) {
+        const [x, y, width, height] = request.figureBox
+        const left = Math.floor(x * image.width)
+        const top = Math.floor(y * image.height)
+        pipeline = pipeline.extract({
             left,
             top,
             width: Math.max(1, Math.min(image.width - left, Math.ceil(width * image.width))),
             height: Math.max(1, Math.min(image.height - top, Math.ceil(height * image.height))),
+        })
+    }
+    const { data, info } = await pipeline
+        .resize({
+            width: STEP_MOTION_POLICY.maxImageEdge,
+            height: STEP_MOTION_POLICY.maxImageEdge,
+            fit: 'inside',
+            withoutEnlargement: true,
         })
         .jpeg({ quality: 85 })
         .toBuffer({ resolveWithObject: true })
@@ -74,15 +92,22 @@ export function createStepMotionHandler(options: {
     provider: Pick<MetaProvider, 'generateStepMotion'> | null
     runtimeMode: 'meta' | 'fixture'
     work: BackgroundWork
+    /** Allows a small bounded cache in tests; production keeps the default completed-result limit. */
+    cacheLimit?: number
 }): (request: Request) => Promise<Response> {
-    const cache = new Map<string, Promise<StepMotionResult>>()
+    const cacheLimit = options.cacheLimit ?? CACHE_LIMIT
+    if (!Number.isSafeInteger(cacheLimit) || cacheLimit < 1 || cacheLimit > CACHE_LIMIT)
+        throw new Error('invalid_cache_limit')
+    const cache = new Map<string, CacheEntry>()
     const calls = new ConcurrencyGate(2, 0)
+    const trimCompleted = (): void => {
+        const completed = [...cache].filter(([, entry]) => entry.completed)
+        for (const [key] of completed.slice(0, Math.max(0, completed.length - cacheLimit))) cache.delete(key)
+    }
     return async (request): Promise<Response> => {
         const deadline = createDeadline(105_000, request.signal)
         try {
             options.auth.authenticate(request)
-            if (options.runtimeMode !== 'meta' || !options.provider?.generateStepMotion)
-                return Response.json({ status: 'unavailable', code: 'unconfigured' }, { status: 503 })
             const { metadata, files } = await readModelMultipart(
                 request,
                 stepMotionRequestSchema,
@@ -90,18 +115,35 @@ export function createStepMotionHandler(options: {
                 deadline,
                 1_048_576,
             )
+            if (new URL(request.url).searchParams.get('cacheOnly') === '1' && metadata.cacheOnly !== true)
+                throw new BeforeMotionDispatch(new ModelBodyError(400))
             const fileName = `page:${metadata.page.pageId}`
-            exactModelFiles(files, [fileName], false)
+            exactModelFiles(files, metadata.cacheOnly ? [] : [fileName], false)
             const key = stepMotionCacheKey(metadata)
-            let pending = cache.get(key)
-            if (pending === undefined) {
-                if (cache.size >= CACHE_LIMIT)
-                    return Response.json({ status: 'unavailable', code: 'cache_capacity' }, { status: 503 })
+            let entry = cache.get(key)
+            if (metadata.cacheOnly && entry === undefined)
+                return Response.json(
+                    { status: 'unavailable', code: 'cache_miss' },
+                    { status: 404, headers: { 'cache-control': 'no-store' } },
+                )
+            if (entry === undefined) {
+                if (options.runtimeMode !== 'meta' || !options.provider?.generateStepMotion)
+                    return Response.json(
+                        { status: 'unavailable', code: 'unconfigured', notDispatched: true },
+                        { status: 503 },
+                    )
+                if (
+                    Buffer.byteLength(JSON.stringify(metadata), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
+                    stepMotionTextBytes(metadata) > STEP_MOTION_POLICY.maxTextBytes
+                )
+                    throw new BeforeMotionDispatch(new ModelBodyError(400))
                 const release = calls.tryAcquire()
-                if (!release) return Response.json({ status: 'unavailable', code: 'busy' }, { status: 503 })
+                if (!release)
+                    return Response.json({ status: 'unavailable', code: 'busy', notDispatched: true }, { status: 503 })
                 // Store the promise synchronously before any image work or dispatch: concurrent callers share one attempt.
-                pending = (async (): Promise<StepMotionResult> => {
+                const pending = (async (): Promise<StepMotionResult> => {
                     let releaseWork: (() => void) | undefined
+                    let generationDeadline: ReturnType<typeof createDeadline> | undefined
                     let dispatched = false
                     try {
                         const bytes = await modelFileBytes(
@@ -119,13 +161,17 @@ export function createStepMotionHandler(options: {
                         const cropped = await figure(metadata, image!)
                         deadline.checkpoint()
                         releaseWork = await options.work.acquire(deadline.signal)
+                        deadline.checkpoint()
+                        // Once admitted, work has its own finite lifetime. A disconnected reader cannot erase a paid result.
+                        generationDeadline = createDeadline(STEP_MOTION_POLICY.deadlineMs)
                         const generation = await options.work.run(
-                            { deadlineMs: PIECES_DEADLINE_MS, signal: deadline.signal },
+                            { deadlineMs: STEP_MOTION_POLICY.deadlineMs, signal: generationDeadline.signal },
                             () => {
+                                deadline.checkpoint()
                                 dispatched = true
                                 return options.provider!.generateStepMotion!(
                                     { request: metadata, image: cropped },
-                                    deadline.signal,
+                                    generationDeadline!.signal,
                                 )
                             },
                         )
@@ -155,20 +201,34 @@ export function createStepMotionHandler(options: {
                         return accepted ? result : EMPTY
                     } catch (error) {
                         if (!dispatched) {
-                            cache.delete(key)
                             throw new BeforeMotionDispatch(error)
                         }
-                        // An unknown/invalid outcome is terminal for this key, including a cancelled first caller.
+                        // Provider failure or its own deadline is terminal; reader cancellation never enters this branch.
                         return EMPTY
                     } finally {
+                        generationDeadline?.dispose()
                         releaseWork?.()
                         release()
                     }
                 })()
-                cache.set(key, pending)
+                const started: CacheEntry = { pending, completed: false }
+                cache.set(key, started)
+                // Reinsert on completion so iteration is completion order, rather than request or access order.
+                void pending.then(
+                    () => {
+                        if (cache.get(key) !== started) return
+                        started.completed = true
+                        cache.delete(key)
+                        cache.set(key, started)
+                        trimCompleted()
+                    },
+                    () => {
+                        if (cache.get(key) === started) cache.delete(key)
+                    },
+                )
+                entry = started
             }
-            const result = await pending
-            deadline.checkpoint()
+            const result = await withinModelDeadline(entry.pending, deadline)
             return Response.json(result, { headers: { 'cache-control': 'no-store' } })
         } catch (error) {
             const notDispatched = error instanceof BeforeMotionDispatch

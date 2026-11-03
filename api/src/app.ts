@@ -153,9 +153,16 @@ export function createApp(
             // Collection/cancellation spends no model calls and must remain available after a ceiling is reached.
             const generates =
                 method === 'POST' && !context.req.path.endsWith('/result') && !context.req.path.endsWith('/cancel')
+            const cacheOnly =
+                context.req.path === '/api/step-motion' && new URL(request.url).searchParams.get('cacheOnly') === '1'
             try {
                 if (generates)
-                    await runtime.counter.runForClient(request, context.req.path === '/api/manuals/parse', next)
+                    await runtime.counter.runForClient(
+                        request,
+                        context.req.path === '/api/manuals/parse',
+                        next,
+                        cacheOnly,
+                    )
                 else await next()
             } catch (error) {
                 if (!(error instanceof PublicLimitError)) throw error

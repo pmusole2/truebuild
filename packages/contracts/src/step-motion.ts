@@ -4,14 +4,21 @@ import { pieceDrawingBoxSchema } from './piece-generation'
 import { PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
 
-export const STEP_MOTION_PROMPT_VERSION = 1
+export const STEP_MOTION_PROMPT_VERSION = 2
+/** Ten percent on each side, clamped to the cited page, keeps nearby movement marks in the crop. */
+export function paddedStepFigureBox(box: readonly [number, number, number, number]): [number, number, number, number] {
+    const [x, y, width, height] = box
+    const left = Math.max(0, x - width * 0.1)
+    const top = Math.max(0, y - height * 0.1)
+    return [left, top, Math.min(1, x + width * 1.1) - left, Math.min(1, y + height * 1.1) - top]
+}
 const id = z.string().min(1).max(128)
 const coordinate = z.number().finite().min(-PIECE_SPEC_LIMITS.extent).max(PIECE_SPEC_LIMITS.extent)
 const vector = z.tuple([coordinate, coordinate, coordinate])
 const component = z.number().finite().min(-1).max(1)
 const axis = z
     .tuple([component, component, component])
-    .refine((value) => Math.abs(Math.hypot(...value) - 1) <= 0.000001, { message: 'Axis must be a unit vector' })
+    .refine((value) => Math.abs(Math.hypot(...value) - 1) <= 0.001, { message: 'Axis must be a unit vector' })
 const degrees = z.number().finite().min(-180).max(180)
 const motion = z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('rotate'), pivot: vector, axis, fromDeg: degrees, toDeg: degrees }),
@@ -64,6 +71,8 @@ export type StepMotionResult = z.infer<typeof stepMotionResultSchema>
 export const stepMotionRequestSchema = z
     .strictObject({
         requestId: id,
+        /** Cache-only recovery cannot dispatch, including when no completed scene exists. */
+        cacheOnly: z.boolean().optional(),
         manualHash: z.string().regex(/^[a-f0-9]{64}$/u),
         stepId: id,
         readingLanguage: parseLanguageSchema,
@@ -95,20 +104,24 @@ export const stepMotionRequestSchema = z
     .superRefine((value, context) => {
         if (!value.sourceRefs.some((ref) => ref.pageId === value.page.pageId))
             context.addIssue({ code: 'custom', message: 'The figure page must be cited by this step' })
-        if (
-            value.figureBox !== null &&
-            !value.sourceRefs.some((ref) => {
-                const box = ref.region
-                return (
-                    ref.pageId === value.page.pageId &&
-                    box !== null &&
-                    [box.x, box.y, box.width, box.height].every(
-                        (coordinate, index) => coordinate === value.figureBox![index],
-                    )
-                )
-            })
+        const regions = value.sourceRefs.flatMap((ref) =>
+            ref.pageId === value.page.pageId && ref.region !== null ? [ref.region] : [],
         )
-            context.addIssue({ code: 'custom', message: 'A figure crop must match a cited source region' })
+        const matches = (candidate: readonly number[]): boolean =>
+            value.figureBox !== null &&
+            candidate.every((coordinate, index) => Math.abs(coordinate - value.figureBox![index]!) < 1e-9)
+        const grounded =
+            regions.length === 0
+                ? value.figureBox === null || matches([0, 0, 1, 1])
+                : regions.some((box) => {
+                      const original: [number, number, number, number] = [box.x, box.y, box.width, box.height]
+                      return matches(original) || matches(paddedStepFigureBox(original))
+                  })
+        if (!grounded)
+            context.addIssue({
+                code: 'custom',
+                message: 'A figure crop must follow its cited source region or use an uncropped page when none exists',
+            })
         if (value.page.width * value.page.height > 24_000_000)
             context.addIssue({ code: 'custom', message: 'Page pixel limit' })
         if (new Set(value.parts.map((part) => part.id)).size !== value.parts.length)

@@ -76,5 +76,13 @@ export function GuideStepMotion({
     }, [enabled, request, identity, pageUri])
     if (!enabled || identity === null || pageUri === undefined) return null
     const scene = result?.identity === identity ? result.scene : null
-    return <StepMotionHint key={identity} scene={scene} loading={loading} active={active} />
+    return (
+        <StepMotionHint
+            key={identity}
+            scene={scene}
+            loading={loading}
+            active={active}
+            readingLanguage={session?.readingLanguage ?? 'en'}
+        />
+    )
 }

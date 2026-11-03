@@ -82,6 +82,39 @@ function queued(
 }
 
 describe('bounded parse repair', () => {
+    it.each(['', 'x'.repeat(601)])(
+        'drops only invalid optional source text from an otherwise valid parse',
+        async (sourceText) => {
+            const { input, clean } = await fixture()
+            const value = structuredClone(clean)
+            value.steps[0]!.sourceText = sourceText
+            const { provider, fetch } = queued([value])
+            const parsed = await provider.parseManual(input, new AbortController().signal)
+            expect(parsed.steps[0]).toEqual({ ...clean.steps[0], sourceText: null })
+            expect(parsed.parts).toEqual(clean.parts)
+            expect(fetch).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it.each(['title', 'safety'])(
+        'still rejects invalid core %s while discarding invalid optional source text',
+        async (field) => {
+            const { input, clean } = await fixture()
+            const value = structuredClone(clean)
+            value.steps[0]!.sourceText = 'x'.repeat(601)
+            if (field === 'title') value.steps[0]!.title = ''
+            else
+                value.steps[0]!.safetyNotes = [
+                    { noteId: 'note-1', note: { state: 'known', value: 'Do not touch.', sourceRefs: [] } },
+                ]
+            const { provider, fetch } = queued([value])
+            await expect(provider.parseManual(input, new AbortController().signal)).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+            expect(fetch).toHaveBeenCalledTimes(1)
+        },
+    )
+
     it('returns a clean first extraction without authorizing another request', async () => {
         const { input, clean } = await fixture()
         const authorized = vi.fn()

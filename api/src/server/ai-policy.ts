@@ -60,6 +60,22 @@ export interface AiPolicy {
 export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 /** One geometry batch (Muse Wonder high, up to eight pieces) from background slot to response; the route allows queueing and crops on top. */
 export const PIECES_DEADLINE_MS = 90_000
+/**
+ * One motion scene has its own output ceiling, independent of the larger piece/page stage. Context and complete
+ * text/schema bytes are rejected above these limits; the image is reduced to one 1024px frame. The 8192 image-token
+ * allowance is conservative planning headroom, not a provider billing guarantee (exact vision counts need its helper).
+ */
+export const STEP_MOTION_POLICY = {
+    model: 'muse-wonder-1.0',
+    effort: 'high',
+    deadlineMs: 90_000,
+    maxOutputTokens: 14_000,
+    maxContextBytes: 8_192,
+    maxTextBytes: 32_768,
+    maxImageEdge: 1024,
+    imageTokenAllowance: 8_192,
+    plannedInputTokens: 40_960,
+} as const
 /** Guide composition includes reasoning and JSON; geometry retains the separate 48k step-page policy cap. */
 export const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000
 /** Installed clients stop at 55s; leave room to validate and return the single attempt. */

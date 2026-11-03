@@ -814,7 +814,7 @@ it('validates and serializes parse language, defaults English, and rejects large
     const api = client(run.fetch)
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
     expect(new URL(run.calls[0]!.url).searchParams.get('stepKinds')).toBe('remove')
-    expect(new URL(run.calls[0]!.url).searchParams.get('stepActions')).toBe('1')
+    expect(new URL(run.calls[0]!.url).searchParams.get('stepFields')).toBe('actions,sourceText')
     expect(JSON.parse(String((run.calls[0]!.init.body as FormData).get('metadata'))).language).toBe('en')
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID, language: 'fr' })
     expect(JSON.parse(String((run.calls[1]!.init.body as FormData).get('metadata'))).language).toBe('fr')
@@ -952,8 +952,12 @@ it.each([false, true])('drops optional actions with unresolved pages (valid acti
         { actionId: 'bad', instruction: 'Turn it.', sourceRefs: [{ pageId: 'missing', region: null }] },
         ...(hasGood ? [good] : []),
     ]
-    const run = scripted(() =>
-        jsonResponse(200, { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }),
+    const run = scripted(
+        () =>
+            new Response(
+                JSON.stringify({ status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }),
+                { status: 200, headers: { 'content-type': 'application/json', 'x-truebuild-step-fields': 'actions' } },
+            ),
     )
     const result = await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
     expect(result.status).toBe('ok')
@@ -976,4 +980,28 @@ it('rejects new parse citations outside supplied pages', async () => {
     expect(
         await client(run.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID }),
     ).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
+})
+
+it('applies only the optional step fields the parse response echoes in its header', async () => {
+    const value = structuredClone(session.rawExtraction!)
+    value.steps[0] = { ...value.steps[0]!, sourceText: 'Turn the panel.', actions: null }
+    const body = { status: 'ok', requestId: REQUEST_ID, mode: 'model', binding: manualBinding, value }
+    const firstStep = (result: Awaited<ReturnType<ModelApiClient['parse']>>): unknown =>
+        result.status === 'ok' ? result.value.steps[0] : null
+
+    const unechoed = scripted(() => jsonResponse(200, body))
+    const absent = await client(unechoed.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(absent).toMatchObject({ status: 'ok' })
+    expect(firstStep(absent)).not.toHaveProperty('sourceText')
+    expect(firstStep(absent)).not.toHaveProperty('actions')
+
+    const echoed = scripted(
+        () =>
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'content-type': 'application/json', 'x-truebuild-step-fields': 'actions, sourceText' },
+            }),
+    )
+    const kept = await client(echoed.fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(firstStep(kept)).toMatchObject({ sourceText: 'Turn the panel.', actions: null })
 })
