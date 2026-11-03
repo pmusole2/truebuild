@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { PieceViewer, PiecesGrid } from './piece-viewer'
 import { ViewerScrollView } from './viewer-scroll-lock'
 import { ThemeProvider } from '../../theme/theme'
@@ -24,6 +24,8 @@ const mockScene = {
     draw: jest.fn(() => false),
     dispose: jest.fn(),
 }
+jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
+
 jest.mock('expo', () => ({
     ...jest.requireActual('expo'),
     requireOptionalNativeModule: (): Record<string, never> | null => mockOptionalNativeModule(),
@@ -146,6 +148,23 @@ it('claims a single-finger touch that starts on the view in any direction, and a
         create.mockRestore()
         os.restore()
     }
+})
+
+it('shows the piece scene only while its 3D view is pending; an unavailable view stays static', async () => {
+    const items = [
+        { pieceId: 'arm', name: 'Arm', quantity: 1, state: 'pending' as const },
+        { pieceId: 'hub', name: 'Hub', quantity: null, state: 'unavailable' as const },
+    ]
+    await render(
+        <ThemeProvider>
+            <PiecesGrid pieces={[]} items={items} />
+        </ThemeProvider>,
+    )
+    expect(within(screen.getByTestId('piece-placeholder-arm')).getByTestId('blueprint-loader-piece')).toBeTruthy()
+    expect(screen.getByText('Shaping the part')).toBeTruthy()
+    const hub = screen.getByTestId('piece-placeholder-hub')
+    expect(within(hub).getByText('3D view unavailable')).toBeTruthy()
+    expect(within(hub).queryByTestId('blueprint-loader-piece')).toBeNull()
 })
 
 it('gives every valid step-registry piece its own 3D view in guide mode, not the 2D fallback', async () => {

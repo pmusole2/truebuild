@@ -27,6 +27,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { requireOptionalNativeModule } from 'expo'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { pieceSpecSchema, type PieceSpec } from '@truebuild/contracts'
+import { BlueprintLoader, LoaderSwap } from '../../ui/blueprint-loader'
 import { Heading, Caption, Body } from '../../ui/text'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
@@ -585,6 +586,9 @@ function GuidePieceCard({
         },
         [onFrame],
     )
+    const placeholder = (
+        <PiecePlaceholder pieceId={row.pieceId} name={row.name} state={row.state} imageUri={cutout} showName={false} />
+    )
     return (
         <View style={styles.guideCard} testID={`piece-card-${row.pieceId}`}>
             <View style={styles.guideHeader}>
@@ -595,23 +599,21 @@ function GuidePieceCard({
                     </View>
                 )}
             </View>
-            {row.spec === undefined ? (
-                <PiecePlaceholder
-                    pieceId={row.pieceId}
-                    name={row.name}
-                    state={row.state}
-                    imageUri={cutout}
-                    showName={false}
-                />
-            ) : (
-                <PieceViewer
-                    piece={row.spec}
-                    fallbackImageUri={cutout}
-                    height={240}
-                    showName={false}
-                    onFrame={pieceFrame}
-                />
-            )}
+            {/* The 3D view arrives in place of its own waiting drawing; a terminal unavailable card never waits. */}
+            {/* While the spec is pending only the one overlaid waiting drawing exists; the viewer replaces it in place. */}
+            <LoaderSwap waiting={row.spec === undefined && row.state !== 'unavailable'} loader={placeholder}>
+                {row.spec !== undefined ? (
+                    <PieceViewer
+                        piece={row.spec}
+                        fallbackImageUri={cutout}
+                        height={240}
+                        showName={false}
+                        onFrame={pieceFrame}
+                    />
+                ) : row.state === 'unavailable' ? (
+                    placeholder
+                ) : null}
+            </LoaderSwap>
             {ready ? <View testID={`piece-viewer-ready-${row.pieceId}`} style={styles.marker} /> : null}
         </View>
     )
@@ -637,16 +639,21 @@ function PiecePlaceholder({
             accessibilityLabel={name}
             style={[styles.fallback, styles.placeholder, { backgroundColor: colors.surfaceSunken }]}
         >
-            {imageUri === undefined ? null : (
+            {state === 'unavailable' && imageUri !== undefined ? (
                 <Image
                     source={{ uri: imageUri }}
                     resizeMode="contain"
                     style={styles.fallbackImage}
                     accessibilityLabel={name}
                 />
-            )}
+            ) : null}
             {showName ? <Heading>{name}</Heading> : null}
-            <Caption>{state === 'unavailable' ? '3D view unavailable' : 'Preparing 3D view'}</Caption>
+            {/* The cutout is the piece scene's backdrop while its 3D view is prepared; an unavailable view stays static. */}
+            {state === 'unavailable' ? (
+                <Caption>3D view unavailable</Caption>
+            ) : (
+                <BlueprintLoader phase="piece" imageUri={imageUri} />
+            )}
         </View>
     )
 }
@@ -698,12 +705,7 @@ export function PiecesGrid({
         return (
             <View style={styles.viewer} testID="pieces-grid">
                 {rows.map((row) => (
-                    <GuidePieceCard
-                        key={`${row.pieceId}\n${row.spec === undefined ? '' : JSON.stringify(row.spec)}`}
-                        row={row}
-                        cutout={cutouts?.[row.pieceId]}
-                        onFrame={onFrame}
-                    />
+                    <GuidePieceCard key={row.pieceId} row={row} cutout={cutouts?.[row.pieceId]} onFrame={onFrame} />
                 ))}
             </View>
         )

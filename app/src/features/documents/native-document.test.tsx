@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
+import { spies } from '../../ui/test-support/reanimated-mock'
 import { StrictMode, useEffect, type ReactElement } from 'react'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
@@ -311,6 +312,95 @@ describe('the actual v2 catalog renderer', () => {
         expect(shown).toHaveBeenLastCalledWith(document, 'pending')
         expect(screen.queryByRole('button', { name: 'Next step' })).toBeNull()
     })
+    it('draws the photo-check scene under the one held photo while a Result is checking', async () => {
+        const { inputs, bindings } = await setup(true)
+        const checking = compose({ ...inputs, uiState: { ...inputs.uiState, busy: { activity: 'checking' } } })
+        const live = bindings.live!
+        await render(
+            wrap(
+                <DocumentRenderer
+                    document={checking}
+                    bindings={{
+                        ...bindings,
+                        live: { ...live, state: { ...live.state, pending: 'Checking frozen photo…' } },
+                    }}
+                    variant="busy"
+                />,
+            ),
+        )
+        expect(screen.getAllByTestId('frozen-photo-image')).toHaveLength(1)
+        expect(screen.getByTestId('blueprint-loader-check')).toBeTruthy()
+        const thumbnail = screen.getByTestId('blueprint-loader-check').queryAll((node) => node.type === 'RNSVGImage')
+        expect(thumbnail).toHaveLength(1)
+        expect(thumbnail[0]!.props.src.uri).toBe(screen.getByTestId('frozen-photo-image').props.source.uri)
+        expect(screen.queryByRole('progressbar')).toBeNull()
+    })
+
+    it('uses the guide scene while a Result document is prepared after the photo check has finished', async () => {
+        const { inputs, bindings } = await setup(true)
+        await render(wrap(<DocumentRenderer document={compose(inputs)} bindings={bindings} variant="pending" />))
+        expect(screen.getByTestId('blueprint-loader-guide')).toBeTruthy()
+        expect(screen.queryByTestId('blueprint-loader-check')).toBeNull()
+    })
+
+    it.each([
+        ['guide', 'working', 'Building your guide', false],
+        ['answer', 'asking', 'Asking…', true],
+    ] as const)(
+        'a waiting %s shows its build scene, never a count of finished steps',
+        async (kind, activity, copy, held) => {
+            const { inputs, bindings } = await setup(held)
+            const waiting = compose({ ...inputs, kind, uiState: { busy: { activity } } })
+            await render(wrap(<DocumentRenderer document={waiting} bindings={bindings} variant="busy" />))
+            expect(within(screen.getByTestId('blueprint-loader-guide')).getByText(copy)).toBeTruthy()
+            expect(screen.queryByRole('progressbar')).toBeNull()
+        },
+    )
+
+    it('cross-fades a finished Guide over its wait scene in the loader’s own 200ms, not the fast fade', async () => {
+        const { inputs, bindings } = await setup()
+        const document = compose(inputs)
+        const moving = (node: ReactElement): ReactElement => (
+            <ThemeProvider>
+                <FeedbackProvider reduceMotion={false}>{node}</FeedbackProvider>
+            </ThemeProvider>
+        )
+        const view = await render(moving(<DocumentRenderer document={document} bindings={bindings} variant="busy" />))
+        const scroller = bodyScroller()
+        expect(screen.getByTestId('document-wait-transition').props.exiting).toEqual({
+            durationV: 200,
+            reduceMotionV: 'system',
+        })
+        spies.withTiming.mockClear()
+        await view.rerender(moving(<DocumentRenderer document={document} bindings={bindings} />))
+        expect(bodyScroller()).toBe(scroller)
+        const incoming = { durationV: 200, reduceMotionV: 'system' }
+        expect(screen.getByTestId('document-wait-transition').props.entering).toEqual(incoming)
+        await view.rerender(moving(<DocumentRenderer document={document} bindings={bindings} />))
+        expect(screen.getByTestId('document-wait-transition').props.entering).toEqual(incoming)
+    })
+
+    it('keeps a finished Completion’s own progress while a waiting one shows the build scene', async () => {
+        const { inputs, bindings } = await setup()
+        const completedStepIds = bindings.session!.reviewedSteps.map((step) => step.stepId)
+        const completion = { ...inputs, kind: 'completion' as const, stepId: null, completedStepIds }
+        const waiting = await render(
+            wrap(
+                <DocumentRenderer
+                    document={compose({ ...completion, uiState: { busy: { activity: 'saving' } } })}
+                    bindings={bindings}
+                    variant="busy"
+                />,
+            ),
+        )
+        expect(screen.getByTestId('blueprint-loader-guide')).toBeTruthy()
+        expect(screen.queryByRole('progressbar')).toBeNull()
+        await waiting.unmount()
+        await render(wrap(<DocumentRenderer document={compose(completion)} bindings={bindings} />))
+        expect(screen.queryByTestId('blueprint-loader-guide')).toBeNull()
+        expect(screen.getByRole('progressbar')).toBeTruthy()
+    })
+
     it.each([
         ['recorded-more-global', 'busy'],
         ['recorded-more-global', 'pending'],

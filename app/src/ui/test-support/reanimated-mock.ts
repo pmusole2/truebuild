@@ -59,6 +59,19 @@ export enum ReduceMotion {
     Never = 'never',
 }
 
+// Records only the native exit configuration; this stand-in never simulates retention or elapsed native time.
+export const FadeOut = {
+    duration: (
+        durationV: number,
+    ): { reduceMotion: (value: ReduceMotion) => { durationV: number; reduceMotionV: ReduceMotion } } => ({
+        reduceMotion: (reduceMotionV: ReduceMotion): { durationV: number; reduceMotionV: ReduceMotion } => ({
+            durationV,
+            reduceMotionV,
+        }),
+    }),
+}
+
 export const { withRepeat, withTiming, withSequence, withSpring, cancelAnimation } = spies
+export const FadeIn = FadeOut
 
 export default { View, createAnimatedComponent }

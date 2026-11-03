@@ -15,9 +15,10 @@ import { useHeroHeight, useKeyboardVisible } from '../capture/screen-layout'
 import { StepPicture } from '../capture/step-picture'
 import { AppButton } from '../../ui/button'
 import { useFeedback } from '../../ui/feedback'
+import { useCoachAttention, useCoachScope } from '../onboarding/coach-provider'
 import { Icon } from '../../ui/icons'
 import { ProgressBar } from '../../ui/progress'
-import { Skeleton, SkeletonCard, SkeletonLines } from '../../ui/skeleton'
+import { BlueprintLoader, type BlueprintPhase } from '../../ui/blueprint-loader'
 import { Notice, StatusTag, VerdictTag } from '../../ui/status'
 import { Card } from '../../ui/surface'
 import { Body, Caption, Heading, Instruction } from '../../ui/text'
@@ -272,8 +273,17 @@ function Disclosure({
     )
 }
 
+/** The wait a live pending operation names: reading the manual, checking a photo, or building the guide. */
+function waitPhase(pending: string | null): BlueprintPhase {
+    if (pending?.startsWith('Reading') === true) return 'reading'
+    if (pending?.startsWith('Checking') === true || pending?.startsWith('Freezing') === true) return 'check'
+    return 'guide'
+}
+
 function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path: string }): ReactElement | null {
     const mark = originId(context.originOf(path))
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
     switch (node.type) {
         case 'HeroFigure':
             return <Hero node={node} context={context} path={path} />
@@ -396,12 +406,14 @@ function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path
         case 'ManualDirections':
             return <DirectionsBlock node={node} context={context} path={path} />
         case 'Skeleton':
-            return node.variant === 'lines' ? (
-                <SkeletonLines nativeID={mark} lines={node.lines} />
-            ) : node.variant === 'card' ? (
-                <SkeletonCard nativeID={mark} />
-            ) : (
-                <Skeleton nativeID={mark} height={96} />
+            // A waiting node shows the wait scene for what the app is doing right now, not a generic grey shape.
+            return (
+                <BlueprintLoader
+                    nativeID={mark}
+                    phase={waitPhase(context.live?.state.pending ?? null)}
+                    running={scope.active && !attention}
+                    compact
+                />
             )
     }
 }
