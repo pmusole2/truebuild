@@ -635,6 +635,18 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         if (manualId !== null && revision !== null && !guard.observe(manualId, revision)) {
             return deterministic(context, 'stale')
         }
+        if (
+            context.inputs.kind === 'guide' &&
+            !context.material.facts.some(
+                (fact) =>
+                    fact.kind !== 'safety' &&
+                    fact.kind !== 'title' &&
+                    (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+            )
+        ) {
+            // No authored Guide can meet its instruction floor without inventing a direction: skip the paid call.
+            return deterministic(context, 'missing_requirement')
+        }
         const key = cacheKey(context)
         const hit = cache.get(key)
         const served = hit === undefined ? null : fromCache(context, hit)

@@ -126,8 +126,7 @@ test('a complete document owns the frame; off stays local and full publishes hon
     await expect(
         page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
     ).toBeVisible()
-    // The synthetic manual explicitly classifies these as directions, kept complete behind More detail.
-    await page.getByTestId('guide-screen').getByRole('button', { name: 'More detail', exact: true }).click()
+    // Guide directions are visible immediately, including explicitly classified directions.
     await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
     if (mode !== 'off') {
         expect(documentRequests).toBeGreaterThan(0)

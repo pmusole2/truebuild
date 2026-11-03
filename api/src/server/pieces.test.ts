@@ -3,6 +3,7 @@ import sharp from 'sharp'
 import {
     pieceBatchResultSchema,
     parsedManualSchema,
+    PIECE_CUTOUT_MAX_CHARS,
     type ManualPieceInput,
     type PieceBatchRequest,
 } from '@truebuild/contracts'
@@ -495,7 +496,7 @@ it('sends no crop image for a blank drawing and still asks Wonder for the name-o
 it('drops shared own-box claims and reused cutouts while accepting explicit and legacy broader figure context', async () => {
     const drawing = await sharp(
         Buffer.from(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="white"/><path d="M10 10 H30 V30 H10 Z M10 20 H30" stroke="black" stroke-width="2" fill="none"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 80 40"><rect width="80" height="40" fill="white"/><rect x="1" y="1" width="8" height="8" fill="red"/><rect x="71" y="31" width="8" height="8" fill="blue"/><path d="M20 10 H60 V30 H20 Z M20 20 H60" stroke="black" stroke-width="2" fill="none"/></svg>',
         ),
     )
         .png()
@@ -533,7 +534,7 @@ it('drops shared own-box claims and reused cutouts while accepting explicit and 
                     { ...part('battery'), drawingBox: undefined, figureBox: [0.2, 0.2, 0.6, 0.6] },
                     { ...part('legacy'), drawingBox: undefined },
                 ],
-                pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
+                pages: [{ pageId: 'page-1', width: 1600, height: 800, mimeType: 'image/png' }],
             },
             drawing,
         ),
@@ -554,4 +555,21 @@ it('drops shared own-box claims and reused cutouts while accepting explicit and 
     expect(sentImages).toHaveLength(4)
     expect(Buffer.from(sentImages[0]!.bytes).equals(drawing)).toBe(false)
     expect(sentImages[0]!.bytes).toEqual(sentImages[1]!.bytes)
+    const legacy = sentImages[3]!
+    expect(legacy).toMatchObject({ width: 1024, height: 512, mimeType: 'image/jpeg' })
+    expect(`data:image/jpeg;base64,${Buffer.from(legacy.bytes).toString('base64')}`.length).toBeLessThanOrEqual(
+        PIECE_CUTOUT_MAX_CHARS,
+    )
+    for (const [x, y, channel] of [
+        [0.05, 0.1, 0],
+        [0.95, 0.9, 2],
+    ] as const) {
+        const pixel = await sharp(legacy.bytes)
+            .extract({ left: Math.floor(legacy.width * x), top: Math.floor(legacy.height * y), width: 1, height: 1 })
+            .removeAlpha()
+            .raw()
+            .toBuffer()
+        expect(pixel[channel]).toBeGreaterThan(200)
+        expect([...pixel].filter((_value, index) => index !== channel).every((value) => value < 50)).toBe(true)
+    }
 })

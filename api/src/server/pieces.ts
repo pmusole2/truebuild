@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import {
     LIMITS,
+    PIECE_CUTOUT_MAX_CHARS,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
     type ManualPieceInput,
@@ -42,7 +43,7 @@ async function counted<T>(
 interface PieceCrop {
     uri: string
     image: ObservationImage
-    /** Refined drawing box; null when the crop is a client cutout reused for repair. */
+    /** Refined drawing box; null for a full-page context image or a client cutout reused for repair. */
     box: PieceCropResult['box'] | null
     inkRatio: number | null
     /** Broader figure context is sent to the model but is never shown or stored as this piece's own cutout. */
@@ -64,11 +65,39 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
     }
 }
 
+/** A page-only legacy request supplies context for every figure, without claiming any cluster as this part's drawing. */
+async function pageContext(image: ObservationImage): Promise<PieceCrop | null> {
+    try {
+        const source = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels, failOn: 'warning' })
+            .autoOrient()
+            .flatten({ background: '#ffffff' })
+        for (const size of [1024, 512, 256]) {
+            const { data: bytes, info } = await source
+                .clone()
+                .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 80 })
+                .toBuffer({ resolveWithObject: true })
+            const uri = `data:image/jpeg;base64,${bytes.toString('base64')}`
+            if (uri.length > PIECE_CUTOUT_MAX_CHARS) continue
+            return {
+                uri,
+                image: { bytes, width: info.width, height: info.height, mimeType: 'image/jpeg' },
+                box: null,
+                inkRatio: null,
+                contextOnly: true,
+            }
+        }
+        return null
+    } catch {
+        return null
+    }
+}
+
 async function cropDrawing(part: ManualPieceInput, image: ObservationImage | undefined): Promise<PieceCrop | null> {
     if (part.cutoutUri) return readCrop(part.cutoutUri)
     if (!image) return null
-    // Pre-figureBox clients supplied the cited page alone. Its whole frame is context, never an own cutout.
-    const box = part.drawingBox ?? part.figureBox ?? [0, 0, 1, 1]
+    const box = part.drawingBox ?? part.figureBox
+    if (box == null) return pageContext(image)
     try {
         const crop = await refinePieceCrop(image, box)
         return crop && crop.uri.length <= 360_000 ? { ...crop, contextOnly: part.drawingBox == null } : null

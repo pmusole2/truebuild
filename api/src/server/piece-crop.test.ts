@@ -24,6 +24,45 @@ it('recovers a drawing that its drawing box clips, extending past the box within
     expect((y + h) * 100).toBeGreaterThanOrEqual(70)
 })
 
+it('anchors the seed to ink in the hint even when a larger neighbour scores higher in padding', async () => {
+    const bytes = await sharp(
+        Buffer.from(`<svg width="360" height="300">
+        <rect width="100%" height="100%" fill="white" />
+        <rect x="65" y="145" width="10" height="10" fill="black" />
+        <circle cx="170" cy="150" r="49" fill="black" />
+    </svg>`),
+    )
+        .png()
+        .toBuffer()
+    const crop = await refinePieceCrop({ bytes, mimeType: 'image/png', width: 360, height: 300 }, [
+        20 / 360,
+        100 / 300,
+        100 / 360,
+        100 / 300,
+    ])
+    expect(crop).not.toBeNull()
+    const [x, y, w, h] = crop!.box
+    expect(x * 360).toBeLessThanOrEqual(65)
+    expect((x + w) * 360).toBeGreaterThanOrEqual(75)
+    expect(y * 300).toBeLessThanOrEqual(145)
+    expect((y + h) * 300).toBeGreaterThanOrEqual(155)
+    expect((x + w) * 360).toBeLessThan(121)
+})
+
+it('keeps the whole connected part when its centre lies outside the clipped hint', async () => {
+    const bytes = await sharp(
+        Buffer.from(
+            '<svg width="100" height="100"><rect width="100%" height="100%" fill="white"/><circle cx="60" cy="50" r="20" fill="black"/></svg>',
+        ),
+    )
+        .png()
+        .toBuffer()
+    const crop = await refinePieceCrop({ bytes, mimeType: 'image/png', width: 100, height: 100 }, [0.2, 0.3, 0.3, 0.4])
+    expect(crop).not.toBeNull()
+    expect(crop!.box[0] * 100).toBeLessThanOrEqual(40)
+    expect((crop!.box[0] + crop!.box[2]) * 100).toBeGreaterThanOrEqual(80)
+})
+
 it('keeps a neighbouring drawing that lies only in the padding out of the crop', async () => {
     const bytes = await sharp(
         Buffer.from(`<svg width="300" height="200">

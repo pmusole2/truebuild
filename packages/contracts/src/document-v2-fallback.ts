@@ -298,21 +298,17 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
     const safety = manual.filter(isSafety)
     const required = manual.filter((fact) => !isSafety(fact) && requiredIds.has(fact.factId))
     const optional = manual.filter((fact) => !isSafety(fact) && !requiredIds.has(fact.factId))
+    const guide = material.inputs.kind === 'guide'
+    const directions = guide ? [...required, ...optional] : required
     return [
         ...(safety.length > 0
             ? [section('Safety', nest(pack(entries(safety, true), (children) => card(children, 'caution'))))]
             : []),
-        ...(required.length > 0
-            ? [section('Directions', nest(pack(entries(required, false), (children) => card(children))))]
+        ...(directions.length > 0
+            ? [section('Directions', nest(pack(entries(directions, false), (children) => card(children))))]
             : []),
-        ...(optional.length > 0
-            ? [
-                  section(
-                      material.inputs.kind === 'guide' ? 'Directions' : 'More detail',
-                      nest(pack(entries(optional, false), (children) => card(children))),
-                      material.inputs.kind !== 'guide',
-                  ),
-              ]
+        ...(!guide && optional.length > 0
+            ? [section('More detail', nest(pack(entries(optional, false), (children) => card(children))), true)]
             : []),
     ]
 }

@@ -907,12 +907,24 @@ describe('Guide usability floor', () => {
         expect((await liveService([complete]).service.generate(inputs)).metadata.source).toBe('generated')
 
         step.correction = null
-        const unavailable = buildDocumentContext(inputs)
-        expect((unavailable.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([])
         vi.spyOn(console, 'info').mockImplementation(() => {})
-        expect((await liveService([goodWire('guide', session)]).service.generate(inputs)).metadata.source).toBe(
-            'fallback',
-        )
+        for (const classification of ['classified', 'legacy', 'safety-only'] as const) {
+            if (classification === 'legacy') delete step.safetyNotes
+            else step.safetyNotes = classification === 'safety-only' ? demoSession().reviewedSteps[0]!.safetyNotes : []
+            const unavailable = buildDocumentContext(inputs)
+            expect((unavailable.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([])
+            expect(guideQualityIssues(buildFallbackProposalV2(unavailable.material), unavailable)).toEqual([
+                'guide_quality:instruction_text_missing',
+            ])
+            const unused = liveService([])
+            const fallback = await unused.service.generate(inputs)
+            expect(unused.inputs).toHaveLength(0)
+            expect(fallback.metadata).toMatchObject({
+                source: 'fallback',
+                fallbackReason: 'missing_requirement',
+                usage: { inputTokens: null, outputTokens: null },
+            })
+        }
     })
 
     it('keeps a strict-valid sparse Guide on the complete shell with its live piece catalog', async () => {
