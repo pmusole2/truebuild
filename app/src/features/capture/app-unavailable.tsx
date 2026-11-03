@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { reloadAppAsync } from 'expo'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { buildFallbackDocumentV2, screenDocumentV2Schema } from '@truebuild/contracts'
+import { APP_RELOAD_WAIT_COPY_V2, buildFallbackDocumentV2, screenDocumentV2Schema } from '@truebuild/contracts'
 import { DocumentRoot } from '../documents/document-renderer'
 import { DocumentRouteBoundary, useDocumentOwner } from '../documents/ownership'
 import { sha256Hex } from '../documents/sha256'
@@ -52,7 +52,7 @@ function StartupRecoveryDocument(): ReactElement {
             ),
         [],
     )
-    useDocumentOwner(document, true, reloading ? 'busy' : 'ready')
+    useDocumentOwner(document, true, 'ready')
     const retry = (): void => {
         if (inFlight.current) return
         inFlight.current = true
@@ -84,16 +84,12 @@ function StartupRecoveryDocument(): ReactElement {
         insetTop: insets.top,
         inspect: showBuilt,
         workInProgress: reloading,
+        preparingDocument: reloading,
+        waitCopy: APP_RELOAD_WAIT_COPY_V2,
+        preparationLabel: APP_RELOAD_WAIT_COPY_V2.action,
         operationNotice: notice,
         resolveText: (ref) =>
             ref.kind === 'literal' ? ref.text : ref.kind === 'bound' && ref.key === 'operation-notice' ? notice : '',
     }
-    return (
-        <DocumentRoot
-            document={document}
-            bindings={bindings}
-            variant={reloading ? 'busy' : 'ready'}
-            testID="app-unavailable-screen"
-        />
-    )
+    return <DocumentRoot document={document} bindings={bindings} variant="ready" testID="app-unavailable-screen" />
 }

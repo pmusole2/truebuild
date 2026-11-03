@@ -7,6 +7,7 @@ import type {
     ScreenDocumentV2,
     TextRefV2,
     VariantState,
+    WaitCopyV2,
 } from '@truebuild/contracts'
 import type { CaptureView, SegmentMark } from '../capture/controller'
 import type { ResolvedIntent } from '../screens/intents'
@@ -41,6 +42,9 @@ export type FrameBindings = {
     readonly workInProgress?: boolean
     /** Only navigation/document preparation; the existing authored action presents its intrinsic busy state. */
     readonly preparingDocument?: boolean
+    /** Shared contract-owned activity words for a transient native wait. */
+    readonly waitCopy?: WaitCopyV2
+    readonly preparationLabel?: string
     /** The committed variant after the real held-photo gate; a pending photo never witnesses ready. */
     readonly onVariantShown?: (document: ScreenDocumentV2, state: 'ready' | VariantState) => void
     /** Live resolution of v2 bound text and toggles, from controller state. Absent means the control shows its label only. */

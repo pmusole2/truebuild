@@ -710,7 +710,7 @@ describe('complete v2 catalog through the actual renderer and real controller fi
                     }
                 }
                 if (selected.variant.header.title.kind === 'literal')
-                    expect(screen.getAllByText(selected.variant.header.title.text).length).toBeGreaterThan(0)
+                    expect((await screen.findAllByText(selected.variant.header.title.text)).length).toBeGreaterThan(0)
                 const primary = within(screen.getAllByTestId('bottom-bar').at(-1)!).getByRole('button', {
                     name: selected.variant.bar.primary.label,
                 })

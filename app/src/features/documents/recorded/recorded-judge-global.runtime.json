@@ -5,12 +5,12 @@
     "authoring": {
         "model": "Test fixture",
         "effort": "ultra",
-        "recordedAt": "2026-10-30T15:16:56.000Z",
+        "recordedAt": "2026-11-03T12:58:30.000Z",
         "fixtureId": "recorded-judge-global-sol-v1"
     },
-    "recordedAt": "2026-10-30T15:16:56.000Z",
+    "recordedAt": "2026-11-03T12:58:30.000Z",
     "promptVersion": 0,
     "repaired": false,
-    "rawJsonSha256": "79dd68d8a403aadcf08f3b900315b5ebb9dc344e44e3332a3b7a9eabc74f1c48",
-    "proposalSha256": "f3fe97c7d68fa66392496450bf7ff2699665cb1a89ce251fbefd54d723dd9eb3"
+    "rawJsonSha256": "5850faaf25e93993d8af1f3b8a8f19e0683e14904fe0f637e344f89b4ea8ca47",
+    "proposalSha256": "7443c15e9d63080e8bb30c9822001cf60703a7f65796c842a2d460b55e7534e5"
 }

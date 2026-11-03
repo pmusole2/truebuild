@@ -107,7 +107,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Loading your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -134,7 +134,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Getting your saved manuals ready to show."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",
@@ -163,7 +163,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Loading your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -185,7 +185,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Getting your saved manuals ready to show."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",

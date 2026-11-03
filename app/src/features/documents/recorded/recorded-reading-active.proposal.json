@@ -298,7 +298,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Opening the reading screen"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -327,7 +327,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Getting your manual reading screen ready."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",

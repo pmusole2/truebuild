@@ -5,6 +5,8 @@ import { useIsFocused, usePathname } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
     baseKindV2,
+    manualDisplayTitleV2,
+    waitCopyV2,
     visitVariantNodesV2,
     type AppIntent,
     type ScreenKindV2,
@@ -26,7 +28,7 @@ import { useNavigationPreparation, useWorkflowActions } from './native-routes'
 import { rereadPrompt } from './reading-language'
 import { useMoreState, type MoreMode } from './screen-header'
 import type { QuickProgress } from '../screens/quick-progress'
-import { documentInputs } from './document-inputs'
+import { activityOf, documentInputs } from './document-inputs'
 export { documentInputs } from './document-inputs'
 import { useWorkflow, type WorkflowValue } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
@@ -55,6 +57,7 @@ export function DocumentSurface({
     requestQuestionComposer,
     runContextAction,
     testID,
+    routeWait,
 }: {
     kind: ScreenKindV2
     quick?: QuickProgress
@@ -77,6 +80,7 @@ export function DocumentSurface({
     requestQuestionComposer?: () => void
     runContextAction?: (run: () => void) => void
     testID?: string
+    routeWait?: { readonly kind: ScreenKindV2; readonly manualTitle?: string | null }
 }): ReactElement {
     const actualWorkflow = useWorkflow()
     const routeFocused = useIsFocused()
@@ -119,7 +123,18 @@ export function DocumentSurface({
         !actualWorkflow.state.storageReadOnly &&
         !actualWorkflow.state.loading &&
         savingKey === previous.stableKey
-    const preparing = navigationPreparing || savingPreparing
+    const preparing = navigationPreparing || savingPreparing || routeWait !== undefined
+    const preparationKind = navigationPreparing ? preparation.kind : (routeWait?.kind ?? kind)
+    const preparationSession = navigationPreparing
+        ? actualWorkflow.state.entries.find((candidate) => candidate.session.manualId === preparation.manualId)?.session
+        : undefined
+    const preparationTitle =
+        preparationSession === undefined ? routeWait?.manualTitle : manualDisplayTitleV2(preparationSession)
+    const waitCopy = waitCopyV2(
+        preparationKind,
+        navigationPreparing || routeWait !== undefined ? null : activityOf(actualWorkflow.state.pending),
+        preparationTitle,
+    )
     const questionInputs =
         holdQuestion && kind === 'questions' ? documentInputs(kind, actualWorkflow, quick, contextualMore) : null
     const questionHeld =
@@ -346,7 +361,7 @@ export function DocumentSurface({
         if (preparing)
             return intent.intent === 'navigate' && intent.target === 'back'
                 ? { enabled: true, reason: null, run: nav.back }
-                : { enabled: false, reason: null, run: (): void => {} }
+                : { enabled: false, reason: waitCopy.action, run: (): void => {} }
         if (effectiveKind === 'more' && intent.intent === 'ask' && requestQuestionComposer !== undefined) {
             const resolved = resolveIntent(intent, {
                 kind: 'more',
@@ -611,6 +626,8 @@ export function DocumentSurface({
                     : undefined,
         workInProgress: busy || more.open || judgeOpen,
         preparingDocument: preparing,
+        waitCopy,
+        preparationLabel: waitCopy.action,
         onVariantShown: (document, activeState): void => {
             if (kind === 'questions' && !holdQuestion && document === queried.document)
                 shownQuestion.current = {

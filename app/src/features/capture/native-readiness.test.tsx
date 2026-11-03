@@ -3,6 +3,7 @@ import type * as ReactModule from 'react'
 import type * as ReactNative from 'react-native'
 import { resolve } from 'node:path'
 import { router } from 'expo-router'
+import { BUSY_COPY_V2 } from '@truebuild/contracts'
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react-native'
 import { createController, createDocuments, createScreens } from './controller-factory'
 import { flush, loadPhoto, mount, press, type Mounted } from '../screens/test-support/flow'
@@ -150,7 +151,11 @@ it('keeps a witnessed Home ready composition while saving leaves its displayed f
     await waitFor(() => expect(mounted!.controller.getSnapshot().pending).toBe('Saving on this device…'))
     expect(root('library-screen')?.documentRoot).toBe(previous.documentRoot)
     expect(screen.getByRole('button', { name: 'Add a manual' })).toBeDisabled()
-    expect(primary('library-screen').props.accessibilityState.busy).toBe(true)
+    // The retained ready action disables immediately; its dedicated blueprint owns the visible wait after grace.
+    expect(primary('library-screen').props.accessibilityState.busy).toBe(false)
+    expect(
+        within(await screen.findByTestId('document-preparing-wait')).getByText(BUSY_COPY_V2.saving.heading),
+    ).toBeTruthy()
     await act(async () => {
         gate.resolve()
     })
@@ -322,7 +327,7 @@ it('shows the actual held photo while Spark is pending, then reveals its result 
         expect(uri).toMatch(/^data:image\/jpeg;base64,/u)
         await loadPhoto()
         expect(screen.queryByText('Looks right')).toBeNull()
-        expect(primary('guide-screen')).toBeDisabled()
+        await waitFor(() => expect(primary('guide-screen')).toBeDisabled())
         await act(async () => {
             check.resolve()
             await shutter

@@ -160,7 +160,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "This only takes a moment."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",
@@ -189,7 +189,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Getting your pages ready"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -218,7 +218,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Preparing your manual pages to show."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",

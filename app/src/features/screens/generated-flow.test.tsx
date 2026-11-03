@@ -7,7 +7,7 @@ import { StyleSheet } from 'react-native'
 import { createController, createDocuments, createScreens } from '../capture/controller-factory'
 import {
     documentMaterialV2,
-    STATE_COPY_V2,
+    waitCopyV2,
     screenStageV2,
     variantsOfV2,
     type ScreenContextInputsV2,
@@ -141,7 +141,7 @@ describe('generated screens off keeps the original app', () => {
     it('makes no screens request and shows the native Home and Guide copy exactly', async () => {
         const { server, view, controller } = await mount([entry()], { screens: 'off' })
         expect(screen.getByRole('button', { name: 'Continue building' })).toBeTruthy()
-        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
+        expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
         expect(screen.queryByTestId('generated-body')).toBeNull()
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
@@ -158,12 +158,12 @@ describe('Home composed by the document', () => {
     it('shows the calm skeleton while composing, then the document, keeping the stable test identity of the action', async () => {
         const gate = deferred<void>()
         const { server } = await mount([], { screens: { gate: gate.promise }, recordings: 'off' })
-        expect(await screen.findByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
-        expect(screen.getByText(STATE_COPY_V2.pending.detail)).toBeTruthy()
-        expect(STATE_COPY_V2.pending.heading).toBe('Working on it')
+        expect(await screen.findByText(waitCopyV2('home').heading)).toBeTruthy()
+        expect(screen.getByText(waitCopyV2('home').detail)).toBeTruthy()
+        expect(waitCopyV2('home').heading).toBe('Loading your manuals')
         await act(async () => gate.resolve())
         expect(await screen.findByText('Add a manual to start building.')).toBeTruthy()
-        expect(screen.queryByText(STATE_COPY_V2.pending.heading)).toBeNull()
+        expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
         const add = screen.getByTestId('home-add')
         expect(add).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Add a manual' })).toBeTruthy()
@@ -195,9 +195,11 @@ describe('Home composed by the document', () => {
             screens: { generated: ['home'], gate: gate.promise },
             recordings: 'off',
         })
-        expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
+        expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
+        await act(async () => jest.advanceTimersByTime(300))
+        expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(15_001))
-        expect(screen.getByText(STATE_COPY_V2.busy.heading)).toBeTruthy()
+        expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
         expect(screen.queryByText('That took too long')).toBeNull()
         const request = server.requests.find((item) => item.op === 'generate' && item.kind === 'home')!
         expect(store.peek(inputsFromDocumentMetadata(request))?.status).toBe('pending')
@@ -940,7 +942,9 @@ describe('every other screen is composed from its own document', () => {
         expect(screen.getByTestId('add-page')).toBeTruthy()
         await press('Read manual')
         await waitFor(() => expect(view.getPathname()).toMatch(/^\/reading\//u))
-        expect(within(screen.getByTestId('document-header-copy')).getByText('Reading your manual')).toBeTruthy()
+        expect(
+            within(await screen.findByTestId('blueprint-loader-reading')).getByText('Reading your manual'),
+        ).toBeTruthy()
         expect(screen.getByText('This can take a minute.')).toBeTruthy()
         // While it reads, the only honest controls are the native ones: stop is never replaced.
         expect(screen.getByRole('button', { name: 'Back' }).props.accessibilityState).toMatchObject({ disabled: false })
@@ -1281,7 +1285,7 @@ describe('an expired composition stays unavailable until explicitly retried', ()
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))
         await act(async () => jest.advanceTimersByTime(20_000))
         expect(
-            within(screen.getByTestId('library-screen', { hidden: true })).getByText(STATE_COPY_V2.pending.heading, {
+            within(screen.getByTestId('library-screen', { hidden: true })).getByText(waitCopyV2('home').heading, {
                 hidden: true,
             }),
         ).toBeTruthy()
@@ -1294,7 +1298,7 @@ describe('an expired composition stays unavailable until explicitly retried', ()
         const attempts = (): typeof server.requests =>
             server.requests.filter((request) => request.op === 'generate' && request.contextKey === expired.contextKey)
         await act(async () => jest.advanceTimersByTime(timeoutMs - 24_001))
-        expect(screen.getByText(STATE_COPY_V2.pending.heading)).toBeTruthy()
+        expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(2))
         await flush()
         expect(screen.getByText('That took too long')).toBeTruthy()

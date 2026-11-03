@@ -10,6 +10,7 @@ import {
     NODE_TYPES_V2,
     SCREEN_KINDS_V2,
     STATE_COPY_V2,
+    waitCopyV2,
     VARIANT_STATES,
     assembleDocumentV2,
     buildFallbackDocumentV2,
@@ -264,17 +265,42 @@ describe('assembly owns only what the server owns', () => {
 describe('state wording is stable', () => {
     // The wording of the waiting and failure screens is part of the product. These strings are pinned on purpose: changing
     // one is a deliberate edit of this test, never a side effect of changing the builder or the model prompt.
+    it.each(SCREEN_KINDS_V2)('%s waits name their screen without generic filler', (kind) => {
+        const proposal = buildFallbackProposalV2(documentMaterialV2(inputsFor(kind)))
+        for (const state of ['busy', 'pending'] as const) {
+            const variant = proposal.states[state]
+            if (variant === null) continue
+            const copy = literals(variant)
+            expect(copy).not.toContain('Working on it')
+            expect(copy).not.toContain('One moment, please.')
+        }
+    })
+
+    it('names a known manual while opening it, and keeps an actual activity ahead of its title', () => {
+        expect(waitCopyV2('guide', null, '  Shelf unit  ')).toMatchObject({
+            heading: 'Opening Shelf unit',
+            action: 'Opening manual…',
+        })
+        expect(waitCopyV2('guide', 'saving', 'Shelf unit')).toMatchObject({
+            heading: 'Saving…',
+            action: 'Saving…',
+        })
+        expect(waitCopyV2('guide', null, ' ')).toEqual(waitCopyV2('guide'))
+        expect(waitCopyV2('camera', null, 'Shelf unit')).toEqual(waitCopyV2('camera'))
+    })
+
     it('keeps the registry wording of every state exactly', () => {
         expect(STATE_COPY_V2).toEqual({
-            busy: { heading: 'Working on it', detail: 'One moment, please.' },
-            pending: { heading: 'Working on it', detail: 'One moment, please.' },
+            busy: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+            pending: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
             empty: { heading: 'Nothing here yet', detail: 'Add something to get started.' },
             error: { heading: 'Something went wrong', detail: 'Try again in a moment.' },
             recovery: { heading: 'Let us get you back on track', detail: 'Try again, or go back home.' },
             confirming: { heading: 'Stop reading?', detail: 'Reading will stop and you will go back to your pages.' },
         })
         expect(BUSY_COPY_V2).toEqual({
-            working: { heading: 'Working on it', detail: 'One moment, please.' },
+            reopening: { heading: 'Reopening TrueBuild', detail: 'Trying to open the app again.' },
+            working: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
             reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
             checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
             'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
@@ -313,7 +339,12 @@ describe('state wording is stable', () => {
             for (const state of VARIANT_STATES) {
                 const variant = proposal.states[state]
                 if (variant === null) continue
-                const copy = state === 'empty' ? emptyCopy : STATE_COPY_V2[state]
+                const copy =
+                    state === 'busy' || state === 'pending'
+                        ? waitCopyV2(kind)
+                        : state === 'empty'
+                          ? emptyCopy
+                          : STATE_COPY_V2[state]
                 const readingFailure = kind === 'reading' && (state === 'error' || state === 'recovery')
                 const stated = readingFailure
                     ? [variant.header.title.kind === 'literal' ? variant.header.title.text : '', ...literals(variant)]
@@ -341,9 +372,9 @@ describe('state wording is stable', () => {
         (activity) => {
             const inputs = { ...inputsFor('guide'), uiState: { ...ui, busy: { activity } } }
             const busy = buildFallbackProposalV2(documentMaterialV2(inputs)).states.busy!
-            expect(busy.header.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2[activity].heading })
+            expect(busy.header.title).toEqual({ kind: 'literal', text: waitCopyV2('guide', activity).heading })
             expect(literals(busy)).toEqual(
-                expect.arrayContaining([BUSY_COPY_V2[activity].heading, BUSY_COPY_V2[activity].detail]),
+                expect.arrayContaining([waitCopyV2('guide', activity).heading, waitCopyV2('guide', activity).detail]),
             )
         },
     )

@@ -22,7 +22,7 @@ import {
     type VariantState,
 } from './document-v2'
 import { assembleDocumentV2, type AssembleDeps } from './document-v2-assemble'
-import { BUSY_COPY_V2, STATE_COPY_V2 } from './document-v2-copy'
+import { BUSY_COPY_V2, STATE_COPY_V2, waitCopyV2 } from './document-v2-copy'
 import type { ScreenContextInputsV2 } from './document-v2-context'
 import {
     LAYOUT_DECISIONS_V2,
@@ -163,8 +163,8 @@ function expandVariant(
             ? checking
                 ? BUSY_COPY_V2.checking
                 : null
-            : name === 'busy' && activity !== undefined
-              ? BUSY_COPY_V2[activity]
+            : name === 'busy' || name === 'pending'
+              ? waitCopyV2(inputs.kind, name === 'busy' ? activity : null)
               : STATE_COPY_V2[name]
     let nodes = 0
 

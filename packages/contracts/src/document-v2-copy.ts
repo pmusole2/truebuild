@@ -64,9 +64,9 @@ export const COACH_COPY_V2: Readonly<Record<string, { heading: string; body: str
 }
 
 export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; detail: string }>> = {
-    // The generic wait says one calm thing, busy or pending; what the app is actually doing is `BUSY_COPY_V2`.
-    busy: { heading: 'Working on it', detail: 'One moment, please.' },
-    pending: { heading: 'Working on it', detail: 'One moment, please.' },
+    // Busy and pending documents select the screen-specific table below.
+    busy: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+    pending: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
     empty: { heading: 'Nothing here yet', detail: 'Add something to get started.' },
     error: { heading: 'Something went wrong', detail: 'Try again in a moment.' },
     recovery: { heading: 'Let us get you back on track', detail: 'Try again, or go back home.' },
@@ -74,14 +74,124 @@ export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; det
 }
 
 /** The busy variant's authored words per activity (what the app is doing), never a native text override. */
-export const BUSY_COPY_V2: Readonly<Record<BusyActivityV2, { heading: string; detail: string }>> = {
-    working: { heading: 'Working on it', detail: 'One moment, please.' },
+export const BUSY_COPY_V2: Readonly<Record<BusyActivityV2 | 'reopening', { heading: string; detail: string }>> = {
+    reopening: { heading: 'Reopening TrueBuild', detail: 'Trying to open the app again.' },
+    working: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
     reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
     checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
     'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
     asking: { heading: 'Asking…', detail: 'This only takes a moment.' },
     'question-waiting': { heading: 'Still thinking…', detail: 'Thanks for waiting.' },
     saving: { heading: 'Saving…', detail: 'This only takes a moment.' },
+}
+
+/** Closed words for screen preparation, with no invented operation, progress or time estimate. */
+export type WaitCopyV2 = { readonly heading: string; readonly detail: string; readonly action: string }
+/** Local startup recovery retains its ready document while the official app reload runs; never sent as an API activity. */
+export const APP_RELOAD_WAIT_COPY_V2: WaitCopyV2 = {
+    ...BUSY_COPY_V2.reopening,
+    action: 'Reopening TrueBuild…',
+}
+export const SCREEN_WAIT_COPY_V2: Readonly<Record<ScreenKindV2, WaitCopyV2>> = {
+    home: {
+        heading: 'Loading your manuals',
+        detail: 'Getting your saved manuals ready to show.',
+        action: 'Loading manuals…',
+    },
+    add: {
+        heading: 'Getting ready to add a manual',
+        detail: 'Preparing the page photo options.',
+        action: 'Preparing page photos…',
+    },
+    pages: {
+        heading: 'Getting your pages ready',
+        detail: 'Preparing your manual pages to show.',
+        action: 'Preparing pages…',
+    },
+    reading: {
+        heading: 'Opening the reading screen',
+        detail: 'Getting your manual reading screen ready.',
+        action: 'Opening reading…',
+    },
+    'quick-check': {
+        heading: 'Opening your manual review',
+        detail: 'Getting the review screen ready.',
+        action: 'Opening review…',
+    },
+    guide: { heading: 'Opening your build guide', detail: 'Getting your step guide ready.', action: 'Opening guide…' },
+    result: {
+        heading: 'Opening your photo check',
+        detail: 'Getting the photo check screen ready.',
+        action: 'Opening photo check…',
+    },
+    questions: {
+        heading: 'Opening your question',
+        detail: 'Getting the question screen ready.',
+        action: 'Opening question…',
+    },
+    answer: { heading: 'Opening your answer', detail: 'Getting the answer screen ready.', action: 'Opening answer…' },
+    more: { heading: 'Opening More', detail: 'Getting settings and help ready.', action: 'Opening More…' },
+    completion: {
+        heading: 'Opening your build summary',
+        detail: 'Getting your saved build progress ready to show.',
+        action: 'Opening summary…',
+    },
+    error: {
+        heading: 'Opening help for this problem',
+        detail: 'Getting the available recovery options ready.',
+        action: 'Opening help…',
+    },
+    recovery: {
+        heading: 'Opening your next options',
+        detail: 'Getting the ways to continue ready.',
+        action: 'Opening options…',
+    },
+    camera: {
+        heading: 'Getting your camera ready',
+        detail: 'Preparing the photo screen.',
+        action: 'Preparing camera…',
+    },
+    judge: {
+        heading: 'Opening layout details',
+        detail: 'Getting the layout details ready to show.',
+        action: 'Opening details…',
+    },
+    compare: {
+        heading: 'Opening the comparison',
+        detail: 'Getting the comparison screen ready.',
+        action: 'Opening comparison…',
+    },
+}
+
+const BUSY_ACTION_V2: Readonly<Record<Exclude<BusyActivityV2, 'working'>, string>> = {
+    reading: 'Reading manual…',
+    checking: 'Checking photo…',
+    'second-opinion': 'Taking a closer look…',
+    asking: 'Asking…',
+    'question-waiting': 'Still thinking…',
+    saving: 'Saving…',
+}
+
+export const WAIT_ACTION_LABELS_V2: readonly string[] = [
+    ...Object.values(SCREEN_WAIT_COPY_V2).map((copy) => copy.action),
+    ...Object.values(BUSY_ACTION_V2),
+]
+
+/** Shared contract-owned copy for document variants and transient native navigation/storage waits. */
+export function waitCopyV2(
+    kind: ScreenKindV2,
+    activity?: BusyActivityV2 | null,
+    manualTitle?: string | null,
+): WaitCopyV2 {
+    if (activity != null && activity !== 'working') {
+        return { ...BUSY_COPY_V2[activity], action: BUSY_ACTION_V2[activity] }
+    }
+    const copy = SCREEN_WAIT_COPY_V2[kind]
+    const title = manualTitle?.trim()
+    if (title && ['guide', 'quick-check', 'reading', 'completion', 'pages'].includes(kind)) {
+        return { ...copy, heading: `Opening ${title}`, action: 'Opening manual…' }
+    }
+    return copy
 }
 
 /**
@@ -305,7 +415,10 @@ export function allowedLiteralsV2(material: DocumentMaterialV2, variant: CopyVar
     if (variant !== 'ready') {
         list.push(STATE_COPY_V2[variant].heading, STATE_COPY_V2[variant].detail)
         const busy = material.inputs.uiState?.busy?.activity
-        if (variant === 'busy' && busy !== undefined) list.push(BUSY_COPY_V2[busy].heading, BUSY_COPY_V2[busy].detail)
+        if (variant === 'busy' || variant === 'pending') {
+            const copy = waitCopyV2(kind, variant === 'busy' ? busy : null)
+            list.push(copy.heading, copy.detail, copy.action)
+        }
         if (variant === 'empty') {
             // A held Question's empty variant still owes its photo; do not allow wording that denies it exists.
             const empty = kind === 'questions' && material.requirements.capture ? undefined : EMPTY_COPY_V2[kind]
@@ -348,7 +461,10 @@ export function busyHeaderIssuesV2(document: DocumentLike, material: DocumentMat
     const issues: string[] = []
     for (const { name, prefix, variant } of variantsOfV2(document)) {
         const { title } = variant.header
-        if (name === 'busy' && !(title.kind === 'literal' && inList([BUSY_COPY_V2[activity].heading], title.text))) {
+        if (
+            name === 'busy' &&
+            !(title.kind === 'literal' && inList([waitCopyV2(material.inputs.kind, activity).heading], title.text))
+        ) {
             issues.push(`${prefix}header:busy_header_mismatch`)
         }
     }

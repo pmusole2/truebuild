@@ -930,7 +930,7 @@ describe('slots, branches and states fail closed', () => {
         }
         const { document } = compiled(inputs, resultTemplate())
         expect(document.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Taking a closer look…' })
-        expect(document.states.pending!.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        expect(document.states.pending!.header.title).toEqual({ kind: 'literal', text: 'Opening your photo check' })
         expect(document.states.error!.header.title).toEqual({ kind: 'literal', text: 'Something went wrong' })
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
     })
@@ -1452,11 +1452,11 @@ describe('a version 3 record owns the held Question', () => {
         ['question-waiting', 'Still thinking…'],
     ] as const)('names the witnessed %s activity in the busy header and nowhere else', (activity, heading) => {
         const idle = compiled(heldQuestion(), questionsTemplate()).document
-        expect(idle.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        expect(idle.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Opening your question' })
         const inputs = heldQuestion({ uiState: { ...ui, busy: { activity } } })
         const { document } = compiled(inputs, questionsTemplate())
         expect(document.states.busy!.header.title).toEqual({ kind: 'literal', text: heading })
-        expect(document.states.pending!.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        expect(document.states.pending!.header.title).toEqual({ kind: 'literal', text: 'Opening your question' })
         expect(document.header.title).toEqual({ kind: 'literal', text: 'Ask about this step' })
         // The activity is part of the context: another key, and the document verifies only against its own inputs.
         expect(document.bound.contextKey).not.toBe(idle.bound.contextKey)

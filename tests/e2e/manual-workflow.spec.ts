@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { expect, test, type Page, type Response } from '@playwright/test'
-import { apiResultSchema, checkResultSchema } from '@truebuild/contracts'
+import { apiResultSchema, checkResultSchema, waitCopyV2 } from '@truebuild/contracts'
 
 // Real product path: the browser file chooser and normalizer, the app client, the Hono API and the documented Meta HTTP
 // mock. Nothing here intercepts or answers an API request; responses are read from the real network.
@@ -330,7 +330,7 @@ test('the library shows its restoring state while it loads, before any manual is
     // Development-build query parameter: delays only the first restore, so the loading state is observable.
     await page.goto('/?truebuildTestRestoreDelayMs=3000')
     await acceptAiConsentOnce(page)
-    await expect(page.getByRole('heading', { name: 'Working on it', exact: true }).first()).toBeVisible({
+    await expect(page.getByRole('heading', { name: waitCopyV2('home').heading, exact: true }).first()).toBeVisible({
         timeout: 60_000,
     })
     await expect(page.getByTestId('manual-card')).toHaveCount(0)

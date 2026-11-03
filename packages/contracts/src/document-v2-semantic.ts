@@ -17,6 +17,7 @@ import {
     BUSY_COPY_V2,
     CONFIRM_LABELS_V2,
     COACH_COPY_V2,
+    WAIT_ACTION_LABELS_V2,
 } from './document-v2-copy'
 import { availableBoundKeysV2, intentAllowedV2, type DocumentMaterialV2 } from './document-v2-material'
 import { resultOfKindV2 } from './document-v2-context'
@@ -27,6 +28,7 @@ const normalize = (text: string): string => text.toLowerCase().replace(/\s+/gu, 
 /** Interface wording a state variant or a header control may use besides the per-intent labels. */
 export const GENERIC_ACTION_LABELS_V2 = [
     'Working…',
+    ...WAIT_ACTION_LABELS_V2,
     'Saving…',
     'Please wait',
     'Try again',

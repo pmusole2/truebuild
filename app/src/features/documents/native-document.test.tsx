@@ -4,6 +4,7 @@ import { StrictMode, useEffect, type ReactElement } from 'react'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
 import {
+    AccessibilityInfo,
     Dimensions,
     PanResponder,
     Platform,
@@ -17,6 +18,8 @@ import type { TestInstance } from 'test-renderer'
 import {
     assembleDocumentV2,
     buildFallbackProposalV2,
+    waitCopyV2,
+    SCREEN_KINDS_V2,
     documentMaterialV2,
     screenDocumentV2Schema,
     manualSessionSchema,
@@ -329,35 +332,152 @@ describe('the actual v2 catalog renderer', () => {
             ),
         )
         expect(screen.getAllByTestId('frozen-photo-image')).toHaveLength(1)
-        expect(screen.getByTestId('blueprint-loader-check')).toBeTruthy()
+        expect(await screen.findByTestId('blueprint-loader-check')).toBeTruthy()
         const thumbnail = screen.getByTestId('blueprint-loader-check').queryAll((node) => node.type === 'RNSVGImage')
         expect(thumbnail).toHaveLength(1)
         expect(thumbnail[0]!.props.src.uri).toBe(screen.getByTestId('frozen-photo-image').props.source.uri)
         expect(screen.queryByRole('progressbar')).toBeNull()
     })
 
-    it('uses the guide scene while a Result document is prepared after the photo check has finished', async () => {
+    it('uses the screen scene while a Result document is prepared after the photo check has finished', async () => {
         const { inputs, bindings } = await setup(true)
         await render(wrap(<DocumentRenderer document={compose(inputs)} bindings={bindings} variant="pending" />))
-        expect(screen.getByTestId('blueprint-loader-guide')).toBeTruthy()
+        expect(await screen.findByTestId('blueprint-loader-screen')).toBeTruthy()
         expect(screen.queryByTestId('blueprint-loader-check')).toBeNull()
     })
 
     it.each([
-        ['guide', 'working', 'Building your guide', false],
-        ['answer', 'asking', 'Asking…', true],
+        ['guide', 'working', false],
+        ['answer', 'asking', true],
     ] as const)(
-        'a waiting %s shows its build scene, never a count of finished steps',
-        async (kind, activity, copy, held) => {
+        'a waiting %s shows its build scene labelled by the contract wait copy, never a count of finished steps',
+        async (kind, activity, held) => {
             const { inputs, bindings } = await setup(held)
-            const waiting = compose({ ...inputs, kind, uiState: { busy: { activity } } })
-            await render(wrap(<DocumentRenderer document={waiting} bindings={bindings} variant="busy" />))
-            expect(within(screen.getByTestId('blueprint-loader-guide')).getByText(copy)).toBeTruthy()
+            const context = kind === 'answer' ? heldPages(inputs, bindings).answerInputs : inputs
+            const waiting = compose({ ...context, kind, uiState: { ...context.uiState, busy: { activity } } })
+            const copy = waitCopyV2(kind, activity)
+            await render(
+                wrap(<DocumentRenderer document={waiting} bindings={{ ...bindings, waitCopy: copy }} variant="busy" />),
+            )
+            expect(within(await screen.findByTestId('blueprint-loader-screen')).getByText(copy.heading)).toBeTruthy()
             expect(screen.queryByRole('progressbar')).toBeNull()
         },
     )
 
-    it('cross-fades a finished Guide over its wait scene in the loader’s own 200ms, not the fast fade', async () => {
+    it.each(SCREEN_KINDS_V2)(
+        'a generic %s wait draws its screen scene only after 300ms, then removes it as soon as the screen is ready',
+        async (kind) => {
+            const held = kind === 'result' || kind === 'answer'
+            const { inputs, bindings } = await setup(held)
+            const context = kind === 'answer' ? heldPages(inputs, bindings).answerInputs : inputs
+            const copy = waitCopyV2(kind)
+            const waitingBindings: FrameBindings = { ...bindings, waitCopy: copy }
+            const waiting = compose({
+                ...context,
+                kind,
+                uiState: { ...context.uiState, busy: { activity: 'working' } },
+            })
+            const ready = compose({ ...context, kind })
+            jest.useFakeTimers()
+            const announce = jest
+                .spyOn(AccessibilityInfo, 'announceForAccessibility')
+                .mockImplementation(() => undefined)
+            announce.mockClear()
+            try {
+                const view = await render(
+                    wrap(<DocumentRenderer document={waiting} bindings={waitingBindings} variant="busy" />),
+                )
+                if (held) await loadHeldPhoto()
+                expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+                expect(screen.queryByText(copy.heading)).toBeNull()
+                expect(screen.queryByText(copy.detail)).toBeNull()
+                expect(screen.queryByText(copy.action)).toBeNull()
+                expect(announce).not.toHaveBeenCalled()
+                await act(() => jest.advanceTimersByTime(299))
+                expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+                await act(() => jest.advanceTimersByTime(1))
+                expect(within(screen.getByTestId('blueprint-loader-screen')).getByText(copy.heading)).toBeTruthy()
+                expect(screen.getByRole('header', { name: copy.heading })).toBeTruthy()
+                expect(screen.getAllByText(copy.heading)).toHaveLength(1)
+                expect(announce).toHaveBeenCalledTimes(1)
+                expect(spies.withRepeat).not.toHaveBeenCalled()
+                await view.rerender(wrap(<DocumentRenderer document={ready} bindings={bindings} />))
+                expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+                expect(screen.queryByText(copy.heading)).toBeNull()
+            } finally {
+                announce.mockRestore()
+                jest.useRealTimers()
+            }
+        },
+    )
+
+    it.each([true, false])(
+        'renders a delayed blueprint for a valid wait without a progress node (scroll: %s)',
+        async (scrolled) => {
+            const { inputs, bindings } = await setup()
+            const copy = waitCopyV2('home')
+            const context = { ...inputs, kind: 'home' as const }
+            const document = composeEdited(context, (body) => {
+                const withoutProgress = inStack((children) => children.filter((node) => node.type !== 'Progress'))(body)
+                return scrolled ? withoutProgress : unscrolled(withoutProgress)
+            })
+            jest.useFakeTimers()
+            try {
+                const view = await render(
+                    wrap(<DocumentRenderer document={document} bindings={bindings} variant="pending" />),
+                )
+                expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+                await act(() => jest.advanceTimersByTime(300))
+                expect(screen.getAllByTestId('blueprint-loader-screen')).toHaveLength(1)
+                expect(screen.getByRole('header', { name: copy.heading })).toBeTruthy()
+                await view.rerender(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+                expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+            } finally {
+                jest.useRealTimers()
+            }
+        },
+    )
+
+    it('keeps a ready screen while the app prepares the next one, then removes the small scene at once', async () => {
+        const { inputs, bindings } = await setup()
+        const ready = compose(inputs)
+        const copy = waitCopyV2('pages', 'saving')
+        const preparing: FrameBindings = { ...bindings, preparingDocument: true, waitCopy: copy }
+        jest.useFakeTimers()
+        try {
+            const view = await render(wrap(<DocumentRenderer document={ready} bindings={preparing} />))
+            expect(screen.queryByTestId('document-preparing-wait')).toBeNull()
+            await act(() => jest.advanceTimersByTime(299))
+            expect(screen.queryByTestId('document-preparing-wait')).toBeNull()
+            await act(() => jest.advanceTimersByTime(1))
+            expect(within(screen.getByTestId('document-preparing-wait')).getByText(copy.heading)).toBeTruthy()
+            await view.rerender(wrap(<DocumentRenderer document={ready} bindings={bindings} />))
+            expect(screen.queryByTestId('document-preparing-wait')).toBeNull()
+        } finally {
+            jest.useRealTimers()
+        }
+    })
+
+    it('a wait that ends before 300ms never reveals the scene, even after its delay would have passed', async () => {
+        const { inputs, bindings } = await setup()
+        const waitingBindings: FrameBindings = { ...bindings, waitCopy: waitCopyV2('home') }
+        const waiting = compose({ ...inputs, kind: 'home', uiState: { busy: { activity: 'working' } } })
+        const ready = compose({ ...inputs, kind: 'home' })
+        jest.useFakeTimers()
+        try {
+            const view = await render(
+                wrap(<DocumentRenderer document={waiting} bindings={waitingBindings} variant="busy" />),
+            )
+            await act(() => jest.advanceTimersByTime(299))
+            await view.rerender(wrap(<DocumentRenderer document={ready} bindings={bindings} />))
+            await act(() => jest.advanceTimersByTime(1_000))
+            expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+        } finally {
+            jest.useRealTimers()
+        }
+    })
+
+    it('removes a finished Guide wait immediately with motion enabled and preserves its scroller', async () => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs)
         const moving = (node: ReactElement): ReactElement => (
@@ -365,19 +485,79 @@ describe('the actual v2 catalog renderer', () => {
                 <FeedbackProvider reduceMotion={false}>{node}</FeedbackProvider>
             </ThemeProvider>
         )
-        const view = await render(moving(<DocumentRenderer document={document} bindings={bindings} variant="busy" />))
-        const scroller = bodyScroller()
-        expect(screen.getByTestId('document-wait-transition').props.exiting).toEqual({
-            durationV: 200,
-            reduceMotionV: 'system',
-        })
-        spies.withTiming.mockClear()
-        await view.rerender(moving(<DocumentRenderer document={document} bindings={bindings} />))
-        expect(bodyScroller()).toBe(scroller)
-        const incoming = { durationV: 200, reduceMotionV: 'system' }
-        expect(screen.getByTestId('document-wait-transition').props.entering).toEqual(incoming)
-        await view.rerender(moving(<DocumentRenderer document={document} bindings={bindings} />))
-        expect(screen.getByTestId('document-wait-transition').props.entering).toEqual(incoming)
+        jest.useFakeTimers()
+        try {
+            const view = await render(
+                moving(<DocumentRenderer document={document} bindings={bindings} variant="busy" />),
+            )
+            const scroller = bodyScroller()
+            expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+            await act(() => jest.advanceTimersByTime(300))
+            expect(screen.getByTestId('blueprint-loader-screen')).toBeTruthy()
+            await view.rerender(moving(<DocumentRenderer document={document} bindings={bindings} />))
+            expect(bodyScroller()).toBe(scroller)
+            expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+            expect(screen.queryByTestId('document-wait-transition')).toBeNull()
+        } finally {
+            jest.useRealTimers()
+        }
+    })
+
+    it('uses the selected variant heading despite stale bindings, and reserves title overrides for preparation', async () => {
+        const { inputs, bindings } = await setup(true)
+        const answer = heldPages(inputs, bindings).answerInputs
+        const document = compose({ ...answer, uiState: { ...answer.uiState, busy: { activity: 'asking' } } })
+        jest.useFakeTimers()
+        try {
+            const view = await render(
+                wrap(
+                    <DocumentRenderer
+                        document={document}
+                        bindings={{ ...bindings, waitCopy: waitCopyV2('pages', 'saving') }}
+                        variant="busy"
+                    />,
+                ),
+            )
+            expect(screen.queryByText('Asking…')).toBeNull()
+            await act(() => jest.advanceTimersByTime(300))
+            expect(within(screen.getByTestId('blueprint-loader-screen')).getByText('Asking…')).toBeTruthy()
+            expect(screen.queryByText('Saving…')).toBeNull()
+            const opening = waitCopyV2('guide', null, 'Shelf unit')
+            const guide = compose(inputs)
+            await view.rerender(
+                wrap(
+                    <DocumentRenderer
+                        document={guide}
+                        bindings={{ ...bindings, preparingDocument: true, waitCopy: opening }}
+                        variant="pending"
+                    />,
+                ),
+            )
+            expect(screen.queryByText(opening.heading)).toBeNull()
+            await act(() => jest.advanceTimersByTime(300))
+            expect(screen.getAllByText(opening.heading)).toHaveLength(1)
+            expect(screen.queryByText(waitCopyV2('guide').heading)).toBeNull()
+        } finally {
+            jest.useRealTimers()
+        }
+    })
+
+    it('resolves a listed body wait heading when a valid pending variant retains its ready header', async () => {
+        const { inputs, bindings } = await setup()
+        const document = compose({ ...inputs, kind: 'home', session: null, stepId: null })
+        document.states.pending!.header.title = document.header.title
+        jest.useFakeTimers()
+        try {
+            await render(wrap(<DocumentRenderer document={document} bindings={bindings} variant="pending" />))
+            expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
+            await act(() => jest.advanceTimersByTime(300))
+            expect(screen.getAllByText(waitCopyV2('home').heading)).toHaveLength(1)
+            expect(
+                within(screen.getByTestId('blueprint-loader-screen')).getByText(waitCopyV2('home').heading),
+            ).toBeTruthy()
+        } finally {
+            jest.useRealTimers()
+        }
     })
 
     it('keeps a finished Completion’s own progress while a waiting one shows the build scene', async () => {
@@ -393,11 +573,11 @@ describe('the actual v2 catalog renderer', () => {
                 />,
             ),
         )
-        expect(screen.getByTestId('blueprint-loader-guide')).toBeTruthy()
+        expect(await screen.findByTestId('blueprint-loader-screen')).toBeTruthy()
         expect(screen.queryByRole('progressbar')).toBeNull()
         await waiting.unmount()
         await render(wrap(<DocumentRenderer document={compose(completion)} bindings={bindings} />))
-        expect(screen.queryByTestId('blueprint-loader-guide')).toBeNull()
+        expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
         expect(screen.getByRole('progressbar')).toBeTruthy()
     })
 
@@ -712,12 +892,12 @@ describe('the actual v2 catalog renderer', () => {
         const document = compose(inputs)
         await render(wrap(<DocumentRenderer document={document} bindings={bindings} variant="busy" />))
         expect(screen.getAllByTestId('bottom-bar')).toHaveLength(1)
-        expect(screen.getByTestId('guide-primary').props.nativeID).toBe(
+        expect((await screen.findByTestId('guide-primary')).props.nativeID).toBe(
             document.metadata.origins['states.busy.bar.primary'] === 'generated'
                 ? 'truebuild-render-origin:generated'
                 : 'truebuild-render-origin:fallback',
         )
-        expect(screen.getByText('Working…')).toBeTruthy()
+        expect(await screen.findByText(waitCopyV2('guide').action)).toBeTruthy()
     })
 
     it('keeps the uncapped header copy in a wrapping, non-scrolling persistent native view', async () => {
@@ -1146,7 +1326,8 @@ describe('the actual v2 catalog renderer', () => {
                 />,
             )
         const view = await render(reading('Reading your pages…'))
-        const progress = screen.getByRole('progressbar', { name: 'Reading your manual' })
+        expect(await screen.findByRole('header', { name: 'Reading your manual' })).toBeTruthy()
+        const progress = await screen.findByRole('progressbar', { name: 'Reading your manual' })
         expect(progress.props.accessibilityValue).toEqual({ text: 'Reading your manual. This can take a minute.' })
         expect(screen.getByText('1 manual page')).toBeTruthy()
         expect(screen.queryByText('Page 1 of 1')).toBeNull()
@@ -1351,7 +1532,7 @@ describe('the actual v2 catalog renderer', () => {
         expect(screen.getByTestId('raw-camera-preview')).toBeTruthy()
         expect(mounted).toHaveBeenCalledTimes(1)
         expect(unmounted).not.toHaveBeenCalled()
-        await fireEvent.press(screen.getByRole('button', { name: 'Working…' }))
+        await fireEvent.press(await screen.findByRole('button', { name: waitCopyV2('camera').action }))
         expect(capture).toHaveBeenCalledTimes(1)
         await view.rerender(wrap(<DocumentRenderer document={document} bindings={cameraBindings} variant="pending" />))
         expect(screen.getByTestId('camera-shutter')).toBeEnabled()

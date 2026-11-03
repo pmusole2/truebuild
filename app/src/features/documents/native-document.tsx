@@ -21,7 +21,9 @@ import {
 } from 'react-native'
 import Svg, { Circle } from 'react-native-svg'
 import {
+    waitCopyV2,
     BUSY_COPY_V2,
+    SCREEN_WAIT_COPY_V2,
     screenFacts,
     citationPlanV2,
     sourceKeyV2,
@@ -72,7 +74,7 @@ import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
-import Animated, { FadeIn, FadeOut, ReduceMotion } from 'react-native-reanimated'
+import Animated from 'react-native-reanimated'
 import { useContentFade } from '../../ui/motion'
 import { useIconReveal, useStepTransition } from '../../ui/motion'
 import { useFeedback } from '../../ui/feedback'
@@ -184,6 +186,7 @@ type Environment = {
     planSources: readonly DocumentSourceV2[]
     sections: Readonly<Record<string, boolean>>
     sectionChanged: (path: string, open: boolean) => void
+    leading: ReactNode
     trailing: ReactNode
     /** Guide pills already shown by resolved text, so a repeated quantity or status reads once. */
     guidePillPaths: ReadonlySet<string>
@@ -197,7 +200,12 @@ type Environment = {
     photoBranch: ReadonlySet<string>
     /** The shown variant is a busy or pending wait (not ready, error or empty): its build indicator is a wait scene. */
     waiting: boolean
-    waitAnimation: 'none' | 'waiting' | 'arriving'
+    /** The contract's wait heading, used as the wait scene's label and not repeated as the body's plain heading. */
+    waitHeading: string
+    authoredWaitHeading: string
+    waitVisible: boolean
+    /** A wait scene is drawn only after the complete waiting presentation has observed WAIT_REVEAL_MS. */
+    waitScene: boolean
 }
 const marked = (environment: Environment, path: string): string => {
     const origin = environment.document.metadata.origins[path]
@@ -468,34 +476,35 @@ function ReadingProgress({
     const streamPhase =
         pending?.startsWith('Reading manual pages: laying out steps') === true ? plainPending(pending) : null
     return (
-        <View
-            nativeID={mark}
-            accessible
-            accessibilityRole={reading ? 'progressbar' : 'text'}
-            accessibilityLabel={label || (reading ? 'Reading your manual' : 'Manual pages')}
-            accessibilityValue={reading ? { text: plainPending(pending) ?? 'In progress' } : undefined}
-            style={styles.stack}
-        >
-            {reading ? (
+        <View nativeID={mark} style={styles.stack}>
+            {reading && (!environment.waiting || environment.waitVisible) ? (
                 <View testID="reading-stream-phase">
                     <BlueprintLoader
+                        heading
                         phase="reading"
                         pageCount={count || undefined}
-                        label={streamPhase ?? undefined}
+                        label={streamPhase ?? environment.waitHeading}
                         running={scope.active && !attention}
                     />
                 </View>
             ) : null}
-            <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
+            <View
+                accessible
+                accessibilityRole={reading ? 'progressbar' : 'text'}
+                accessibilityLabel={label || (reading ? 'Reading your manual' : 'Manual pages')}
+                accessibilityValue={reading ? { text: plainPending(pending) ?? 'In progress' } : undefined}
+            >
+                <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
+            </View>
         </View>
     )
 }
 
 /**
- * The one wait scene of a waiting Guide, Result, Done or Answer. It names only what the app is doing for that document:
- * the photo check of a Result, or the guide (or the question) being prepared. It never counts finished steps.
+ * The one wait scene of a waiting document. Only a live reading/check witness selects an operation scene; every other
+ * wait draws screen preparation. Its label resolves the authored wait heading, without counting steps or repeating it.
  */
-function BuildWait({ environment, mark }: { environment: Environment; mark: string }): ReactElement {
+function WaitScene({ environment, mark }: { environment: Environment; mark: string }): ReactElement {
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const { document, bindings } = environment
@@ -512,22 +521,36 @@ function BuildWait({ environment, mark }: { environment: Environment; mark: stri
     return (
         <BlueprintLoader
             nativeID={mark}
-            phase={checking ? 'check' : 'guide'}
-            label={document.kind === 'answer' ? BUSY_COPY_V2.asking.heading : undefined}
+            heading
+            phase={
+                checking ? 'check' : bindings.live?.state.pending?.startsWith('Reading') === true ? 'reading' : 'screen'
+            }
+            label={environment.waitHeading}
             imageUri={thumbnail}
             running={scope.active && !attention}
         />
     )
 }
 
-/** Documents whose waiting variant is a generation the app is performing, so their build indicator becomes the wait scene. */
-const GENERATED_WAIT_KINDS: ReadonlySet<string> = new Set(['guide', 'result', 'answer', 'completion'])
-/** The one cross-fade a finished document takes over its wait scene, the loader's own handoff length. */
-const ARRIVAL_FADE_MS = 200
-// Reanimated retains the actual outgoing native scene in place; the held image's React ancestry stays intact.
-const WAIT_SCENE_EXIT = FadeOut.duration(ARRIVAL_FADE_MS).reduceMotion(ReduceMotion.System)
-const WAIT_SCENE_ENTER = FadeIn.duration(ARRIVAL_FADE_MS).reduceMotion(ReduceMotion.System)
-
+/** A generic wait's scene appears only after this delay: a shorter wait reveals nothing and the screen stays as it is. */
+const WAIT_REVEAL_MS = 300
+/** Contract-owned transient navigation/storage wording; full variants resolve their own TextRefs below. */
+const waitHeadingOf = (bindings: FrameBindings, kind: ScreenDocumentV2['kind']): string =>
+    bindings.waitCopy?.heading ?? waitCopyV2(kind).heading
+/** The reason a control gives while the app prepares work: the contract-owned activity words, never a native string. */
+const preparingReason = (bindings: FrameBindings, kind: ScreenDocumentV2['kind']): string =>
+    bindings.preparationLabel ?? bindings.waitCopy?.action ?? waitCopyV2(kind).action
+/** True only for `active` lasting WAIT_REVEAL_MS on this page; leaving the wait or changing page clears it at once. */
+function useWaitReveal(active: boolean, page: string): boolean {
+    const [revealed, setRevealed] = useState<string | null>(null)
+    useEffect(() => {
+        setRevealed(null)
+        if (!active) return undefined
+        const timer = setTimeout((): void => setRevealed(page), WAIT_REVEAL_MS)
+        return (): void => clearTimeout(timer)
+    }, [active, page])
+    return active && revealed === page
+}
 function contextOf(environment: Environment): BlockContext {
     const { document, bindings } = environment
     return {
@@ -562,7 +585,12 @@ function Action({
         environment.bindings.readOnly === true || preparingAction(environment.bindings, action.intent)
             ? {
                   enabled: false,
-                  reason: environment.bindings.readOnly === true ? 'Comparison is read only.' : 'Working on it',
+                  reason:
+                      environment.bindings.readOnly === true
+                          ? 'Comparison is read only.'
+                          : environment.waitVisible
+                            ? preparingReason(environment.bindings, environment.document.kind)
+                            : null,
                   run: (): void => undefined,
               }
             : environment.bindings.resolve(action.intent)
@@ -1354,6 +1382,15 @@ function PieceTile({
     )
 }
 
+/** Existing manual evidence and live capture surfaces stay mounted while new wait UI observes its grace. */
+function holdsWaitEvidence(node: ScreenNodeV2): boolean {
+    if (node.type === 'CameraView' || node.type === 'Citation' || node.type === 'ManualPage') return true
+    if (node.type === 'Image') return true
+    if (node.type === 'Text')
+        return node.content.kind === 'fact' || (node.content.kind === 'bound' && node.content.key === 'privacy-camera')
+    return 'children' in node && node.children.some(holdsWaitEvidence)
+}
+
 type NodeProps = { node: ScreenNodeV2; environment: Environment; path: string }
 
 /** Only the branch that holds the shared photo outlives its page; every other node starts fresh with a new page. */
@@ -1365,30 +1402,8 @@ function Node(props: NodeProps): ReactElement {
 function PageNode(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
     if (props.environment.omittedDuplicates.has(props.path)) return <></>
-    const { environment, path } = props
-    const root = path === `${environment.prefix}body`
-    const parent = path.slice(0, path.lastIndexOf('.'))
-    // Keep the held photo and its ancestors intact; only independent sibling branches cross-fade.
-    const fades =
-        !environment.bindings.inspect &&
-        GENERATED_WAIT_KINDS.has(environment.document.kind) &&
-        props.node.type !== 'Scroll' &&
-        !environment.photoBranch.has(path) &&
-        (root || parent === `${environment.prefix}body` || environment.photoBranch.has(parent))
-    const content = fades ? (
-        <Animated.View
-            key={environment.waiting ? 'wait' : 'content'}
-            testID="document-wait-transition"
-            collapsable={false}
-            style={root ? styles.grow : undefined}
-            entering={environment.waitAnimation === 'arriving' ? WAIT_SCENE_ENTER : undefined}
-            exiting={environment.waitAnimation === 'waiting' ? WAIT_SCENE_EXIT : undefined}
-        >
-            <NodeContent {...props} />
-        </Animated.View>
-    ) : (
-        <NodeContent {...props} />
-    )
+    // Photo/camera ancestors and their siblings retain their React ancestry across the wait handoff.
+    const content = <NodeContent {...props} />
     if (!props.environment.bindings.inspect)
         return (
             <RenderOriginProvider origin={originAt(props.environment, props.path)}>
@@ -1438,6 +1453,7 @@ function NodeContent({
     const { document, bindings } = environment
     const mark = marked(environment, path)
     const text = (ref: TextRefV2 | null): string => documentText(document, bindings, ref)
+    if (environment.waiting && !environment.waitVisible && !holdsWaitEvidence(node)) return null
     const children =
         'children' in node
             ? node.children.map((child, index) => (
@@ -1578,6 +1594,7 @@ function NodeContent({
                     nestedScrollEnabled
                     contentInsetAdjustmentBehavior="never"
                 >
+                    {path === `${environment.prefix}body` ? environment.leading : null}
                     {children}
                     {path === `${environment.prefix}body` ? environment.trailing : null}
                 </ViewerScrollView>
@@ -1596,6 +1613,13 @@ function NodeContent({
         case 'Spacer':
             return <View nativeID={mark} style={{ height: gap(node.size) }} />
         case 'Text': {
+            // The wait scene carries this heading as its label, so the body does not repeat it beside the drawing.
+            if (
+                environment.waiting &&
+                node.content.kind === 'literal' &&
+                text(node.content) === environment.authoredWaitHeading
+            )
+                return null
             const Typography = {
                 display: LargeTitle,
                 title: Title,
@@ -1702,13 +1726,8 @@ function NodeContent({
             if (node.binding === 'reading' || node.binding === 'pages-read')
                 return <ReadingProgress environment={environment} label={text(node.label)} mark={mark} />
             // A waiting variant's build indicator is not a count of finished steps: it is the wait scene itself.
-            if (
-                node.type === 'Progress' &&
-                node.binding === 'build' &&
-                environment.waiting &&
-                GENERATED_WAIT_KINDS.has(environment.document.kind)
-            )
-                return <BuildWait environment={environment} mark={mark} />
+            if (node.type === 'Progress' && node.binding === 'build' && environment.waiting)
+                return environment.waitScene ? <WaitScene environment={environment} mark={mark} /> : null
             const entry = live?.entry
             const pages = node.binding === 'pages'
             const total = pages ? (bindings.session?.pages.length ?? 0) : (facts?.steps.length ?? 0)
@@ -1974,7 +1993,6 @@ export function NativeDocumentRenderer({
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
-    const { reduceMotion } = useFeedback()
     const previousStep = useRef(bindings.live?.entry?.stepIndex ?? 0)
     const stepIndex = bindings.live?.entry?.stepIndex ?? 0
     const direction = stepIndex >= previousStep.current ? 1 : -1
@@ -2083,6 +2101,39 @@ export function NativeDocumentRenderer({
                 instructionInBody = true
         })
     }
+    // Use the authored wait indicator when present; text-only variants receive the same scene in their body.
+    let waitIndicator = false
+    let bodyWaitHeading: string | null = null
+    const listedWaitHeadings = new Set([
+        SCREEN_WAIT_COPY_V2[document.kind].heading,
+        ...Object.values(BUSY_COPY_V2).map((copy) => copy.heading),
+    ])
+    const readingNow = bindings.live?.state.pending?.startsWith('Reading') === true
+    visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
+        if (
+            !hidden &&
+            path.startsWith(`${selected.prefix}body`) &&
+            node.type === 'Text' &&
+            node.content.kind === 'literal' &&
+            listedWaitHeadings.has(node.content.text) &&
+            bodyWaitHeading === null
+        )
+            bodyWaitHeading = documentText(document, bindings, node.content)
+        if (
+            !hidden &&
+            path.startsWith(`${selected.prefix}body`) &&
+            ((node.type === 'Progress' && node.binding === 'build') ||
+                (readingNow &&
+                    ((node.type === 'Progress' && node.binding === 'reading') ||
+                        (node.type === 'Meter' && node.binding === 'pages-read'))))
+        )
+            waitIndicator = true
+    })
+    const waitingNow = selected.name === 'busy' || selected.name === 'pending'
+    const waitRevealed = useWaitReveal(waitingNow || bindings.preparingDocument === true, bodyPage)
+    // Retained content stays while the app prepares a new document; its small scene appears only after the same delay.
+    const preparingRevealed = bindings.preparingDocument === true && !waitingNow && waitRevealed
+    const authoredWaitHeading = bodyWaitHeading ?? documentText(document, bindings, selected.variant.header.title)
     const environment: Environment = {
         document,
         bindings,
@@ -2103,22 +2154,23 @@ export function NativeDocumentRenderer({
             includeManualPages: true,
             lowPriorityPaths,
         }),
+        leading: null,
         trailing: null,
         guidePillPaths: new Set<string>(),
         rootScroll,
         scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
         page: bodyPage,
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
-        waiting: selected.name === 'busy' || selected.name === 'pending',
-        waitAnimation:
-            reduceMotion || !scope.active || attention
-                ? 'none'
-                : selected.name === 'busy' || selected.name === 'pending'
-                  ? 'waiting'
-                  : arriving
-                    ? 'arriving'
-                    : 'none',
+        waiting: waitingNow,
+        waitHeading: bindings.preparingDocument === true ? waitHeadingOf(bindings, document.kind) : authoredWaitHeading,
+        authoredWaitHeading,
+        waitVisible: waitRevealed,
+        waitScene: waitingNow && waitRevealed,
     }
+    if (environment.waitScene && !waitIndicator)
+        environment.leading = (
+            <WaitScene environment={environment} mark={marked(environment, `${selected.prefix}body`)} />
+        )
     const findRegions = (node: ScreenNodeV2): boolean =>
         node.type === 'VerdictCard' ? node.showRegions : 'children' in node && node.children.some(findRegions)
     environment.showRegions = findRegions(selected.variant.body)
@@ -2162,7 +2214,6 @@ export function NativeDocumentRenderer({
             (node.label === 'Close' || node.label === 'Back')
         return {
             label: node.label,
-            busy: bindings.preparingDocument === true && role === 'primary' && !cancelsWork(node.intent),
             accessibilityLabel: node.label,
             icon: node.icon ?? undefined,
             onPress:
@@ -2214,8 +2265,10 @@ export function NativeDocumentRenderer({
                             nativeID={marked(environment, `${selected.prefix}header`)}
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
-                            <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            {subtitle === null || instructionInBody ? null : (
+                            {waitingNow ? null : (
+                                <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
+                            )}
+                            {waitingNow || subtitle === null || instructionInBody ? null : (
                                 <Caption>{documentText(document, bindings, subtitle)}</Caption>
                             )}
                         </View>
@@ -2251,6 +2304,7 @@ export function NativeDocumentRenderer({
                                     : {}),
                             }}
                         >
+                            {environment.leading}
                             <Node
                                 node={selected.variant.body}
                                 environment={environment}
@@ -2260,19 +2314,48 @@ export function NativeDocumentRenderer({
                         </ViewerScrollView>
                     )}
                 </Animated.View>
+                {preparingRevealed ? (
+                    <BlueprintLoader
+                        testID="document-preparing-wait"
+                        heading
+                        phase="screen"
+                        compact
+                        label={waitHeadingOf(bindings, document.kind)}
+                        running={scope.active && !attention}
+                    />
+                ) : null}
                 {essentialControls}
                 <FixedBottomBar
                     onHeight={document.kind === 'guide' ? setBarHeight : undefined}
                     nativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}
-                    primary={action(selected.variant.bar.primary, 'primary')}
+                    primary={
+                        waitingNow &&
+                        !waitRevealed &&
+                        !(
+                            ['Back', 'Close'].includes(selected.variant.bar.primary.label) &&
+                            selected.variant.bar.primary.intent.intent === 'navigate' &&
+                            selected.variant.bar.primary.intent.target === 'back'
+                        ) &&
+                        !(
+                            document.kind === 'camera' &&
+                            selected.name === 'pending' &&
+                            selected.variant.bar.primary.intent.intent === 'capture' &&
+                            selected.variant.bar.primary.intent.target === 'take-photo'
+                        )
+                            ? null
+                            : action(selected.variant.bar.primary, 'primary')
+                    }
                     secondary={
-                        selected.variant.bar.secondary === null
+                        (waitingNow && !waitRevealed) || selected.variant.bar.secondary === null
                             ? undefined
                             : action(selected.variant.bar.secondary, 'secondary')
                     }
                     reason={
-                        document.kind === 'camera' ? null : bindings.resolve(selected.variant.bar.primary.intent).reason
+                        document.kind === 'camera' ||
+                        ((waitingNow || bindings.preparingDocument === true) && !waitRevealed)
+                            ? null
+                            : bindings.resolve(selected.variant.bar.primary.intent).reason
                     }
                 />
             </ScreenBody>

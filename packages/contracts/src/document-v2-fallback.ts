@@ -53,6 +53,7 @@ import {
     NO_OVERVIEW_FIGURE_COPY_V2,
     NO_STEP_FIGURE_COPY_V2,
     STATE_COPY_V2,
+    waitCopyV2,
 } from './document-v2-copy'
 import {
     coachTargetsForV2,
@@ -917,7 +918,8 @@ function stateHeader(
     const { kind, uiState } = material.inputs
     // A busy screen's fixed header names what the app is doing (the body's own heading may be scrolled out of sight).
     const activity = state === 'busy' ? uiState?.busy?.activity : undefined
-    if (activity !== undefined) return { ...ready.header, title: lit(BUSY_COPY_V2[activity].heading), actions: [] }
+    if (state === 'busy' || state === 'pending')
+        return { ...ready.header, title: lit(waitCopyV2(kind, activity).heading), actions: [] }
     if (kind !== 'result' && kind !== 'completion') return { ...ready.header, actions: [] }
     const title = kind === 'completion' ? lit('Your build') : lit(STATE_COPY_V2[state].heading)
     return { ...ready.header, title, actions: [] }
@@ -935,7 +937,7 @@ function stateVariant(
     const screenTimeout = state === 'error' && reason === 'timeout'
     const copy =
         (screenTimeout ? { heading: 'That took too long', detail: 'Try again in a moment.' } : undefined) ??
-        (activity === undefined ? undefined : BUSY_COPY_V2[activity]) ??
+        (state === 'busy' || state === 'pending' ? waitCopyV2(inputs.kind, activity) : undefined) ??
         (state === 'empty' && inputs.kind === 'questions' && material.requirements.capture
             ? { heading: 'Ask anything about this step.', detail: 'Which part is your question about?' }
             : undefined) ??
@@ -953,7 +955,7 @@ function stateVariant(
     // while the document is only pending, guidance never blocks the shutter: the authored Take photo stays usable.
     const cameraRuns = inputs.kind === 'camera' && material.requirements.nodes.includes('CameraView')
     const holdCamera = (waiting || screenTimeout) && cameraRuns
-    const waitLabel = inputs.uiState?.busy?.activity === 'saving' ? 'Saving…' : 'Working…'
+    const waitLabel = waitCopyV2(inputs.kind, activity).action
     const bar: BarV2 = waiting
         ? holdCamera && state === 'pending'
             ? { primary: primary('Take photo', intent('capture', 'take-photo'), 'camera'), secondary: null }

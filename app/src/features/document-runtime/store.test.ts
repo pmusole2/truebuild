@@ -4,6 +4,8 @@ import {
     buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
+    waitCopyV2,
+    verifyDocumentAgainstInputsV2,
     screenDocumentV2Schema,
     SCREEN_KINDS_V2,
     type ScreenKindV2,
@@ -437,6 +439,26 @@ describe('whole-document runtime store', () => {
             store.dispose()
         }
         expect(screensV2).not.toHaveBeenCalled()
+    })
+
+    it('rejects an older API wait vocabulary and publishes the current complete local fallback', async () => {
+        const older = fixture(inputs)
+        older.states.pending!.header.title = { kind: 'literal', text: 'Working on it' }
+        expect(verifyDocumentAgainstInputsV2(older, inputs, sha256Hex)).toEqual(['literal_not_listed'])
+        const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) => ok(older, metadata.requestId))
+        const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'old-api' })
+        store.request(inputs)
+        await vi.waitFor(() => expect(store.peek(inputs)?.status).toBe('ready'))
+        const entry = store.peek(inputs)!
+        expect(entry.issue).toBe('invalid_output')
+        expect(entry.document.metadata.source).toBe('fallback')
+        expect(entry.document.states.pending!.header.title).toEqual({
+            kind: 'literal',
+            text: waitCopyV2('guide').heading,
+        })
+        expect(screenDocumentV2Schema.safeParse(entry.document).success).toBe(true)
+        expect(screensV2).toHaveBeenCalledTimes(1)
+        store.dispose()
     })
 
     it('rejects corrupt identity as a complete local fallback and never mints B3 credit', async () => {

@@ -13,7 +13,7 @@ import type { LibraryEntry } from './library'
 import { reviewedSession } from './reviewed-session'
 import { stepPiecesForStep } from '../pieces/piece-registry'
 
-function activityOf(pending: string | null): BusyActivityV2 | null {
+export function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending === null) return null
     if (pending.startsWith('Taking a closer look') || pending.startsWith('Second opinion')) return 'second-opinion'
     if (pending.startsWith('Still thinking')) return 'question-waiting'
@@ -21,6 +21,7 @@ function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending.startsWith('Checking') || pending.startsWith('Freezing')) return 'checking'
     if (pending.startsWith('Asking')) return 'asking'
     if (pending.startsWith('Saving')) return 'saving'
+    // Page selection and local image preparation share the screen preparation vocabulary, not a provider activity.
     return 'working'
 }
 

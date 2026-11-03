@@ -190,7 +190,7 @@ describe('2 busy activity witness', () => {
             checking: 'Checking your photo…',
             asking: 'Asking…',
             saving: 'Saving…',
-            working: 'Working on it',
+            working: 'Opening your photo check',
             reading: 'Reading your manual',
         }
         expect([...BUSY_ACTIVITIES_V2].sort()).toEqual(Object.keys(copy).sort())

@@ -1,3 +1,4 @@
+import { manualDisplayTitleV2, type ScreenKindV2 } from '@truebuild/contracts'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import * as ImagePicker from 'expo-image-picker'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
@@ -107,10 +108,22 @@ export function useManualRoute(manualId: string, stop: Stop): ManualRoute {
  * Loading, failure and recovery route states are complete fallback documents through the same renderer as every
  * other route — never a native branch beside a document. The native Stack header above stays the one header.
  */
-function Waiting({ route }: { route?: ManualRoute }): ReactElement {
+function Waiting({
+    route,
+    kind,
+    manualId,
+}: {
+    route?: ManualRoute
+    kind: ScreenKindV2
+    manualId: string
+}): ReactElement {
+    const { state } = useWorkflow()
+    const session = state.entries.find((candidate) => candidate.session.manualId === manualId)?.session
+    const manualTitle = session === undefined ? undefined : manualDisplayTitleV2(session)
     return (
         <DocumentSurface
-            kind={route?.status === 'failed' ? 'error' : 'reading'}
+            kind={route?.status === 'failed' ? 'error' : kind}
+            routeWait={route?.status === 'failed' ? undefined : { kind, manualTitle }}
             state={route?.status === 'failed' ? 'error' : 'pending'}
             retry={route?.retry}
             primaryTestId={route?.status === 'failed' ? 'retry-route' : undefined}
@@ -194,7 +207,7 @@ export function ReadingRoute(): ReactElement {
                         readingConfirmation={{ open: confirming, onChange: setConfirming }}
                     />
                 ) : (
-                    <Waiting route={route} />
+                    <Waiting route={route} kind="reading" manualId={manualId} />
                 )}
             </CoachRoute>
         </>
@@ -214,7 +227,7 @@ export function CheckRoute(): ReactElement {
                 {route.status === 'ready' ? (
                     <DocumentSurface kind="quick-check" quick={progress} />
                 ) : (
-                    <Waiting route={route} />
+                    <Waiting route={route} kind="quick-check" manualId={manualId} />
                 )}
             </CoachRoute>
         </>
@@ -229,7 +242,11 @@ export function GuideRoute(): ReactElement {
         <>
             <Stack.Screen options={{ headerShown: false, gestureResponseDistance: { end: touchTarget } }} />
             <CoachRoute screen="guide">
-                {route.status === 'ready' ? <DocumentSurface kind="guide" /> : <Waiting route={route} />}
+                {route.status === 'ready' ? (
+                    <DocumentSurface kind="guide" />
+                ) : (
+                    <Waiting route={route} kind="guide" manualId={manualId} />
+                )}
             </CoachRoute>
         </>
     )
@@ -243,7 +260,11 @@ export function DoneRoute(): ReactElement {
         <>
             <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
             <CoachRoute screen={null}>
-                {route.status === 'ready' ? <DocumentSurface kind="completion" /> : <Waiting route={route} />}
+                {route.status === 'ready' ? (
+                    <DocumentSurface kind="completion" />
+                ) : (
+                    <Waiting route={route} kind="completion" manualId={manualId} />
+                )}
             </CoachRoute>
         </>
     )

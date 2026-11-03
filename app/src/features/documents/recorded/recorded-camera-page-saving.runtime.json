@@ -5,12 +5,12 @@
     "authoring": {
         "model": "Test fixture",
         "effort": "ultra",
-        "recordedAt": "2026-10-30T19:14:29.242Z",
+        "recordedAt": "2026-11-03T12:58:30.000Z",
         "fixtureId": "recorded-camera-page-saving-sol-v1"
     },
-    "recordedAt": "2026-10-30T19:14:29.242Z",
+    "recordedAt": "2026-11-03T12:58:30.000Z",
     "promptVersion": 0,
     "repaired": false,
-    "rawJsonSha256": "da6a3ba91929b32d803866cffa0b20312548656426630b905ef1bb35ffdc44af",
-    "proposalSha256": "e2e884a90586309d5b8a866d7c6176473e0db8f7759152935800480fa219bbd6"
+    "rawJsonSha256": "d187fb2c1647e34882df3fbbeee634206297e61eec16fa1d1a1997c88a50b7b0",
+    "proposalSha256": "a1055316cbde261194e699071fd9ca7f60900a2cf8128eba41fa9e27587831a6"
 }
