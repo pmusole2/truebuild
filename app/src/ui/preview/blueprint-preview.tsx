@@ -11,6 +11,11 @@ import { BlueprintLoader, LoaderSwap, type BlueprintPhase } from '../blueprint-l
 import { FeedbackProvider } from '../feedback'
 import { Body, Caption, Heading } from '../text'
 import { STOOL_PHOTO_PNG_BASE64 } from './synthetic-stool-photo-png'
+import { PiecesGrid } from '../../features/pieces/piece-viewer'
+import { VIEWER_FIXTURE_PIECES } from '../../features/pieces/__fixtures__/piece-spec'
+
+const PIECE = VIEWER_FIXTURE_PIECES[0]!
+const PIECE_ITEMS = [{ pieceId: PIECE.id, name: PIECE.name, quantity: 1, state: 'pending' as const }]
 
 /** Actual native loader components with synthetic local images; no controller, camera or API calls. */
 export default function BlueprintPreview(): ReactElement {
@@ -28,28 +33,34 @@ export default function BlueprintPreview(): ReactElement {
                         {scene === 'reading' ? 'Your manual' : scene === 'check' ? 'Your build' : 'Your guide'}
                     </Heading>
                     <View style={styles.slot}>
-                        <LoaderSwap
-                            key={scene}
-                            waiting={!ready}
-                            loader={
-                                <BlueprintLoader
-                                    phase={scene}
-                                    pageCount={scene === 'reading' ? 8 : undefined}
-                                    stepNumber={scene === 'guide' ? 2 : undefined}
-                                    imageUri={
-                                        scene === 'check'
-                                            ? `data:image/png;base64,${STOOL_PHOTO_PNG_BASE64}`
-                                            : scene === 'piece'
-                                              ? `data:image/png;base64,${HERO_DIAGRAM_PNG_BASE64}`
-                                              : undefined
-                                    }
-                                />
-                            }
-                        >
-                            <View style={styles.arrival}>
-                                <Body>Fixture content is ready.</Body>
-                            </View>
-                        </LoaderSwap>
+                        {scene === 'piece' ? (
+                            <PiecesGrid
+                                pieces={ready ? [PIECE] : []}
+                                items={PIECE_ITEMS}
+                                cutouts={{ [PIECE.id]: `data:image/png;base64,${HERO_DIAGRAM_PNG_BASE64}` }}
+                            />
+                        ) : (
+                            <LoaderSwap
+                                key={scene}
+                                waiting={!ready}
+                                loader={
+                                    <BlueprintLoader
+                                        phase={scene}
+                                        pageCount={scene === 'reading' ? 8 : undefined}
+                                        stepNumber={scene === 'guide' ? 2 : undefined}
+                                        imageUri={
+                                            scene === 'check'
+                                                ? `data:image/png;base64,${STOOL_PHOTO_PNG_BASE64}`
+                                                : undefined
+                                        }
+                                    />
+                                }
+                            >
+                                <View style={styles.arrival}>
+                                    <Body>Fixture content is ready.</Body>
+                                </View>
+                            </LoaderSwap>
+                        )}
                     </View>
                     <AppButton label={ready ? 'Show loader' : 'Show arrival'} onPress={(): void => setReady(!ready)} />
                     <Caption>Synthetic scene proof · no model request</Caption>

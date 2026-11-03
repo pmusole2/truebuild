@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { AccessibilityInfo, StyleSheet, View } from 'react-native'
 import Animated, {
     cancelAnimation,
@@ -21,14 +21,34 @@ export type BlueprintPhase = 'reading' | 'guide' | 'piece' | 'check'
 
 const AnimatedPath = Animated.createAnimatedComponent(Path)
 const AnimatedLine = Animated.createAnimatedComponent(Line)
-const SLOW_WAIT_MS = 20_000
+// A retained drawing stays visible during its swap fade, but no longer owns active work.
+const LoaderActivityContext = createContext(true)
 const SWAP_MS = 200
-const SLOW_COPY = 'Still working; big manuals take up to a minute'
-const LABELS: Readonly<Record<BlueprintPhase, string>> = {
-    reading: 'Reading your manual',
-    guide: 'Building your guide',
-    piece: 'Shaping the part',
-    check: 'Checking your build',
+const PHASES: Readonly<
+    Record<BlueprintPhase, { label: string; slowText: string | null; slowAfterMs: number; timeoutMs: number }>
+> = {
+    // Model parse and piece client budgets live in app/src/api/model-client.ts.
+    reading: {
+        label: 'Reading your manual',
+        slowText: 'Still working; big manuals take up to a minute',
+        slowAfterMs: 20_000,
+        timeoutMs: 175_000,
+    },
+    // Repair-capable Guide work: two 45s attempts plus 2s (api/src/server/documents/service.ts).
+    guide: {
+        label: 'Building your guide',
+        slowText: 'Still writing; this can take up to a minute and a half',
+        slowAfterMs: 20_000,
+        timeoutMs: 92_000,
+    },
+    piece: {
+        label: 'Shaping the part',
+        slowText: 'Still shaping this part',
+        slowAfterMs: 20_000,
+        timeoutMs: 120_000,
+    },
+    // Shortest check: 8s (app/src/api/client.ts); model check's 15s is also below the 20s threshold.
+    check: { label: 'Checking your build', slowText: null, slowAfterMs: 20_000, timeoutMs: 8_000 },
 }
 
 function Trace({
@@ -84,8 +104,9 @@ function Sweep({
     })
     return (
         <AnimatedLine
-            x1={check ? 32 : 88}
-            x2={check ? 284 : 223}
+            testID="blueprint-sweep"
+            x1={check ? 36 : 88}
+            x2={check ? 133 : 223}
             y1={133}
             y2={133}
             stroke={color}
@@ -101,12 +122,14 @@ function BlueprintScene({
     colors,
     imageUri,
     stepNumber,
+    fit,
 }: {
     phase: BlueprintPhase
     timeline: SharedValue<number>
     colors: Colors
     imageUri?: string
     stepNumber?: number
+    fit: boolean
 }): ReactElement {
     const { accent, inkMuted, border } = colors
     const lift = useAnimatedStyle(() => ({
@@ -118,7 +141,7 @@ function BlueprintScene({
             accessible={false}
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
-            style={styles.scene}
+            style={[styles.scene, fit && { flex: 1, aspectRatio: undefined }]}
         >
             <Svg width="100%" height="100%" viewBox="0 0 320 180">
                 <G stroke={border} strokeWidth={0.5} opacity={0.45}>
@@ -307,9 +330,11 @@ export function BlueprintLoader({
     stepNumber,
     pageCount,
     running = true,
+    announce = true,
     testID,
     nativeID,
     compact = false,
+    height,
 }: {
     readonly phase: BlueprintPhase
     readonly label?: string
@@ -317,31 +342,39 @@ export function BlueprintLoader({
     readonly stepNumber?: number
     readonly pageCount?: number
     readonly running?: boolean
+    readonly announce?: boolean
     readonly testID?: string
     readonly nativeID?: string
     readonly compact?: boolean
+    readonly height?: number
 }): ReactElement {
     const { colors } = useTheme()
     const { reduceMotion } = useFeedback()
+    const swapActive = useContext(LoaderActivityContext)
+    const effectiveRunning = running && swapActive
     const timeline = useSharedValue(1)
     const announced = useRef(false)
-    const [slow, setSlow] = useState(false)
+    const [slowPhase, setSlowPhase] = useState<BlueprintPhase | null>(null)
+    const config = PHASES[phase]
+    const slow = effectiveRunning && slowPhase === phase
     const count = Number.isSafeInteger(pageCount) && (pageCount ?? 0) > 0 ? pageCount : undefined
     const sentence =
-        label || (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : LABELS[phase])
+        label || (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : config.label)
     useEffect(() => {
-        if (running && !announced.current) {
+        if (announce && effectiveRunning && !announced.current) {
             announced.current = true
             AccessibilityInfo.announceForAccessibility(sentence)
         }
-    }, [sentence, running])
+    }, [sentence, effectiveRunning, announce])
     useEffect(() => {
-        const timer = setTimeout((): void => setSlow(true), SLOW_WAIT_MS)
+        setSlowPhase(null)
+        if (!effectiveRunning || config.slowText === null || config.slowAfterMs >= config.timeoutMs) return undefined
+        const timer = setTimeout((): void => setSlowPhase(phase), config.slowAfterMs)
         return (): void => clearTimeout(timer)
-    }, [])
+    }, [phase, effectiveRunning, config])
     useEffect(() => {
         cancelAnimation(timeline)
-        if (reduceMotion || !running) {
+        if (reduceMotion || !effectiveRunning) {
             timeline.value = 1
         } else {
             timeline.value = 0
@@ -356,7 +389,7 @@ export function BlueprintLoader({
             )
         }
         return (): void => cancelAnimation(timeline)
-    }, [timeline, reduceMotion, running])
+    }, [timeline, reduceMotion, effectiveRunning])
     return (
         <View
             nativeID={nativeID}
@@ -365,6 +398,7 @@ export function BlueprintLoader({
                 styles.loader,
                 { backgroundColor: colors.surfaceSunken, borderColor: colors.border },
                 compact && styles.compact,
+                height === undefined ? undefined : { height },
             ]}
         >
             <BlueprintScene
@@ -373,22 +407,25 @@ export function BlueprintLoader({
                 colors={colors}
                 imageUri={imageUri}
                 stepNumber={stepNumber}
+                fit={height !== undefined}
             />
             <View style={styles.copy}>
                 <Body>{sentence}</Body>
-                <View
-                    style={[styles.slowLine, { opacity: slow ? 1 : 0 }]}
-                    accessibilityElementsHidden={!slow}
-                    importantForAccessibility={slow ? 'auto' : 'no-hide-descendants'}
-                >
-                    <Caption>{SLOW_COPY}</Caption>
-                </View>
+                {config.slowText === null ? null : (
+                    <View
+                        style={[styles.slowLine, { opacity: slow ? 1 : 0 }]}
+                        accessibilityElementsHidden={!slow}
+                        importantForAccessibility={slow ? 'auto' : 'no-hide-descendants'}
+                    >
+                        <Caption>{config.slowText}</Caption>
+                    </View>
+                )}
             </View>
         </View>
     )
 }
 
-/** Retain at least the measured wait footprint; the outgoing drawing overlays arriving content for 200ms. */
+/** Retain the measured wait footprint only while waiting and during the 200ms outgoing fade. */
 export function LoaderSwap({
     waiting,
     loader,
@@ -401,6 +438,7 @@ export function LoaderSwap({
     readonly testID?: string
 }): ReactElement {
     const { reduceMotion } = useFeedback()
+    const parentActive = useContext(LoaderActivityContext)
     const progress = useSharedValue(waiting ? 0 : 1)
     const [outgoing, setOutgoing] = useState(false)
     const [footprint, setFootprint] = useState(0)
@@ -408,7 +446,7 @@ export function LoaderSwap({
     const retained = useRef(loader)
     if (waiting) retained.current = loader
     const departing = wasWaiting.current && !waiting && !reduceMotion
-    const showLoader = waiting || outgoing || departing
+    const showLoader = waiting || (!reduceMotion && (outgoing || departing))
     useEffect(() => {
         const arrived = wasWaiting.current && !waiting
         wasWaiting.current = waiting
@@ -432,7 +470,7 @@ export function LoaderSwap({
     const contentStyle = useAnimatedStyle(() => ({ opacity: progress.value }))
     const loaderStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.value }))
     return (
-        <View testID={testID} style={[styles.swap, { minHeight: footprint }]}>
+        <View testID={testID} style={[styles.swap, showLoader && { minHeight: footprint }]}>
             <Animated.View
                 pointerEvents={waiting ? 'none' : 'auto'}
                 accessibilityElementsHidden={waiting}
@@ -449,7 +487,9 @@ export function LoaderSwap({
                     importantForAccessibility={waiting ? 'auto' : 'no-hide-descendants'}
                     style={[!waiting && StyleSheet.absoluteFill, loaderStyle]}
                 >
-                    {retained.current}
+                    <LoaderActivityContext.Provider value={parentActive && waiting}>
+                        {retained.current}
+                    </LoaderActivityContext.Provider>
                 </Animated.View>
             ) : null}
         </View>

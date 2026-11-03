@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
 import { PieceViewer, PiecesGrid } from './piece-viewer'
 import { ViewerScrollView } from './viewer-scroll-lock'
+import { spies } from '../../ui/test-support/reanimated-mock'
 import { ThemeProvider } from '../../theme/theme'
 import {
+    AccessibilityInfo,
     PanResponder,
     Platform,
     StyleSheet,
@@ -203,6 +205,179 @@ it('gives every valid step-registry piece its own 3D view in guide mode, not the
         expect(screen.getByTestId('piece-placeholder-phone-support')).toBeTruthy()
     } finally {
         await view?.unmount()
+        os.restore()
+    }
+})
+
+const pendingItem = (
+    pieceId: string,
+    name: string,
+): { pieceId: string; name: string; quantity: number; state: 'pending' } => ({
+    pieceId,
+    name,
+    quantity: 1,
+    state: 'pending',
+})
+
+it('keeps the outgoing piece drawing for 200ms when its first spec arrives', async () => {
+    jest.useFakeTimers()
+    const items = [pendingItem('arm', 'Arm')]
+    const piece: PieceSpec = {
+        id: 'arm',
+        name: 'Arm',
+        color: '#5A7CA5',
+        parts: [
+            { type: 'box', dimensions: { width: 1, height: 1, depth: 1 }, position: [0, 0, 0], rotation: [0, 0, 0] },
+        ],
+    }
+    const tree = (pieces: PieceSpec[]): React.JSX.Element => (
+        <ThemeProvider>
+            <PiecesGrid pieces={pieces} items={items} />
+        </ThemeProvider>
+    )
+    const view = await render(tree([]))
+    try {
+        await view.rerender(tree([piece]))
+        expect(screen.getByTestId('piece-placeholder-arm', { hidden: true })).toBeTruthy()
+        await act(() => jest.advanceTimersByTime(199))
+        expect(screen.getByTestId('piece-placeholder-arm', { hidden: true })).toBeTruthy()
+        await act(() => jest.advanceTimersByTime(1))
+        expect(screen.queryByTestId('piece-placeholder-arm', { hidden: true })).toBeNull()
+    } finally {
+        await view.unmount()
+        jest.useRealTimers()
+    }
+})
+
+it('lets accessibility text grow beyond the guide viewer footprint while waiting', async () => {
+    const dimensions = jest.requireActual<typeof ReactNativeModule>('react-native')
+    const scaled = jest
+        .spyOn(dimensions, 'useWindowDimensions')
+        .mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 3 })
+    let view: Awaited<ReturnType<typeof render>> | undefined
+    try {
+        view = await render(
+            <ThemeProvider>
+                <PiecesGrid pieces={[]} items={[pendingItem('arm', 'Arm')]} />
+            </ThemeProvider>,
+        )
+        expect(screen.getByTestId('piece-placeholder-arm')).not.toHaveStyle({ height: 240 })
+        expect(screen.getByTestId('piece-placeholder-arm')).toHaveStyle({ minHeight: 240 })
+        expect(screen.getByTestId('blueprint-loader-piece')).not.toHaveStyle({ height: 240 })
+    } finally {
+        await view?.unmount()
+        scaled.mockRestore()
+    }
+})
+
+it.each([2, 3])('shares one announced, animated wait across %i pending pieces of a guide screen', async (count) => {
+    const dimensions = jest.requireActual<typeof ReactNativeModule>('react-native')
+    const standardText = jest.spyOn(dimensions, 'useWindowDimensions').mockReturnValue({
+        width: 390,
+        height: 844,
+        scale: 3,
+        fontScale: 1,
+    })
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => undefined)
+    announce.mockClear()
+    spies.withRepeat.mockClear()
+    const items = [pendingItem('arm', 'Arm'), pendingItem('hub', 'Hub'), pendingItem('leg', 'Leg')].slice(0, count)
+    let view: Awaited<ReturnType<typeof render>> | undefined
+    try {
+        view = await render(
+            <ThemeProvider>
+                <PiecesGrid pieces={[]} items={items} />
+            </ThemeProvider>,
+        )
+        expect(screen.getAllByTestId('blueprint-loader-piece')).toHaveLength(count)
+        expect(announce.mock.calls.filter(([text]) => text === 'Shaping the part')).toHaveLength(1)
+        // Only the primary pending piece runs its loop; the other cards hold the same scene at its final frame.
+        expect(spies.withRepeat).toHaveBeenCalledTimes(1)
+        expect(screen.getByTestId('piece-placeholder-arm')).toHaveStyle({ height: 240, padding: 0 })
+        expect(within(screen.getByTestId('piece-placeholder-arm')).getByTestId('blueprint-loader-piece')).toHaveStyle({
+            height: 240,
+        })
+    } finally {
+        await view?.unmount()
+        announce.mockRestore()
+        standardText.mockRestore()
+    }
+})
+
+it('does not announce again when the primary pending piece is unavailable and another takes its wait', async () => {
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => undefined)
+    announce.mockClear()
+    const items = [pendingItem('arm', 'Arm'), pendingItem('hub', 'Hub'), pendingItem('leg', 'Leg')]
+    let view: Awaited<ReturnType<typeof render>> | undefined
+    try {
+        view = await render(
+            <ThemeProvider>
+                <PiecesGrid pieces={[]} items={items} />
+            </ThemeProvider>,
+        )
+        expect(announce.mock.calls.filter(([text]) => text === 'Shaping the part')).toHaveLength(1)
+        await view.rerender(
+            <ThemeProvider>
+                <PiecesGrid
+                    pieces={[]}
+                    items={[
+                        { pieceId: 'arm', name: 'Arm', quantity: 1, state: 'unavailable' as const },
+                        ...items.slice(1),
+                    ]}
+                />
+            </ThemeProvider>,
+        )
+        expect(screen.getByText('3D view unavailable')).toBeTruthy()
+        expect(announce.mock.calls.filter(([text]) => text === 'Shaping the part')).toHaveLength(1)
+    } finally {
+        await view?.unmount()
+        announce.mockRestore()
+    }
+})
+
+it('clears a guide piece ready marker when its spec is refined, until the refined view draws a frame', async () => {
+    const os = jest.replaceProperty(Platform, 'OS', 'ios')
+    mockOptionalNativeModule.mockReset()
+    mockOptionalNativeModule.mockReturnValue({})
+    jest.useFakeTimers()
+    const part = {
+        type: 'box' as const,
+        dimensions: { width: 1, height: 1, depth: 1 },
+        position: [0, 0, 0] as [number, number, number],
+        rotation: [0, 0, 0] as [number, number, number],
+    }
+    const spec = (color: string): PieceSpec => ({ id: 'walking', name: 'Walking', color, parts: [part] })
+    const items = [{ pieceId: 'walking', name: 'Walking', quantity: 1 }]
+    const drawFrame = async (): Promise<void> => {
+        await act(async () => {
+            await Promise.resolve()
+            jest.advanceTimersByTime(20)
+        })
+    }
+    let view: Awaited<ReturnType<typeof render>> | undefined
+    try {
+        view = await render(
+            <ThemeProvider>
+                <PiecesGrid pieces={[spec('#5A7CA5')]} items={items} />
+            </ThemeProvider>,
+        )
+        await act(async () => screen.getByTestId('stalled-gl-surface').props.onContextCreate({}))
+        await drawFrame()
+        expect(screen.getByTestId('piece-viewer-ready-walking')).toBeTruthy()
+
+        await view.rerender(
+            <ThemeProvider>
+                <PiecesGrid pieces={[spec('#B0B7C3')]} items={items} />
+            </ThemeProvider>,
+        )
+        // The refined spec is a new 3D view: the marker waits for its own first frame.
+        expect(screen.queryByTestId('piece-viewer-ready-walking')).toBeNull()
+        await act(async () => screen.getByTestId('stalled-gl-surface').props.onContextCreate({}))
+        await drawFrame()
+        expect(screen.getByTestId('piece-viewer-ready-walking')).toBeTruthy()
+    } finally {
+        await view?.unmount()
+        jest.useRealTimers()
         os.restore()
     }
 })

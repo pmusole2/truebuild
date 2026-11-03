@@ -280,10 +280,22 @@ function waitPhase(pending: string | null): BlueprintPhase {
     return 'guide'
 }
 
-function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path: string }): ReactElement | null {
-    const mark = originId(context.originOf(path))
+/** Only the waiting drawing follows the coach: other leaves never re-render when the coach's scope or attention changes. */
+function SkeletonBlock({ context, mark }: { context: BlockContext; mark: string }): ReactElement {
     const scope = useCoachScope()
     const attention = useCoachAttention()
+    return (
+        <BlueprintLoader
+            nativeID={mark}
+            phase={waitPhase(context.live?.state.pending ?? null)}
+            running={scope.active && !attention}
+            compact
+        />
+    )
+}
+
+function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path: string }): ReactElement | null {
+    const mark = originId(context.originOf(path))
     switch (node.type) {
         case 'HeroFigure':
             return <Hero node={node} context={context} path={path} />
@@ -407,14 +419,7 @@ function Leaf({ node, context, path }: { node: Leaf; context: BlockContext; path
             return <DirectionsBlock node={node} context={context} path={path} />
         case 'Skeleton':
             // A waiting node shows the wait scene for what the app is doing right now, not a generic grey shape.
-            return (
-                <BlueprintLoader
-                    nativeID={mark}
-                    phase={waitPhase(context.live?.state.pending ?? null)}
-                    running={scope.active && !attention}
-                    compact
-                />
-            )
+            return <SkeletonBlock context={context} mark={mark} />
     }
 }
 

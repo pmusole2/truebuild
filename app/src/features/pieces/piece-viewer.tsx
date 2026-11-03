@@ -28,6 +28,7 @@ import { requireOptionalNativeModule } from 'expo'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { pieceSpecSchema, type PieceSpec } from '@truebuild/contracts'
 import { BlueprintLoader, LoaderSwap } from '../../ui/blueprint-loader'
+import { useLargeText } from '../../ui/large-text'
 import { Heading, Caption, Body } from '../../ui/text'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
@@ -37,6 +38,10 @@ import { lockPageScroll, unlockPageScroll } from './viewer-scroll-lock'
 
 // The normal document renderer may import this module without loading GL or Three (including on unsupported devices).
 const LazyGLView = lazy(loadPieceGL)
+
+const DEFAULT_VIEWER_HEIGHT = 320
+/** The guide card's inline viewer; its waiting placeholder keeps the same footprint so the swap does not jump. */
+const GUIDE_VIEWER_HEIGHT = 240
 
 type FallbackReason =
     | 'invalid_spec'
@@ -148,12 +153,12 @@ type ViewerProps = {
 export function PieceViewer({
     piece,
     fallbackImageUri,
-    height = 320,
+    height = DEFAULT_VIEWER_HEIGHT,
     showName = true,
     onFrame,
 }: ViewerProps): ReactElement {
     const parsed = useMemo(() => validatedPiece(piece), [piece])
-    const size = Number.isFinite(height) ? Math.max(160, Math.min(640, height)) : 320
+    const size = Number.isFinite(height) ? Math.max(160, Math.min(640, height)) : DEFAULT_VIEWER_HEIGHT
     const fallback = (
         <PieceCard
             name={parsed?.name ?? fallbackName(piece)}
@@ -561,22 +566,18 @@ function specsById(pieces: readonly PieceSpec[]): Map<string, PieceSpec> {
     return specs
 }
 
-/** One linked piece in Guide mode: its own inline viewer, with a ready marker set by the first real 3D frame. */
-function GuidePieceCard({
-    row,
+/** Spec-keyed content keeps its readiness witness separate from the stable arrival fade. */
+function GuidePieceView({
+    piece,
     cutout,
     onFrame,
 }: {
-    row: GridRow
+    piece: PieceSpec
     cutout: string | undefined
     onFrame: ((timestampMs: number) => void) | undefined
 }): ReactElement {
     const [ready, setReady] = useState(false)
     const readyRef = useRef(false)
-    useFallbackLog(
-        row.pieceId,
-        row.spec === undefined && row.state === 'unavailable' ? 'registry_rejected_or_unavailable' : null,
-    )
     const pieceFrame = useCallback(
         (timestampMs: number): void => {
             onFrame?.(timestampMs)
@@ -586,8 +587,48 @@ function GuidePieceCard({
         },
         [onFrame],
     )
+    return (
+        <>
+            <PieceViewer
+                piece={piece}
+                fallbackImageUri={cutout}
+                height={GUIDE_VIEWER_HEIGHT}
+                showName={false}
+                onFrame={pieceFrame}
+            />
+            {ready ? <View testID={`piece-viewer-ready-${piece.id}`} style={styles.marker} /> : null}
+        </>
+    )
+}
+
+/** One linked piece in Guide mode: its own inline viewer, with a ready marker set by the first real 3D frame. */
+function GuidePieceCard({
+    row,
+    cutout,
+    onFrame,
+    wait,
+}: {
+    row: GridRow
+    cutout: string | undefined
+    onFrame: ((timestampMs: number) => void) | undefined
+    /** Whether this card's waiting drawing runs its loop and announces; the screen picks one primary when pieces share a wait. */
+    wait: { running: boolean; announce: boolean }
+}): ReactElement {
+    useFallbackLog(
+        row.pieceId,
+        row.spec === undefined && row.state === 'unavailable' ? 'registry_rejected_or_unavailable' : null,
+    )
     const placeholder = (
-        <PiecePlaceholder pieceId={row.pieceId} name={row.name} state={row.state} imageUri={cutout} showName={false} />
+        <PiecePlaceholder
+            pieceId={row.pieceId}
+            name={row.name}
+            state={row.state}
+            imageUri={cutout}
+            showName={false}
+            height={GUIDE_VIEWER_HEIGHT}
+            running={wait.running}
+            announce={wait.announce}
+        />
     )
     return (
         <View style={styles.guideCard} testID={`piece-card-${row.pieceId}`}>
@@ -603,18 +644,16 @@ function GuidePieceCard({
             {/* While the spec is pending only the one overlaid waiting drawing exists; the viewer replaces it in place. */}
             <LoaderSwap waiting={row.spec === undefined && row.state !== 'unavailable'} loader={placeholder}>
                 {row.spec !== undefined ? (
-                    <PieceViewer
+                    <GuidePieceView
+                        key={`${row.pieceId}:${JSON.stringify(row.spec)}`}
                         piece={row.spec}
-                        fallbackImageUri={cutout}
-                        height={240}
-                        showName={false}
-                        onFrame={pieceFrame}
+                        cutout={cutout}
+                        onFrame={onFrame}
                     />
                 ) : row.state === 'unavailable' ? (
                     placeholder
                 ) : null}
             </LoaderSwap>
-            {ready ? <View testID={`piece-viewer-ready-${row.pieceId}`} style={styles.marker} /> : null}
         </View>
     )
 }
@@ -625,19 +664,31 @@ function PiecePlaceholder({
     state,
     imageUri,
     showName = true,
+    height = DEFAULT_VIEWER_HEIGHT,
+    running = true,
+    announce = true,
 }: {
     pieceId: string
     name: string
     state?: PieceGridItem['state']
     imageUri?: string
     showName?: boolean
+    height?: number
+    running?: boolean
+    announce?: boolean
 }): ReactElement {
     const { colors } = useTheme()
+    const largeText = useLargeText()
+    const fitViewer = !showName && !largeText
     return (
         <View
             testID={`piece-placeholder-${pieceId}`}
             accessibilityLabel={name}
-            style={[styles.fallback, styles.placeholder, { backgroundColor: colors.surfaceSunken }]}
+            style={[
+                styles.fallback,
+                { minHeight: height, backgroundColor: colors.surfaceSunken },
+                fitViewer && state !== 'unavailable' && { height, padding: 0 },
+            ]}
         >
             {state === 'unavailable' && imageUri !== undefined ? (
                 <Image
@@ -652,7 +703,13 @@ function PiecePlaceholder({
             {state === 'unavailable' ? (
                 <Caption>3D view unavailable</Caption>
             ) : (
-                <BlueprintLoader phase="piece" imageUri={imageUri} />
+                <BlueprintLoader
+                    phase="piece"
+                    imageUri={imageUri}
+                    running={running}
+                    announce={announce}
+                    height={fitViewer ? height : undefined}
+                />
             )}
         </View>
     )
@@ -699,14 +756,32 @@ export function PiecesGrid({
     }, [accepted, items, pieces, pieceIds])
     const [selected, setSelected] = useState<string | null>(null)
     const current = rows.find((row) => row.pieceId === selected) ?? rows[0]
+    // The screen announces its wait once, for its first pending piece; a promoted piece takes the loop without a new announcement.
+    const pendingIds = rows
+        .filter((row) => row.spec === undefined && row.state !== 'unavailable')
+        .map((row) => row.pieceId)
+    const primaryId = pendingIds[0] ?? null
+    const announcedRef = useRef(false)
+    useEffect(() => {
+        if (primaryId !== null) announcedRef.current = true
+    }, [primaryId])
     if (current === undefined) return <PieceCard name="Assembly pieces" height={240} />
     // Guide mode: every linked piece shows its own 3D view; the legacy single shared viewer stays for non-guide grids.
     if (items !== undefined)
         return (
             <View style={styles.viewer} testID="pieces-grid">
-                {rows.map((row) => (
-                    <GuidePieceCard key={row.pieceId} row={row} cutout={cutouts?.[row.pieceId]} onFrame={onFrame} />
-                ))}
+                {rows.map((row) => {
+                    const primary = row.pieceId === primaryId
+                    return (
+                        <GuidePieceCard
+                            key={row.pieceId}
+                            row={row}
+                            cutout={cutouts?.[row.pieceId]}
+                            onFrame={onFrame}
+                            wait={{ running: primary, announce: primary && !announcedRef.current }}
+                        />
+                    )
+                })}
             </View>
         )
     return (
@@ -787,8 +862,6 @@ const styles = StyleSheet.create({
         borderWidth: 2,
     },
     swatch: { width: 40, height: 24, borderRadius: radius.sm },
-    // Matches the default viewport height so the placeholder-to-viewer swap does not jump the page.
-    placeholder: { minHeight: 320 },
     // Test-visible readiness witness only: it takes no layout space and draws nothing.
     marker: { position: 'absolute', width: 0, height: 0 },
 })
