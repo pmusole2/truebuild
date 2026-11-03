@@ -86,7 +86,9 @@ export function documentInputs(
                             ...(kind === 'more'
                                 ? {
                                       ...(moreContext ? (held ? captureUiState(state) : { capture: null }) : {}),
-                                      language: { options: ['en', 'es', 'fr', 'de', 'pt-BR'] },
+                                      ...(entry === undefined
+                                          ? {}
+                                          : { language: { options: ['en', 'es', 'fr', 'de', 'pt-BR'] } }),
                                       settings: { storage: true as const },
                                   }
                                 : {}),

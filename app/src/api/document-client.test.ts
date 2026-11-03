@@ -426,6 +426,33 @@ describe('v2 document transport', () => {
         expect(String(form.get('metadata'))).not.toContain('public-fixture-key')
     })
 
+    it('posts the parsed language with the session, and never accepts a document composed in another language', async () => {
+        const french: ScreenContextInputsV2 = { ...inputs, session: { ...session, parsedLanguage: 'fr-CA' } }
+        const frenchDocument = buildFallbackDocumentV2(french, {
+            sha256Hex,
+            now: () => new Date('2026-01-01T00:00:00Z'),
+            reason: 'fixture',
+            evidence: 'synthetic-fixture',
+        })
+        const frenchEnvelope = {
+            status: 'ok',
+            requestId: 'v2-fr',
+            mode: 'fixture',
+            value: { document: frenchDocument, documents: [], progress: null },
+        }
+        const fetch = vi.fn<ModelFetch>(async () => Response.json(frenchEnvelope))
+        const frenchMetadata = screensV2GenerateRequest('v2-fr', french, sha256Hex)
+        expect(await client(fetch).screensV2(frenchMetadata, { requestId: 'v2-fr' })).toMatchObject({ status: 'ok' })
+        const form = fetch.mock.calls[0]![1].body as FormData
+        expect(JSON.parse(String(form.get('metadata'))).session).toMatchObject({ parsedLanguage: 'fr-CA' })
+
+        const englishReply = vi.fn<ModelFetch>(async () => Response.json({ ...envelope(), requestId: 'v2-fr' }))
+        expect(await client(englishReply).screensV2(frenchMetadata, { requestId: 'v2-fr' })).toMatchObject({
+            status: 'unavailable',
+            code: 'invalid_output',
+        })
+    })
+
     it.each(['request', 'kind', 'manual', 'revision', 'step', 'capture', 'context'] as const)(
         'rejects a corrupt %s response identity',
         async (which) => {

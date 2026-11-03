@@ -1,9 +1,21 @@
-// Keep the language actually submitted for each manual's reading attempt. Picker drafts do not affect another read.
-// This is presentation state only; the controller continues validating the submitted language.
-const submitted = new Map<string, string>()
-export function setReadingLanguage(manualId: string, code: string): void {
-    submitted.set(manualId, code)
+const names: Readonly<Record<string, string>> = {
+    en: 'English',
+    es: 'Spanish',
+    fr: 'French',
+    de: 'German',
+    'pt-BR': 'Portuguese',
 }
-export function readingLanguage(manualId: string): string {
-    return submitted.get(manualId) ?? 'en'
+export function languageName(code: string): string {
+    return names[code] ?? code
+}
+export function rereadPrompt(session: {
+    readingLanguage?: string
+    parsedLanguage?: string
+    rawExtraction: unknown
+}): string | null {
+    const selected = session.readingLanguage ?? 'en'
+    const parsed = session.parsedLanguage ?? 'en'
+    return session.rawExtraction !== null && selected !== parsed
+        ? `This manual was read in ${languageName(parsed)}. Re-read in ${languageName(selected)}? This resets your corrections and build progress.`
+        : null
 }

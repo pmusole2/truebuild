@@ -26,6 +26,14 @@ describe('the real v2 route document inputs', () => {
         expect(sole.session).toBeNull()
         expect(sole.uiState?.library?.soleManualId).toBe(entry.session.manualId)
         expect(sole.uiState?.review).toBeUndefined()
+        expect(documentInputs('more', { state: idle, entry: undefined }).uiState?.language).toBeUndefined()
+        expect(documentInputs('more', { state: idle, entry }).uiState?.language?.options).toEqual([
+            'en',
+            'es',
+            'fr',
+            'de',
+            'pt-BR',
+        ])
         const other = flowEntry('other', 'reviewed')
         expect(
             documentInputs('home', { state: { ...idle, entries: [entry, other] }, entry: undefined }).uiState?.library

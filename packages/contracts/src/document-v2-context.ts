@@ -1,4 +1,5 @@
 import type { ManualSession, ManualStep, QuestionResult } from './index'
+import { parseLanguageSchema } from './reading-language'
 import {
     canonicalJson,
     screenFacts,
@@ -300,6 +301,19 @@ export function screenUiForKindV2(
     return BUSY_KINDS_V2.has(kind) ? { ...(base ?? {}), busy: ui?.busy ?? null } : base
 }
 
+/** The language of every session that has no parsed code, and of every screen with no manual. */
+export const DOCUMENT_LANGUAGE_DEFAULT_V2 = 'en'
+
+/**
+ * The language a document's manual text is in: the code of the last successful parse (`parsedLanguage`). The reading
+ * preference is not part of it, so changing the picker alone never regenerates a document that reads the same facts.
+ * A session without a valid code, and a screen without a manual, are English.
+ */
+export function documentLanguageV2(session: Pick<ManualSession, 'parsedLanguage'> | null): string {
+    const parsed = parseLanguageSchema.safeParse(session?.parsedLanguage)
+    return parsed.success ? parsed.data : DOCUMENT_LANGUAGE_DEFAULT_V2
+}
+
 /**
  * `content` is what the composition is grounded in (reusable across revisions of identical facts); `identity` binds it
  * to one manual revision, step, capture and review state. The v2 catalog is part of the content, so a v2 key never
@@ -321,6 +335,7 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
     const companion = inputs.companionAnswer ?? null
     // The finished build's picture is grounded in the manual's own cited step: part of the key only where it exists.
     const figure = inputs.kind === 'completion' ? completionFigureV2(inputs.session) : null
+    const language = documentLanguageV2(inputs.session)
     return {
         content: {
             ...parts.content,
@@ -328,6 +343,8 @@ export function screenContextPartsV2(raw: ScreenContextInputsV2): ReturnType<typ
             kind: inputs.kind,
             catalogV2: SCREEN_CATALOG_V2_VERSION,
             ui: screenUiForKindV2(inputs.kind, inputs.uiState, { stepScoped: moreScopedV2(inputs) }),
+            // Present only for a manual read in another language, so every English key is exactly what it always was.
+            ...(language === DOCUMENT_LANGUAGE_DEFAULT_V2 ? {} : { language }),
             // Present only when held, so the key of every other screen is exactly what it always was.
             ...(companion === null
                 ? {}

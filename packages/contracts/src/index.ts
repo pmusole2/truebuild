@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { parseLanguageSchema } from './reading-language'
 
 import { layoutSchema } from './layout'
 import { optionalPieceDrawingBoxSchema } from './piece-generation'
@@ -452,6 +453,8 @@ export const manualSessionSchema = z
         pages: z.array(manualPageSchema).max(LIMITS.manualPages),
         parts: z.array(manualPartSchema).max(256),
         rawExtraction: parsedManualSchema.nullable(),
+        readingLanguage: parseLanguageSchema.optional(),
+        parsedLanguage: parseLanguageSchema.optional(),
         // User-selected extraction inputs, including pages from which no facts could be read.
         // Optional for sessions saved before extraction custody was recorded explicitly.
         extractionSourcePageIds: z.array(idSchema).max(LIMITS.manualPages).optional(),

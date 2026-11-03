@@ -41,11 +41,8 @@ import { pieceIdSchema, piecesSpecSchema } from './piece-spec'
 
 export const MAX_PARSE_PAGES = 8
 export const PARSE_SPLIT_MESSAGE = 'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.'
-export const parseLanguageSchema = z
-    .string()
-    .trim()
-    .regex(/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u)
-    .max(16)
+export { parseLanguageSchema } from './reading-language'
+import { parseLanguageSchema } from './reading-language'
 
 // Shared client/server multipart metadata ceiling; independent of the aggregate image budget.
 // The measured valid 100-note/100-reference manual needs ~830 KB before multipart framing.

@@ -11,7 +11,6 @@ import { useCoachAttention, useCoachScope } from '../onboarding/coach-provider'
 import type { LibraryEntry } from './library'
 import { PageImage } from './page-media'
 import { plainNotice } from './plain-copy'
-import { readingLanguage } from './reading-language'
 import { ScreenBody, TextRegion, useHeroHeight } from './screen-layout'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import type { WorkflowScreenProps } from './workflow-types'
@@ -61,7 +60,7 @@ export function ReadingScreen({
     }, [reading, running])
     const first = entry.session.pages[0]
     const read = (): void => {
-        void controller.parse(readingLanguage(entry.session.manualId))
+        void controller.parse(entry.session.readingLanguage ?? 'en')
     }
     const stop = (): void => {
         setConfirming(false)

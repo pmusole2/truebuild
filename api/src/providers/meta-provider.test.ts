@@ -475,6 +475,34 @@ describe('inactive direct Meta transport', (): void => {
         )
     })
 
+    it.each(['check', 'question'] as const)(
+        'requests %s prose in the successfully parsed language',
+        async (operation): Promise<void> => {
+            const input = await validInput()
+            input.session.parsedLanguage = 'pt-BR'
+            input.session.readingLanguage = 'fr'
+            const output =
+                operation === 'check'
+                    ? result
+                    : {
+                          answer: 'Use the cited visible edge.',
+                          sourceRefs: result.sourceRefs,
+                          missingEvidence: [],
+                      }
+            await localServer(jsonResponder(responseBody(output)), async (transport): Promise<void> => {
+                if (operation === 'check') await transport.provider.checkStep(input, signal())
+                else
+                    await transport.provider.answerQuestion(
+                        { ...input, question: 'Which way?', target: { kind: 'point', x: 0.3, y: 0.4 } },
+                        signal(),
+                    )
+                expect(transport.bodies[0]).toMatchObject({
+                    instructions: expect.stringContaining('Write model-authored prose in pt-BR'),
+                })
+            })
+        },
+    )
+
     it('answers an observation-bound question with cited output', async (): Promise<void> => {
         const answer = { answer: 'Use the cited visible edge.', sourceRefs: result.sourceRefs, missingEvidence: [] }
 

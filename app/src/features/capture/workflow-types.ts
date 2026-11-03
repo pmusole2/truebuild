@@ -19,6 +19,7 @@ export type WorkflowController = Pick<
     | 'parse'
     | 'questionChanged'
     | 'rename'
+    | 'setReadingLanguage'
     | 'restore'
     | 'step'
     | 'targetChanged'
