@@ -22,6 +22,7 @@ import {
 import Svg, { Circle } from 'react-native-svg'
 import {
     waitCopyV2,
+    waitVariantV2,
     BUSY_COPY_V2,
     SCREEN_WAIT_COPY_V2,
     screenFacts,
@@ -200,9 +201,12 @@ type Environment = {
     photoBranch: ReadonlySet<string>
     /** The shown variant is a busy or pending wait (not ready, error or empty): its build indicator is a wait scene. */
     waiting: boolean
-    /** The contract's wait heading, used as the wait scene's label and not repeated as the body's plain heading. */
+    /** The contract's wait heading, announced when its drawing appears. */
     waitHeading: string
-    authoredWaitHeading: string
+    /** Transient preparation labels its scene; a complete variant already carries its words in the header or body. */
+    waitLabel: string | undefined
+    /** Body text that repeats the header label of a waiting document: suppressed, while unique body text stays. */
+    headerDuplicatePaths: ReadonlySet<string>
     waitVisible: boolean
     /** A wait scene is drawn only after the complete waiting presentation has observed WAIT_REVEAL_MS. */
     waitScene: boolean
@@ -525,7 +529,9 @@ function WaitScene({ environment, mark }: { environment: Environment; mark: stri
             phase={
                 checking ? 'check' : bindings.live?.state.pending?.startsWith('Reading') === true ? 'reading' : 'screen'
             }
-            label={environment.waitHeading}
+            // A generic wait's header already carries its heading; only a preparing document names it in the scene.
+            label={environment.waitLabel ?? ''}
+            announcementLabel={environment.waitHeading}
             imageUri={thumbnail}
             running={scope.active && !attention}
         />
@@ -588,9 +594,7 @@ function Action({
                   reason:
                       environment.bindings.readOnly === true
                           ? 'Comparison is read only.'
-                          : environment.waitVisible
-                            ? preparingReason(environment.bindings, environment.document.kind)
-                            : null,
+                          : preparingReason(environment.bindings, environment.document.kind),
                   run: (): void => undefined,
               }
             : environment.bindings.resolve(action.intent)
@@ -1382,15 +1386,6 @@ function PieceTile({
     )
 }
 
-/** Existing manual evidence and live capture surfaces stay mounted while new wait UI observes its grace. */
-function holdsWaitEvidence(node: ScreenNodeV2): boolean {
-    if (node.type === 'CameraView' || node.type === 'Citation' || node.type === 'ManualPage') return true
-    if (node.type === 'Image') return true
-    if (node.type === 'Text')
-        return node.content.kind === 'fact' || (node.content.kind === 'bound' && node.content.key === 'privacy-camera')
-    return 'children' in node && node.children.some(holdsWaitEvidence)
-}
-
 type NodeProps = { node: ScreenNodeV2; environment: Environment; path: string }
 
 /** Only the branch that holds the shared photo outlives its page; every other node starts fresh with a new page. */
@@ -1453,7 +1448,7 @@ function NodeContent({
     const { document, bindings } = environment
     const mark = marked(environment, path)
     const text = (ref: TextRefV2 | null): string => documentText(document, bindings, ref)
-    if (environment.waiting && !environment.waitVisible && !holdsWaitEvidence(node)) return null
+    if (environment.headerDuplicatePaths.has(path)) return null
     const children =
         'children' in node
             ? node.children.map((child, index) => (
@@ -1613,13 +1608,6 @@ function NodeContent({
         case 'Spacer':
             return <View nativeID={mark} style={{ height: gap(node.size) }} />
         case 'Text': {
-            // The wait scene carries this heading as its label, so the body does not repeat it beside the drawing.
-            if (
-                environment.waiting &&
-                node.content.kind === 'literal' &&
-                text(node.content) === environment.authoredWaitHeading
-            )
-                return null
             const Typography = {
                 display: LargeTitle,
                 title: Title,
@@ -2049,24 +2037,21 @@ export function NativeDocumentRenderer({
         loadedCapture === expectedPhoto &&
         (!document.requirements.capture || bindings.capture?.reusable === true)
     const gatePhoto = wanted.name === 'ready' && document.requirements.capture && !heldReady
-    const selected = gatePhoto ? variants.find((item) => item.name === 'pending')! : wanted
+    const picked = gatePhoto ? variants.find((item) => item.name === 'pending')! : wanted
+    // A busy/pending variant shows the contract's wait words before any layout, planning or text reads it.
+    const shownVariant = useMemo(
+        () => waitVariantV2(picked.variant, document.kind, picked.name, bindings.busyActivity ?? null),
+        [picked.variant, picked.name, document.kind, bindings.busyActivity],
+    )
+    const selected = useMemo(
+        () => ({ name: picked.name, prefix: picked.prefix, variant: shownVariant }),
+        [picked.name, picked.prefix, shownVariant],
+    )
     useLayoutEffect(() => {
         bindings.onVariantShown?.(document, selected.name)
     }, [document, selected.name, bindings.onVariantShown])
-    const transition = useRef({ page: bodyPage, state: selected.name, arriving: false })
-    const before = transition.current
-    if (before.page !== bodyPage || before.state !== selected.name)
-        transition.current = {
-            page: bodyPage,
-            state: selected.name,
-            arriving:
-                before.page === bodyPage &&
-                (before.state === 'busy' || before.state === 'pending') &&
-                selected.name === 'ready',
-        }
-    const arriving = transition.current.arriving
-    // Incoming and retained outgoing branches own their fades; their shared parent stays opaque.
-    const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove && !arriving)
+    // A variant change (including a wait arriving as ready) gets the shared short fade; reduced motion applies it at once.
+    const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove)
     const [sectionState, setSectionState] = useState<{ id: string; values: Readonly<Record<string, boolean>> }>(() => ({
         id: bodyPage,
         values: {},
@@ -2133,7 +2118,22 @@ export function NativeDocumentRenderer({
     const waitRevealed = useWaitReveal(waitingNow || bindings.preparingDocument === true, bodyPage)
     // Retained content stays while the app prepares a new document; its small scene appears only after the same delay.
     const preparingRevealed = bindings.preparingDocument === true && !waitingNow && waitRevealed
-    const authoredWaitHeading = bodyWaitHeading ?? documentText(document, bindings, selected.variant.header.title)
+    const headerTitle = documentText(document, bindings, selected.variant.header.title)
+    const authoredWaitHeading = bodyWaitHeading ?? headerTitle
+    // Only repeated interface copy is a duplicate; factual and bound page text always stays visible.
+    const headerDuplicatePaths = new Set<string>()
+    if (waitingNow)
+        visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
+            if (
+                !hidden &&
+                path.startsWith(`${selected.prefix}body`) &&
+                node.type === 'Text' &&
+                node.content.kind === 'literal' &&
+                documentText(document, bindings, node.content).trim().replace(/\s+/gu, ' ') ===
+                    headerTitle.trim().replace(/\s+/gu, ' ')
+            )
+                headerDuplicatePaths.add(path)
+        })
     const environment: Environment = {
         document,
         bindings,
@@ -2163,7 +2163,8 @@ export function NativeDocumentRenderer({
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
         waiting: waitingNow,
         waitHeading: bindings.preparingDocument === true ? waitHeadingOf(bindings, document.kind) : authoredWaitHeading,
-        authoredWaitHeading,
+        waitLabel: bindings.preparingDocument === true ? waitHeadingOf(bindings, document.kind) : undefined,
+        headerDuplicatePaths,
         waitVisible: waitRevealed,
         waitScene: waitingNow && waitRevealed,
     }
@@ -2265,10 +2266,8 @@ export function NativeDocumentRenderer({
                             nativeID={marked(environment, `${selected.prefix}header`)}
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
-                            {waitingNow ? null : (
-                                <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            )}
-                            {waitingNow || subtitle === null || instructionInBody ? null : (
+                            <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
+                            {subtitle === null || subtitleText === '' || instructionInBody ? null : (
                                 <Caption>{documentText(document, bindings, subtitle)}</Caption>
                             )}
                         </View>
@@ -2315,47 +2314,30 @@ export function NativeDocumentRenderer({
                     )}
                 </Animated.View>
                 {preparingRevealed ? (
-                    <BlueprintLoader
-                        testID="document-preparing-wait"
-                        heading
-                        phase="screen"
-                        compact
-                        label={waitHeadingOf(bindings, document.kind)}
-                        running={scope.active && !attention}
-                    />
+                    <View style={{ paddingHorizontal: space.md }}>
+                        <BlueprintLoader
+                            testID="document-preparing-wait"
+                            heading
+                            phase="screen"
+                            compact
+                            label={waitHeadingOf(bindings, document.kind)}
+                            running={scope.active && !attention}
+                        />
+                    </View>
                 ) : null}
                 {essentialControls}
                 <FixedBottomBar
                     onHeight={document.kind === 'guide' ? setBarHeight : undefined}
                     nativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}
-                    primary={
-                        waitingNow &&
-                        !waitRevealed &&
-                        !(
-                            ['Back', 'Close'].includes(selected.variant.bar.primary.label) &&
-                            selected.variant.bar.primary.intent.intent === 'navigate' &&
-                            selected.variant.bar.primary.intent.target === 'back'
-                        ) &&
-                        !(
-                            document.kind === 'camera' &&
-                            selected.name === 'pending' &&
-                            selected.variant.bar.primary.intent.intent === 'capture' &&
-                            selected.variant.bar.primary.intent.target === 'take-photo'
-                        )
-                            ? null
-                            : action(selected.variant.bar.primary, 'primary')
-                    }
+                    primary={action(selected.variant.bar.primary, 'primary')}
                     secondary={
-                        (waitingNow && !waitRevealed) || selected.variant.bar.secondary === null
+                        selected.variant.bar.secondary === null
                             ? undefined
                             : action(selected.variant.bar.secondary, 'secondary')
                     }
                     reason={
-                        document.kind === 'camera' ||
-                        ((waitingNow || bindings.preparingDocument === true) && !waitRevealed)
-                            ? null
-                            : bindings.resolve(selected.variant.bar.primary.intent).reason
+                        document.kind === 'camera' ? null : bindings.resolve(selected.variant.bar.primary.intent).reason
                     }
                 />
             </ScreenBody>

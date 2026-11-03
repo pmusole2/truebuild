@@ -189,7 +189,7 @@ describe('2 busy activity witness', () => {
             'question-waiting': 'Still thinking…',
             checking: 'Checking your photo…',
             asking: 'Asking…',
-            saving: 'Saving…',
+            saving: 'Saving your progress',
             working: 'Opening your photo check',
             reading: 'Reading your manual',
         }

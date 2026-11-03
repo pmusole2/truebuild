@@ -286,7 +286,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing page photos…",
                     "icon": null,
                     "intent": {
                         "intent": "capture",
@@ -409,7 +409,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing page photos…",
                     "icon": null,
                     "intent": {
                         "intent": "capture",

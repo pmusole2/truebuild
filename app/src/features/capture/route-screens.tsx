@@ -1,4 +1,4 @@
-import { manualDisplayTitleV2, type ScreenKindV2 } from '@truebuild/contracts'
+import { manualOpeningTitleV2, type ScreenKindV2 } from '@truebuild/contracts'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import * as ImagePicker from 'expo-image-picker'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
@@ -119,7 +119,7 @@ function Waiting({
 }): ReactElement {
     const { state } = useWorkflow()
     const session = state.entries.find((candidate) => candidate.session.manualId === manualId)?.session
-    const manualTitle = session === undefined ? undefined : manualDisplayTitleV2(session)
+    const manualTitle = session === undefined ? undefined : manualOpeningTitleV2(session)
     return (
         <DocumentSurface
             kind={route?.status === 'failed' ? 'error' : kind}

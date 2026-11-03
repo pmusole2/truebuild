@@ -166,7 +166,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing camera…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",

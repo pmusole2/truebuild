@@ -82,7 +82,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Saving…"
+                    "text": "Saving your progress"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -147,17 +147,6 @@
                                 "type": "Progress",
                                 "binding": "build",
                                 "label": null
-                            },
-                            {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "This only takes a moment."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
                             }
                         ]
                     }
@@ -166,7 +155,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Saving…",
                     "icon": null,
                     "intent": {
                         "intent": "retry",

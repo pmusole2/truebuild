@@ -299,7 +299,7 @@ function waitingVariant(
             primary: waiting
                 ? {
                       type: 'PrimaryAction',
-                      label: 'Working…',
+                      label: 'Preparing step…',
                       icon: null,
                       intent: { intent: 'navigate', target: 'guide' },
                   }

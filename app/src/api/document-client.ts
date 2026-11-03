@@ -170,7 +170,7 @@ function validRequest(metadata: ModelScreensV2Metadata, requestId: string): bool
 
 export function documentMatchesInputs(document: ScreenDocumentV2, inputs: ScreenContextInputsV2): boolean {
     try {
-        return verifyDocumentAgainstInputsV2(document, inputs, sha256Hex).length === 0
+        return verifyDocumentAgainstInputsV2(document, inputs, sha256Hex, { legacyWaitCopy: true }).length === 0
     } catch {
         return false
     }

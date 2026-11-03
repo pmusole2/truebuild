@@ -5,7 +5,7 @@ import { useIsFocused, usePathname } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
     baseKindV2,
-    manualDisplayTitleV2,
+    manualOpeningTitleV2,
     waitCopyV2,
     visitVariantNodesV2,
     type AppIntent,
@@ -129,11 +129,19 @@ export function DocumentSurface({
         ? actualWorkflow.state.entries.find((candidate) => candidate.session.manualId === preparation.manualId)?.session
         : undefined
     const preparationTitle =
-        preparationSession === undefined ? routeWait?.manualTitle : manualDisplayTitleV2(preparationSession)
+        preparationSession === undefined ? (routeWait?.manualTitle ?? null) : manualOpeningTitleV2(preparationSession)
+    const targetStepNumber =
+        navigationPreparing &&
+        kind === 'guide' &&
+        preparation.kind === 'guide' &&
+        actualWorkflow.entry?.session.manualId === preparation.manualId
+            ? actualWorkflow.entry.stepIndex + 1
+            : undefined
     const waitCopy = waitCopyV2(
         preparationKind,
         navigationPreparing || routeWait !== undefined ? null : activityOf(actualWorkflow.state.pending),
-        preparationTitle,
+        navigationPreparing || routeWait !== undefined ? preparationTitle : undefined,
+        { targetStepNumber },
     )
     const questionInputs =
         holdQuestion && kind === 'questions' ? documentInputs(kind, actualWorkflow, quick, contextualMore) : null
@@ -380,7 +388,7 @@ export function DocumentSurface({
         if (intent.intent === 'navigate' && intent.target === 'back') {
             return {
                 enabled: !state.loading,
-                reason: state.loading ? 'Your builds are opening.' : null,
+                reason: state.loading ? waitCopyV2('home').action : null,
                 run: (): void => {
                     if (state.loading) return
                     if (effectiveKind === 'camera') controller.cancel()
@@ -463,7 +471,7 @@ export function DocumentSurface({
         if (intent.intent === 'retry' && state.storageReadOnly)
             return {
                 enabled: !state.loading,
-                reason: state.loading ? 'Your builds are opening.' : null,
+                reason: state.loading ? waitCopyV2('home').action : null,
                 run: (): void => {
                     if (!state.loading) void controller.restore()
                 },
@@ -627,6 +635,7 @@ export function DocumentSurface({
         workInProgress: busy || more.open || judgeOpen,
         preparingDocument: preparing,
         waitCopy,
+        busyActivity: inputs.uiState?.busy?.activity ?? null,
         preparationLabel: waitCopy.action,
         onVariantShown: (document, activeState): void => {
             if (kind === 'questions' && !holdQuestion && document === queried.document)

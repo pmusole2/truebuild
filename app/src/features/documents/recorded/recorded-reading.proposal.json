@@ -286,7 +286,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening reading…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",
@@ -437,7 +437,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening reading…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",

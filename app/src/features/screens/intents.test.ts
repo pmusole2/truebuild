@@ -186,6 +186,17 @@ describe('guards that hold whatever a document asked for', () => {
         }
     })
 
+    it.each([
+        [{ loading: true }, 'Opening your manuals'],
+        [{ pending: 'Preparing page 1 of 2…' }, 'Getting your photos ready'],
+        [{ pending: 'Saving on this device…' }, 'Saving your progress'],
+    ])('explains a blocked intent with the current activity', (state, reason) => {
+        const busy = host({}, state)
+        const resolved = resolveIntent({ intent: 'check', target: 'current-step' }, busy.host)
+        expect(resolved.enabled).toBe(false)
+        expect(resolved.reason).toBe(reason)
+    })
+
     it('never opens the camera for a check before the manual facts are confirmed', () => {
         const unreviewed = entryOf({ session: { ...reviewed, reviewStatus: 'unreviewed' } })
         const draft = host({ entry: unreviewed })

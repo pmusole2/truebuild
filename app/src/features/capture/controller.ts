@@ -286,7 +286,7 @@ export class CaptureController {
     }
     cancel = (): void => {
         if (this.saving) {
-            this.publish({ notice: 'Finishing the local save. Please wait a moment.' })
+            this.publish({ notice: 'Finishing the local save.' })
             return
         }
         const route =
@@ -805,7 +805,7 @@ export class CaptureController {
             return false
         }
         if (this.saving) {
-            return reject('Finishing the local save. Please wait before accepting step facts.')
+            return reject('Finishing the local save.')
         }
         if (this.state.storageReadOnly) {
             return reject('Local library is read-only. Retry reading it before accepting step facts.')

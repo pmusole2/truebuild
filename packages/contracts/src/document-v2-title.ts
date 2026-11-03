@@ -23,3 +23,11 @@ export function manualDisplayTitleV2(
         .slice(0, 2)
     return known.length > 0 ? known.join(' · ') : `${session.pages.length} page manual`
 }
+
+/** Product title for opening status only: never substitute a step, part name or page count. */
+export function manualOpeningTitleV2(session: Pick<ManualSession, 'title'>): string | null {
+    const title = session.title.trim()
+    if (title === '' || PLACEHOLDER_TITLE.test(title)) return null
+    const points = Array.from(title)
+    return points.length > 40 ? `${points.slice(0, 39).join('')}…` : title
+}

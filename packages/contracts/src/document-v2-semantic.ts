@@ -18,6 +18,8 @@ import {
     CONFIRM_LABELS_V2,
     COACH_COPY_V2,
     WAIT_ACTION_LABELS_V2,
+    legacyWaitLiteralsV2,
+    type WaitCompatibilityV2,
 } from './document-v2-copy'
 import { availableBoundKeysV2, intentAllowedV2, type DocumentMaterialV2 } from './document-v2-material'
 import { resultOfKindV2 } from './document-v2-context'
@@ -27,10 +29,8 @@ const normalize = (text: string): string => text.toLowerCase().replace(/\s+/gu, 
 
 /** Interface wording a state variant or a header control may use besides the per-intent labels. */
 export const GENERIC_ACTION_LABELS_V2 = [
-    'Working…',
     ...WAIT_ACTION_LABELS_V2,
     'Saving…',
-    'Please wait',
     'Try again',
     'Home',
     'Back',
@@ -85,13 +85,24 @@ function labelAllowed(label: string, intent: AppIntent, extra: readonly string[]
 }
 
 /** Wording a control may use besides the per-intent registry, by variant (the confirmation labels only in `confirming`). */
-function extraLabels(name: 'ready' | string, intent: AppIntent, fallback: readonly string[]): readonly string[] {
+function extraLabels(
+    name: 'ready' | string,
+    intent: AppIntent,
+    fallback: readonly string[],
+    options: WaitCompatibilityV2 = {},
+): readonly string[] {
+    if (options.legacyWaitCopy === true && (name === 'busy' || name === 'pending'))
+        return [...GENERIC_ACTION_LABELS_V2, ...legacyWaitLiteralsV2()]
     if (name === 'confirming') return [...GENERIC_ACTION_LABELS_V2, ...confirmLabelsForV2(intent)]
     return name === 'ready' ? fallback : GENERIC_ACTION_LABELS_V2
 }
 
 /** Semantic rules beyond the structural contract. Each issue is `<component path>:<rule>`. */
-export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentMaterialV2): string[] {
+export function semanticIssuesV2(
+    proposal: ScreenProposalV2,
+    material: DocumentMaterialV2,
+    options: WaitCompatibilityV2 = {},
+): string[] {
     const { inputs } = material
     const ui = inputs.uiState
     const issues: string[] = []
@@ -124,13 +135,13 @@ export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentM
             add(`${prefix}header`, 'title_not_listed')
         }
         if (header.back) {
-            const extra = extraLabels(name, header.back.intent, ['Back', 'More'])
+            const extra = extraLabels(name, header.back.intent, ['Back', 'More'], options)
             checkIntent(header.back.intent, `${prefix}header.back`)
             if (!labelAllowed(header.back.label, header.back.intent, extra))
                 add(`${prefix}header.back`, 'label_not_listed')
         }
         header.actions.forEach((action, index) => {
-            const extra = extraLabels(name, action.intent, ['Back', 'More'])
+            const extra = extraLabels(name, action.intent, ['Back', 'More'], options)
             checkIntent(action.intent, `${prefix}header.actions.${index}`)
             if (!labelAllowed(action.label, action.intent, extra))
                 add(`${prefix}header.actions.${index}`, 'label_not_listed')
@@ -142,7 +153,7 @@ export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentM
         switch (node.type) {
             case 'PrimaryAction':
             case 'SecondaryAction':
-                if (!labelAllowed(node.label, node.intent, extraLabels(name, node.intent, ['Back'])))
+                if (!labelAllowed(node.label, node.intent, extraLabels(name, node.intent, ['Back'], options)))
                     add(path, 'label_not_listed')
                 break
             case 'Choice':
@@ -231,7 +242,7 @@ export function semanticIssuesV2(proposal: ScreenProposalV2, material: DocumentM
     // Every literal is closed interface copy of this screen (no unlisted prose, whatever its length or digits), and
     // progress or success is only shown where something earned it: the registry and the witnesses are shared contracts.
     issues.push(
-        ...literalIssuesV2(proposal, material),
+        ...literalIssuesV2(proposal, material, options),
         ...earnedStateIssuesV2(proposal, material),
         ...coachIssuesV2(proposal, material),
         ...cameraIssuesV2(proposal, material),

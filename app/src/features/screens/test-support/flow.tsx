@@ -57,7 +57,7 @@ export async function mount(
     jest.mocked(createScreens).mockReturnValue(null)
     jest.mocked(createDocuments).mockReturnValue(store)
     const view = await renderRouter(resolve(__dirname, '../../../../app'))
-    await waitFor(() => expect(screen.queryByText('Getting your builds ready.')).toBeNull())
+    await waitFor(() => expect(controller.getSnapshot().loading).toBe(false))
     return { view, controller, server, store, calls, storage }
 }
 

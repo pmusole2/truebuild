@@ -279,20 +279,20 @@ describe('state wording is stable', () => {
     it('names a known manual while opening it, and keeps an actual activity ahead of its title', () => {
         expect(waitCopyV2('guide', null, '  Shelf unit  ')).toMatchObject({
             heading: 'Opening Shelf unit',
-            action: 'Opening manual…',
+            action: 'Opening…',
         })
         expect(waitCopyV2('guide', 'saving', 'Shelf unit')).toMatchObject({
-            heading: 'Saving…',
+            heading: 'Saving your progress',
             action: 'Saving…',
         })
-        expect(waitCopyV2('guide', null, ' ')).toEqual(waitCopyV2('guide'))
+        expect(waitCopyV2('guide', null, ' ').heading).toBe('Opening your manual')
         expect(waitCopyV2('camera', null, 'Shelf unit')).toEqual(waitCopyV2('camera'))
     })
 
     it('keeps the registry wording of every state exactly', () => {
         expect(STATE_COPY_V2).toEqual({
-            busy: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
-            pending: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+            busy: { heading: 'Laying out this step', detail: '' },
+            pending: { heading: 'Laying out this step', detail: '' },
             empty: { heading: 'Nothing here yet', detail: 'Add something to get started.' },
             error: { heading: 'Something went wrong', detail: 'Try again in a moment.' },
             recovery: { heading: 'Let us get you back on track', detail: 'Try again, or go back home.' },
@@ -300,13 +300,13 @@ describe('state wording is stable', () => {
         })
         expect(BUSY_COPY_V2).toEqual({
             reopening: { heading: 'Reopening TrueBuild', detail: 'Trying to open the app again.' },
-            working: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+            working: { heading: 'Laying out this step', detail: '' },
             reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
-            checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
-            'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
-            asking: { heading: 'Asking…', detail: 'This only takes a moment.' },
-            'question-waiting': { heading: 'Still thinking…', detail: 'Thanks for waiting.' },
-            saving: { heading: 'Saving…', detail: 'This only takes a moment.' },
+            checking: { heading: 'Checking your photo…', detail: '' },
+            'second-opinion': { heading: 'Taking a closer look…', detail: '' },
+            asking: { heading: 'Asking…', detail: '' },
+            'question-waiting': { heading: 'Still thinking…', detail: '' },
+            saving: { heading: 'Saving your progress', detail: '' },
         })
         expect(EMPTY_COPY_V2).toEqual({
             home: { heading: 'No manuals yet', detail: 'Add a manual to start building.' },
@@ -349,7 +349,9 @@ describe('state wording is stable', () => {
                 const stated = readingFailure
                     ? [variant.header.title.kind === 'literal' ? variant.header.title.text : '', ...literals(variant)]
                     : literals(variant)
-                expect(stated, `${kind}/${state}`).toEqual(expect.arrayContaining([copy.heading, copy.detail]))
+                expect(stated, `${kind}/${state}`).toEqual(
+                    expect.arrayContaining([copy.heading, copy.detail].filter(Boolean)),
+                )
             }
         },
     )
@@ -374,7 +376,9 @@ describe('state wording is stable', () => {
             const busy = buildFallbackProposalV2(documentMaterialV2(inputs)).states.busy!
             expect(busy.header.title).toEqual({ kind: 'literal', text: waitCopyV2('guide', activity).heading })
             expect(literals(busy)).toEqual(
-                expect.arrayContaining([waitCopyV2('guide', activity).heading, waitCopyV2('guide', activity).detail]),
+                expect.arrayContaining(
+                    [waitCopyV2('guide', activity).heading, waitCopyV2('guide', activity).detail].filter(Boolean),
+                ),
             )
         },
     )

@@ -1,7 +1,7 @@
-import type { AppIntent, ScreenKind } from '@truebuild/contracts'
+import { waitCopyV2, type AppIntent, type ScreenKind } from '@truebuild/contracts'
 import { reviewedSession, type WorkflowState } from '../capture/controller'
 import type { LibraryEntry } from '../capture/library'
-import { allStepsMarked, stopFor } from '../capture/plain-copy'
+import { allStepsMarked, plainPending, stopFor } from '../capture/plain-copy'
 import type { ScreenNav } from '../capture/screen-nav'
 import type { MoreMode } from '../capture/screen-header'
 import type { WorkflowController } from '../capture/workflow-types'
@@ -69,10 +69,10 @@ const available = (run: () => void): ResolvedIntent => ({ enabled: true, reason:
 const STEP_KINDS: ReadonlySet<ScreenKind> = new Set(['guide', 'result', 'questions', 'answer', 'recovery', 'error'])
 const PAGE_KINDS: ReadonlySet<ScreenKind> = new Set(['add', 'pages', 'reading'])
 
-function busyReason(state: WorkflowState): string | null {
-    if (state.loading) return 'Your builds are opening.'
+function busyReason(state: WorkflowState, kind: ScreenKind): string | null {
+    if (state.loading) return waitCopyV2('home').heading
     if (state.storageReadOnly) return 'Saving is paused until your builds open again.'
-    if (state.pending !== null) return 'Wait for the current request to finish.'
+    if (state.pending !== null) return plainPending(state.pending, kind)
     return null
 }
 
@@ -84,7 +84,7 @@ function busyReason(state: WorkflowState): string | null {
  */
 export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedIntent {
     const { state, entry, controller, nav, extras, kind } = host
-    const busy = busyReason(state)
+    const busy = busyReason(state, kind)
     const session = entry?.session
     const reviewed = session?.reviewStatus === 'reviewed'
     const contextualStep =
@@ -110,7 +110,9 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
                     return busy !== null ? unavailable(busy) : available(() => void controller.createManual())
                 case 'pages':
                     if (entry === undefined) return unavailable('Open a manual first.')
-                    return state.pending !== null ? unavailable(busyReason(state) ?? '') : available(nav.editPages)
+                    return state.pending !== null
+                        ? unavailable(busyReason(state, kind) ?? '')
+                        : available(nav.editPages)
                 case 'reading':
                     return unavailable('Reading starts from your pages.')
                 case 'quick-check':
@@ -118,7 +120,7 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
                         return unavailable('Read the manual first.')
                     }
                     return state.pending !== null
-                        ? unavailable(busyReason(state) ?? '')
+                        ? unavailable(busyReason(state, kind) ?? '')
                         : available(() => controller.navigate('overview'))
                 case 'guide':
                     if (kind === 'home') {
@@ -131,7 +133,7 @@ export function resolveIntent(intent: AppIntent, host: IntentHost): ResolvedInte
                     }
                     if (entry === undefined || !reviewed) return unavailable('Confirm the manual facts first.')
                     return state.pending !== null
-                        ? unavailable(busyReason(state) ?? '')
+                        ? unavailable(busyReason(state, kind) ?? '')
                         : available(() => controller.navigate('guide'))
                 case 'done':
                     return entry !== undefined && allStepsMarked(entry) && stopFor(entry) === 'done'

@@ -379,6 +379,7 @@ function BlueprintScene({
 export function BlueprintLoader({
     phase,
     label,
+    announcementLabel,
     imageUri,
     stepNumber,
     pageCount,
@@ -392,6 +393,7 @@ export function BlueprintLoader({
 }: {
     readonly phase: BlueprintPhase
     readonly label?: string
+    readonly announcementLabel?: string
     readonly imageUri?: string
     readonly stepNumber?: number
     readonly pageCount?: number
@@ -413,14 +415,15 @@ export function BlueprintLoader({
     const config = PHASES[phase]
     const slow = effectiveRunning && slowPhase === phase
     const count = Number.isSafeInteger(pageCount) && (pageCount ?? 0) > 0 ? pageCount : undefined
+    // An explicit empty label draws the scene without any sentence; an omitted label keeps the phase's own sentence.
     const sentence =
-        label || (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : config.label)
+        label ?? (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : config.label)
     useEffect(() => {
         if (announce && effectiveRunning && !announced.current) {
             announced.current = true
-            AccessibilityInfo.announceForAccessibility(sentence)
+            AccessibilityInfo.announceForAccessibility(announcementLabel ?? sentence)
         }
-    }, [sentence, effectiveRunning, announce])
+    }, [sentence, announcementLabel, effectiveRunning, announce])
     useEffect(() => {
         setSlowPhase(null)
         if (!effectiveRunning || config.slowText === null || config.slowAfterMs >= config.timeoutMs) return undefined
@@ -466,11 +469,11 @@ export function BlueprintLoader({
             />
             <View
                 style={styles.copy}
-                accessible={heading}
-                accessibilityRole={heading ? 'header' : undefined}
-                accessibilityLabel={heading ? sentence : undefined}
+                accessible={heading && sentence !== ''}
+                accessibilityRole={heading && sentence !== '' ? 'header' : undefined}
+                accessibilityLabel={heading && sentence !== '' ? sentence : undefined}
             >
-                <Body>{sentence}</Body>
+                {sentence === '' ? null : <Body>{sentence}</Body>}
                 {config.slowText === null ? null : (
                     <View
                         style={[styles.slowLine, { opacity: slow ? 1 : 0 }]}

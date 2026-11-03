@@ -190,7 +190,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing pages…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",
@@ -253,7 +253,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing pages…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",

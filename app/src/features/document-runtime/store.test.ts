@@ -1,3 +1,4 @@
+import legacyWaitCopy from '../../../../packages/contracts/src/fixtures/prompt39/wait-copy'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
     assembleDocumentV2,
@@ -5,6 +6,7 @@ import {
     createDemoManual,
     documentMaterialV2,
     waitCopyV2,
+    waitVariantV2,
     verifyDocumentAgainstInputsV2,
     screenDocumentV2Schema,
     SCREEN_KINDS_V2,
@@ -441,18 +443,22 @@ describe('whole-document runtime store', () => {
         expect(screensV2).not.toHaveBeenCalled()
     })
 
-    it('rejects an older API wait vocabulary and publishes the current complete local fallback', async () => {
+    it('accepts legacy API wait copy while preserving its raw document and presenting current activity copy', async () => {
         const older = fixture(inputs)
-        older.states.pending!.header.title = { kind: 'literal', text: 'Working on it' }
+        older.states.pending!.header.title = { kind: 'literal', text: legacyWaitCopy.headings[0]! }
         expect(verifyDocumentAgainstInputsV2(older, inputs, sha256Hex)).toEqual(['literal_not_listed'])
         const screensV2 = vi.fn<ModelApiClient['screensV2']>(async (metadata) => ok(older, metadata.requestId))
         const store = new DocumentStore({ client: { screensV2 }, mode: 'full', id: (): string => 'old-api' })
         store.request(inputs)
         await vi.waitFor(() => expect(store.peek(inputs)?.status).toBe('ready'))
         const entry = store.peek(inputs)!
-        expect(entry.issue).toBe('invalid_output')
-        expect(entry.document.metadata.source).toBe('fallback')
+        expect(entry.issue).toBeNull()
+        expect(entry.document.metadata.source).toBe('generated')
         expect(entry.document.states.pending!.header.title).toEqual({
+            kind: 'literal',
+            text: legacyWaitCopy.headings[0]!,
+        })
+        expect(waitVariantV2(entry.document.states.pending!, 'guide', 'pending').header.title).toEqual({
             kind: 'literal',
             text: waitCopyV2('guide').heading,
         })

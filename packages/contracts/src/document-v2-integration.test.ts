@@ -478,7 +478,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
                 bar: {
                     primary: {
                         ...proposal.states.pending!.bar.primary,
-                        label: 'Working…',
+                        label: 'Preparing step…',
                         intent: { intent: 'navigate', target: 'guide' },
                     },
                     secondary: null,

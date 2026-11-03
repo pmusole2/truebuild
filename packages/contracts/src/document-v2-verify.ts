@@ -1,3 +1,4 @@
+import type { WaitCompatibilityV2 } from './document-v2-copy'
 import { nodeTextRefsV2, variantsOfV2, visitVariantNodesV2, type ScreenDocumentV2, type TextRefV2 } from './document-v2'
 import { screenContextJsonV2, screenContextPartsV2, type ScreenContextInputsV2 } from './document-v2-context'
 import { semanticIssuesV2 } from './document-v2-semantic'
@@ -14,6 +15,7 @@ export function verifyDocumentAgainstInputsV2(
     document: ScreenDocumentV2,
     inputs: ScreenContextInputsV2,
     sha256Hex?: (text: string) => string,
+    options: WaitCompatibilityV2 = {},
 ): string[] {
     const material = documentMaterialV2(inputs)
     const { identity } = screenContextPartsV2(inputs)
@@ -42,7 +44,7 @@ export function verifyDocumentAgainstInputsV2(
         checkRef(variant.header.subtitle)
         visitVariantNodesV2(variant, prefix, ({ node }) => nodeTextRefsV2(node).forEach(checkRef))
     }
-    for (const issue of semanticIssuesV2(document, material)) {
+    for (const issue of semanticIssuesV2(document, material, options)) {
         issues.add(issue.slice(issue.lastIndexOf(':') + 1))
     }
     return [...issues]

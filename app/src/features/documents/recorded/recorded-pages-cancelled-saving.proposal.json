@@ -142,7 +142,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Saving…"
+                    "text": "Saving your progress"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -166,26 +166,14 @@
                         "type": "Stack",
                         "gap": "md",
                         "align": "stretch",
-                        "children": [
-                            {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "This only takes a moment."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
-                            }
-                        ]
+                        "children": []
                     }
                 ]
             },
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Saving…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",
@@ -248,7 +236,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing pages…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",

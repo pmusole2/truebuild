@@ -1,3 +1,4 @@
+import { waitCopyV2 } from '@truebuild/contracts'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import {
     ScrollView,
@@ -27,7 +28,7 @@ import { useTheme } from '../../theme/theme'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck, HowItWorks } from './more-sections'
-import { plainNotice, progressLine, stopFor } from './plain-copy'
+import { plainNotice, plainPending, progressLine, stopFor } from './plain-copy'
 import { ManualImage } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
@@ -174,13 +175,13 @@ const HOME_HEADING = 'Your builds'
 /** Why Add manual is unavailable, so a disabled primary action is never unexplained. */
 function addHint(state: WorkflowScreenProps['state']): string | null {
     if (state.loading) {
-        return 'Your builds are opening.'
+        return waitCopyV2('home').heading
     }
     if (state.storageReadOnly) {
         return 'Adding is paused until your saved builds open again.'
     }
     if (state.pending !== null) {
-        return 'Wait for the current request to finish.'
+        return plainPending(state.pending, 'home')
     }
     return null
 }
@@ -236,7 +237,7 @@ export function LibraryScreen({
     const nav = navProp ?? defaultNav(controller)
     const addDisabled = state.loading || state.pending !== null || state.storageReadOnly
     const failed = !state.loading && state.storageReadOnly
-    const hint = failed ? (state.pending === null ? null : 'Please wait') : addHint(state)
+    const hint = failed ? plainPending(state.pending, 'home') : addHint(state)
     const recoveryCopy =
         state.notice === null
             ? 'Your saved builds need another try.'
@@ -351,7 +352,7 @@ export function LibraryScreen({
                     {state.storageReadOnly ? null : <PlainNotice state={state} controller={controller} />}
                     {state.loading ? (
                         <Card>
-                            <LoadingState label="Getting your builds ready." shape="card" />
+                            <LoadingState label={waitCopyV2('home').heading} shape="card" />
                         </Card>
                     ) : failed ? (
                         <Instruction>{recoveryCopy}</Instruction>

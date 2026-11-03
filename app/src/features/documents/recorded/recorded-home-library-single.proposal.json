@@ -107,7 +107,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Loading your manuals"
+                    "text": "Opening your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -129,17 +129,6 @@
                                 "type": "Progress",
                                 "binding": "build",
                                 "label": null
-                            },
-                            {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "Getting your saved manuals ready to show."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
                             }
                         ]
                     }
@@ -148,7 +137,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",
@@ -163,7 +152,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Loading your manuals"
+                    "text": "Opening your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -182,17 +171,6 @@
                         "align": "stretch",
                         "children": [
                             {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "Getting your saved manuals ready to show."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
-                            },
-                            {
                                 "type": "Progress",
                                 "binding": "build",
                                 "label": null
@@ -204,7 +182,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",

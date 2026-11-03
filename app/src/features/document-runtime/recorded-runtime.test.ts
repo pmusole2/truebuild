@@ -89,7 +89,7 @@ describe('bound recorded model documents', () => {
         const doc = recordedDocument(inputs)
         expect(doc).not.toBeNull()
         expect(doc!.metadata.authoring?.fixtureId).toBe('recorded-camera-page-saving-sol-v1')
-        expect(doc!.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Saving…' })
+        expect(doc!.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Saving your progress' })
         expect(verifyDocumentAgainstInputsV2(doc!, inputs, sha256Hex)).toEqual([])
     })
 
@@ -150,7 +150,7 @@ describe('bound recorded model documents', () => {
         const doc = recordedDocument({ ...base, uiState: { ...base.uiState, busy: { activity: 'saving' } } })
         expect(doc).not.toBeNull()
         expect(doc!.metadata.authoring?.fixtureId).toBe('recorded-home-saving-sol-v1')
-        expect(doc!.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Saving…' })
+        expect(doc!.states.busy!.header.title).toEqual({ kind: 'literal', text: 'Saving your progress' })
         expect(doc!.metadata.model).toBeNull()
     })
     it.each([

@@ -705,7 +705,9 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
                 return [
                     ...capturedImage(material),
                     text(lit(BUSY_COPY_V2.checking.heading), { role: 'heading' }),
-                    text(lit(BUSY_COPY_V2.checking.detail), { tone: 'info' }),
+                    ...(BUSY_COPY_V2.checking.detail === ''
+                        ? []
+                        : [text(lit(BUSY_COPY_V2.checking.detail), { tone: 'info' })]),
                     ...factNodes(material, true),
                 ]
             }
@@ -1022,7 +1024,9 @@ function stateVariant(
                     ? [{ type: 'Progress', binding: activity === 'reading' ? 'reading' : 'build', label: null } as Node]
                     : []),
                 ...(readingFailure ? [] : [text(lit(copy.heading), { role: 'heading' })]),
-                ...(readingFailure && material.requirements.notice ? [] : [text(lit(copy.detail), { tone: 'info' })]),
+                ...((readingFailure && material.requirements.notice) || copy.detail === ''
+                    ? []
+                    : [text(lit(copy.detail), { tone: 'info' })]),
                 ...noticeNodes(material, state),
                 ...stated,
             ]),

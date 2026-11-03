@@ -487,7 +487,7 @@ it('shows the restoring state while the local library loads, before any manual i
     controllers.push(controller)
     expect(controller.getSnapshot().loading).toBe(true)
     await render(<LibraryScreen state={controller.getSnapshot()} controller={controller} />)
-    expect(screen.getByLabelText('Getting your builds ready.')).toBeTruthy()
+    expect(screen.getByLabelText('Opening your manuals')).toBeTruthy()
     expect(screen.queryByText('Build furniture with step-by-step help.')).toBeNull()
 })
 

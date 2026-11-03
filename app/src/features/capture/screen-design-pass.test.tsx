@@ -157,7 +157,7 @@ describe('home', () => {
     it('predicts the saved-manual card while the library restores, with the primary disabled in place', async () => {
         const { state } = workflowPreviewFixture('home-loading')
         await render(<LibraryScreen state={state} controller={INERT_WORKFLOW_CONTROLLER} />)
-        expect(screen.getByLabelText('Getting your builds ready.')).toBeTruthy()
+        expect(screen.getByLabelText('Opening your manuals')).toBeTruthy()
         expect(screen.getAllByTestId('skeleton-block', hidden).length).toBeGreaterThanOrEqual(5)
         expect(screen.getByRole('button', { name: 'Add manual' }).props.accessibilityState.disabled).toBe(true)
     })

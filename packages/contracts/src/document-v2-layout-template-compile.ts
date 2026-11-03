@@ -203,7 +203,11 @@ function expandVariant(
     }
 
     const list = (items: TemplateNodeV2[], at: string, depth: number, scope: Scope | null): ScreenNodeV2[] => {
-        const out = items.flatMap((item, index) => place(item, `${at}.${index}`, depth, scope))
+        const out = items.flatMap((item, index) =>
+            item.type === 'Text' && item.content.kind === 'state' && copy?.[item.content.part] === ''
+                ? []
+                : place(item, `${at}.${index}`, depth, scope),
+        )
         if (out.length > DOCUMENT_V2_LIMITS.children) throw new Stop(`children:${at}`)
 
         return out

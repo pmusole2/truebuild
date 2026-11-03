@@ -1,3 +1,5 @@
+import legacyWaitCopy from './fixtures/prompt39/wait-copy'
+import { manualOpeningTitleV2 } from './document-v2-title'
 import { cameraAccessV2, resultOfKindV2, type CameraAccessV2 } from './document-v2-context'
 import {
     nodeTextRefsV2,
@@ -8,6 +10,7 @@ import {
     type ScreenNodeV2,
     type TextRefV2,
     type VariantState,
+    type ScreenVariantV2,
 } from './document-v2'
 import { coachTargetsForV2, type DocumentMaterialV2 } from './document-v2-material'
 
@@ -65,8 +68,8 @@ export const COACH_COPY_V2: Readonly<Record<string, { heading: string; body: str
 
 export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; detail: string }>> = {
     // Busy and pending documents select the screen-specific table below.
-    busy: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
-    pending: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+    busy: { heading: 'Laying out this step', detail: '' },
+    pending: { heading: 'Laying out this step', detail: '' },
     empty: { heading: 'Nothing here yet', detail: 'Add something to get started.' },
     error: { heading: 'Something went wrong', detail: 'Try again in a moment.' },
     recovery: { heading: 'Let us get you back on track', detail: 'Try again, or go back home.' },
@@ -76,13 +79,13 @@ export const STATE_COPY_V2: Readonly<Record<VariantState, { heading: string; det
 /** The busy variant's authored words per activity (what the app is doing), never a native text override. */
 export const BUSY_COPY_V2: Readonly<Record<BusyActivityV2 | 'reopening', { heading: string; detail: string }>> = {
     reopening: { heading: 'Reopening TrueBuild', detail: 'Trying to open the app again.' },
-    working: { heading: 'Preparing this screen', detail: 'Getting this screen ready to use.' },
+    working: { heading: 'Laying out this step', detail: '' },
     reading: { heading: 'Reading your manual', detail: 'This can take a minute.' },
-    checking: { heading: 'Checking your photo…', detail: 'This only takes a moment.' },
-    'second-opinion': { heading: 'Taking a closer look…', detail: 'A closer look can take a little longer.' },
-    asking: { heading: 'Asking…', detail: 'This only takes a moment.' },
-    'question-waiting': { heading: 'Still thinking…', detail: 'Thanks for waiting.' },
-    saving: { heading: 'Saving…', detail: 'This only takes a moment.' },
+    checking: { heading: 'Checking your photo…', detail: '' },
+    'second-opinion': { heading: 'Taking a closer look…', detail: '' },
+    asking: { heading: 'Asking…', detail: '' },
+    'question-waiting': { heading: 'Still thinking…', detail: '' },
+    saving: { heading: 'Saving your progress', detail: '' },
 }
 
 /** Closed words for screen preparation, with no invented operation, progress or time estimate. */
@@ -94,9 +97,9 @@ export const APP_RELOAD_WAIT_COPY_V2: WaitCopyV2 = {
 }
 export const SCREEN_WAIT_COPY_V2: Readonly<Record<ScreenKindV2, WaitCopyV2>> = {
     home: {
-        heading: 'Loading your manuals',
-        detail: 'Getting your saved manuals ready to show.',
-        action: 'Loading manuals…',
+        heading: 'Opening your manuals',
+        detail: '',
+        action: 'Opening…',
     },
     add: {
         heading: 'Getting ready to add a manual',
@@ -118,7 +121,7 @@ export const SCREEN_WAIT_COPY_V2: Readonly<Record<ScreenKindV2, WaitCopyV2>> = {
         detail: 'Getting the review screen ready.',
         action: 'Opening review…',
     },
-    guide: { heading: 'Opening your build guide', detail: 'Getting your step guide ready.', action: 'Opening guide…' },
+    guide: { heading: 'Laying out this step', detail: '', action: 'Preparing step…' },
     result: {
         heading: 'Opening your photo check',
         detail: 'Getting the photo check screen ready.',
@@ -175,6 +178,8 @@ const BUSY_ACTION_V2: Readonly<Record<Exclude<BusyActivityV2, 'working'>, string
 export const WAIT_ACTION_LABELS_V2: readonly string[] = [
     ...Object.values(SCREEN_WAIT_COPY_V2).map((copy) => copy.action),
     ...Object.values(BUSY_ACTION_V2),
+    'Opening…',
+    'Preparing step…',
 ]
 
 /** Shared contract-owned copy for document variants and transient native navigation/storage waits. */
@@ -182,14 +187,27 @@ export function waitCopyV2(
     kind: ScreenKindV2,
     activity?: BusyActivityV2 | null,
     manualTitle?: string | null,
+    context?: { readonly targetStepNumber?: number; readonly phase?: 'preparing-photos' | 'choosing-photos' },
 ): WaitCopyV2 {
     if (activity != null && activity !== 'working') {
         return { ...BUSY_COPY_V2[activity], action: BUSY_ACTION_V2[activity] }
     }
+    if (context?.phase === 'preparing-photos')
+        return { heading: 'Getting your photos ready', detail: '', action: 'Preparing page photos…' }
+    if (context?.phase === 'choosing-photos')
+        return { heading: 'Choosing your page photos', detail: '', action: 'Choosing page photos…' }
     const copy = SCREEN_WAIT_COPY_V2[kind]
-    const title = manualTitle?.trim()
-    if (title && ['guide', 'quick-check', 'reading', 'completion', 'pages'].includes(kind)) {
-        return { ...copy, heading: `Opening ${title}`, action: 'Opening manual…' }
+    if (
+        kind === 'guide' &&
+        context?.targetStepNumber !== undefined &&
+        Number.isInteger(context.targetStepNumber) &&
+        context.targetStepNumber > 0
+    ) {
+        return { heading: `Getting step ${context.targetStepNumber} ready`, detail: '', action: 'Preparing step…' }
+    }
+    if (manualTitle !== undefined && ['guide', 'quick-check', 'reading', 'completion', 'pages'].includes(kind)) {
+        const title = manualOpeningTitleV2({ title: manualTitle ?? '' })
+        return { heading: title === null ? 'Opening your manual' : `Opening ${title}`, detail: '', action: 'Opening…' }
     }
     return copy
 }
@@ -455,7 +473,11 @@ const factEditorListed = (node: ScreenNodeV2): boolean =>
  * heading can be off screen and a header that kept the ready title would misstate the screen. Applies only where the
  * context names the activity (`ui.busy`); machine code `<prefix>header:busy_header_mismatch`.
  */
-export function busyHeaderIssuesV2(document: DocumentLike, material: DocumentMaterialV2): string[] {
+export function busyHeaderIssuesV2(
+    document: DocumentLike,
+    material: DocumentMaterialV2,
+    options: WaitCompatibilityV2 = {},
+): string[] {
     const activity = material.inputs.uiState?.busy?.activity
     if (activity === undefined) return []
     const issues: string[] = []
@@ -463,7 +485,11 @@ export function busyHeaderIssuesV2(document: DocumentLike, material: DocumentMat
         const { title } = variant.header
         if (
             name === 'busy' &&
-            !(title.kind === 'literal' && inList([waitCopyV2(material.inputs.kind, activity).heading], title.text))
+            !(
+                title.kind === 'literal' &&
+                (inList([waitCopyV2(material.inputs.kind, activity).heading], title.text) ||
+                    (options.legacyWaitCopy === true && legacyWaitLiteralsV2(activity).includes(title.text)))
+            )
         ) {
             issues.push(`${prefix}header:busy_header_mismatch`)
         }
@@ -475,10 +501,19 @@ export function busyHeaderIssuesV2(document: DocumentLike, material: DocumentMat
  * `<path>:literal_not_listed` for every literal that is not interface copy of this screen, in the header, subtitle, body,
  * bar, overlays and every state variant. Pure and portable: the server gate and a request-bound client run the same rule.
  */
-export function literalIssuesV2(document: DocumentLike, material: DocumentMaterialV2): string[] {
-    const issues = new Set<string>(busyHeaderIssuesV2(document, material))
+export function literalIssuesV2(
+    document: DocumentLike,
+    material: DocumentMaterialV2,
+    options: WaitCompatibilityV2 = {},
+): string[] {
+    const issues = new Set<string>(busyHeaderIssuesV2(document, material, options))
     for (const { name, prefix, variant } of variantsOfV2(document)) {
-        const allowed = allowedLiteralsV2(material, name)
+        const allowed = [
+            ...allowedLiteralsV2(material, name),
+            ...(options.legacyWaitCopy === true && (name === 'busy' || name === 'pending')
+                ? legacyWaitLiteralsV2(name === 'busy' ? material.inputs.uiState?.busy?.activity : null)
+                : []),
+        ]
         for (const ref of [variant.header.title, variant.header.subtitle]) {
             if (ref?.kind === 'literal' && !inList(allowed, ref.text)) issues.add(`${prefix}header:literal_not_listed`)
         }
@@ -647,4 +682,62 @@ export function earnedStateIssuesV2(document: DocumentLike, material: DocumentMa
         })
     }
     return [...issues]
+}
+
+/** Explicit client compatibility; server authoring remains strict by default. */
+export type WaitCompatibilityV2 = { readonly legacyWaitCopy?: boolean }
+/** Exact pre-Prompt40 wait vocabulary, never admitted to ready, error or recovery. */
+export const LEGACY_WAIT_LITERALS_V2: readonly string[] = [
+    ...legacyWaitCopy.headings,
+    ...legacyWaitCopy.details,
+    ...legacyWaitCopy.actions,
+]
+const LEGACY_ACTIVITY_COPY_V2: Readonly<
+    Partial<Record<BusyActivityV2, { readonly heading?: string; readonly detail: string }>>
+> = legacyWaitCopy.activities
+export function legacyWaitLiteralsV2(activity?: BusyActivityV2 | null): readonly string[] {
+    const copy = activity == null ? undefined : LEGACY_ACTIVITY_COPY_V2[activity]
+    return [
+        ...LEGACY_WAIT_LITERALS_V2,
+        ...(copy === undefined
+            ? []
+            : [copy.heading, copy.detail].filter((value): value is string => value !== undefined)),
+    ]
+}
+
+/**
+ * Presentation only. The received document, screen identity, metadata and provenance remain untouched. Replacing
+ * literal words retains every component path, source ref, factual ref, held image and required node in the raw tree.
+ * Empty detail renders no text; this view is never published or passed off as an authored wire document.
+ */
+export function waitVariantV2(
+    variant: ScreenVariantV2,
+    kind: ScreenKindV2,
+    state: 'ready' | VariantState,
+    activity?: BusyActivityV2 | null,
+): ScreenVariantV2 {
+    if (state !== 'busy' && state !== 'pending') return variant
+    const active = state === 'busy' ? activity : null
+    const copy = waitCopyV2(kind, active)
+    const legacy = legacyWaitLiteralsV2(active)
+    const replace = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(replace)
+        if (value === null || typeof value !== 'object') return value
+        const entry = value as Record<string, unknown>
+        const mapped = Object.fromEntries(Object.entries(entry).map(([key, child]) => [key, replace(child)]))
+        if (entry.kind === 'literal' && typeof entry.text === 'string' && legacy.includes(entry.text)) {
+            mapped.text =
+                legacyWaitCopy.details.includes(entry.text) ||
+                (active != null && LEGACY_ACTIVITY_COPY_V2[active]?.detail === entry.text)
+                    ? copy.detail
+                    : copy.heading
+        }
+        if (
+            typeof entry.label === 'string' &&
+            (legacy.includes(entry.label) || WAIT_ACTION_LABELS_V2.includes(entry.label))
+        )
+            mapped.label = copy.action
+        return mapped
+    }
+    return replace(variant) as ScreenVariantV2
 }

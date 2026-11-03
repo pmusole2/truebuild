@@ -159,8 +159,8 @@ describe('Home composed by the document', () => {
         const gate = deferred<void>()
         const { server } = await mount([], { screens: { gate: gate.promise }, recordings: 'off' })
         expect(await screen.findByText(waitCopyV2('home').heading)).toBeTruthy()
-        expect(screen.getByText(waitCopyV2('home').detail)).toBeTruthy()
-        expect(waitCopyV2('home').heading).toBe('Loading your manuals')
+        expect(waitCopyV2('home').detail).toBe('')
+        expect(waitCopyV2('home').heading).toBe('Opening your manuals')
         await act(async () => gate.resolve())
         expect(await screen.findByText('Add a manual to start building.')).toBeTruthy()
         expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
@@ -195,8 +195,11 @@ describe('Home composed by the document', () => {
             screens: { generated: ['home'], gate: gate.promise },
             recordings: 'off',
         })
-        expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
+        expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
+        expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
+        expect(screen.getByTestId('bottom-bar')).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(300))
+        expect(screen.getByTestId('blueprint-loader-screen')).toBeTruthy()
         expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(15_001))
         expect(screen.getByText(waitCopyV2('home').heading)).toBeTruthy()
