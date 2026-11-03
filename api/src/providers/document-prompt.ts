@@ -1,7 +1,7 @@
 import { DOCUMENT_V2_LIMITS, INTENT_TARGETS, OVERVIEW_PARTS_VISIBLE_V2, TIP_TARGETS } from '@truebuild/contracts'
 
 /** Bump when the instructions or the supplied view change: it keys the document cache and is recorded in metadata. */
-export const DOCUMENT_PROMPT_VERSION = 36
+export const DOCUMENT_PROMPT_VERSION = 37
 
 const INTENT_LINES = Object.entries(INTENT_TARGETS)
     .map(([intent, targets]) => `${intent}: ${targets.join(' | ')}`)

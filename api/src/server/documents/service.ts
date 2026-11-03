@@ -518,6 +518,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                         provider,
                         repairIssues === undefined ? base : { ...base, repairIssues },
                         callAbort.signal,
+                        context.inputs.kind === 'guide' ? attemptMs : undefined,
                     )
                 const generation = await withinModelDeadline(
                     repairIssues === undefined ? call() : work.repair(call),

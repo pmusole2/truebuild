@@ -287,8 +287,8 @@ export interface MetaProvider {
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
     secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     generateScreen?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
-    /** Version 2 whole-screen document: returns the flat wire value of a completed response (see document-wire.ts). */
-    generateDocument?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
+    /** Version 2 document. The service may supply its remaining shared budget; the absolute route ceiling still applies. */
+    generateDocument?(input: ScreenGenerationInput, signal: AbortSignal, deadlineMs?: number): Promise<ScreenGeneration>
     overlay?(input: OverlayInput, signal: AbortSignal): Promise<OverlayGeneration>
 }
 
@@ -1543,9 +1543,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             })
         },
 
-        async generateDocument(input, signal): Promise<ScreenGeneration> {
+        async generateDocument(input, signal, deadlineMs): Promise<ScreenGeneration> {
             const stagePolicy = policy.stages[input.stage]
-            return execute(stagePolicy.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
+            const timeoutMs = deadlineMs ?? stagePolicy.deadlineMs
+            return execute(timeoutMs, signal, async (deadline): Promise<ScreenGeneration> => {
                 const { value, telemetry } = await dispatchDetailed(
                     'document',
                     { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },

@@ -22,6 +22,7 @@ import { DOCUMENT_INSTRUCTIONS, DOCUMENT_PROMPT_VERSION } from '../../providers/
 import { decodeWireProposal, encodeWireProposal, type WireProposal } from '../../providers/document-wire'
 import {
     MetaProviderError,
+    createMetaProvider,
     type ScreenGenerationInput,
     type VerifiedCallTelemetry,
 } from '../../providers/meta-provider'
@@ -619,36 +620,57 @@ describe('service: a live provider', () => {
         { delays: [50_000], source: 'generated', repaired: false },
         { delays: [30_000, 50_000], source: 'generated', repaired: true },
         { delays: [60_000, 40_000], source: 'fallback', repaired: true },
-    ])('shares the existing Guide budget across attempts lasting $delays ms', async ({ delays, source, repaired }) => {
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-        const signals: AbortSignal[] = []
-        try {
-            const service = createDocumentService({
-                provider: {
-                    generateDocument: async (_input, signal) => {
-                        signals.push(signal)
-                        const index = signals.length - 1
-                        await new Promise((resolve) => setTimeout(resolve, delays[index]))
-                        return {
-                            value: index === delays.length - 1 ? goodWire('guide') : {},
-                            telemetry: telemetry(),
-                        }
-                    },
-                },
-                policy: policyFor(),
-                runtimeMode: 'meta',
-                // No outer timer in this stub: the attempt itself must enforce the shared remaining budget.
-                work,
-            })
-            const pending = service.generate(documentInputs('guide'))
-            await vi.advanceTimersByTimeAsync(92_001)
-            expect((await pending).metadata).toMatchObject({ source, repaired })
-            expect(signals).toHaveLength(delays.length)
-            expect(signals.at(-1)!.aborted).toBe(source === 'fallback')
-        } finally {
-            vi.useRealTimers()
-        }
-    })
+    ])(
+        'shares the existing Guide budget through the real provider across attempts lasting $delays ms',
+        async ({ delays, source, repaired }) => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+            const signals: AbortSignal[] = []
+            try {
+                const service = createDocumentService({
+                    provider: createMetaProvider({
+                        apiKey: 'synthetic-free-provider',
+                        policy: policyFor(),
+                        fetchImpl: async (_url, init) => {
+                            signals.push(init!.signal as AbortSignal)
+                            const index = signals.length - 1
+                            await new Promise((resolve) => setTimeout(resolve, delays[index]))
+                            return Response.json({
+                                status: 'completed',
+                                model: 'muse-wonder-1.0',
+                                output: [
+                                    {
+                                        type: 'message',
+                                        role: 'assistant',
+                                        status: 'completed',
+                                        content: [
+                                            {
+                                                type: 'output_text',
+                                                text: JSON.stringify(
+                                                    index === delays.length - 1 ? goodWire('guide') : {},
+                                                ),
+                                                annotations: [],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            })
+                        },
+                    }),
+                    policy: policyFor(),
+                    runtimeMode: 'meta',
+                    // No outer timer in this stub: the attempt itself must enforce the shared remaining budget.
+                    work,
+                })
+                const pending = service.generate(documentInputs('guide'))
+                await vi.advanceTimersByTimeAsync(92_001)
+                expect((await pending).metadata).toMatchObject({ source, repaired })
+                expect(signals).toHaveLength(delays.length)
+                if (source === 'fallback') expect(signals.at(-1)!.aborted).toBe(true)
+            } finally {
+                vi.useRealTimers()
+            }
+        },
+    )
 })
 
 describe('service: precompute, progress and cancel', () => {
