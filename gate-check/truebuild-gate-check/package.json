@@ -1,6 +1,7 @@
 {
   "name": "truebuild-gate-check",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "sam": "tsx sam-smoke.ts",

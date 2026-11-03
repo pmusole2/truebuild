@@ -1,5 +1,0 @@
-{
-    "extends": "../tsconfig.base.json",
-    "compilerOptions": { "types": ["node"] },
-    "include": ["playwright.capture.config.ts", "src/features/capture/browser/**/*.ts"]
-}
