@@ -560,7 +560,12 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     }),
                 )
             }
-            return evaluateWire(normalized.value, context)
+            const evaluated = evaluateWire(normalized.value, context)
+            if (!evaluated.ok) return evaluated
+            // A completed Guide without usable directions gets the same single bounded repair as a bad graph.
+            // The floor is unchanged; apply it to the repair too, before anything can be published or cached.
+            const quality = guideQualityIssues(evaluated.proposal, context)
+            return quality.length === 0 ? evaluated : { ok: false, issues: quality }
         }
 
         const run = async (): Promise<Made> => {
@@ -594,19 +599,6 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     logRejection(context, 'repair', evaluated.issues)
                     return failure('repair_failed')
                 }
-            }
-            const quality = guideQualityIssues(evaluated.proposal, context)
-            if (quality.length > 0) {
-                rejectedIssues = (rejectedIssues ?? 0) + quality.length
-                console.info(
-                    JSON.stringify({
-                        event: 'guide_quality_fallback',
-                        contextKey: context.bound.contextKey,
-                        stepId: context.bound.stepId,
-                        reason: quality,
-                    }),
-                )
-                return failure('invalid_output')
             }
             const seen = observed()
             const document = generated(context, evaluated.proposal, seen, false)

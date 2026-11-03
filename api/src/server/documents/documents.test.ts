@@ -980,6 +980,32 @@ describe('Guide usability floor', () => {
         expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
         expect((await liveService([complete]).service.generate(inputs)).metadata.source).toBe('generated')
 
+        // P13 completed a reachable graph of step-position badges, but authored no direction Text.
+        const badges: WireProposal = {
+            ...complete,
+            body: 'label',
+            overlays: [],
+            nodes: [{ id: 'label', type: 'Badge', label: { kind: 'bound', key: 'step-position' }, tone: 'info' }],
+        }
+        const sparse = evaluateWire(badges, context)
+        expect(sparse).toMatchObject({ ok: true })
+        if (!sparse.ok) throw new Error('Badge-only Guide must reach the unchanged quality floor')
+        expect(guideQualityIssues(sparse.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        const repaired = liveService([badges, complete])
+        expect((await repaired.service.generate(inputs)).metadata).toMatchObject({
+            source: 'generated',
+            repaired: true,
+        })
+        expect(repaired.inputs).toHaveLength(2)
+        expect(repaired.inputs[1]!.repairIssues).toEqual(['guide_quality:instruction_text_missing'])
+        const failed = liveService([badges, badges])
+        expect((await failed.service.generate(inputs)).metadata).toMatchObject({
+            source: 'fallback',
+            fallbackReason: 'repair_failed',
+            repaired: true,
+        })
+        expect(failed.inputs).toHaveLength(2)
+
         step.correction = null
         vi.spyOn(console, 'info').mockImplementation(() => {})
         for (const classification of ['classified', 'legacy', 'safety-only'] as const) {
@@ -1018,10 +1044,10 @@ describe('Guide usability floor', () => {
         const document = await live.service.generate(inputs)
         expect(document.metadata).toMatchObject({
             source: 'fallback',
-            fallbackReason: 'invalid_output',
-            repaired: false,
+            fallbackReason: 'repair_failed',
+            repaired: true,
         })
-        expect(live.inputs).toHaveLength(1)
+        expect(live.inputs).toHaveLength(2)
         const context = buildDocumentContext(inputs)
         const complete = buildFallbackProposalV2(context.material)
         expect(guideQualityIssues(complete, context)).toEqual([])
@@ -1059,8 +1085,9 @@ describe('Guide usability floor', () => {
         expect(inputs.stepPieces).toEqual([{ pieceId: 'walking-machine-468c09a8', quantity: 1 }])
         expect(log.mock.calls.map(([value]) => JSON.parse(String(value)))).toContainEqual(
             expect.objectContaining({
-                event: 'guide_quality_fallback',
-                reason: expect.arrayContaining(['guide_quality:instruction_text_missing']),
+                event: 'document_rejection',
+                attempt: 'initial',
+                issueCodes: expect.arrayContaining(['guide_quality:instruction_text_missing']),
             }),
         )
     })
