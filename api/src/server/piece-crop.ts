@@ -141,7 +141,6 @@ function blobs(mask: Uint8Array, width: number, height: number): Blob[] {
 export async function refinePieceCrop(
     image: ObservationImage,
     drawingBox: readonly [number, number, number, number],
-    options: { withinBox?: boolean } = {},
 ): Promise<PieceCropResult | null> {
     const [x, y, w, h] = drawingBox
     if (
@@ -168,13 +167,12 @@ export async function refinePieceCrop(
         const source = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels, failOn: 'warning' }).autoOrient()
         const metadata = await source.metadata()
         if (metadata.autoOrient.width !== image.width || metadata.autoOrient.height !== image.height) return null
-        const expansion = options.withinBox ? 0 : 1.1
-        const startPixel = options.withinBox ? Math.ceil : Math.floor
-        const endPixel = options.withinBox ? Math.floor : Math.ceil
-        const left = Math.max(0, startPixel((x - expansion * w) * image.width))
-        const top = Math.max(0, startPixel((y - expansion * h) * image.height))
-        const right = Math.min(image.width, endPixel((x + (1 + expansion) * w) * image.width))
-        const bottom = Math.min(image.height, endPixel((y + (1 + expansion) * h) * image.height))
+        // Padding recovers ink that a parse box clips; only the page edge limits it.
+        const expansion = 1.1
+        const left = Math.max(0, Math.floor((x - expansion * w) * image.width))
+        const top = Math.max(0, Math.floor((y - expansion * h) * image.height))
+        const right = Math.min(image.width, Math.ceil((x + (1 + expansion) * w) * image.width))
+        const bottom = Math.min(image.height, Math.ceil((y + (1 + expansion) * h) * image.height))
         const region = { left, top, width: right - left, height: bottom - top }
         const scale = Math.min(
             1,
@@ -195,6 +193,10 @@ export async function refinePieceCrop(
         const boxHeight = h * image.height * sy
         const centerX = ((x + w / 2) * image.width - left) * sx
         const centerY = ((y + h / 2) * image.height - top) * sy
+        const hintLeft = (x * image.width - left) * sx
+        const hintTop = (y * image.height - top) * sy
+        const hintRight = ((x + w) * image.width - left) * sx
+        const hintBottom = ((y + h) * image.height - top) * sy
         const mask = inkMask(data, info.width, info.height)
         removeRules(mask, info.width, info.height, boxWidth, boxHeight)
         const candidates = blobs(mask, info.width, info.height).filter((blob) => {
@@ -233,6 +235,10 @@ export async function refinePieceCrop(
         const verticalGap = Math.max(3, Math.min(boxHeight, seed.bottom - seed.top + 1) * 0.12)
         // Group detached detail strokes using the seed's extent, never an expanding chain of neighbouring text.
         for (const blob of candidates.slice(1)) {
+            // Padding can expose a neighbouring drawing; only strokes centred inside the parse box may join the seed.
+            const blobX = (blob.left + blob.right) / 2
+            const blobY = (blob.top + blob.bottom) / 2
+            if (blobX < hintLeft || blobX > hintRight || blobY < hintTop || blobY > hintBottom) continue
             const dx = Math.max(0, seed.left - blob.right, blob.left - seed.right)
             const dy = Math.max(0, seed.top - blob.bottom, blob.top - seed.bottom)
             const peer =

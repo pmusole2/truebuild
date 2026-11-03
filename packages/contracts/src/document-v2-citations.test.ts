@@ -313,6 +313,9 @@ describe('the plan over complete documents keeps every mandatory citation witnes
 
     it('keeps independent disclosures useful on a complete guide without hiding its mandatory safety', () => {
         const inputs = inputsFor('guide')
+        // The disclosures cite a separate step region, unclaimed by the now-visible direction citations.
+        const optionalRef = { pageId: 'demo-page-1', region: { x: 0.6, y: 0.6, width: 0.2, height: 0.2 } }
+        inputs.session!.reviewedSteps[0]!.sourceRefs.push(optionalRef)
         inputs.session!.reviewedSteps[0]!.safetyNotes = [
             {
                 noteId: 'n1',
@@ -320,7 +323,7 @@ describe('the plan over complete documents keeps every mandatory citation witnes
             },
         ]
         const material = documentMaterialV2(inputs)
-        const optionalPage = material.sources.findIndex((source) => source.region === null)
+        const optionalPage = material.sources.findIndex((source) => sourceKeyV2(source) === sourceKeyV2(optionalRef))
         expect(optionalPage).toBeGreaterThanOrEqual(0)
         const proposal = buildFallbackProposalV2(material)
         const body = proposal.body as Extract<ScreenNodeV2, { type: 'Scroll' }>

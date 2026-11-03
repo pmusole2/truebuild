@@ -15,17 +15,19 @@ export function guideQualityIssues(proposal: ScreenProposalV2, context: Document
     const directions = new Set(
         context.material.facts
             .filter(
-                (fact) => fact.kind !== 'safety' && (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+                (fact) =>
+                    fact.kind !== 'safety' &&
+                    fact.kind !== 'title' &&
+                    (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
             )
             .map((fact) => fact.factId),
     )
     let instruction = false
     visitVariantNodesV2(proposal, '', ({ node, hidden, path }) => {
         if (hidden || !path.startsWith('body') || node.type !== 'Text') return
-        // ManualStep.title is the manual's full primary instruction sentence, not a model-written label.
+        // A title names the step; it cannot substitute for the available source-backed physical directions.
         const ref = node.content
-        if ((ref.kind === 'bound' && ref.key === 'step-title') || (ref.kind === 'fact' && directions.has(ref.factId)))
-            instruction = true
+        if (ref.kind === 'fact' && directions.has(ref.factId)) instruction = true
     })
     if (!instruction) issues.push('guide_quality:instruction_text_missing')
     // GuidePieces is app-owned trailing chrome for EVERY Guide origin. It takes the same stepPieces catalog and

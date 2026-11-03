@@ -13,6 +13,7 @@ import { createHeroResponse } from '@truebuild/contracts/hero'
 import { describe, expect, it } from 'vitest'
 
 import { createDocumentFixtureGenerator } from '../../providers/document-fixtures'
+import { encodeWireProposal } from '../../providers/document-wire'
 import { demoSession, documentInputs, fullUi } from '../../test-support/document-inputs'
 import { aiPolicyFromEnvironment } from '../ai-policy'
 import type { BackgroundWork } from '../screens/service'
@@ -476,7 +477,33 @@ describe('the page a check names keeps its composition and is re-verified (store
         service: DocumentService
         screen: { screenId: string; contextKey: string }
     }> {
-        const service = serviceFor({}, true)
+        const service = createDocumentService({
+            provider: null,
+            runtimeMode: 'fixture',
+            policy: policyFor(),
+            work,
+            fixtureGenerator: async ({ context }) => {
+                const proposal = buildFallbackProposalV2(context.material)
+                if (proposal.body.type !== 'Scroll') throw new Error('Expected the Guide scroll')
+                return encodeWireProposal({
+                    ...proposal,
+                    body: {
+                        ...proposal.body,
+                        children: [
+                            ...proposal.body.children,
+                            // Exercise hidden-child projection without hiding the actual Guide instructions.
+                            {
+                                type: 'Section',
+                                title: { kind: 'literal', text: 'More detail' },
+                                collapsible: true,
+                                initiallyOpen: false,
+                                children: [text('Details')],
+                            },
+                        ],
+                    },
+                })
+            },
+        })
         const document = await service.generate(documentInputs('guide', session))
         return { service, screen: { screenId: document.screenId, contextKey: document.bound.contextKey } }
     }

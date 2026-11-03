@@ -5,7 +5,7 @@ import { PIECE_CUTOUT_MAX_CHARS } from '@truebuild/contracts'
 import type { ObservationImage } from './media'
 import { refinePieceCrop } from './piece-crop'
 
-it('keeps a part crop inside its own box even when connected ink extends beyond it', async () => {
+it('recovers a drawing that its drawing box clips, extending past the box within the page', async () => {
     const bytes = await sharp(
         Buffer.from(
             '<svg width="100" height="100"><rect width="100" height="100" fill="white"/><circle cx="50" cy="50" r="20" fill="black"/></svg>',
@@ -15,13 +15,50 @@ it('keeps a part crop inside its own box even when connected ink extends beyond 
         .toBuffer()
     const image: ObservationImage = { bytes, mimeType: 'image/png', width: 100, height: 100 }
     const box = [0.4, 0.3, 0.2, 0.4] as const
-    const crop = await refinePieceCrop(image, box, { withinBox: true })
+    const crop = await refinePieceCrop(image, box)
     expect(crop).not.toBeNull()
     const [x, y, w, h] = crop!.box
-    expect(x).toBeGreaterThanOrEqual(box[0])
-    expect(y).toBeGreaterThanOrEqual(box[1])
-    expect(x + w).toBeLessThanOrEqual(box[0] + box[2])
-    expect(y + h).toBeLessThanOrEqual(box[1] + box[3])
+    expect(x * 100).toBeLessThanOrEqual(30)
+    expect(y * 100).toBeLessThanOrEqual(30)
+    expect((x + w) * 100).toBeGreaterThanOrEqual(70)
+    expect((y + h) * 100).toBeGreaterThanOrEqual(70)
+})
+
+it('keeps a neighbouring drawing that lies only in the padding out of the crop', async () => {
+    const bytes = await sharp(
+        Buffer.from(`<svg width="300" height="200">
+            <rect width="100%" height="100%" fill="white" />
+            <circle cx="100" cy="100" r="20" fill="black" />
+            <circle cx="146" cy="100" r="8" fill="black" />
+        </svg>`),
+    )
+        .png()
+        .toBuffer()
+    const image: ObservationImage = { bytes, mimeType: 'image/png', width: 300, height: 200 }
+    const crop = await refinePieceCrop(image, [80 / 300, 80 / 200, 40 / 300, 40 / 200])
+    expect(crop).not.toBeNull()
+    const [x, , w] = crop!.box
+    expect(x * 300).toBeLessThanOrEqual(80)
+    expect((x + w) * 300).toBeGreaterThanOrEqual(120)
+    expect((x + w) * 300).toBeLessThan(138)
+})
+
+it('clamps a padded crop at the bottom-right page edge', async () => {
+    const bytes = await sharp(
+        Buffer.from(
+            '<svg width="200" height="200"><rect width="200" height="200" fill="white"/><circle cx="180" cy="180" r="8" fill="black"/></svg>',
+        ),
+    )
+        .png()
+        .toBuffer()
+    const image: ObservationImage = { bytes, mimeType: 'image/png', width: 200, height: 200 }
+    const crop = await refinePieceCrop(image, [0.85, 0.85, 0.1, 0.1])
+    expect(crop).not.toBeNull()
+    const [x, y, w, h] = crop!.box
+    expect(x + w).toBeLessThanOrEqual(1)
+    expect(y + h).toBeLessThanOrEqual(1)
+    expect((x + w) * 200).toBeGreaterThanOrEqual(188)
+    expect((y + h) * 200).toBeGreaterThanOrEqual(188)
 })
 
 it('finds an offset ink drawing without table borders, preserves nearby strokes, and bounds blank or invalid crops', async (): Promise<void> => {

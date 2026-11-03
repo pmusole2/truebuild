@@ -1,6 +1,16 @@
 import { expect, it } from 'vitest'
 import { manualPieceInputSchema, PIECE_SPEC_LIMITS, pieceSpecSchema } from '@truebuild/contracts'
 import { metaOutputSchemas } from './meta-schemas'
+import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
+
+it('folds only surface detail into primitives so flat silhouettes stay extrudes and integral members stay distinct', () => {
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'Fold small surface lobes, bumps and grip details into the parent primitive rather than adding projecting parts; this applies only to surface detail, so a real flat blade or fin silhouette still uses extrude.',
+    )
+    expect(PIECE_GEOMETRY_INSTRUCTIONS).toContain(
+        'Preserve integral shafts, stems, pegs and other connected functional structural members',
+    )
+})
 
 it('accepts optional bounded inventory exclusions as data while rejecting malformed or oversized lists', () => {
     const part = { id: 'panel', name: 'Panel', quantity: 1, label: null, dimensions: null, pageId: null }

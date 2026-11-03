@@ -762,7 +762,7 @@ export function createModelHandlers(options: {
             route?: string
             path?: string
             /** The value as published: the fixture runtime strips what a provider claimed about itself. */
-            present?: (value: T) => T
+            present?: (value: T, request: Request) => T
         } = {},
     ): Handler {
         const run = async (
@@ -817,7 +817,8 @@ export function createModelHandlers(options: {
                         mode: fixtureProvider && policy.route === 'overlay' ? 'fixture' : 'model',
                         requestId: metadata.requestId,
                         binding: metadata.binding,
-                        value: policy.present?.(published?.value ?? value.data) ?? published?.value ?? value.data,
+                        value:
+                            policy.present?.(published?.value ?? value.data, request) ?? published?.value ?? value.data,
                     },
                     { headers: { 'cache-control': 'no-store', ...scopeHeaders?.(metadata) } },
                 )
@@ -898,7 +899,17 @@ export function createModelHandlers(options: {
         {
             repairable: true,
             route: 'parse',
-            present: (value) => asPublic(value),
+            present: (value, request) => {
+                const publicValue = asPublic(value)
+                if (new URL(request.url).searchParams.get('stepKinds') === 'remove') return publicValue
+                // Old installed clients reject `remove`; adapt only the wire value, leaving canonical/cache data intact.
+                return {
+                    ...publicValue,
+                    steps: publicValue.steps.map((step) =>
+                        step.kind === 'remove' ? { ...step, kind: 'adjust' as const } : step,
+                    ),
+                }
+            },
             progress: true,
             deadlineFor: createParseDeadline,
         },

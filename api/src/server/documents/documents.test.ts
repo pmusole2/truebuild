@@ -770,7 +770,7 @@ describe('Guide usability floor', () => {
         expect(live.inputs[0]!.dynamic.document).toMatchObject({ headerText })
     })
 
-    it('supplies the visible instruction even when classified directions leave the required fact list empty', async () => {
+    it('requires actual visible directions even when the required fact list is empty', async () => {
         const session = demoSession({ safety: false })
         session.reviewedSteps[0]!.safetyNotes = []
         const inputs = documentInputs('guide', session)
@@ -807,24 +807,112 @@ describe('Guide usability floor', () => {
         expect(guideQualityIssues(missing.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
         expect((await liveService([sparse]).service.generate(inputs)).metadata.source).toBe('fallback')
 
-        const view = context.view.dynamic.document as Record<string, unknown>
-        const instruction = bodyTextRefSchema.parse(view.instructionText)
-        expect(instruction).toEqual({ kind: 'bound', key: 'step-title' })
-        const corrected: WireProposal = {
+        const titleOnly: WireProposal = {
             ...sparse,
             nodes: sparse.nodes.map((node) =>
-                node.id === 'stack'
-                    ? { ...node, children: ['f3502', 'progress'] }
-                    : node.id === 'f3502'
-                      ? { ...node, content: instruction }
-                      : node,
+                node.id === 'stack' ? { ...node, children: ['f3502', 'progress'] } : node,
             ),
+        }
+        const title = evaluateWire(titleOnly, context)
+        expect(title.ok).toBe(true)
+        if (!title.ok) throw new Error('Title-only Guide must reach the quality floor')
+        expect(guideQualityIssues(title.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        expect((await liveService([titleOnly]).service.generate(inputs)).metadata.source).toBe('fallback')
+
+        const view = context.view.dynamic.document as Record<string, unknown>
+        expect(view).not.toHaveProperty('instructionText')
+        const directions = bodyTextRefSchema.array().parse(view.directionFacts)
+        expect(directions).toEqual([
+            { kind: 'fact', factId: 'orientation' },
+            { kind: 'fact', factId: 'connection' },
+            { kind: 'fact', factId: 'check:groove-inward' },
+            { kind: 'fact', factId: 'correction:turn-panel' },
+        ])
+        expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
+        expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
+        expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
+        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThan(34)
+        const corrected: WireProposal = {
+            ...titleOnly,
+            nodes: titleOnly.nodes.map((node) => (node.id === 'f3502' ? { ...node, content: directions[0]! } : node)),
         }
         const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
         expect(evaluated.ok).toBe(true)
         if (!evaluated.ok) throw new Error('Supplied instruction must pass the strict gate')
         expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
         expect((await liveService([corrected]).service.generate(inputs)).metadata.source).toBe('generated')
+    })
+
+    it('rejects a legacy title fact as the sole instruction', () => {
+        const context = contextFor('guide', demoSession({ safety: false }))
+        const proposal = buildFallbackProposalV2(context.material)
+        expect(context.material.facts.some((fact) => fact.factId === 'title')).toBe(true)
+        expect(
+            guideQualityIssues(
+                {
+                    ...proposal,
+                    body: {
+                        type: 'Text',
+                        content: { kind: 'fact', factId: 'title' },
+                        role: 'body',
+                        tone: 'neutral',
+                        emphasis: 'normal',
+                        align: 'start',
+                    },
+                },
+                context,
+            ),
+        ).toEqual(['guide_quality:instruction_text_missing'])
+    })
+
+    it('uses the retained battery-removal correction when no orientation or connection was extracted', async () => {
+        // Reduced shape of .local/prompt11/final/reviewed-session.json: no richer removal procedure was retained.
+        const session = demoSession({ safety: false })
+        const step = session.reviewedSteps[0]!
+        step.title = '3B-C. Remove modular battery from drone'
+        step.kind = 'remove'
+        step.requirements = { orientation: false, connection: false, visibleChecks: false }
+        step.safetyNotes = []
+        step.orientation = { state: 'unknown', reason: 'No removal orientation to verify' }
+        step.connection = { state: 'unknown', reason: 'No removal connection state to verify' }
+        step.visibleChecks = []
+        step.correction = {
+            reviewed: true,
+            actions: [
+                {
+                    actionId: 'action-step-5-check',
+                    instruction: 'Verify battery lifted clear after prying',
+                    sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                },
+            ],
+        }
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        const view = context.view.dynamic.document as Record<string, unknown>
+        expect(view.directionFacts).toEqual([{ kind: 'fact', factId: 'correction:action-step-5-check' }])
+        expect(context.material.facts).toEqual([
+            {
+                factId: 'correction:action-step-5-check',
+                kind: 'correction',
+                basis: 'direction',
+                text: 'Verify battery lifted clear after prying',
+                sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+            },
+        ])
+        const complete = goodWire('guide', session)
+        const evaluated = evaluateWire(complete, context)
+        expect(evaluated.ok).toBe(true)
+        if (!evaluated.ok) throw new Error('Battery correction must pass strict validation')
+        expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
+        expect((await liveService([complete]).service.generate(inputs)).metadata.source).toBe('generated')
+
+        step.correction = null
+        const unavailable = buildDocumentContext(inputs)
+        expect((unavailable.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([])
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        expect((await liveService([goodWire('guide', session)]).service.generate(inputs)).metadata.source).toBe(
+            'fallback',
+        )
     })
 
     it('keeps a strict-valid sparse Guide on the complete shell with its live piece catalog', async () => {

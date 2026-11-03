@@ -62,6 +62,7 @@ const routes = new Hono<ApiEnv>()
             secondOpinionModel: context.get('runtime').secondOpinionModel,
             aiPolicy: describeAiPolicy(context.get('runtime').policy),
             followUps: { overlay: context.get('runtime').overlay, segments: context.get('runtime').segments },
+            capabilities: { pieceFigureBox: true },
             // Secret-free: the whole-screen document version this server speaks and where, never a key or a model detail.
             screensV2: {
                 documentVersion: SCREEN_DOCUMENT_V2_VERSION,

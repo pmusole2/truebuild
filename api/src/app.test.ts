@@ -222,6 +222,7 @@ describe('Hono HTTP boundary', (): void => {
             secondOpinionModel: 'muse-wonder-1.0',
             aiPolicy: expect.objectContaining({ generativeUi: 'full' }),
             followUps: { overlay: true, segments: true },
+            capabilities: { pieceFigureBox: true },
             screensV2: { documentVersion: 2, catalogVersion: 2, route: '/api/screens/v2' },
         })
         expect(second).toEqual(first)

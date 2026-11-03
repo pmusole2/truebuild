@@ -282,7 +282,7 @@ function factEntry(
     return [text(factRef(fact.factId), look), ...(withCitations ? chips(resolve(fact.sourceRefs)) : [])]
 }
 
-/** Facts of the step the screen states, grouped: safety first, then the remaining required directions, then optional. */
+/** Facts of the step: safety first, then required directions; a Guide also keeps optional directions visible. */
 function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[] {
     const resolve = sourceResolverV2(material.sources)
     const entries = (facts: FactV2[], safety: boolean): Node[][] =>
@@ -306,7 +306,13 @@ function factNodes(material: DocumentMaterialV2, withCitations: boolean): Node[]
             ? [section('Directions', nest(pack(entries(required, false), (children) => card(children))))]
             : []),
         ...(optional.length > 0
-            ? [section('More detail', nest(pack(entries(optional, false), (children) => card(children))), true)]
+            ? [
+                  section(
+                      material.inputs.kind === 'guide' ? 'Directions' : 'More detail',
+                      nest(pack(entries(optional, false), (children) => card(children))),
+                      material.inputs.kind !== 'guide',
+                  ),
+              ]
             : []),
     ]
 }
@@ -678,8 +684,7 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
         case 'guide':
             return [
                 ...heroImage(material),
-                // The step title is the manual's full instruction sentence; keep it readable even when optional
-                // direction details live under More and when a rejected generated page falls back to this shell.
+                // Keep the step heading readable beside the actual source-backed direction facts below it.
                 ...(material.step === null ? [] : [text(bound('step-title'))]),
                 ...(material.step === null ? [] : [{ type: 'Progress', binding: 'step', label: null } as Node]),
                 ...partNodes(material),

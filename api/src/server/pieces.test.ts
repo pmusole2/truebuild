@@ -388,7 +388,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     expect((await sharp(cutoutBytes).stats()).isOpaque).toBe(true)
     const firstInput = generatePieces.mock.calls[0]![0]
     expect(firstInput.parts[0]).toMatchObject({ notPartOfThisPiece: ['pin', 'washer'] })
-    expect(firstInput.imagePieceIds).toEqual(['bracket', 'washer'])
+    expect(firstInput.imagePieceIds).toEqual(['bracket', 'pin', 'washer'])
     const cutoutInfo = await sharp(cutoutBytes).metadata()
     expect(Buffer.from(firstInput.images[0]!.bytes)).toEqual(cutoutBytes)
     expect(firstInput.images[0]).toMatchObject({
@@ -420,7 +420,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
         expect.stringContaining('Use volumetric primitives for thick housings'),
     )
     expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Never add a schema placeholder'))
-    expect(bodies[0]).toHaveProperty('instructions', expect.not.stringContaining('Fold small surface lobes'))
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Fold small surface lobes'))
     const failed = first.results[1]!
     const repaired = await handler(
         pieceRequest(
@@ -492,7 +492,7 @@ it('sends no crop image for a blank drawing and still asks Wonder for the name-o
     expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: [], images: [], parts: [plate] })
 })
 
-it('drops shared own-box claims and reused cutouts while accepting explicit broader figure context', async () => {
+it('drops shared own-box claims and reused cutouts while accepting explicit and legacy broader figure context', async () => {
     const drawing = await sharp(
         Buffer.from(
             '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="white"/><path d="M10 10 H30 V30 H10 Z M10 20 H30" stroke="black" stroke-width="2" fill="none"/></svg>',
@@ -503,7 +503,7 @@ it('drops shared own-box claims and reused cutouts while accepting explicit broa
     const provider = createMetaProvider({
         apiKey: 'synthetic-pieces-provider-key',
         fetchImpl: guardModelFetch(async (): Promise<Response> =>
-            wonderResponse([spec('propeller-a'), spec('propeller-b'), spec('battery')]),
+            wonderResponse([spec('propeller-a'), spec('propeller-b'), spec('battery'), spec('legacy')]),
         ),
     })
     const generatePieces = vi.spyOn(provider, 'generatePieces')
@@ -531,6 +531,7 @@ it('drops shared own-box claims and reused cutouts while accepting explicit broa
                         cutoutUri: `data:image/png;base64,${drawing.toString('base64')}`,
                     },
                     { ...part('battery'), drawingBox: undefined, figureBox: [0.2, 0.2, 0.6, 0.6] },
+                    { ...part('legacy'), drawingBox: undefined },
                 ],
                 pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
             },
@@ -543,11 +544,14 @@ it('drops shared own-box claims and reused cutouts while accepting explicit broa
         ['propeller-a', false],
         ['propeller-b', false],
         ['battery', false],
+        ['legacy', false],
     ])
     expect(generatePieces).toHaveBeenCalledTimes(1)
-    expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: ['propeller-a', 'propeller-b', 'battery'] })
+    expect(generatePieces.mock.calls[0]![0]).toMatchObject({
+        imagePieceIds: ['propeller-a', 'propeller-b', 'battery', 'legacy'],
+    })
     const sentImages = generatePieces.mock.calls[0]![0].images
-    expect(sentImages).toHaveLength(3)
+    expect(sentImages).toHaveLength(4)
     expect(Buffer.from(sentImages[0]!.bytes).equals(drawing)).toBe(false)
     expect(sentImages[0]!.bytes).toEqual(sentImages[1]!.bytes)
 })

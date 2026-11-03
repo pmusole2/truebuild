@@ -1,6 +1,8 @@
 import {
     createDemoManual,
     LIMITS,
+    manualPieceInputSchema,
+    pieceBatchRequestSchema,
     type ApiResult,
     type CaptureBinding,
     type ManualBinding,
@@ -8,6 +10,7 @@ import {
     type SegmentEvent,
 } from '@truebuild/contracts'
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { createCallGuard } from './transport'
 import {
     MODEL_CHECK_TIMEOUT_MS,
@@ -810,6 +813,7 @@ it('validates and serializes parse language, defaults English, and rejects large
     const run = scripted(() => jsonResponse(200, okParse()))
     const api = client(run.fetch)
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
+    expect(new URL(run.calls[0]!.url).searchParams.get('stepKinds')).toBe('remove')
     expect(JSON.parse(String((run.calls[0]!.init.body as FormData).get('metadata'))).language).toBe('en')
     await api.parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID, language: 'fr' })
     expect(JSON.parse(String((run.calls[1]!.init.body as FormData).get('metadata'))).language).toBe('fr')
@@ -831,6 +835,86 @@ it('validates and serializes parse language, defaults English, and rejects large
     )
     expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('8 pages') })
     expect(run.calls).toHaveLength(2)
+})
+
+describe('piece figure capability negotiation', () => {
+    // The deployed pre-figureBox API uses this same strict schema without the optional field.
+    const oldRequest = pieceBatchRequestSchema.safeExtend({
+        parts: z
+            .array(manualPieceInputSchema.omit({ figureBox: true }))
+            .min(1)
+            .max(8),
+    })
+    const request = {
+        requestId: 'piece-compat',
+        contentHash: 'a'.repeat(64),
+        parts: [
+            {
+                id: 'divider',
+                name: 'Divider',
+                quantity: 1,
+                label: null,
+                dimensions: null,
+                pageId: 'page-1',
+                figureBox: [0, 0, 1, 1] as [number, number, number, number],
+            },
+        ],
+        pages: [{ pageId: 'page-1', width: 1, height: 1, mimeType: 'image/png' as const }],
+    }
+    const result = {
+        contentHash: request.contentHash,
+        results: [
+            {
+                id: 'divider',
+                name: 'Divider',
+                status: 'invalid',
+                piece: null,
+                cutoutUri: null,
+                issueCodes: ['piece:missing_id'],
+            },
+        ],
+        model: null,
+        effort: null,
+        durationMs: 1,
+    }
+
+    it.each([false, true])('sends figureBox only with explicit server support (%s)', async (supported) => {
+        expect(oldRequest.safeParse(request).success).toBe(false)
+        const calls: Recorded[] = []
+        const fetch: ModelFetch = async (url, init) => {
+            calls.push({ url, init })
+            if (new URL(url).pathname === '/api/session') {
+                expect(init.method).toBe('GET')
+                return jsonResponse(200, {
+                    status: 'ok',
+                    ...(supported ? { capabilities: { pieceFigureBox: true } } : {}),
+                })
+            }
+            const metadata: unknown = JSON.parse(String((init.body as FormData).get('metadata')))
+            expect(oldRequest.safeParse(metadata).success).toBe(!supported)
+            return jsonResponse(200, result)
+        }
+        const api = client(fetch)
+        for (let batch = 0; batch < 2; batch++) {
+            expect(await api.pieceBatch(request, { 'page-1': 'data:image/png;base64,AQID' })).toEqual(result)
+        }
+        expect(calls.map((call) => new URL(call.url).pathname)).toEqual(['/api/session', '/api/pieces', '/api/pieces'])
+        expect(request.parts[0]!.figureBox).toEqual([0, 0, 1, 1])
+    })
+
+    it('uses the legacy strict request after a failed capability probe and never resends a rejected batch', async () => {
+        const calls: Recorded[] = []
+        let metadata: unknown
+        const fetch: ModelFetch = async (url, init) => {
+            calls.push({ url, init })
+            if (new URL(url).pathname === '/api/session') throw new Error('session unavailable')
+            metadata = JSON.parse(String((init.body as FormData).get('metadata'))) as unknown
+            return jsonResponse(400, { status: 'unavailable', code: 'invalid_input' })
+        }
+        expect(await client(fetch).pieceBatch(request, { 'page-1': 'data:image/png;base64,AQID' })).toBeNull()
+        expect(oldRequest.safeParse(metadata).success).toBe(true)
+        expect(calls.map((call) => new URL(call.url).pathname)).toEqual(['/api/session', '/api/pieces'])
+    })
 })
 
 it('preserves bounded server parse failure messages through non-success HTTP responses', async () => {

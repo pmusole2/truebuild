@@ -431,6 +431,7 @@ describe('piece registry', () => {
             figureBox: [0, 0, 1, 1],
         })
         expect(manualPieceInputOf(session).parts[0]).toMatchObject({ pageId: 'demo-page-1', figureBox: [0, 0, 1, 1] })
+        expect(manualPieceInputOf(session).parts[0]?.drawingBox).toBeUndefined()
     })
 
     it('binds own sub-boxes to their drawing page and gives every missing part cited figure context without claiming it as its own drawing', () => {

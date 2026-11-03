@@ -66,10 +66,11 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
 
 async function cropDrawing(part: ManualPieceInput, image: ObservationImage | undefined): Promise<PieceCrop | null> {
     if (part.cutoutUri) return readCrop(part.cutoutUri)
-    const box = part.drawingBox ?? part.figureBox
-    if (!image || !box) return null
+    if (!image) return null
+    // Pre-figureBox clients supplied the cited page alone. Its whole frame is context, never an own cutout.
+    const box = part.drawingBox ?? part.figureBox ?? [0, 0, 1, 1]
     try {
-        const crop = await refinePieceCrop(image, box, { withinBox: true })
+        const crop = await refinePieceCrop(image, box)
         return crop && crop.uri.length <= 360_000 ? { ...crop, contextOnly: part.drawingBox == null } : null
     } catch {
         return null

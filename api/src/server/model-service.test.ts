@@ -2,7 +2,14 @@ import { asRequestedMetaResponse } from '../test-support/meta-stream'
 import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
-import { createDemoManual, type CheckResult, type ParsedManual, type SegmentEvent } from '@truebuild/contracts'
+import {
+    createDemoManual,
+    manualStepSchema,
+    parsedManualSchema,
+    type CheckResult,
+    type ParsedManual,
+    type SegmentEvent,
+} from '@truebuild/contracts'
 import {
     modelCheckMetadataSchema,
     MAX_PARSE_PAGES,
@@ -11,6 +18,7 @@ import {
 } from '@truebuild/contracts/model'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import { createMetaProvider, type MetaProvider } from '../providers/meta-provider'
 import { createSamProvider, type SamProvider } from '../providers/sam'
@@ -1085,6 +1093,72 @@ function parseRequest(state: Awaited<ReturnType<typeof setup>>, signal?: AbortSi
         signal,
     })
 }
+
+describe('parse removal compatibility at the response boundary', () => {
+    // 941de77's actual parse contract differs only in this enum; preserve its strict shape and refinements.
+    const oldParsedManual = parsedManualSchema.safeExtend({
+        steps: z
+            .array(
+                manualStepSchema.safeExtend({
+                    kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
+                }),
+            )
+            .max(200),
+    })
+
+    it.each([
+        { stream: false, capable: false },
+        { stream: true, capable: false },
+        { stream: false, capable: true },
+        { stream: true, capable: true },
+    ])('preserves removal meaning for $stream streaming / $capable capable clients', async ({ stream, capable }) => {
+        const state = await setup()
+        const canonical = parsed()
+        canonical.steps[0] = { ...canonical.steps[0]!, title: 'Remove the divider', kind: 'remove' }
+        expect(oldParsedManual.safeParse(canonical).success).toBe(false)
+        const original = structuredClone(canonical)
+        const handlers = createModelHandlers({
+            ...state,
+            samProvider: null,
+            provider: {
+                ...provider(async () => checked),
+                parseManual: async (_input, _signal, progress) => {
+                    progress?.('reading')
+                    progress?.('output')
+                    return canonical
+                },
+            },
+        })
+        const base = parseRequest(state)
+        const headers = new Headers(base.headers)
+        headers.delete('content-type')
+        if (stream) headers.set('accept', 'text/event-stream')
+        const response = await handlers.parse(
+            new Request(`${base.url}${capable ? '?stepKinds=remove' : ''}`, {
+                headers,
+                method: 'POST',
+                body: await base.formData(),
+            }),
+        )
+        expect(response.status).toBe(200)
+        const wire = stream
+            ? (await response.text())
+                  .split('\n\n')
+                  .filter((block) => block.startsWith('data: '))
+                  .map((block) => JSON.parse(block.slice(6)) as { type: string; result?: { value: unknown } })
+                  .find((event) => event.type === 'result')!.result!
+            : ((await response.json()) as { value: unknown })
+        expect(parsedManualSchema.parse(wire.value)).toEqual({
+            ...original,
+            steps: original.steps.map((step) =>
+                step.kind === 'remove' && !capable ? { ...step, kind: 'adjust' } : step,
+            ),
+        })
+        expect(oldParsedManual.safeParse(wire.value).success).toBe(!capable)
+        expect(canonical).toEqual(original)
+        expect(state.counter.used).toBe(1)
+    })
+})
 
 /** Records the provider-visible signal and lets a test decide the moment the parse settles. */
 function gatedParse(): {

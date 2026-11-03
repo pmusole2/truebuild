@@ -338,19 +338,31 @@ export function assertStrictSchema(schema: Schema): void {
 
 // Geometry inference uses the six primitives and extrude named by the active prompt. Reuse the shared part bounds and
 // refinements; legacy lathe geometry remains valid in cached registries and viewer fixtures.
-const [boxPart, cylinderPart, conePart, spherePart, torusPart, capsulePart, , extrudePart] =
-    pieceSpecSchema.shape.parts.element.options
+const piecePartOptions = pieceSpecSchema.shape.parts.element.options
+type PiecePartOf<Type extends string> = Extract<
+    (typeof piecePartOptions)[number],
+    { shape: { type: { values: Set<Type> } } }
+>
+// Select by literal type rather than position, so a contract reorder cannot silently swap a part schema.
+function piecePartOf<Type extends string>(type: Type): PiecePartOf<Type> {
+    const option = piecePartOptions.find((part): part is PiecePartOf<Type> => {
+        const values: ReadonlySet<string> = part.shape.type.values
+        return values.has(type)
+    })
+    if (!option) throw new Error(`invalid_piece_part_schema:${type}`)
+    return option
+}
 const requestedPieceSchema = pieceSpecSchema.extend({
     parts: z
         .array(
             z.discriminatedUnion('type', [
-                boxPart,
-                cylinderPart,
-                conePart,
-                spherePart,
-                torusPart,
-                capsulePart,
-                extrudePart,
+                piecePartOf('box'),
+                piecePartOf('cylinder'),
+                piecePartOf('cone'),
+                piecePartOf('sphere'),
+                piecePartOf('torus'),
+                piecePartOf('capsule'),
+                piecePartOf('extrude'),
             ]),
         )
         .min(1)
