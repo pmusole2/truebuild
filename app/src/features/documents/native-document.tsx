@@ -21,6 +21,7 @@ import {
 } from 'react-native'
 import Svg, { Circle } from 'react-native-svg'
 import {
+    BUSY_COPY_V2,
     screenFacts,
     citationPlanV2,
     sourceKeyV2,
@@ -36,6 +37,7 @@ import {
     type DocumentSourceV2,
 } from '@truebuild/contracts'
 import { AppButton, IconButton } from '../../ui/button'
+import { BlueprintLoader } from '../../ui/blueprint-loader'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
 import { SegmentedControl, SettingRow, TextField } from '../../ui/fields'
 import { Icon } from '../../ui/icons'
@@ -69,9 +71,9 @@ import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
-import Animated from 'react-native-reanimated'
+import Animated, { FadeIn, FadeOut, ReduceMotion } from 'react-native-reanimated'
 import { useContentFade } from '../../ui/motion'
-import { useIconReveal, useReadingLoop, useStepTransition } from '../../ui/motion'
+import { useIconReveal, useStepTransition } from '../../ui/motion'
 import { useFeedback } from '../../ui/feedback'
 import { useLargeText } from '../../ui/large-text'
 import { PRIVACY_COPY } from '../capture/privacy-copy'
@@ -192,6 +194,9 @@ type Environment = {
     page: string
     /** The held photo's own path and every path above it: the one branch of a page that may outlive that page. */
     photoBranch: ReadonlySet<string>
+    /** The shown variant is a busy or pending wait (not ready, error or empty): its build indicator is a wait scene. */
+    waiting: boolean
+    waitAnimation: 'none' | 'waiting' | 'arriving'
 }
 const marked = (environment: Environment, path: string): string => {
     const origin = environment.document.metadata.origins[path]
@@ -453,13 +458,14 @@ function ReadingProgress({
     label: string
     mark: string
 }): ReactElement {
-    const { colors } = useTheme()
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const pending = environment.bindings.live?.state.pending ?? null
     const reading = pending?.startsWith('Reading') === true
-    const breath = useReadingLoop(reading && scope.active && !attention)
     const count = environment.bindings.session?.pages.length ?? 0
+    // Only the stream's own output phase is named; before it, the loader shows the known page count and nothing more.
+    const streamPhase =
+        pending?.startsWith('Reading manual pages: laying out steps') === true ? plainPending(pending) : null
     return (
         <View
             nativeID={mark}
@@ -467,27 +473,59 @@ function ReadingProgress({
             accessibilityRole={reading ? 'progressbar' : 'text'}
             accessibilityLabel={label || (reading ? 'Reading your manual' : 'Manual pages')}
             accessibilityValue={reading ? { text: plainPending(pending) ?? 'In progress' } : undefined}
-            style={styles.row}
+            style={styles.stack}
         >
             {reading ? (
-                <Animated.View
-                    style={[
-                        { width: space.xs, height: space.xs, borderRadius: space.xxs, backgroundColor: colors.accent },
-                        breath,
-                    ]}
-                />
+                <View testID="reading-stream-phase">
+                    <BlueprintLoader
+                        phase="reading"
+                        pageCount={count || undefined}
+                        label={streamPhase ?? undefined}
+                        running={scope.active && !attention}
+                    />
+                </View>
             ) : null}
-            <View style={styles.stack}>
-                <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
-                {reading ? (
-                    <View testID="reading-stream-phase">
-                        <Caption>{plainPending(pending)}</Caption>
-                    </View>
-                ) : null}
-            </View>
+            <Caption>{label || `${count} manual ${count === 1 ? 'page' : 'pages'}`}</Caption>
         </View>
     )
 }
+
+/**
+ * The one wait scene of a waiting Guide, Result, Done or Answer. It names only what the app is doing for that document:
+ * the photo check of a Result, or the guide (or the question) being prepared. It never counts finished steps.
+ */
+function BuildWait({ environment, mark }: { environment: Environment; mark: string }): ReactElement {
+    const scope = useCoachScope()
+    const attention = useCoachAttention()
+    const { document, bindings } = environment
+    const checking = /^(Checking|Freezing)/u.test(bindings.live?.state.pending ?? '')
+    const observation = bindings.capture?.observation
+    // The held photo's bytes are shown as a thumbnail only for a check; the one held photo stays the Photo node above.
+    const thumbnail = useMemo(
+        () =>
+            checking && observation !== undefined && captureMatchesDocument(document, bindings.capture)
+                ? bytesToDataUri(observation.bytes, observation.mimeType)
+                : undefined,
+        [checking, document, bindings.capture, observation],
+    )
+    return (
+        <BlueprintLoader
+            nativeID={mark}
+            phase={checking ? 'check' : 'guide'}
+            label={document.kind === 'answer' ? BUSY_COPY_V2.asking.heading : undefined}
+            imageUri={thumbnail}
+            running={scope.active && !attention}
+        />
+    )
+}
+
+/** Documents whose waiting variant is a generation the app is performing, so their build indicator becomes the wait scene. */
+const GENERATED_WAIT_KINDS: ReadonlySet<string> = new Set(['guide', 'result', 'answer', 'completion'])
+/** The one cross-fade a finished document takes over its wait scene, the loader's own handoff length. */
+const ARRIVAL_FADE_MS = 200
+// Reanimated retains the actual outgoing native scene in place; the held image's React ancestry stays intact.
+const WAIT_SCENE_EXIT = FadeOut.duration(ARRIVAL_FADE_MS).reduceMotion(ReduceMotion.System)
+const WAIT_SCENE_ENTER = FadeIn.duration(ARRIVAL_FADE_MS).reduceMotion(ReduceMotion.System)
 
 function contextOf(environment: Environment): BlockContext {
     const { document, bindings } = environment
@@ -1326,11 +1364,35 @@ function Node(props: NodeProps): ReactElement {
 function PageNode(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
     if (props.environment.omittedDuplicates.has(props.path)) return <></>
+    const { environment, path } = props
+    const root = path === `${environment.prefix}body`
+    const parent = path.slice(0, path.lastIndexOf('.'))
+    // Keep the held photo and its ancestors intact; only independent sibling branches cross-fade.
+    const fades =
+        !environment.bindings.inspect &&
+        GENERATED_WAIT_KINDS.has(environment.document.kind) &&
+        props.node.type !== 'Scroll' &&
+        !environment.photoBranch.has(path) &&
+        (root || parent === `${environment.prefix}body` || environment.photoBranch.has(parent))
+    const content = fades ? (
+        <Animated.View
+            key={environment.waiting ? 'wait' : 'content'}
+            testID="document-wait-transition"
+            collapsable={false}
+            style={root ? styles.grow : undefined}
+            entering={environment.waitAnimation === 'arriving' ? WAIT_SCENE_ENTER : undefined}
+            exiting={environment.waitAnimation === 'waiting' ? WAIT_SCENE_EXIT : undefined}
+        >
+            <NodeContent {...props} />
+        </Animated.View>
+    ) : (
+        <NodeContent {...props} />
+    )
     if (!props.environment.bindings.inspect)
         return (
             <RenderOriginProvider origin={originAt(props.environment, props.path)}>
                 <DocumentNodeOrigin document={props.environment.document} path={props.path}>
-                    <NodeContent {...props} />
+                    {content}
                 </DocumentNodeOrigin>
             </RenderOriginProvider>
         )
@@ -1350,7 +1412,7 @@ function PageNode(props: NodeProps): ReactElement {
         >
             <RenderOriginProvider origin={originAt(props.environment, props.path)}>
                 <DocumentNodeOrigin document={props.environment.document} path={props.path}>
-                    <NodeContent {...props} />
+                    {content}
                 </DocumentNodeOrigin>
             </RenderOriginProvider>
             {showSource ? (
@@ -1638,6 +1700,14 @@ function NodeContent({
                 )
             if (node.binding === 'reading' || node.binding === 'pages-read')
                 return <ReadingProgress environment={environment} label={text(node.label)} mark={mark} />
+            // A waiting variant's build indicator is not a count of finished steps: it is the wait scene itself.
+            if (
+                node.type === 'Progress' &&
+                node.binding === 'build' &&
+                environment.waiting &&
+                GENERATED_WAIT_KINDS.has(environment.document.kind)
+            )
+                return <BuildWait environment={environment} mark={mark} />
             const entry = live?.entry
             const pages = node.binding === 'pages'
             const total = pages ? (bindings.session?.pages.length ?? 0) : (facts?.steps.length ?? 0)
@@ -1893,6 +1963,7 @@ export function NativeDocumentRenderer({
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
+    const { reduceMotion } = useFeedback()
     const previousStep = useRef(bindings.live?.entry?.stepIndex ?? 0)
     const stepIndex = bindings.live?.entry?.stepIndex ?? 0
     const direction = stepIndex >= previousStep.current ? 1 : -1
@@ -1953,7 +2024,20 @@ export function NativeDocumentRenderer({
     useLayoutEffect(() => {
         bindings.onVariantShown?.(document, selected.name)
     }, [document, selected.name, bindings.onVariantShown])
-    const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove)
+    const transition = useRef({ page: bodyPage, state: selected.name, arriving: false })
+    const before = transition.current
+    if (before.page !== bodyPage || before.state !== selected.name)
+        transition.current = {
+            page: bodyPage,
+            state: selected.name,
+            arriving:
+                before.page === bodyPage &&
+                (before.state === 'busy' || before.state === 'pending') &&
+                selected.name === 'ready',
+        }
+    const arriving = transition.current.arriving
+    // Incoming and retained outgoing branches own their fades; their shared parent stays opaque.
+    const fade = useContentFade(`${document.screenId}:${selected.name}`, mayMove && !arriving)
     const [sectionState, setSectionState] = useState<{ id: string; values: Readonly<Record<string, boolean>> }>(() => ({
         id: bodyPage,
         values: {},
@@ -2014,6 +2098,15 @@ export function NativeDocumentRenderer({
         scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
         page: bodyPage,
         photoBranch: heldPhotoBranch(selected.variant.body, `${selected.prefix}body`),
+        waiting: selected.name === 'busy' || selected.name === 'pending',
+        waitAnimation:
+            reduceMotion || !scope.active || attention
+                ? 'none'
+                : selected.name === 'busy' || selected.name === 'pending'
+                  ? 'waiting'
+                  : arriving
+                    ? 'arriving'
+                    : 'none',
     }
     const findRegions = (node: ScreenNodeV2): boolean =>
         node.type === 'VerdictCard' ? node.showRegions : 'children' in node && node.children.some(findRegions)

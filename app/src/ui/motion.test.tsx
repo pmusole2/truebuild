@@ -6,7 +6,6 @@ import { ColdStartProvider, useColdEntrance } from './cold-start'
 import { FeedbackProvider, useFeedback } from './feedback'
 import {
     EASE_OUT,
-    READING_LEG,
     SPRING_GENTLE,
     STEP_TRAVEL,
     stepTravel,
@@ -15,7 +14,6 @@ import {
     useEntranceGroup,
     useIconReveal,
     useLoadEntrance,
-    useReadingLoop,
     useStepTransition,
 } from './motion'
 import { motion } from '../theme/tokens'
@@ -43,10 +41,6 @@ describe('motion language', () => {
         for (const duration of [motion.fast, motion.standard, motion.emphasis]) {
             expect(timing(duration)).toEqual({ duration, easing: EASE_OUT, reduceMotion: 'system' })
         }
-    })
-
-    it('derives the Reading loop legs from emphasis rather than adding a duration', () => {
-        expect(READING_LEG).toBe(motion.emphasis * 2)
     })
 })
 
@@ -178,30 +172,6 @@ describe('cold launch lease', () => {
     it('plays nothing without a provider, as in previews and tests', async () => {
         await render(<Cold ready />)
         expect(screen.getByTestId('cold').children).toEqual(['still'])
-    })
-})
-
-function Loop({ running }: { running: boolean }): ReactElement {
-    const style = useReadingLoop(running)
-    return <Animated.View testID="loop" style={style} />
-}
-
-describe('Reading loop', () => {
-    it('runs one repeating ease-out loop while reading and stops it when reading stops', async () => {
-        const { rerender } = await render(frame(false, <Loop running />))
-        expect(spies.withRepeat).toHaveBeenCalledTimes(1)
-        expect(spies.withRepeat).toHaveBeenCalledWith(expect.anything(), -1, false)
-        for (const call of spies.withTiming.mock.calls) {
-            expect(call[1]).toMatchObject({ duration: READING_LEG, easing: EASE_OUT })
-        }
-        spies.cancelAnimation.mockClear()
-        await rerender(frame(false, <Loop running={false} />))
-        expect(spies.cancelAnimation).toHaveBeenCalled()
-    })
-
-    it('starts no loop under reduced motion', async () => {
-        await render(frame(true, <Loop running />))
-        expect(spies.withRepeat).not.toHaveBeenCalled()
     })
 })
 

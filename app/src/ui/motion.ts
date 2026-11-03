@@ -6,8 +6,6 @@ import {
     ReduceMotion,
     useAnimatedStyle,
     useSharedValue,
-    withRepeat,
-    withSequence,
     withSpring,
     withTiming,
     type SharedValue,
@@ -182,35 +180,6 @@ export function useLoadEntrance(enabled: boolean): EntranceStyle {
         opacity: progress.value,
         transform: [{ translateY: (1 - progress.value) * lift }],
     }))
-}
-
-/** One leg of the Reading indicator's calm loop, derived from the emphasis duration. */
-export const READING_LEG = motion.emphasis * 2
-
-/**
- * The Reading screen's single ambient loop: a gentle opacity breath on the UI thread, using only the ease-out curve.
- * It runs while `running` and is cancelled the moment it stops, on unmount and under reduced motion (full strength).
- */
-export function useReadingLoop(running: boolean): EntranceStyle {
-    const { reduceMotion } = useFeedback()
-    const breath = useSharedValue(1)
-    useEffect(() => {
-        cancelAnimation(breath)
-        if (!running || reduceMotion) {
-            breath.value = 1
-            return undefined
-        }
-        breath.value = withRepeat(
-            withSequence(withTiming(0.4, timing(READING_LEG)), withTiming(1, timing(READING_LEG))),
-            -1,
-            false,
-        )
-        return (): void => {
-            cancelAnimation(breath)
-            breath.value = 1
-        }
-    }, [running, reduceMotion, breath])
-    return useAnimatedStyle(() => ({ opacity: breath.value }))
 }
 
 /** A content state changes in place; native navigation and busy/suppressed states always win over its one fast fade. */

@@ -4,7 +4,7 @@ import { spies } from '../../ui/test-support/reanimated-mock'
 import { FeedbackProvider } from '../../ui/feedback'
 import { INERT_WORKFLOW_CONTROLLER } from '../../ui/preview/workflow-preview'
 import { workflowPreviewFixture } from '../../ui/preview/workflow-fixtures'
-import { CAPTION_MS, READING_CAPTIONS, ReadingScreen } from './reading-screen'
+import { ReadingScreen } from './reading-screen'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
@@ -28,35 +28,42 @@ const reading = (reduceMotion: boolean): ReactElement => {
 }
 
 describe('Reading', () => {
-    it('says only the two approved captions, every 3.5 seconds, and nothing about how the manual is read', async () => {
-        expect(READING_CAPTIONS).toEqual(['Keep this screen open.', 'You can stop and try again later.'])
-        expect(CAPTION_MS).toBe(3500)
+    it('shows one fixed caption, the known page count and nothing about how the manual is read', async () => {
         await render(reading(false))
         expect(screen.getByText('Keep this screen open.')).toBeTruthy()
-        await act(async () => jest.advanceTimersByTime(3499))
-        expect(screen.getByText('Keep this screen open.')).toBeTruthy()
-        await act(async () => jest.advanceTimersByTime(1))
-        expect(screen.getByText('You can stop and try again later.')).toBeTruthy()
+        expect(screen.getByText(/^Reading your \d+-page manual$/u)).toBeTruthy()
         await act(async () => jest.advanceTimersByTime(3500))
         expect(screen.getByText('Keep this screen open.')).toBeTruthy()
         expect(screen.queryByText(/privacy|stay on this device|page in order|percent|%/iu)).toBeNull()
     })
 
-    it('runs one calm indicator loop and no sliding progress bar or percentage', async () => {
+    it('runs one calm loop in the reading scene and no sliding progress bar or percentage', async () => {
         await render(reading(false))
         expect(screen.getByTestId('reading-indicator', { hidden: true })).toBeTruthy()
         expect(spies.withRepeat).toHaveBeenCalledTimes(1)
         expect(screen.queryByRole('progressbar')).toBeNull()
     })
 
-    it('keeps rotating captions under Reduce Motion but starts no loop', async () => {
+    it('holds the scene still under Reduce Motion and starts no loop', async () => {
         await render(reading(true))
         expect(spies.withRepeat).not.toHaveBeenCalled()
-        await act(async () => jest.advanceTimersByTime(3500))
-        expect(screen.getByText('You can stop and try again later.')).toBeTruthy()
+        expect(screen.getByTestId('reading-indicator', { hidden: true })).toBeTruthy()
+        expect(screen.getByText('Keep this screen open.')).toBeTruthy()
     })
 
-    it('stops the loop and the captions once reading stops', async () => {
+    it('names only the stream’s own output phase on the scene, and no step or percentage', async () => {
+        const { state, entry } = workflowPreviewFixture('pages-reading')
+        const laying = { ...state, pending: 'Reading manual pages: laying out steps…' }
+        await render(
+            <FeedbackProvider reduceMotion={false}>
+                <ReadingScreen state={laying} controller={INERT_WORKFLOW_CONTROLLER} entry={entry} />
+            </FeedbackProvider>,
+        )
+        expect(screen.getByText('Laying out steps…')).toBeTruthy()
+        expect(screen.queryByText(/step \d|%/iu)).toBeNull()
+    })
+
+    it('stops the loop and the scene once reading stops', async () => {
         const { state, entry } = workflowPreviewFixture('pages-reading')
         const tree = (pending: string | null): ReactElement => (
             <FeedbackProvider reduceMotion={false}>
@@ -67,7 +74,9 @@ describe('Reading', () => {
         spies.cancelAnimation.mockClear()
         await rerender(tree(null))
         expect(spies.cancelAnimation).toHaveBeenCalled()
+        // The scene hands its place to the page after the short cross-fade.
+        await act(async () => jest.advanceTimersByTime(200))
         expect(screen.queryByTestId('reading-indicator', { hidden: true })).toBeNull()
-        expect(screen.queryByText('You can stop and try again later.')).toBeNull()
+        expect(screen.queryByText('Keep this screen open.')).toBeNull()
     })
 })

@@ -1,12 +1,10 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
-import Animated from 'react-native-reanimated'
+import { BlueprintLoader, LoaderSwap } from '../../ui/blueprint-loader'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { SkeletonCard } from '../../ui/skeleton'
 import { Caption, Instruction } from '../../ui/text'
-import { useReadingLoop } from '../../ui/motion'
-import { useTheme } from '../../theme/theme'
-import { radius, space } from '../../theme/tokens'
+import { space } from '../../theme/tokens'
 import { useCoachAttention, useCoachScope } from '../onboarding/coach-provider'
 import type { LibraryEntry } from './library'
 import { PageImage } from './page-media'
@@ -23,10 +21,8 @@ type ReadingProps = WorkflowScreenProps & {
     readonly onConfirmingChange?: (confirming: boolean) => void
 }
 
-// The only captions Reading ever shows. They name no step of the pipeline and promise nothing new.
-export const READING_CAPTIONS = ['Keep this screen open.', 'You can stop and try again later.'] as const
-// A caption stays at least this long before the next one replaces it.
-export const CAPTION_MS = 3500
+// The one caption Reading shows while it works. It names no step of the pipeline and promises nothing new.
+const KEEP_OPEN_CAPTION = 'Keep this screen open.'
 
 /** Reading: wait calmly, know it is working, never be trapped. A presentation of the existing parse request. */
 export function ReadingScreen({
@@ -45,21 +41,11 @@ export function ReadingScreen({
     const reading = state.pending !== null && state.pending.startsWith('Reading')
     const scope = useCoachScope()
     const attention = useCoachAttention()
-    const { colors } = useTheme()
-    // The one calm loop: it pauses while the screen is covered or blurred and stops when reading stops.
+    // Covered or blurred screens hold the final drawing; reading again restarts its calm reveal.
     const running = reading && scope.active && !attention && !confirming
-    const breath = useReadingLoop(running)
-    const [caption, setCaption] = useState(0)
-    useEffect(() => {
-        if (!reading) {
-            setCaption(0)
-            return undefined
-        }
-        if (!running) return undefined
-        const timer = setInterval(() => setCaption((now) => (now + 1) % READING_CAPTIONS.length), CAPTION_MS)
-        return (): void => clearInterval(timer)
-    }, [reading, running])
     const first = entry.session.pages[0]
+    // Only the stream's own output phase is named; every other reading phase keeps the calm known-page line.
+    const laying = state.pending?.startsWith('Reading manual pages: laying out steps') === true
     const read = (): void => {
         void controller.parse(readingLanguage(entry.session.manualId))
     }
@@ -123,33 +109,32 @@ export function ReadingScreen({
                     },
                 ]}
             >
-                {first === undefined ? (
-                    <SkeletonCard />
-                ) : (
-                    <PageImage
-                        uri={state.pageUris[first.pageId]}
-                        label="First page of your manual"
-                        aspectRatio={first.width / first.height}
-                    />
-                )}
+                <LoaderSwap
+                    waiting={reading}
+                    loader={
+                        <BlueprintLoader
+                            phase="reading"
+                            pageCount={entry.session.pages.length || undefined}
+                            label={laying ? 'Laying out steps…' : undefined}
+                            running={running}
+                            testID="reading-indicator"
+                        />
+                    }
+                >
+                    {first === undefined ? (
+                        <SkeletonCard />
+                    ) : (
+                        <PageImage
+                            uri={state.pageUris[first.pageId]}
+                            label="First page of your manual"
+                            aspectRatio={first.width / first.height}
+                        />
+                    )}
+                </LoaderSwap>
             </View>
             <TextRegion>
                 <Instruction>{sentence}</Instruction>
-                {reading ? (
-                    <Animated.View
-                        testID="reading-indicator"
-                        accessibilityElementsHidden={true}
-                        importantForAccessibility="no-hide-descendants"
-                        style={[
-                            styles.indicator,
-                            {
-                                backgroundColor: colors.accent,
-                            },
-                            breath,
-                        ]}
-                    />
-                ) : null}
-                {reading ? <Caption>{READING_CAPTIONS[caption]}</Caption> : null}
+                {reading ? <Caption>{KEEP_OPEN_CAPTION}</Caption> : null}
                 {!reading && state.notice !== null && plainNotice(state.notice) !== sentence ? (
                     <Caption>{plainNotice(state.notice)}</Caption>
                 ) : null}
@@ -159,11 +144,6 @@ export function ReadingScreen({
     )
 }
 const styles = StyleSheet.create({
-    indicator: {
-        width: space.xl,
-        height: space.xxs,
-        borderRadius: radius.pill,
-    },
     hero: {
         padding: space.md,
         overflow: 'hidden',
