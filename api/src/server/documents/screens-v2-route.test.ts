@@ -11,15 +11,16 @@ import {
     screensV2GenerateRequest,
     screensV2ResultSchema,
     type ModelScreensV2Metadata,
+    type ScreensV2Result,
 } from '@truebuild/contracts/model'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createApp } from '../../app'
 import { encodeWireProposal } from '../../providers/document-wire'
+import { REPAIR_ONCE_MANUAL } from '../../providers/document-fixtures'
 import { demoSession, documentInputs, fullUi } from '../../test-support/document-inputs'
 import { startMetaMock } from '../../test-support/meta-http-mock'
-import { aiPolicyFromEnvironment } from '../ai-policy'
 import { createRuntimeFromEnvironment } from '../model-runtime'
 import { buildDocumentContext } from './context'
 
@@ -36,7 +37,7 @@ function fixtureApp(env: Record<string, string> = {}): ReturnType<typeof createA
 function send(
     app: ReturnType<typeof createApp>,
     metadata: unknown,
-    options: { key?: string | null; files?: boolean } = {},
+    options: { key?: string | null; files?: boolean; query?: string } = {},
 ): Promise<Response> {
     // An unauthenticated request is refused before its body is read, so it carries a plain (non-streaming) body.
     if (options.key === null) {
@@ -46,7 +47,11 @@ function send(
     body.set('metadata', JSON.stringify(metadata))
     if (options.files) body.set('extra', new Blob(['x'], { type: 'image/png' }), 'x.png')
     return Promise.resolve(
-        app.request('/api/screens/v2', { method: 'POST', headers: { 'x-truebuild-key': options.key ?? KEY }, body }),
+        app.request(`/api/screens/v2${options.query ?? '?guideRepair=1'}`, {
+            method: 'POST',
+            headers: { 'x-truebuild-key': options.key ?? KEY },
+            body,
+        }),
     )
 }
 
@@ -123,6 +128,46 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
         expect(modelScreensV2MetadataSchema.safeParse(request).success).toBe(true)
     })
 
+    it('isolates Guide precompute, progress and cancel by the client capability', async () => {
+        const app = fixtureApp()
+        const session = { ...demoSession(), manualId: REPAIR_ONCE_MANUAL }
+        const base = generate(documentInputs('guide', session))
+        const common = {
+            ...base,
+            op: 'precompute',
+            kind: null,
+            stepId: null,
+            contextKey: null,
+            focusKey: 'guide:step-1',
+            requestedKinds: ['guide'],
+            want: [],
+        }
+        expect((await send(app, common)).status).toBe(200)
+        const read = async (query: string): Promise<Extract<ScreensV2Result, { status: 'ok' }>['value']> => {
+            const response = await send(
+                app,
+                { ...common, op: 'progress', focusKey: null, want: ['guide:step-1'] },
+                { query },
+            )
+            const result = screensV2ResultSchema.parse(await response.json())
+            if (result.status !== 'ok') throw new Error('expected ok')
+            return result.value
+        }
+        expect(await read('')).toEqual({ document: null, documents: [], progress: null })
+        const cancelled = screensV2ResultSchema.parse(
+            await (await send(app, { ...common, op: 'cancel', focusKey: null }, { query: '' })).json(),
+        )
+        if (cancelled.status !== 'ok') throw new Error('expected ok')
+        expect(cancelled.value.progress).toBeNull()
+        expect((await send(app, { ...common, requestId: 'old-job' }, { query: '' })).status).toBe(200)
+        await vi.waitFor(async () => {
+            const capable = await read('?guideRepair=1')
+            const legacy = await read('')
+            expect(capable.documents[0]?.metadata).toMatchObject({ source: 'generated', repaired: true })
+            expect(legacy.documents[0]?.metadata).toMatchObject({ source: 'fallback', repaired: false })
+        })
+    })
+
     it('precomputes, reports progress with first pages early, and cancels', async () => {
         const app = fixtureApp()
         const session = demoSession()
@@ -161,7 +206,7 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
 
 describe('POST /api/screens/v2 (live wire)', () => {
     function liveApp(
-        output: (index: number) => unknown,
+        output: (index: number) => unknown | Promise<unknown>,
         status = 'completed',
     ): { app: ReturnType<typeof createApp>; bodies: Record<string, unknown>[] } {
         vi.spyOn(console, 'info').mockImplementation((): void => {})
@@ -179,7 +224,7 @@ describe('POST /api/screens/v2 (live wire)', () => {
                         type: 'message',
                         role: 'assistant',
                         status: 'completed',
-                        content: [{ type: 'output_text', text: JSON.stringify(output(bodies.length - 1)) }],
+                        content: [{ type: 'output_text', text: JSON.stringify(await output(bodies.length - 1)) }],
                     },
                 ],
                 usage: {
@@ -230,16 +275,8 @@ describe('POST /api/screens/v2 (live wire)', () => {
             model: 'muse-wonder-1.0',
             store: false,
             stream: false,
-            // The wire carries exactly the step-page stage cap of the policy (not a number copied into this test).
-            max_output_tokens: aiPolicyFromEnvironment(
-                {},
-                {
-                    checkTimeoutMs: 8_000,
-                    parseModel: 'muse-spark-1.3',
-                    verdictModel: 'muse-spark-1.3',
-                    secondOpinionModel: 'muse-wonder-1.0',
-                },
-            ).stages['step-pages'].maxOutputTokens,
+            // Documents use their own cap; PIECES keeps the full step-page geometry cap.
+            max_output_tokens: 8_000,
             reasoning: { effort: 'medium' },
             text: { format: { type: 'json_schema', name: 'truebuild_document', strict: true } },
         })
@@ -271,10 +308,59 @@ describe('POST /api/screens/v2 (live wire)', () => {
             evidence: 'live',
         })
         expect(bodies).toHaveLength(2)
+        expect(bodies.map((body) => body.max_output_tokens)).toEqual([8_000, 8_000])
         expect(String(bodies[1]!.instructions)).toContain('Repair:')
         // Both attempts' tokens are summed; nothing is credited to a model that did not produce the shown document.
         expect(metadata.usage.inputTokens).toBe(642)
         expect(body.value.document!.facts.map((fact) => fact.factId)).toContain('safety:n1')
+    })
+
+    it.each(['', '?guideRepair=0', '?guideRepair=true', '?guideRepair=1&guideRepair=1'])(
+        'gives absent or invalid capability %s one primary and no repair',
+        async (query) => {
+            const { app, bodies } = liveApp(() => ({}))
+            const response = await send(app, generate(documentInputs('guide')), { query })
+            expect(response.status).toBe(200)
+            const body = screensV2ResultSchema.parse(await response.json())
+            if (body.status !== 'ok') throw new Error('expected ok')
+            expect(body.value.document!.metadata).toMatchObject({
+                source: 'fallback',
+                fallbackReason: 'invalid_output',
+                repaired: false,
+            })
+            expect(bodies).toHaveLength(1)
+            expect(bodies[0]!.max_output_tokens).toBe(8_000)
+        },
+    )
+
+    it('isolates capable in-flight work and its cache from an installed client', async () => {
+        let release: (() => void) | undefined
+        const held = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        const inputs = documentInputs('guide')
+        const complete = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs).material))
+        const { app, bodies } = liveApp(async (index) => {
+            if (index === 0) {
+                await held
+                return complete
+            }
+            return {}
+        })
+        const capable = send(app, generate(inputs, 'capable'))
+        await vi.waitFor(() => expect(bodies).toHaveLength(1))
+        const old = screensV2ResultSchema.parse(await (await send(app, generate(inputs, 'old'), { query: '' })).json())
+        if (old.status !== 'ok') throw new Error('expected ok')
+        expect(old.value.document!.metadata).toMatchObject({ source: 'fallback', repaired: false })
+        expect(bodies).toHaveLength(2)
+        release!()
+        expect((await capable).status).toBe(200)
+        const after = screensV2ResultSchema.parse(
+            await (await send(app, generate(inputs, 'old-again'), { query: '' })).json(),
+        )
+        if (after.status !== 'ok') throw new Error('expected ok')
+        expect(after.value.document!.metadata).toMatchObject({ source: 'fallback', cacheHit: false, repaired: false })
+        expect(bodies).toHaveLength(3)
     })
 
     it('reports an incomplete response honestly: no repair, no claim, the complete fallback', async () => {

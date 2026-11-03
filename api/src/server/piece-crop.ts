@@ -16,6 +16,7 @@ interface Blob {
     right: number
     bottom: number
     pixels: number
+    anchored: boolean
 }
 
 function inkMask(pixels: Uint8Array, width: number, height: number): Uint8Array {
@@ -100,7 +101,12 @@ function removeRules(mask: Uint8Array, width: number, height: number, boxWidth: 
     }
 }
 
-function blobs(mask: Uint8Array, width: number, height: number): Blob[] {
+function blobs(
+    mask: Uint8Array,
+    width: number,
+    height: number,
+    hint: readonly [number, number, number, number],
+): Blob[] {
     const queue = new Uint32Array(mask.length)
     const results: Blob[] = []
     for (let index = 0; index < mask.length; index++) {
@@ -109,7 +115,7 @@ function blobs(mask: Uint8Array, width: number, height: number): Blob[] {
         let tail = 1
         queue[0] = index
         mask[index] = 0
-        const blob: Blob = { left: width, top: height, right: 0, bottom: 0, pixels: 0 }
+        const blob: Blob = { left: width, top: height, right: 0, bottom: 0, pixels: 0, anchored: false }
         while (head < tail) {
             const point = queue[head++]!
             const x = point % width
@@ -119,6 +125,8 @@ function blobs(mask: Uint8Array, width: number, height: number): Blob[] {
             blob.right = Math.max(blob.right, x)
             blob.bottom = Math.max(blob.bottom, y)
             blob.pixels++
+            // Anchor on actual ink, not a component's bounding box or centre: a clipped part can extend outside the hint.
+            if (x >= hint[0] && x < hint[2] && y >= hint[1] && y < hint[3]) blob.anchored = true
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                     const nx = x + dx
@@ -167,6 +175,7 @@ export async function refinePieceCrop(
         const source = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels, failOn: 'warning' }).autoOrient()
         const metadata = await source.metadata()
         if (metadata.autoOrient.width !== image.width || metadata.autoOrient.height !== image.height) return null
+        // Padding recovers ink that a parse box clips; only the page edge limits it.
         const expansion = 1.1
         const left = Math.max(0, Math.floor((x - expansion * w) * image.width))
         const top = Math.max(0, Math.floor((y - expansion * h) * image.height))
@@ -192,20 +201,31 @@ export async function refinePieceCrop(
         const boxHeight = h * image.height * sy
         const centerX = ((x + w / 2) * image.width - left) * sx
         const centerY = ((y + h / 2) * image.height - top) * sy
+        const hintLeft = (x * image.width - left) * sx
+        const hintTop = (y * image.height - top) * sy
+        const hintRight = ((x + w) * image.width - left) * sx
+        const hintBottom = ((y + h) * image.height - top) * sy
         const mask = inkMask(data, info.width, info.height)
         removeRules(mask, info.width, info.height, boxWidth, boxHeight)
-        const candidates = blobs(mask, info.width, info.height).filter((blob) => {
-            const width = blob.right - blob.left + 1
-            const height = blob.bottom - blob.top + 1
-            const clipped =
-                blob.left === 0 || blob.top === 0 || blob.right === info.width - 1 || blob.bottom === info.height - 1
-            // Broken or gently curved table rules can survive the straight-run pass.
-            return !(
-                (width >= Math.max(48, boxWidth * 0.9) && height < width * 0.12) ||
-                (height >= Math.max(48, boxHeight * 0.9) && width < height * 0.12) ||
-                (clipped && (width > boxWidth || height > boxHeight) && blob.pixels / (width * height) < 0.1)
-            )
-        })
+        const candidates = blobs(mask, info.width, info.height, [hintLeft, hintTop, hintRight, hintBottom]).filter(
+            (blob) => {
+                // Padding may complete an anchored component, but cannot introduce a neighbouring component as the seed.
+                if (!blob.anchored) return false
+                const width = blob.right - blob.left + 1
+                const height = blob.bottom - blob.top + 1
+                const clipped =
+                    blob.left === 0 ||
+                    blob.top === 0 ||
+                    blob.right === info.width - 1 ||
+                    blob.bottom === info.height - 1
+                // Broken or gently curved table rules can survive the straight-run pass.
+                return !(
+                    (width >= Math.max(48, boxWidth * 0.9) && height < width * 0.12) ||
+                    (height >= Math.max(48, boxHeight * 0.9) && width < height * 0.12) ||
+                    (clipped && (width > boxWidth || height > boxHeight) && blob.pixels / (width * height) < 0.1)
+                )
+            },
+        )
         const score = (blob: Blob): number => {
             const distance = Math.hypot(
                 ((blob.left + blob.right) / 2 - centerX) / boxWidth,
@@ -230,6 +250,10 @@ export async function refinePieceCrop(
         const verticalGap = Math.max(3, Math.min(boxHeight, seed.bottom - seed.top + 1) * 0.12)
         // Group detached detail strokes using the seed's extent, never an expanding chain of neighbouring text.
         for (const blob of candidates.slice(1)) {
+            // Padding can expose a neighbouring drawing; only strokes centred inside the parse box may join the seed.
+            const blobX = (blob.left + blob.right) / 2
+            const blobY = (blob.top + blob.bottom) / 2
+            if (blobX < hintLeft || blobX > hintRight || blobY < hintTop || blobY > hintBottom) continue
             const dx = Math.max(0, seed.left - blob.right, blob.left - seed.right)
             const dy = Math.max(0, seed.top - blob.bottom, blob.top - seed.bottom)
             const peer =

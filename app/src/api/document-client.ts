@@ -12,6 +12,7 @@ import {
 } from '@truebuild/contracts'
 import {
     MODEL_METADATA_MAX_BYTES,
+    MODEL_STEP_PAGE_TIMEOUT_MS,
     modelScreensV2MetadataSchema,
     screensV2GenerateRequest,
     screensV2ResultSchema,
@@ -291,7 +292,11 @@ export async function postDocuments(options: {
     const form = new FormData()
     form.append('metadata', json)
     const timeoutMs =
-        metadata.op === 'generate' ? (screenStageV2(metadata.kind!) === 'step-page' ? 55_000 : 35_000) : 10_000
+        metadata.op === 'generate'
+            ? screenStageV2(metadata.kind!) === 'step-page'
+                ? MODEL_STEP_PAGE_TIMEOUT_MS
+                : 35_000
+            : 10_000
     const guard = createCallGuard(timeoutMs, ctx.signal)
     let response: Response | undefined
     let outerExpired = false
@@ -308,7 +313,7 @@ export async function postDocuments(options: {
     try {
         checkpoint()
         response = await awaitStopped(
-            options.fetch(new URL('/api/screens/v2', baseUrl).toString(), {
+            options.fetch(new URL('/api/screens/v2?guideRepair=1', baseUrl).toString(), {
                 method: 'POST',
                 headers: { 'x-truebuild-key': options.secret, Accept: 'application/json' },
                 body: form,

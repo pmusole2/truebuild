@@ -129,6 +129,23 @@ export function buildDocumentContext(inputs: ScreenContextInputsV2): DocumentCon
                 readyFacts: ready.facts,
                 /** Every source index the ready screen must cite visibly: the requirements plus the overview steps' pages. */
                 readySources: ready.sources,
+                // Guide directions are needed even when explicit safety classification leaves no mandatory facts.
+                ...(used.kind === 'guide' && step !== null
+                    ? {
+                          headerText: {
+                              title: { kind: 'bound', key: 'step-title' },
+                              subtitle: { kind: 'bound', key: 'step-position' },
+                          },
+                          directionFacts: material.facts
+                              .filter(
+                                  (fact) =>
+                                      fact.kind !== 'safety' &&
+                                      fact.kind !== 'title' &&
+                                      (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+                              )
+                              .map((fact) => ({ kind: 'fact', factId: fact.factId })),
+                      }
+                    : {}),
                 overview: material.overview,
                 failure: inputs.failure,
                 completion: inputs.kind === 'completion' ? material.completion : null,

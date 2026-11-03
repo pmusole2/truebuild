@@ -1,3 +1,4 @@
+import { MODEL_ROUTE_TIMEOUT_MAX_MS } from '@truebuild/contracts/model'
 import { PARSE_DEFAULT_OVERALL_MS, describeParseBudget } from './parse-budget'
 import {
     AI_EFFORTS,
@@ -56,9 +57,14 @@ export interface AiPolicy {
 }
 
 /** Longest deadline `createDeadline` accepts. */
-export const MAX_DEADLINE_MS = 105_000
+export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 /** One geometry batch (Muse Wonder high, up to eight pieces) from background slot to response; the route allows queueing and crops on top. */
 export const PIECES_DEADLINE_MS = 90_000
+/** Guide composition includes reasoning and JSON; geometry retains the separate 48k step-page policy cap. */
+export const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000
+/** Installed clients stop at 55s; leave room to validate and return the single attempt. */
+export const LEGACY_GUIDE_DEADLINE_MS = 45_000
+export const LEGACY_GUIDE_ROUTE_MS = 50_000
 /** Parse has its own 165 s ceiling; the route factory separately allows its return margin. */
 const MAX_PARSE_BUDGET_MS = PARSE_DEFAULT_OVERALL_MS
 const MIN_OUTPUT_TOKENS = 16
@@ -131,7 +137,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
         },
         // t5: Spark low quick-check 17.4 s / camera 23.0 s; quick-check medium 30.8 s. User-selected 30 s deadline.
         screens: { effort: 'low', maxOutputTokens: 32_000, deadlineMs: 30_000, model: defaults.verdictModel },
-        // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; retain the 45 s attempt deadline.
+        // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; Guide shares both 45 s slices plus the margin.
         'step-pages': { effort: 'medium', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
         // t5: Spark low verdict 7.96 s; keep low and use the runtime's requested 12 s limit.
         verdict: {
@@ -225,6 +231,7 @@ export function describeAiPolicy(policy: AiPolicy): Record<string, unknown> {
                         effort,
                         ...(quickCheckEffort === undefined ? {} : { quickCheckEffort }),
                         maxOutputTokens,
+                        ...(stage === 'step-pages' ? { documentMaxOutputTokens: DOCUMENT_MAX_OUTPUT_TOKENS } : {}),
                         deadlineMs,
                         model,
                         provisional,

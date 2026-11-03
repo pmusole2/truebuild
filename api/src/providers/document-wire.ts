@@ -31,7 +31,12 @@ const wireContainers = CONTAINER_TYPES_V2.map((type) =>
         type: z.literal(type),
         id: wireId,
         ...CONTAINER_SHAPES_V2[type],
-        children: z.array(wireId).max(DOCUMENT_V2_LIMITS.children),
+        children: z
+            .array(wireId)
+            .max(DOCUMENT_V2_LIMITS.children)
+            .describe(
+                'IDs of already authored nodes in this table. Never self, an ancestor, an absent ID or a shared child.',
+            ),
     }),
 )
 interface WireNode {
@@ -59,7 +64,13 @@ const wireVariantSchema = z.strictObject({
 })
 
 export const wireProposalSchema = z.strictObject({
-    nodes: z.array(wireNodeSchema).min(1).max(DOCUMENT_V2_LIMITS.documentNodes),
+    nodes: z
+        .array(wireNodeSchema)
+        .min(1)
+        .max(DOCUMENT_V2_LIMITS.documentNodes)
+        .describe(
+            'Complete table, leaves before their parent containers. Include real Text content (every directionFacts reference on Guide) and citations; containers alone have no content. Every referenced ID must exist exactly once and be reachable from body or one overlay.',
+        ),
     ...wireVariantSchema.shape,
 })
 export type WireProposal = z.infer<typeof wireProposalSchema>

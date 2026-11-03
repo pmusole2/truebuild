@@ -99,6 +99,35 @@ function stepQuantity(session: Pick<ManualSession, 'reviewedSteps'>, partId: str
     return null
 }
 
+/** Keep precise own drawings separate from the broader cited step figure used only as context. */
+function resolveDrawings<T extends { partId: string; pageId: string | null; drawingBox: PieceDrawingBox | undefined }>(
+    session: Pick<ManualSession, 'pages' | 'reviewedSteps'>,
+    named: T[],
+): (T & { figureBox?: PieceDrawingBox })[] {
+    const pageIds = new Set(session.pages.map((page) => page.pageId))
+    const keyOf = (part: T): string | null =>
+        part.drawingBox && part.pageId !== null ? `${part.pageId}|${part.drawingBox.join(',')}` : null
+    const counts = new Map<string, number>()
+    for (const part of named) {
+        const key = keyOf(part)
+        if (key !== null) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return named.map((part) => {
+        const key = keyOf(part)
+        if (key !== null && counts.get(key) === 1) return part
+        const refs = session.reviewedSteps
+            .filter((step) => step.parts.some((required) => required.partId === part.partId))
+            .flatMap((step) => step.sourceRefs)
+            .filter((ref) => pageIds.has(ref.pageId))
+        // Prefer a source region over a whole-page citation. A shared procedure figure is context, never an own box.
+        const ref = refs.find((candidate) => candidate.region !== null) ?? refs[0]
+        if (ref === undefined) return { ...part, drawingBox: undefined }
+        const r = ref.region
+        const figureBox = validDrawingBox(r === null ? [0, 0, 1, 1] : [r.x, r.y, r.width, r.height])
+        return { ...part, drawingBox: undefined, pageId: ref.pageId, ...(figureBox ? { figureBox } : {}) }
+    })
+}
+
 /**
  * The manual parts the generation request names, in parse order. Quantity is the printed inventory count when present,
  * otherwise the first known per-step count. Page ids are carried for the request only; they never enter the identity.
@@ -107,27 +136,30 @@ export function manualPieceInputs(
     session: Pick<ManualSession, 'pages' | 'parts' | 'reviewedSteps'>,
 ): PieceRequestPart[] {
     const pageIds = new Set(session.pages.map((page) => page.pageId))
-    const named = session.parts.flatMap((part) => {
-        if (part.name.state !== 'known') return []
-        const pageId = part.name.sourceRefs.map((ref) => ref.pageId).find((id) => pageIds.has(id)) ?? null
-        const quantity = part.inventoryQuantity ?? stepQuantity(session, part.partId)
-        const identityName = part.name.value
-        // The manual may hold names up to 200 characters; the piece contract allows 80. The display name is bounded, the fact is not.
-        const name = Array.from(identityName.trim()).slice(0, PIECE_NAME_MAX).join('')
-        const drawingBox = validDrawingBox(part.drawingBox)
-        return [
-            {
-                partId: part.partId,
-                name,
-                identityName,
-                label: part.label ?? null,
-                dimensions: part.dimensions ?? null,
-                pageId,
-                quantity,
-                drawingBox,
-            },
-        ]
-    })
+    const named = resolveDrawings(
+        session,
+        session.parts.flatMap((part) => {
+            if (part.name.state !== 'known') return []
+            const pageId = part.name.sourceRefs.map((ref) => ref.pageId).find((id) => pageIds.has(id)) ?? null
+            const quantity = part.inventoryQuantity ?? stepQuantity(session, part.partId)
+            const identityName = part.name.value
+            // The manual may hold names up to 200 characters; the piece contract allows 80. The display name is bounded, the fact is not.
+            const name = Array.from(identityName.trim()).slice(0, PIECE_NAME_MAX).join('')
+            const drawingBox = validDrawingBox(part.drawingBox)
+            return [
+                {
+                    partId: part.partId,
+                    name,
+                    identityName,
+                    label: part.label ?? null,
+                    dimensions: part.dimensions ?? null,
+                    pageId,
+                    quantity,
+                    drawingBox,
+                },
+            ]
+        }),
+    )
     const ids = stablePieceIds(named)
     return named.flatMap((part, index): PieceRequestPart[] => {
         const { identityName: _identity, drawingBox, partId, ...request } = part
@@ -170,7 +202,8 @@ export function stepPiecesForStep(
     })
 }
 
-function geometryPart(part: PieceRequestPart): ManualPieceInput {
+/** The wire request part for a registry part: its internal part id is dropped, and the input is never mutated. */
+export function geometryPart(part: PieceRequestPart): ManualPieceInput {
     const { partId: _partId, ...wire } = part
     return wire
 }
@@ -197,11 +230,16 @@ export function manualPieceContentHash(
             manual.pages.map((page) => [page.contentHash, page.width, page.height, page.mimeType]),
             promptVersion,
             PIECE_CROP_VERSION,
-            manual.parts.map((part) =>
-                part.drawingBox === undefined || part.drawingBox === null
+            manual.parts.map((part) => {
+                const box = part.drawingBox ?? part.figureBox
+                return box == null
                     ? null
-                    : [part.drawingBox, part.pageId === null ? null : (citedContent.get(part.pageId) ?? null)],
-            ),
+                    : [
+                          part.drawingBox ? 'part' : 'figure',
+                          box,
+                          part.pageId === null ? null : (citedContent.get(part.pageId) ?? null),
+                      ]
+            }),
         ]),
     )
 }

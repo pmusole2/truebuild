@@ -19,7 +19,7 @@ export function defaultWire(
     if (operation === 'screen')
         return {
             effort: model === 'muse-wonder-1.0' || screenKind === 'quick-check' ? 'medium' : 'low',
-            maxOutputTokens: model === 'muse-wonder-1.0' ? 48_000 : 32_000,
+            maxOutputTokens: ['guide', 'result', 'answer'].includes(screenKind ?? '') ? 8_000 : 32_000,
         }
     // check: Spark verdict is low and provisional; the stronger second opinion is max.
     return secondary || model === 'muse-wonder-1.0'

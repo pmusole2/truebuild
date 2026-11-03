@@ -22,17 +22,18 @@ const sha256Hex = (text: string): string => createHash('sha256').update(text).di
 async function renderSources(extra: ScreenNodeV2[] = [], separateFactRegion = false): Promise<void> {
     const session = createDemoManual()
     if (separateFactRegion) {
+        const factRef = { pageId: session.pages[0]!.pageId, region: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } }
         const moveKnownWitness = (value: unknown): void => {
             if (value === null || typeof value !== 'object') return
             const object = value as Record<string, unknown>
             if (object.state === 'known' && Array.isArray(object.sourceRefs)) {
-                object.sourceRefs = [
-                    { pageId: session.pages[0]!.pageId, region: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } },
-                ]
+                object.sourceRefs = [factRef]
             }
             for (const [key, child] of Object.entries(object)) if (key !== 'sourceRefs') moveKnownWitness(child)
         }
         moveKnownWitness(session.reviewedSteps[0])
+        // Correction directions are now visible too; keep their witnesses with the other fixture facts.
+        for (const action of session.reviewedSteps[0]!.correction?.actions ?? []) action.sourceRefs = [factRef]
         // No visible title/page-only citation may pre-offer source 0 in this closed-section test.
         // Directions and part pictures cite the other exact region; the diagram itself is not a citation opener.
         session.reviewedSteps[0]!.safetyNotes = []
@@ -98,7 +99,7 @@ it('uses the production plan when a manual-page opener comes after fact citation
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
-it.each(['Directions', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
+it.each(['More detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
     const closed = (title: string, node: ScreenNodeV2): ScreenNodeV2 => ({
         type: 'Section',
         title: { kind: 'literal', text: title },
@@ -109,13 +110,13 @@ it.each(['Directions', 'Parts'])('keeps one opener per reference when %s opens f
     // This region is not already reachable from the visible fixture facts.
     await renderSources(
         [
-            closed('Directions', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
+            closed('More detail', { type: 'Citation', sources: [0], label: null, display: 'chip' }),
             closed('Parts', { type: 'ManualPage', sources: [0], label: null, fit: 'contain', initiallyOpen: false }),
         ],
         true,
     )
     // One visible fact region plus one distinct page reference, regardless of which source section opens first.
-    const second = first === 'Directions' ? 'Parts' : 'Directions'
+    const second = first === 'More detail' ? 'Parts' : 'More detail'
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(1)
     await fireEvent.press(screen.getByRole('button', { name: first }))
     expect(screen.getAllByRole('button', { name: 'See it in the manual' })).toHaveLength(2)

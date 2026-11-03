@@ -200,7 +200,7 @@ async function runtime(
     const fetch: ModelFetch = async (url, init) => {
         calls.push(url)
         const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as Metadata
-        if (url.endsWith('/parse')) {
+        if (new URL(url).pathname === '/api/manuals/parse') {
             if (typeof meta.language !== 'string') {
                 throw new Error('Missing parse language at the fixture transport boundary')
             }
@@ -212,21 +212,22 @@ async function runtime(
         } else if (url.endsWith('/checks')) {
             await gates.check?.promise
         }
-        const value = url.endsWith('/parse')
-            ? parsed(meta.pages![0]!.pageId)
-            : url.endsWith('/questions')
-              ? {
-                    answer: 'The groove faces inward.',
-                    sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
-                    missingEvidence: [],
-                }
-              : ({
-                    decision: 'pass',
-                    reason: 'The groove faces inward.',
-                    sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
-                    observedRegion: null,
-                    missingEvidence: [],
-                } satisfies CheckResult)
+        const value =
+            new URL(url).pathname === '/api/manuals/parse'
+                ? parsed(meta.pages![0]!.pageId)
+                : url.endsWith('/questions')
+                  ? {
+                        answer: 'The groove faces inward.',
+                        sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
+                        missingEvidence: [],
+                    }
+                  : ({
+                        decision: 'pass',
+                        reason: 'The groove faces inward.',
+                        sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
+                        observedRegion: null,
+                        missingEvidence: [],
+                    } satisfies CheckResult)
         return new Response(
             JSON.stringify({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value }),
             { headers: { 'content-type': 'application/json' } },
@@ -392,7 +393,7 @@ it('replaces Reading with Quick check, keeps Add in Back history, and explicitly
     await waitFor(() => expect(view.getPathname()).toBe('/guide/manual-navigation-1'))
     expect(controller.current?.session.reviewStatus).toBe('reviewed')
     await testRouter.back('/')
-    expect(calls).toEqual(['https://navigation.invalid/api/manuals/parse'])
+    expect(calls).toEqual(['https://navigation.invalid/api/manuals/parse?stepKinds=remove'])
     expect(restore).toHaveBeenCalledTimes(1)
     expect(dispose).not.toHaveBeenCalled()
 })
@@ -634,8 +635,8 @@ it.each([
     await waitFor(() => expect(view.getPathname()).toBe('/check/english-manual'))
     expect(capturedLanguages).toEqual([language, language])
     expect(calls).toEqual([
-        'https://navigation.invalid/api/manuals/parse',
-        'https://navigation.invalid/api/manuals/parse',
+        'https://navigation.invalid/api/manuals/parse?stepKinds=remove',
+        'https://navigation.invalid/api/manuals/parse?stepKinds=remove',
     ])
 })
 

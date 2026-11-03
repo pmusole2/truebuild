@@ -1,5 +1,7 @@
 import {
     SCREEN_KINDS_V2,
+    bodyTextRefSchema,
+    headerV2Schema,
     manualSessionSchema,
     screenUiStateV2Schema,
     type ScreenContextInputsV2,
@@ -20,6 +22,7 @@ import { DOCUMENT_INSTRUCTIONS, DOCUMENT_PROMPT_VERSION } from '../../providers/
 import { decodeWireProposal, encodeWireProposal, type WireProposal } from '../../providers/document-wire'
 import {
     MetaProviderError,
+    createMetaProvider,
     type ScreenGenerationInput,
     type VerifiedCallTelemetry,
 } from '../../providers/meta-provider'
@@ -30,7 +33,9 @@ import type { BackgroundWork } from '../screens/service'
 import { buildDocumentContext, type DocumentContext } from './context'
 import { checkProposal, evaluateWire, semanticIssues } from './ground'
 import sparseGuides from './fixtures/guide-wire-replay.json'
+import containerOnlyGuide from './fixtures/guide-container-graph.json'
 import { guideQualityIssues } from './guide-quality'
+import { normalizeDocumentWire } from './normalize-wire'
 import { createDocumentService, precomputeItems, type DocumentService, type DocumentServiceOptions } from './service'
 
 afterEach(() => vi.restoreAllMocks())
@@ -610,6 +615,68 @@ describe('service: a live provider', () => {
         })
         expect(slow.inputs).toHaveLength(1)
     })
+
+    it.each([
+        { guideRepair: false, delays: [40_000], source: 'generated', repaired: false },
+        { guideRepair: false, delays: [50_000], source: 'fallback', repaired: false },
+        { guideRepair: true, delays: [50_000], source: 'generated', repaired: false },
+        { guideRepair: true, delays: [30_000, 50_000], source: 'generated', repaired: true },
+        { guideRepair: true, delays: [60_000, 40_000], source: 'fallback', repaired: true },
+    ])(
+        'enforces Guide capability $guideRepair through the real provider across attempts lasting $delays ms',
+        async ({ guideRepair, delays, source, repaired }) => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+            const signals: AbortSignal[] = []
+            const caps: unknown[] = []
+            try {
+                const service = createDocumentService({
+                    guideRepair,
+                    provider: createMetaProvider({
+                        apiKey: 'synthetic-free-provider',
+                        policy: policyFor(),
+                        fetchImpl: async (_url, init) => {
+                            signals.push(init!.signal as AbortSignal)
+                            caps.push((JSON.parse(String(init!.body)) as Record<string, unknown>).max_output_tokens)
+                            const index = signals.length - 1
+                            await new Promise((resolve) => setTimeout(resolve, delays[index]))
+                            return Response.json({
+                                status: 'completed',
+                                model: 'muse-wonder-1.0',
+                                output: [
+                                    {
+                                        type: 'message',
+                                        role: 'assistant',
+                                        status: 'completed',
+                                        content: [
+                                            {
+                                                type: 'output_text',
+                                                text: JSON.stringify(
+                                                    index === delays.length - 1 ? goodWire('guide') : {},
+                                                ),
+                                                annotations: [],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            })
+                        },
+                    }),
+                    policy: policyFor(),
+                    runtimeMode: 'meta',
+                    // No outer timer in this stub: the attempt itself must enforce the shared remaining budget.
+                    work,
+                })
+                const pending = service.generate(documentInputs('guide'))
+                await vi.advanceTimersByTimeAsync(92_001)
+                expect((await pending).metadata).toMatchObject({ source, repaired })
+                expect(signals).toHaveLength(delays.length)
+                expect(caps).toEqual(delays.map(() => 8_000))
+                if (source === 'fallback') expect(signals.at(-1)!.aborted).toBe(true)
+            } finally {
+                vi.useRealTimers()
+            }
+        },
+    )
 })
 
 describe('service: precompute, progress and cancel', () => {
@@ -731,6 +798,241 @@ describe('service: the page a check names', () => {
 })
 
 describe('Guide usability floor', () => {
+    it('supplies Guide header references instead of generic labels even when body instructions are valid', async () => {
+        const session = demoSession({ safety: false })
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        const complete = goodWire('guide', session)
+        // Both live install-guide rejections had reachable instructions but these literal header pairs.
+        for (const title of ['This step', 'Directions']) {
+            const generic: WireProposal = {
+                ...complete,
+                header: {
+                    ...complete.header,
+                    title: { kind: 'literal', text: title },
+                    subtitle: { kind: 'literal', text: 'This step' },
+                },
+            }
+            const evaluated = evaluateWire(normalizeDocumentWire(generic, context).value, context)
+            expect(evaluated.ok).toBe(true)
+            if (!evaluated.ok) throw new Error('Generic labels must reach the unchanged quality floor')
+            expect(guideQualityIssues(evaluated.proposal, context)).toEqual(['guide_quality:title_not_bound'])
+            expect((await liveService([generic]).service.generate(inputs)).metadata.source).toBe('fallback')
+        }
+
+        const view = context.view.dynamic.document as Record<string, unknown>
+        const headerText = headerV2Schema.pick({ title: true, subtitle: true }).parse(view.headerText)
+        expect(headerText).toEqual({
+            title: { kind: 'bound', key: 'step-title' },
+            subtitle: { kind: 'bound', key: 'step-position' },
+        })
+        expect(DOCUMENT_INSTRUCTIONS).toContain('document.headerText')
+        const corrected: WireProposal = { ...complete, header: { ...complete.header, ...headerText } }
+        const live = liveService([corrected])
+        expect((await live.service.generate(inputs)).metadata.source).toBe('generated')
+        expect(live.inputs[0]!.dynamic.document).toMatchObject({ headerText })
+    })
+
+    it('requires actual visible directions even when the required fact list is empty', async () => {
+        const session = demoSession({ safety: false })
+        session.reviewedSteps[0]!.safetyNotes = []
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        expect(context.material.requirements.facts).toEqual([])
+        expect(context.material.facts.some((fact) => fact.basis === 'direction')).toBe(true)
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        // Minimal reproduction of the drone log's orphan cleanup followed by missing visible instruction.
+        // The raw orphan payload was not retained; a Text here also proves cleanup cannot promote it into the body.
+        const sparse: WireProposal = {
+            ...goodWire('guide', session),
+            body: 'scroll',
+            overlays: [],
+            nodes: [
+                { id: 'scroll', type: 'Scroll', axis: 'vertical', children: ['stack'] },
+                { id: 'stack', type: 'Stack', gap: 'md', align: 'stretch', children: ['progress'] },
+                { id: 'progress', type: 'Progress', binding: 'step', label: null },
+                {
+                    id: 'f3502',
+                    type: 'Text',
+                    content: { kind: 'bound', key: 'step-title' },
+                    role: 'body',
+                    tone: 'neutral',
+                    emphasis: 'normal',
+                    align: 'start',
+                },
+            ],
+        }
+        const normalized = normalizeDocumentWire(sparse, context)
+        expect(normalized.issueCodes).toEqual(['normalization.nodes.f3502:unreachable_node'])
+        const missing = evaluateWire(normalized.value, context)
+        expect(missing.ok).toBe(true)
+        if (!missing.ok) throw new Error('Sparse Guide must reach the quality floor')
+        expect(guideQualityIssues(missing.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        expect((await liveService([sparse]).service.generate(inputs)).metadata.source).toBe('fallback')
+
+        const titleOnly: WireProposal = {
+            ...sparse,
+            nodes: sparse.nodes.map((node) =>
+                node.id === 'stack' ? { ...node, children: ['f3502', 'progress'] } : node,
+            ),
+        }
+        const title = evaluateWire(titleOnly, context)
+        expect(title.ok).toBe(true)
+        if (!title.ok) throw new Error('Title-only Guide must reach the quality floor')
+        expect(guideQualityIssues(title.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        expect((await liveService([titleOnly]).service.generate(inputs)).metadata.source).toBe('fallback')
+
+        const view = context.view.dynamic.document as Record<string, unknown>
+        expect(view).not.toHaveProperty('instructionText')
+        const directions = bodyTextRefSchema.array().parse(view.directionFacts)
+        expect(directions).toEqual([
+            { kind: 'fact', factId: 'orientation' },
+            { kind: 'fact', factId: 'connection' },
+            { kind: 'fact', factId: 'check:groove-inward' },
+            { kind: 'fact', factId: 'correction:turn-panel' },
+        ])
+        expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
+        expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
+        expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
+        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThan(34)
+        const corrected: WireProposal = {
+            ...titleOnly,
+            nodes: titleOnly.nodes.map((node) => (node.id === 'f3502' ? { ...node, content: directions[0]! } : node)),
+        }
+        const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
+        expect(evaluated.ok).toBe(true)
+        if (!evaluated.ok) throw new Error('Supplied instruction must pass the strict gate')
+        expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
+        expect((await liveService([corrected]).service.generate(inputs)).metadata.source).toBe('generated')
+    })
+
+    it('rejects a legacy title fact as the sole instruction', () => {
+        const context = contextFor('guide', demoSession({ safety: false }))
+        const proposal = buildFallbackProposalV2(context.material)
+        expect(context.material.facts.some((fact) => fact.factId === 'title')).toBe(true)
+        expect(
+            guideQualityIssues(
+                {
+                    ...proposal,
+                    body: {
+                        type: 'Text',
+                        content: { kind: 'fact', factId: 'title' },
+                        role: 'body',
+                        tone: 'neutral',
+                        emphasis: 'normal',
+                        align: 'start',
+                    },
+                },
+                context,
+            ),
+        ).toEqual(['guide_quality:instruction_text_missing'])
+    })
+
+    it('uses the retained battery-removal correction when no orientation or connection was extracted', async () => {
+        // Reduced shape of .local/prompt11/final/reviewed-session.json: no richer removal procedure was retained.
+        const session = demoSession({ safety: false })
+        const step = session.reviewedSteps[0]!
+        step.title = '3B-C. Remove modular battery from drone'
+        step.kind = 'remove'
+        step.requirements = { orientation: false, connection: false, visibleChecks: false }
+        step.safetyNotes = []
+        step.orientation = { state: 'unknown', reason: 'No removal orientation to verify' }
+        step.connection = { state: 'unknown', reason: 'No removal connection state to verify' }
+        step.visibleChecks = []
+        step.correction = {
+            reviewed: true,
+            actions: [
+                {
+                    actionId: 'action-step-5-check',
+                    instruction: 'Verify battery lifted clear after prying',
+                    sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                },
+            ],
+        }
+        const inputs = documentInputs('guide', session)
+        const context = buildDocumentContext(inputs)
+        const view = context.view.dynamic.document as Record<string, unknown>
+        expect(view.directionFacts).toEqual([{ kind: 'fact', factId: 'correction:action-step-5-check' }])
+        expect(context.material.facts).toEqual([
+            {
+                factId: 'correction:action-step-5-check',
+                kind: 'correction',
+                basis: 'direction',
+                text: 'Verify battery lifted clear after prying',
+                sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+            },
+        ])
+        // Exact completed P12 wire: every node is a container, with absent children and self references.
+        // The source-backed direction above exists; deletion-only normalization cannot author its missing Text.
+        expect(containerOnlyGuide.nodes).toHaveLength(20)
+        expect(new Set(containerOnlyGuide.nodes.map((node) => node.type))).toEqual(new Set(['Card', 'Row']))
+        const normalized = normalizeDocumentWire(containerOnlyGuide, context)
+        expect(normalized.value).toMatchObject({ nodes: [] })
+        expect(normalized.issueCodes).toContain('normalization.refs.n12:unknown_reference')
+        expect(evaluateWire(normalized.value, context)).toEqual({ ok: false, issues: ['nodes:too_small'] })
+
+        // A complete bottom-up table using the very same retained facts passes the unchanged strict and quality gates.
+        const complete = goodWire('guide', session)
+        complete.nodes.reverse()
+        const defined = new Set<string>()
+        for (const node of complete.nodes) {
+            expect(node.children?.every((id) => defined.has(id)) ?? true).toBe(true)
+            defined.add(node.id)
+        }
+        const evaluated = evaluateWire(complete, context)
+        expect(evaluated.ok).toBe(true)
+        if (!evaluated.ok) throw new Error('Battery correction must pass strict validation')
+        expect(guideQualityIssues(evaluated.proposal, context)).toEqual([])
+        expect((await liveService([complete]).service.generate(inputs)).metadata.source).toBe('generated')
+
+        // P13 completed a reachable graph of step-position badges, but authored no direction Text.
+        const badges: WireProposal = {
+            ...complete,
+            body: 'label',
+            overlays: [],
+            nodes: [{ id: 'label', type: 'Badge', label: { kind: 'bound', key: 'step-position' }, tone: 'info' }],
+        }
+        const sparse = evaluateWire(badges, context)
+        expect(sparse).toMatchObject({ ok: true })
+        if (!sparse.ok) throw new Error('Badge-only Guide must reach the unchanged quality floor')
+        expect(guideQualityIssues(sparse.proposal, context)).toEqual(['guide_quality:instruction_text_missing'])
+        const repaired = liveService([badges, complete])
+        expect((await repaired.service.generate(inputs)).metadata).toMatchObject({
+            source: 'generated',
+            repaired: true,
+        })
+        expect(repaired.inputs).toHaveLength(2)
+        expect(repaired.inputs[1]!.repairIssues).toEqual(['guide_quality:instruction_text_missing'])
+        const failed = liveService([badges, badges])
+        expect((await failed.service.generate(inputs)).metadata).toMatchObject({
+            source: 'fallback',
+            fallbackReason: 'repair_failed',
+            repaired: true,
+        })
+        expect(failed.inputs).toHaveLength(2)
+
+        step.correction = null
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        for (const classification of ['classified', 'legacy', 'safety-only'] as const) {
+            if (classification === 'legacy') delete step.safetyNotes
+            else step.safetyNotes = classification === 'safety-only' ? demoSession().reviewedSteps[0]!.safetyNotes : []
+            const unavailable = buildDocumentContext(inputs)
+            expect((unavailable.view.dynamic.document as Record<string, unknown>).directionFacts).toEqual([])
+            expect(guideQualityIssues(buildFallbackProposalV2(unavailable.material), unavailable)).toEqual([
+                'guide_quality:instruction_text_missing',
+            ])
+            const unused = liveService([])
+            const fallback = await unused.service.generate(inputs)
+            expect(unused.inputs).toHaveLength(0)
+            expect(fallback.metadata).toMatchObject({
+                source: 'fallback',
+                fallbackReason: 'missing_requirement',
+                usage: { inputTokens: null, outputTokens: null },
+            })
+        }
+    })
+
     it('keeps a strict-valid sparse Guide on the complete shell with its live piece catalog', async () => {
         const row = sparseGuides.cases[0]!
         const inputs: ScreenContextInputsV2 = {
@@ -748,10 +1050,10 @@ describe('Guide usability floor', () => {
         const document = await live.service.generate(inputs)
         expect(document.metadata).toMatchObject({
             source: 'fallback',
-            fallbackReason: 'invalid_output',
-            repaired: false,
+            fallbackReason: 'repair_failed',
+            repaired: true,
         })
-        expect(live.inputs).toHaveLength(1)
+        expect(live.inputs).toHaveLength(2)
         const context = buildDocumentContext(inputs)
         const complete = buildFallbackProposalV2(context.material)
         expect(guideQualityIssues(complete, context)).toEqual([])
@@ -789,8 +1091,9 @@ describe('Guide usability floor', () => {
         expect(inputs.stepPieces).toEqual([{ pieceId: 'walking-machine-468c09a8', quantity: 1 }])
         expect(log.mock.calls.map(([value]) => JSON.parse(String(value)))).toContainEqual(
             expect.objectContaining({
-                event: 'guide_quality_fallback',
-                reason: expect.arrayContaining(['guide_quality:instruction_text_missing']),
+                event: 'document_rejection',
+                attempt: 'initial',
+                issueCodes: expect.arrayContaining(['guide_quality:instruction_text_missing']),
             }),
         )
     })

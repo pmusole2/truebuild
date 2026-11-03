@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     buildFallbackDocumentV2,
+    buildFallbackProposalV2,
     createDemoManual,
     documentMaterialV2,
     photoSpineV2,
@@ -80,6 +81,49 @@ const build = (inputs: ScreenContextInputsV2): ReturnType<typeof buildFallbackDo
     buildFallbackDocumentV2(inputs, { ...deps, reason: 'disabled', evidence: 'local-deterministic' })
 
 describe('focused questions and answers retain complete step detail', () => {
+    it('groups required and optional Guide directions once, keeping required facts first', () => {
+        const material = documentMaterialV2(inputsFor('guide', classifiedManual()))
+        const correction = material.facts.find((fact) => fact.factId === 'correction:turn-panel')!
+        correction.basis = 'unclassified-step'
+        material.requirements.facts.push(correction.factId)
+        const proposal = buildFallbackProposalV2(material)
+        const sections: ScreenNodeV2[] = []
+        const stated: string[] = []
+        visitVariantNodesV2(proposal, '', ({ node, hidden }) => {
+            if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Directions')
+                sections.push(node)
+            if (!hidden && node.type === 'Text' && node.content.kind === 'fact') stated.push(node.content.factId)
+        })
+        expect(sections).toHaveLength(1)
+        expect(stated).toEqual([
+            'safety:n1',
+            'correction:turn-panel',
+            'orientation',
+            'connection',
+            'check:groove-inward',
+        ])
+    })
+
+    it('Guide keeps classified direction text and its citations visible', () => {
+        const inputs = inputsFor('guide', classifiedManual())
+        const document = build(inputs)
+        const stated = new Map<string, boolean>()
+        const citations: number[] = []
+        visitVariantNodesV2(document, '', ({ node, hidden }) => {
+            if (node.type === 'Text' && node.content.kind === 'fact') stated.set(node.content.factId, hidden)
+            if (!hidden && node.type === 'Citation') citations.push(...node.sources)
+        })
+        for (const [factId, text] of DIRECTIONS) {
+            const fact = document.facts.find((entry) => entry.factId === factId)!
+            expect(fact.text).toBe(text)
+            expect(stated.get(factId)).toBe(false)
+            expect(citations).toEqual(expect.arrayContaining(sourceResolverV2(document.sources)(fact.sourceRefs)))
+        }
+        expect(stated.get('safety:n1')).toBe(false)
+        expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+        expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
+    })
+
     it.each(['questions', 'answer'] as const)(
         '%s keeps explicitly classified directions unabridged and cited behind one closed More detail',
         (kind) => {

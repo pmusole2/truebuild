@@ -35,7 +35,7 @@ import { BudgetError } from '../budget'
 import { createDeadline, RequestStoppedError } from '../deadline'
 import { withinModelDeadline } from '../model-multipart'
 import { admission } from '../request-clock'
-import type { AiPolicy, GenerativeUiMode } from '../ai-policy'
+import { LEGACY_GUIDE_DEADLINE_MS, MAX_DEADLINE_MS, type AiPolicy, type GenerativeUiMode } from '../ai-policy'
 import { PrecomputeRegistry, ScreenCache, SingleFlight, StaleGuard, StaleRevisionError } from '../screens/store'
 import type { BackgroundWork, StepScreenContext } from '../screens/service'
 import { buildDocumentContext, sha256, type DocumentContext } from './context'
@@ -70,6 +70,8 @@ export interface DocumentServiceOptions {
     runtimeMode: 'fixture' | 'meta'
     work: BackgroundWork
     cache?: ScreenCache<CachedDocument>
+    /** API routes set this from the query capability; in-process callers retain the existing repair behavior. */
+    guideRepair?: boolean
     precomputeConcurrency?: number
     now?: () => Date
 }
@@ -397,6 +399,11 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
     async function generateWithModel(context: DocumentContext, signal: AbortSignal): Promise<Made> {
         const stagePolicy = policy.stages[context.stage]
+        const legacyGuide = context.inputs.kind === 'guide' && options.guideRepair === false
+        const workBudgetMs = legacyGuide
+            ? Math.min(LEGACY_GUIDE_DEADLINE_MS, stagePolicy.deadlineMs)
+            : Math.min(MAX_DEADLINE_MS, stagePolicy.deadlineMs * 2 + 2_000)
+        const workStarted = performance.now()
         if ((provider === null || !generateDocument) && fixture === null) {
             return { document: deterministic(context, 'unconfigured'), cached: null }
         }
@@ -479,8 +486,17 @@ export function createDocumentService(options: DocumentServiceOptions): Document
          * the revision superseded) is dropped here, so nothing of it is repaired, published or cached.
          */
         const attempt = async (repairIssues?: readonly string[]): Promise<unknown> => {
+            // A Guide's primary and optional repair share the existing work ceiling. A slow completed primary may
+            // use more than one old 45s slice; a repair can use only what remains, never a fresh full budget.
+            const attemptMs =
+                context.inputs.kind === 'guide' && fixture === null
+                    ? workBudgetMs - (performance.now() - workStarted)
+                    : legacyGuide
+                      ? workBudgetMs
+                      : stagePolicy.deadlineMs
+            if (attemptMs <= 0) throw new RequestStoppedError('timeout')
             dispatched += 1
-            const deadline = createDeadline(stagePolicy.deadlineMs, active)
+            const deadline = createDeadline(attemptMs, active)
             const callAbort = new AbortController()
             const stop = (): void => callAbort.abort(deadline.signal.reason)
             deadline.signal.addEventListener('abort', stop, { once: true })
@@ -509,6 +525,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                         provider,
                         repairIssues === undefined ? base : { ...base, repairIssues },
                         callAbort.signal,
+                        context.inputs.kind === 'guide' ? attemptMs : undefined,
                     )
                 const generation = await withinModelDeadline(
                     repairIssues === undefined ? call() : work.repair(call),
@@ -550,7 +567,12 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     }),
                 )
             }
-            return evaluateWire(normalized.value, context)
+            const evaluated = evaluateWire(normalized.value, context)
+            if (!evaluated.ok) return evaluated
+            // A completed Guide without usable directions gets the same single bounded repair as a bad graph.
+            // The floor is unchanged; apply it to the repair too, before anything can be published or cached.
+            const quality = guideQualityIssues(evaluated.proposal, context)
+            return quality.length === 0 ? evaluated : { ok: false, issues: quality }
         }
 
         const run = async (): Promise<Made> => {
@@ -568,7 +590,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 logRejection(context, 'initial', evaluated.issues)
                 rejectedIssues = evaluated.issues.length
                 // Result already shows the app's verdict/photo shell; rejected background composition never delays it.
-                if (context.inputs.kind === 'result') return failure('invalid_output')
+                if (context.inputs.kind === 'result' || legacyGuide) return failure('invalid_output')
                 repaired = true
                 try {
                     const value = await attempt(evaluated.issues)
@@ -585,19 +607,6 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                     return failure('repair_failed')
                 }
             }
-            const quality = guideQualityIssues(evaluated.proposal, context)
-            if (quality.length > 0) {
-                rejectedIssues = (rejectedIssues ?? 0) + quality.length
-                console.info(
-                    JSON.stringify({
-                        event: 'guide_quality_fallback',
-                        contextKey: context.bound.contextKey,
-                        stepId: context.bound.stepId,
-                        reason: quality,
-                    }),
-                )
-                return failure('invalid_output')
-            }
             const seen = observed()
             const document = generated(context, evaluated.proposal, seen, false)
             if (document === null) return failure('invalid_output')
@@ -606,10 +615,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
 
         try {
             if (fixture !== null) return await run()
-            return await work.run(
-                { deadlineMs: Math.min(105_000, stagePolicy.deadlineMs * 2 + 2_000), signal: active },
-                run,
-            )
+            return await work.run({ deadlineMs: workBudgetMs, signal: active }, run)
         } catch (error) {
             // A cancelled provider call reports a generic stop; the abort reason says why it was stopped.
             return failure(signal.reason instanceof StaleRevisionError ? 'stale' : reasonFor(error))
@@ -634,6 +640,18 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const { manualId, revision } = context.bound
         if (manualId !== null && revision !== null && !guard.observe(manualId, revision)) {
             return deterministic(context, 'stale')
+        }
+        if (
+            context.inputs.kind === 'guide' &&
+            !context.material.facts.some(
+                (fact) =>
+                    fact.kind !== 'safety' &&
+                    fact.kind !== 'title' &&
+                    (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+            )
+        ) {
+            // No authored Guide can meet its instruction floor without inventing a direction: skip the paid call.
+            return deterministic(context, 'missing_requirement')
         }
         const key = cacheKey(context)
         const hit = cache.get(key)

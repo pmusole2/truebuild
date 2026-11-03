@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDemoManual, manualSessionSchema, manualStepSchema } from './index'
+import { createDemoManual, manualSessionSchema, manualStepSchema, stepEvidenceRequirements } from './index'
 import { modelParseMetadataSchema, selectCompactStepSourcePageIds, unresolvedCriticalFacts } from './model'
 
 const cited = [{ pageId: 'demo-page-1', region: null }]
@@ -101,6 +101,51 @@ describe('manual parse versatility', () => {
                 sessionWith({ ...candidate, visibleChecks: [{ checkId: 'check', description: unknown }] }),
             ).success,
         ).toBe(false)
+    })
+    it('accepts a removal step with the tool it uses and leaves unstated requirements unblocked', () => {
+        const session = createDemoManual()
+        const removal = {
+            ...session.reviewedSteps[0]!,
+            stepId: 'step-remove',
+            order: 3,
+            title: 'Take the side panel off',
+            kind: 'remove',
+            requirements: null,
+            parts: [
+                {
+                    partId: 'side-panel',
+                    quantity: { state: 'known', value: 1, sourceRefs: cited },
+                    quantityBasis: null,
+                },
+                {
+                    partId: 'screwdriver',
+                    quantity: { state: 'known', value: 1, sourceRefs: cited },
+                    quantityBasis: null,
+                },
+            ],
+            orientation: unknown,
+            connection: unknown,
+            visibleChecks: [],
+            correction: null,
+        }
+        const parsed = manualSessionSchema.parse({
+            ...session,
+            parts: [
+                ...session.parts,
+                { partId: 'screwdriver', name: { state: 'known', value: 'Phillips screwdriver', sourceRefs: cited } },
+            ],
+            reviewedSteps: [...session.reviewedSteps, removal],
+            rawExtraction: null,
+        })
+        const step = parsed.reviewedSteps[2]!
+        expect(step).toMatchObject({ kind: 'remove', parts: [{ partId: 'side-panel' }, { partId: 'screwdriver' }] })
+        expect(stepEvidenceRequirements(step)).toEqual({
+            parts: false,
+            orientation: false,
+            connection: false,
+            visibleChecks: false,
+        })
+        expect(unresolvedCriticalFacts(parsed)).toEqual([])
     })
     it('preserves legacy assembly gates, unknown names and correction review', () => {
         const session = createDemoManual()

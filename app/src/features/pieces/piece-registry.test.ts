@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
     createDemoManual,
+    manualPieceInputSchema,
     PIECE_GEOMETRY_PROMPT_VERSION,
     type PieceBatchResult,
     type PieceSpec,
 } from '@truebuild/contracts'
 import type { KeyValueStorage } from '../capture/library'
 import {
+    geometryPart,
     manualPieceContentHash,
     manualPieceInputOf,
     manualPieceInputs,
@@ -14,6 +16,7 @@ import {
     stepPiecesForStep,
     type PieceGenerationPort,
     type PieceManualInput,
+    type PieceRequestPart,
 } from './piece-registry'
 
 const CUTOUT = 'data:image/png;base64,iVBORw0KGgo='
@@ -399,6 +402,21 @@ describe('piece registry', () => {
         expect(manualPieceContentHash(manual, PIECE_GEOMETRY_PROMPT_VERSION - 1)).not.toBe(hash)
         expect(manualPieceContentHash(citing('page-1', [0.1, 0.2, 0.3, 0.5]))).not.toBe(boxedHash)
         expect(manualPieceContentHash(citing('page-2'))).not.toBe(boxedHash)
+        const originalFigure = citing('page-1')
+        const first = originalFigure.parts[0]!
+        const figure = {
+            ...originalFigure,
+            parts: [{ ...first, drawingBox: undefined, figureBox: first.drawingBox }, ...originalFigure.parts.slice(1)],
+        }
+        expect(manualPieceContentHash(figure)).not.toBe(boxedHash)
+        const changedFigure = {
+            ...figure,
+            parts: [
+                { ...figure.parts[0]!, figureBox: [0.2, 0.2, 0.3, 0.4] as [number, number, number, number] },
+                ...figure.parts.slice(1),
+            ],
+        }
+        expect(manualPieceContentHash(changedFigure)).not.toBe(manualPieceContentHash(figure))
         expect(manualPieceContentHash(citing('page-1', undefined, [page, twin]))).toBe(
             manualPieceContentHash(citing('page-3', undefined, [page, twin])),
         )
@@ -410,8 +428,105 @@ describe('piece registry', () => {
                 parts: session.parts.map((part, index) => (index === 0 ? { ...part, drawingBox: value } : part)),
             })
         expect(withBoxes([0.1234567, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toEqual([0.1234567, 0.2, 0.3, 0.4])
-        expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]?.drawingBox).toBeUndefined()
+        // An invalid box is no own drawing, so the part takes its step figure (the cited step page, whole frame).
+        expect(withBoxes([0.9, 0.2, 0.3, 0.4]).parts[0]).toMatchObject({
+            pageId: 'demo-page-1',
+            figureBox: [0, 0, 1, 1],
+        })
+        expect(manualPieceInputOf(session).parts[0]).toMatchObject({ pageId: 'demo-page-1', figureBox: [0, 0, 1, 1] })
         expect(manualPieceInputOf(session).parts[0]?.drawingBox).toBeUndefined()
+    })
+
+    it('binds own sub-boxes to their drawing page and gives every missing part cited figure context without claiming it as its own drawing', () => {
+        const source = createDemoManual()
+        const cite = (...pageIds: string[]): { pageId: string; region: null }[] =>
+            pageIds.map((pageId) => ({ pageId, region: null }))
+        const named = (
+            value: string,
+        ): { state: 'known'; value: string; sourceRefs: { pageId: string; region: null }[] } => ({
+            state: 'known',
+            value,
+            sourceRefs: cite('page-1'),
+        })
+        const known1 = (
+            pageId: string,
+        ): { state: 'known'; value: number; sourceRefs: { pageId: string; region: null }[] } => ({
+            state: 'known',
+            value: 1,
+            sourceRefs: cite(pageId),
+        })
+        const grouped: [number, number, number, number] = [0.19, 0.385, 0.155, 0.14]
+        const session = {
+            ...source,
+            pages: ['page-1', 'page-2', 'page-3'].map((pageId) => ({
+                ...source.pages[0]!,
+                pageId,
+                assetId: `asset-${pageId}`,
+            })),
+            parts: [
+                { partId: 'blade-a', name: named('Blade A'), drawingBox: grouped },
+                { partId: 'blade-b', name: named('Blade B'), drawingBox: grouped },
+                { partId: 'battery', name: named('Battery') },
+            ],
+            reviewedSteps: [
+                {
+                    ...source.reviewedSteps[0]!,
+                    stepId: 'step-1',
+                    order: 1,
+                    parts: [
+                        { partId: 'blade-a', quantity: known1('page-2'), quantityBasis: null },
+                        { partId: 'blade-b', quantity: known1('page-2'), quantityBasis: null },
+                    ],
+                    sourceRefs: cite('page-2', 'page-3'),
+                },
+                {
+                    ...source.reviewedSteps[1]!,
+                    stepId: 'step-2',
+                    order: 2,
+                    kind: 'remove' as const,
+                    parts: [{ partId: 'battery', quantity: known1('page-3'), quantityBasis: null }],
+                    sourceRefs: cite('page-3'),
+                },
+            ],
+        }
+        const requested = manualPieceInputs(session)
+        const byPart = new Map(requested.map((part) => [part.partId, part]))
+        for (const id of ['blade-a', 'blade-b']) {
+            expect(byPart.get(id)).toMatchObject({ pageId: 'page-2', figureBox: [0, 0, 1, 1] })
+            expect(byPart.get(id)?.drawingBox).toBeUndefined()
+        }
+        expect(byPart.get('battery')).toMatchObject({ pageId: 'page-3', figureBox: [0, 0, 1, 1] })
+        const boxes: [number, number, number, number][] = [
+            [0.1, 0.2, 0.2, 0.3],
+            [0.6, 0.2, 0.2, 0.3],
+        ]
+        const own = manualPieceInputs({
+            ...session,
+            parts: session.parts.map((part, index) =>
+                index < 2
+                    ? {
+                          ...part,
+                          name: { ...part.name, sourceRefs: cite('page-2', 'page-1') },
+                          drawingBox: boxes[index],
+                      }
+                    : part,
+            ),
+        })
+        expect(own.slice(0, 2).map((part) => ({ pageId: part.pageId, box: part.drawingBox }))).toEqual(
+            boxes.map((box) => ({ pageId: 'page-2', box })),
+        )
+        const region = { x: 0.2, y: 0.3, width: 0.5, height: 0.4 }
+        const regional = manualPieceInputs({
+            ...session,
+            reviewedSteps: session.reviewedSteps.map((step) => ({
+                ...step,
+                sourceRefs: [
+                    { pageId: 'page-2', region: null },
+                    { pageId: 'page-3', region },
+                ],
+            })),
+        })
+        expect(regional.every((part) => part.figureBox?.join(',') === '0.2,0.3,0.5,0.4')).toBe(true)
     })
 
     it('maps only a step’s linked pieces and quantities, and pins only after its pieces settle', async () => {
@@ -487,5 +602,16 @@ describe('piece registry', () => {
         expect(late.pieces.length).toBeGreaterThan(0)
         expect(registry.pin('hidden-page', hash).pieces.length).toBeGreaterThan(0)
         expect(registry.pin('different-manual', 'd'.repeat(64)).pieces).toHaveLength(0)
+    })
+
+    it('projects a registry part to the exact wire request, dropping only the internal part id and leaving the input unchanged', () => {
+        const part: PieceRequestPart = { ...manual.parts[0]!, partId: 'parse-0', notPartOfThisPiece: ['Part 1'] }
+        const before = structuredClone(part)
+        const wire = geometryPart(part)
+        expect(wire).toEqual({ ...manual.parts[0], notPartOfThisPiece: ['Part 1'] })
+        expect(wire).not.toHaveProperty('partId')
+        expect(manualPieceInputSchema.safeParse(wire).success).toBe(true)
+        expect(manualPieceInputSchema.safeParse(part).success).toBe(false)
+        expect(part).toEqual(before)
     })
 })

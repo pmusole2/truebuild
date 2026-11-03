@@ -3,6 +3,7 @@ import sharp from 'sharp'
 import {
     pieceBatchResultSchema,
     parsedManualSchema,
+    PIECE_CUTOUT_MAX_CHARS,
     type ManualPieceInput,
     type PieceBatchRequest,
 } from '@truebuild/contracts'
@@ -213,6 +214,41 @@ it('preserves a valid detached thin structural member without guessing whether i
     expect(result.results[0]).toMatchObject({ status: 'passed', piece: { parts }, issueCodes: [] })
 })
 
+it('preserves a thin concave extrude exactly and drops only its invalid outline sibling', async () => {
+    const extrude = {
+        type: 'extrude',
+        outline: [
+            [0, 0],
+            [3, 0],
+            [3, 0.4],
+            [0.4, 0.4],
+            [0.4, 2],
+            [0, 2],
+        ],
+        depth: 0.04,
+        bevel: 0,
+        position: [1, -2, 0.5],
+        rotation: [0.2, -0.3, 0.4],
+    }
+    const invalid = {
+        ...extrude,
+        outline: [
+            [0, 0],
+            [2, 2],
+            [0, 2],
+            [2, 0],
+        ],
+    }
+    for (const parts of [[extrude], [extrude, invalid]]) {
+        const candidate = rawPiece('thin-bracket', parts)
+        const original = structuredClone(candidate)
+        const result = (await composePiece('thin-bracket', candidate)).results[0]!
+        expect(result).toMatchObject({ status: 'passed', issueCodes: [] })
+        expect(result.piece?.parts).toEqual([extrude])
+        expect(candidate).toEqual(original)
+    }
+})
+
 it('removes consecutive outline and profile duplicates before strict validation without closing or repairing invalid paths', async () => {
     const lathe = {
         type: 'lathe',
@@ -331,7 +367,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
         parts: [
             { ...part('bracket'), notPartOfThisPiece: ['pin', 'washer'] },
             { ...part('pin'), drawingBox: [-0.1, 0, 0.5, 0.5] },
-            part('washer'),
+            { ...part('washer'), drawingBox: [0.2, 0.2, 0.6, 0.6] },
         ],
         pages: [{ pageId: 'page-1', width: 40, height: 40, mimeType: 'image/png' }],
     }
@@ -353,7 +389,7 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     expect((await sharp(cutoutBytes).stats()).isOpaque).toBe(true)
     const firstInput = generatePieces.mock.calls[0]![0]
     expect(firstInput.parts[0]).toMatchObject({ notPartOfThisPiece: ['pin', 'washer'] })
-    expect(firstInput.imagePieceIds).toEqual(['bracket', 'washer'])
+    expect(firstInput.imagePieceIds).toEqual(['bracket', 'pin', 'washer'])
     const cutoutInfo = await sharp(cutoutBytes).metadata()
     expect(Buffer.from(firstInput.images[0]!.bytes)).toEqual(cutoutBytes)
     expect(firstInput.images[0]).toMatchObject({
@@ -378,6 +414,14 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
             'Preserve integral shafts, stems, pegs and other connected functional structural members',
         ),
     )
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use extrude for flat outlines'))
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Use round primitives for round members'))
+    expect(bodies[0]).toHaveProperty(
+        'instructions',
+        expect.stringContaining('Use volumetric primitives for thick housings'),
+    )
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Never add a schema placeholder'))
+    expect(bodies[0]).toHaveProperty('instructions', expect.stringContaining('Fold small surface lobes'))
     const failed = first.results[1]!
     const repaired = await handler(
         pieceRequest(
@@ -414,6 +458,63 @@ it('retains valid siblings and plain crops through Wonder, rejects invalid geome
     })
 })
 
+it('keeps the excluded Phone support outside the requested Frame / Walking machine boundary', async () => {
+    const bodies: unknown[] = []
+    const provider = createMetaProvider({
+        apiKey: 'synthetic-pieces-provider-key',
+        fetchImpl: guardModelFetch(async (_url, init): Promise<Response> => {
+            bodies.push(JSON.parse(String(init?.body)) as unknown)
+            return wonderResponse([{ ...spec('frame'), name: 'Phone support' }])
+        }),
+    })
+    const handler = createPieceHandler({
+        auth: new SharedKeyAuth({ sharedSecret: 'pieces-test-key' }),
+        runtimeMode: 'meta',
+        provider,
+        work: createBackgroundWork(new ModelCallCounter(), new ConcurrencyGate(8)),
+        deadlineMs: 45_000,
+    })
+    const response = await handler(
+        pieceRequest(
+            {
+                requestId: 'exclusion-precedence',
+                contentHash: 'a'.repeat(64),
+                parts: [
+                    {
+                        ...part('frame'),
+                        name: 'Frame / Walking machine',
+                        pageId: null,
+                        notPartOfThisPiece: ['Phone support'],
+                    },
+                ],
+                pages: [],
+            },
+            Buffer.alloc(0),
+        ),
+    )
+    expect(response.status).toBe(200)
+    const result = pieceBatchResultSchema.parse(await response.json())
+    expect(result.results[0]).toMatchObject({
+        id: 'frame',
+        name: 'Frame / Walking machine',
+        status: 'invalid',
+        piece: null,
+        issueCodes: ['piece:name_mismatch'],
+    })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toHaveProperty(
+        'input.0.content.0.text',
+        expect.stringContaining('"notPartOfThisPiece":["Phone support"]'),
+    )
+    expect(bodies[0]).toHaveProperty(
+        'instructions',
+        expect.stringContaining(
+            "these exclusions always take precedence, even for connected profiles in the requested piece's own drawing or cutout",
+        ),
+    )
+    expect(bodies[0]).toHaveProperty('instructions', expect.not.stringContaining('even if a name excludes it'))
+})
+
 it('sends no crop image for a blank drawing and still asks Wonder for the name-only geometry', async () => {
     const blankPage = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#eeeeee' } })
         .png()
@@ -447,4 +548,85 @@ it('sends no crop image for a blank drawing and still asks Wonder for the name-o
     expect(result.results[0]).toMatchObject({ id: 'plate', status: 'passed', cutoutUri: null, issueCodes: [] })
     expect(generatePieces).toHaveBeenCalledTimes(1)
     expect(generatePieces.mock.calls[0]![0]).toMatchObject({ imagePieceIds: [], images: [], parts: [plate] })
+})
+
+it('drops shared own-box claims and reused cutouts while accepting explicit and legacy broader figure context', async () => {
+    const drawing = await sharp(
+        Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 80 40"><rect width="80" height="40" fill="white"/><rect x="1" y="1" width="8" height="8" fill="red"/><rect x="71" y="31" width="8" height="8" fill="blue"/><path d="M20 10 H60 V30 H20 Z M20 20 H60" stroke="black" stroke-width="2" fill="none"/></svg>',
+        ),
+    )
+        .png()
+        .toBuffer()
+    const provider = createMetaProvider({
+        apiKey: 'synthetic-pieces-provider-key',
+        fetchImpl: guardModelFetch(async (): Promise<Response> =>
+            wonderResponse([spec('propeller-a'), spec('propeller-b'), spec('battery'), spec('legacy')]),
+        ),
+    })
+    const generatePieces = vi.spyOn(provider, 'generatePieces')
+    const handler = createPieceHandler({
+        auth: new SharedKeyAuth({ sharedSecret: 'pieces-test-key' }),
+        runtimeMode: 'meta',
+        provider,
+        work: createBackgroundWork(new ModelCallCounter(), new ConcurrencyGate(8)),
+        deadlineMs: 45_000,
+    })
+    const response = await handler(
+        pieceRequest(
+            {
+                requestId: 'pieces-grouped',
+                contentHash: 'd'.repeat(64),
+                parts: [
+                    {
+                        ...part('propeller-a'),
+                        figureBox: [0, 0, 0.5, 1],
+                        cutoutUri: `data:image/png;base64,${drawing.toString('base64')}`,
+                    },
+                    {
+                        ...part('propeller-b'),
+                        figureBox: [0, 0, 0.5, 1],
+                        cutoutUri: `data:image/png;base64,${drawing.toString('base64')}`,
+                    },
+                    { ...part('battery'), drawingBox: undefined, figureBox: [0.2, 0.2, 0.6, 0.6] },
+                    { ...part('legacy'), drawingBox: undefined },
+                ],
+                pages: [{ pageId: 'page-1', width: 1600, height: 800, mimeType: 'image/png' }],
+            },
+            drawing,
+        ),
+    )
+    expect(response.status).toBe(200)
+    const result = pieceBatchResultSchema.parse(await response.json())
+    expect(result.results.map((value) => [value.id, value.cutoutUri !== null])).toEqual([
+        ['propeller-a', false],
+        ['propeller-b', false],
+        ['battery', false],
+        ['legacy', false],
+    ])
+    expect(generatePieces).toHaveBeenCalledTimes(1)
+    expect(generatePieces.mock.calls[0]![0]).toMatchObject({
+        imagePieceIds: ['propeller-a', 'propeller-b', 'battery', 'legacy'],
+    })
+    const sentImages = generatePieces.mock.calls[0]![0].images
+    expect(sentImages).toHaveLength(4)
+    expect(Buffer.from(sentImages[0]!.bytes).equals(drawing)).toBe(false)
+    expect(sentImages[0]!.bytes).toEqual(sentImages[1]!.bytes)
+    const legacy = sentImages[3]!
+    expect(legacy).toMatchObject({ width: 1024, height: 512, mimeType: 'image/jpeg' })
+    expect(`data:image/jpeg;base64,${Buffer.from(legacy.bytes).toString('base64')}`.length).toBeLessThanOrEqual(
+        PIECE_CUTOUT_MAX_CHARS,
+    )
+    for (const [x, y, channel] of [
+        [0.05, 0.1, 0],
+        [0.95, 0.9, 2],
+    ] as const) {
+        const pixel = await sharp(legacy.bytes)
+            .extract({ left: Math.floor(legacy.width * x), top: Math.floor(legacy.height * y), width: 1, height: 1 })
+            .removeAlpha()
+            .raw()
+            .toBuffer()
+        expect(pixel[channel]).toBeGreaterThan(200)
+        expect([...pixel].filter((_value, index) => index !== channel).every((value) => value < 50)).toBe(true)
+    }
 })

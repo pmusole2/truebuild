@@ -79,22 +79,23 @@ function setup(
                 pages?: { pageId: string }[]
                 sourcePageIds?: string[]
             }
-            const value = url.endsWith('/parse')
-                ? parsed(meta.pages![0]!.pageId)
-                : url.endsWith('/questions')
-                  ? {
-                        answer: 'Check the expected diagram.',
-                        sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
-                        missingEvidence: [],
-                    }
-                  : ({
-                        decision: 'refuse',
-                        reason: 'Panel faces outward.',
-                        sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
-                        observedRegion: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-                        missingEvidence: [],
-                        orientationAssessment: 'reversed',
-                    } satisfies CheckResult)
+            const value =
+                new URL(url).pathname === '/api/manuals/parse'
+                    ? parsed(meta.pages![0]!.pageId)
+                    : url.endsWith('/questions')
+                      ? {
+                            answer: 'Check the expected diagram.',
+                            sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
+                            missingEvidence: [],
+                        }
+                      : ({
+                            decision: 'refuse',
+                            reason: 'Panel faces outward.',
+                            sourceRefs: [{ pageId: meta.sourcePageIds![0]!, region: null }],
+                            observedRegion: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                            missingEvidence: [],
+                            orientationAssessment: 'reversed',
+                        } satisfies CheckResult)
             return new Response(
                 JSON.stringify({
                     status: 'ok',
@@ -1134,7 +1135,7 @@ async function followupReady(
     const runtime = setup(async (url, init): Promise<Response> => {
         const form = init.body as FormData
         const raw: unknown = JSON.parse(String(form.get('metadata')))
-        if (url.endsWith('/parse')) {
+        if (new URL(url).pathname === '/api/manuals/parse') {
             const meta = modelParseMetadataSchema.parse(raw)
             return Response.json({
                 status: 'ok',

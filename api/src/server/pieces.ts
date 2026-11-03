@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import {
     LIMITS,
+    PIECE_CUTOUT_MAX_CHARS,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
     type ManualPieceInput,
@@ -42,9 +43,11 @@ async function counted<T>(
 interface PieceCrop {
     uri: string
     image: ObservationImage
-    /** Refined drawing box; null when the crop is a client cutout reused for repair. */
+    /** Refined drawing box; null for a full-page context image or a client cutout reused for repair. */
     box: PieceCropResult['box'] | null
     inkRatio: number | null
+    /** Broader figure context is sent to the model but is never shown or stored as this piece's own cutout. */
+    contextOnly: boolean
 }
 
 async function readCrop(uri: string): Promise<PieceCrop | null> {
@@ -56,7 +59,35 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
         const image: ObservationImage = { bytes, width: info.width, height: info.height, mimeType: 'image/png' }
         // A reused cutout passes the same blank gate as a fresh crop; the whole frame is its drawing box.
         const ink = await refinePieceCrop(image, [0, 0, 1, 1])
-        return ink ? { uri, image, box: null, inkRatio: ink.inkRatio } : null
+        return ink ? { uri, image, box: null, inkRatio: ink.inkRatio, contextOnly: false } : null
+    } catch {
+        return null
+    }
+}
+
+/** A page-only legacy request supplies context for every figure, without claiming any cluster as this part's drawing. */
+async function pageContext(image: ObservationImage): Promise<PieceCrop | null> {
+    try {
+        const source = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels, failOn: 'warning' })
+            .autoOrient()
+            .flatten({ background: '#ffffff' })
+        for (const size of [1024, 512, 256]) {
+            const { data: bytes, info } = await source
+                .clone()
+                .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 80 })
+                .toBuffer({ resolveWithObject: true })
+            const uri = `data:image/jpeg;base64,${bytes.toString('base64')}`
+            if (uri.length > PIECE_CUTOUT_MAX_CHARS) continue
+            return {
+                uri,
+                image: { bytes, width: info.width, height: info.height, mimeType: 'image/jpeg' },
+                box: null,
+                inkRatio: null,
+                contextOnly: true,
+            }
+        }
+        return null
     } catch {
         return null
     }
@@ -64,13 +95,35 @@ async function readCrop(uri: string): Promise<PieceCrop | null> {
 
 async function cropDrawing(part: ManualPieceInput, image: ObservationImage | undefined): Promise<PieceCrop | null> {
     if (part.cutoutUri) return readCrop(part.cutoutUri)
-    if (!image || !part.drawingBox) return null
+    if (!image) return null
+    const box = part.drawingBox ?? part.figureBox
+    if (box == null) return pageContext(image)
     try {
-        const crop = await refinePieceCrop(image, part.drawingBox)
-        return crop && crop.uri.length <= 360_000 ? crop : null
+        const crop = await refinePieceCrop(image, box)
+        return crop && crop.uri.length <= 360_000 ? { ...crop, contextOnly: part.drawingBox == null } : null
     } catch {
         return null
     }
+}
+
+function drawingKey(part: ManualPieceInput): string | null {
+    return part.drawingBox && part.pageId !== null ? `${part.pageId}|${part.drawingBox.join(',')}` : null
+}
+
+/**
+ * A drawing box that two distinct parts of one batch share is no part's own figure: cropping it for either would give
+ * both the same claimed own drawing. Drop that claim and any reused cutout; an explicit step figure remains context.
+ */
+function ownDrawingParts(parts: readonly ManualPieceInput[]): ManualPieceInput[] {
+    const counts = new Map<string, number>()
+    for (const part of parts) {
+        const key = drawingKey(part)
+        if (key !== null) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return parts.map((part) => {
+        const key = drawingKey(part)
+        return key !== null && counts.get(key)! > 1 ? { ...part, drawingBox: undefined, cutoutUri: undefined } : part
+    })
 }
 
 /** Independently accept each requested id. A blank or broken sibling never erases a valid piece. */
@@ -82,7 +135,7 @@ export async function generatePieceBatch(
 ): Promise<PieceBatchResult> {
     const started = performance.now()
     const crops = new Map<string, PieceCrop>()
-    for (const part of metadata.parts) {
+    for (const part of ownDrawingParts(metadata.parts)) {
         const crop = await cropDrawing(part, part.pageId === null ? undefined : pages.get(part.pageId))
         if (crop) crops.set(part.id, crop)
     }
@@ -158,7 +211,7 @@ export async function generatePieceBatch(
             name: part.name,
             status: piece === null ? ('invalid' as const) : part.repair ? ('repaired' as const) : ('passed' as const),
             piece,
-            cutoutUri: crop?.uri ?? null,
+            cutoutUri: crop && !crop.contextOnly ? crop.uri : null,
             issueCodes,
         }
         console.info(

@@ -68,18 +68,23 @@ async function post(
     app: ReturnType<typeof createApp>,
     metadata: Metadata,
     key: string | null = KEY,
+    query = '?guideRepair=1',
 ): Promise<Response> {
     const form = new FormData()
     form.set('metadata', JSON.stringify(metadata))
-    return app.request('/api/screens', {
+    return app.request(`/api/screens${query}`, {
         method: 'POST',
         headers: key === null ? {} : { 'x-truebuild-key': key },
         body: form,
     })
 }
 
-async function document(app: ReturnType<typeof createApp>, metadata: Metadata): Promise<ScreenDocument> {
-    const response = await post(app, metadata)
+async function document(
+    app: ReturnType<typeof createApp>,
+    metadata: Metadata,
+    query = '?guideRepair=1',
+): Promise<ScreenDocument> {
+    const response = await post(app, metadata, KEY, query)
     expect(response.status).toBe(200)
     const parsed = screensResultSchema.parse(await response.json())
     if (parsed.status !== 'ok' || parsed.value.document === null) throw new Error('missing_document')
@@ -253,11 +258,29 @@ describe('generation, validation, repair and fallback', (): void => {
         expect(page.bound).toMatchObject({ manualId: session.manualId, revision: session.revision, stepId: 'step-1' })
     })
 
+    it.each(['', '?guideRepair=0', '?guideRepair=invalid'])(
+        'gives legacy Guide capability %s only one attempt',
+        async (query): Promise<void> => {
+            const { app, mock } = await boot({}, { screen: { scenario: 'invalid-then-valid' } })
+            const response = await post(app, guide(), KEY, query)
+            const result = screensResultSchema.parse(await response.json())
+            if (result.status !== 'ok') throw new Error('expected ok')
+            expect(result.value.document?.metadata).toMatchObject({
+                source: 'shell',
+                repaired: false,
+                fallbackReason: 'invalid_output',
+            })
+            expect(mock.screenDispatches()).toBe(1)
+            expect(mock.wireRequests[0]).toMatchObject({ max_output_tokens: 8_000 })
+        },
+    )
+
     it('repairs invalid completed output once with the same model and machine issue codes only', async (): Promise<void> => {
         const { app, mock } = await boot({}, { screen: { scenario: 'invalid-then-valid' } })
         const page = await document(app, guide())
         expect(page.metadata).toMatchObject({ source: 'generated', repaired: true })
         expect(mock.screenDispatches()).toBe(2)
+        expect(mock.wireRequests.map((request) => request.max_output_tokens)).toEqual([8_000, 8_000])
         expect(mock.wireRequests[1]!.model).toBe(mock.wireRequests[0]!.model)
         const instructions = mock.wireRequests[1]!.instructions!
         expect(instructions).toContain('Repair: your previous completed answer was rejected')
@@ -300,7 +323,7 @@ describe('generation, validation, repair and fallback', (): void => {
             { AI_DEADLINE_STEP_PAGES_MS: '1000' },
             { screen: { scenario: 'valid', delayMs: 1_500 } },
         )
-        const page = await document(app, guide())
+        const page = await document(app, guide(), '')
         expect(page.metadata).toMatchObject({ source: 'shell', fallbackReason: 'timeout' })
         // An ambiguous dispatch is never repaired or retried.
         expect(mock.screenDispatches()).toBe(1)

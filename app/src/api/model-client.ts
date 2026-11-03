@@ -32,6 +32,7 @@ import {
     MAX_PARSE_PAGES,
     PARSE_SPLIT_MESSAGE,
     MODEL_METADATA_MAX_BYTES,
+    MODEL_STEP_PAGE_TIMEOUT_MS,
     modelCheckMetadataSchema,
     modelOverlayMetadataSchema,
     modelOverlayJobMetadataSchema,
@@ -51,7 +52,7 @@ import {
     type ModelScreensV2Metadata,
     type ScreensV2Result,
 } from '@truebuild/contracts/model'
-import type { z } from 'zod'
+import { z } from 'zod'
 import { sameIdentity } from '../features/screens/screen-spec'
 import { streamFetch as defaultStreamFetch, type StreamFetch } from './stream-fetch'
 import {
@@ -69,7 +70,7 @@ import {
     type CallGuard,
 } from './transport'
 
-export { MODEL_METADATA_MAX_BYTES } from '@truebuild/contracts/model'
+export { MODEL_METADATA_MAX_BYTES, MODEL_STEP_PAGE_TIMEOUT_MS } from '@truebuild/contracts/model'
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 // Outlast the 165s parse budget and 170s route, so the server's own timeout answer arrives first.
 export const MODEL_PARSE_TIMEOUT_MS = 175_000
@@ -85,7 +86,6 @@ export const MODEL_QUESTION_COLLECT_TIMEOUT_MS = 10_000
 export const MODEL_QUESTION_CANCEL_TIMEOUT_MS = 5_000
 // Paid baseline: Spark low screens 17s, quick-check medium 31s; outlast the server's 30s limit.
 export const MODEL_SCREEN_TIMEOUT_MS = 35_000
-export const MODEL_STEP_PAGE_TIMEOUT_MS = 55_000
 /** Geometry batches are the slowest model call; a timeout is an unknown outcome, so the registry never resends it. */
 export const MODEL_PIECES_TIMEOUT_MS = 120_000
 /** Eight cutouts of up to 360k characters each, plus piece specs; the default 1 MB limit cannot hold a full batch. */
@@ -98,6 +98,10 @@ export const MODEL_OVERLAY_CANCEL_TIMEOUT_MS = 5_000
 const MAX_STREAM_BYTES = 1_048_576
 const MAX_STREAM_EVENTS = 64
 const MAX_SSE_EVENT_BYTES = 262_144
+const pieceCapabilitiesSchema = z.object({
+    status: z.literal('ok'),
+    capabilities: z.object({ pieceFigureBox: z.literal(true) }),
+})
 
 export type ModelFetch = (url: string, init: RequestInit) => Promise<Response>
 
@@ -225,9 +229,9 @@ function ssePayload(block: string): string | null | undefined {
 
 /**
  * Model-mode client for the TrueBuild backend. The shared key is sent only in the x-truebuild-key header to the configured
- * origin. Every call makes at most one request (no retries),
- * is bounded by one absolute monotonic deadline, validates the request and response against the frozen schemas, and
- * never publishes a value that does not echo its requestId, binding and mode.
+ * origin. Every call makes at most one generation request (no retries); piece batches may first discover unmetered capabilities.
+ * Each operation has one absolute monotonic deadline and validates its request and response against the frozen schemas.
+ * Envelope responses must echo their requestId, binding and mode.
  */
 /** Decodes a page picture the app already holds as a data URI; any other shape or MIME type is refused. */
 function bytesFromDataUri(uri: string | undefined, mimeType: ManualPage['mimeType']): Uint8Array | null {
@@ -390,7 +394,8 @@ export class ModelApiClient {
         const pageIds = new Set(pages.map((page) => page.pageId))
 
         return this.post({
-            path: '/api/manuals/parse',
+            // Query parameters are ignored by old APIs and do not alter their strict metadata or CORS contract.
+            path: '/api/manuals/parse?stepKinds=remove',
             requestId: ctx.requestId,
             binding,
             form,
@@ -760,7 +765,7 @@ export class ModelApiClient {
         let owned: Response | undefined
         try {
             checkpoint()
-            const url = new URL('/api/screens', this.baseUrl).toString()
+            const url = new URL('/api/screens?guideRepair=1', this.baseUrl).toString()
             owned = await awaitStopped(
                 this.fetchImpl(url, this.init(form, guard.signal)),
                 guard.signal,
@@ -857,19 +862,27 @@ export class ModelApiClient {
         const valid = pieceBatchRequestSchema.safeParse(request)
         if (!valid.success) return null
         const form = new FormData()
-        form.append('metadata', JSON.stringify(valid.data))
-        for (const page of valid.data.pages) {
-            const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
-            if (bytes === null) return null
-            appendMultipartImage(
-                form,
-                `page:${page.pageId}`,
-                { bytes, mimeType: page.mimeType, width: page.width, height: page.height },
-                page.pageId,
-            )
-        }
         const guard = createCallGuard(MODEL_PIECES_TIMEOUT_MS, undefined)
         try {
+            for (const page of valid.data.pages) {
+                const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
+                if (bytes === null) return null
+                appendMultipartImage(
+                    form,
+                    `page:${page.pageId}`,
+                    { bytes, mimeType: page.mimeType, width: page.width, height: page.height },
+                    page.pageId,
+                )
+            }
+            const figureBox =
+                valid.data.parts.some((part) => part.figureBox !== undefined) &&
+                (await this.supportsPieceFigureBox(guard.signal))
+            guard.checkpoint()
+            // Old APIs reject unknown keys even when the new field is optional. Keep the cited page for their context.
+            const parts = figureBox
+                ? valid.data.parts
+                : valid.data.parts.map(({ figureBox: _figureBox, ...part }) => part)
+            form.append('metadata', JSON.stringify({ ...valid.data, parts }))
             const url = new URL('/api/pieces', this.baseUrl).toString()
             const response = await awaitStopped(
                 this.fetchImpl(url, this.init(form, guard.signal)),
@@ -888,6 +901,34 @@ export class ModelApiClient {
         } catch {
             return null
         } finally {
+            releaseMultipartImages(form)
+            guard.dispose()
+        }
+    }
+
+    /** Recheck each batch so a backend rollback takes the strict legacy wire path without a POST retry. */
+    private async supportsPieceFigureBox(signal: AbortSignal): Promise<boolean> {
+        const guard = createCallGuard(5_000, signal)
+        let response: Response | undefined
+        try {
+            response = await awaitStopped(
+                this.fetchImpl(new URL('/api/session', this.baseUrl).toString(), {
+                    method: 'GET',
+                    headers: { 'x-truebuild-key': this.secret, Accept: 'application/json' },
+                    credentials: 'omit',
+                    redirect: 'error',
+                    signal: guard.signal,
+                }),
+                guard.signal,
+                discardResponse,
+            )
+            if (!response.ok) return false
+            const text = await readBoundedText(response, guard.signal, guard.checkpoint, 32_768)
+            return pieceCapabilitiesSchema.safeParse(JSON.parse(text)).success
+        } catch {
+            return false
+        } finally {
+            if (response !== undefined) discardResponse(response)
             guard.dispose()
         }
     }

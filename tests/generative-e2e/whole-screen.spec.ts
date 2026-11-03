@@ -6,6 +6,12 @@ import { modelScreensV2MetadataSchema, screensV2ResultSchema } from '@truebuild/
 const API = 'http://127.0.0.1:3101'
 const mode = process.env.TRUEBUILD_E2E_GENERATIVE_UI ?? 'full'
 
+function isDocumentUrl(value: string): boolean {
+    const url = new URL(value)
+    const capability = url.searchParams.getAll('guideRepair')
+    return url.origin === API && url.pathname === '/api/screens/v2' && capability.length === 1 && capability[0] === '1'
+}
+
 async function photographPage(page: Page, first: boolean): Promise<void> {
     await page.getByTestId(first ? 'take-page-photo' : 'add-page').click()
     await expect(page.getByTestId('camera-shutter')).toBeEnabled()
@@ -27,7 +33,7 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 /** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
-        (request) => request.url() === `${API}/api/manuals/parse` && request.method() === 'POST',
+        (request) => request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST',
         { timeout: 60_000 },
     )
     const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
@@ -47,7 +53,7 @@ async function prepareGuide(page: Page, alreadyHome = false): Promise<void> {
     await page.getByTestId('home-add').click()
     await photographPage(page, true)
     const parse = page
-        .waitForResponse((response) => response.url() === `${API}/api/manuals/parse`)
+        .waitForResponse((response) => response.url() === `${API}/api/manuals/parse?stepKinds=remove`)
         .then(async (response) => ({ status: response.status(), body: await response.json() }))
     await readManualWithConsent(page)
     expect((await parse).status).toBe(200)
@@ -81,14 +87,14 @@ test('a complete document owns the frame; off stays local and full publishes hon
 }) => {
     let documentRequests = 0
     page.on('request', (request) => {
-        if (request.url() === `${API}/api/screens/v2`) documentRequests++
+        if (isDocumentUrl(request.url())) documentRequests++
     })
     // Consume the first complete response before navigating. Chromium may discard a response body when its route leaves.
     const firstDocument =
         mode !== 'off'
             ? page
                   .waitForResponse(async (response) => {
-                      if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                      if (!isDocumentUrl(response.url()) || response.status() !== 200) return false
                       const published = screensV2ResultSchema.parse(await response.json())
                       return (
                           published.status === 'ok' &&
@@ -126,8 +132,7 @@ test('a complete document owns the frame; off stays local and full publishes hon
     await expect(
         page.getByTestId('guide-screen').getByRole('img', { name: 'Picture from your manual' }).first(),
     ).toBeVisible()
-    // The synthetic manual explicitly classifies these as directions, kept complete behind More detail.
-    await page.getByTestId('guide-screen').getByRole('button', { name: 'More detail', exact: true }).click()
+    // Guide directions are visible immediately, including explicitly classified directions.
     await expect(page.getByText('Groove faces inward toward the divider.', { exact: true }).first()).toBeVisible()
     if (mode !== 'off') {
         expect(documentRequests).toBeGreaterThan(0)
@@ -206,7 +211,7 @@ test('a closer look, slow question and retained More use the same photo; a fresh
         mode !== 'off'
             ? page
                   .waitForResponse(async (response) => {
-                      if (response.url() !== `${API}/api/screens/v2` || response.status() !== 200) return false
+                      if (!isDocumentUrl(response.url()) || response.status() !== 200) return false
                       const request = response.request()
                       const body = request.postDataBuffer()
                       if (body === null) return false

@@ -40,7 +40,7 @@ async function acceptAiConsentOnce(page: Page): Promise<void> {
 /** Consent can first appear at Read; observe dispatch before clicking so filming opt-in and ordinary users both work. */
 async function readManualWithConsent(page: Page): Promise<void> {
     const sent = page.waitForRequest(
-        (request) => request.url() === `${API}/api/manuals/parse` && request.method() === 'POST',
+        (request) => request.url() === `${API}/api/manuals/parse?stepKinds=remove` && request.method() === 'POST',
         { timeout: 60_000 },
     )
     const agree = page.getByRole('button', { name: 'Agree and continue', exact: true })
@@ -76,7 +76,8 @@ async function addTwoPagesAndRead(page: Page): Promise<Response> {
     // Reorder through the same controller; the subsequent parse receives the edited order.
     await page.getByRole('button', { name: 'Move page up', exact: true }).click()
     const parse = page.waitForResponse(
-        (response) => response.url() === `${API}/api/manuals/parse` && response.request().method() === 'POST',
+        (response) =>
+            response.url() === `${API}/api/manuals/parse?stepKinds=remove` && response.request().method() === 'POST',
     )
     await readManualWithConsent(page)
     return parse

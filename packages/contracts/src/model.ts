@@ -51,6 +51,11 @@ export const parseLanguageSchema = z
 // The measured valid 100-note/100-reference manual needs ~830 KB before multipart framing.
 export const MODEL_METADATA_MAX_BYTES = 1_048_576
 
+/** Non-parse routes have an absolute ceiling, including one screen repair; parse has its own longer budget. */
+export const MODEL_ROUTE_TIMEOUT_MAX_MS = 105_000
+/** Let the server return its bounded generation/repair outcome before the client stops the request. */
+export const MODEL_STEP_PAGE_TIMEOUT_MS = MODEL_ROUTE_TIMEOUT_MAX_MS + 5_000
+
 const requestId = z.string().trim().min(1).max(128)
 const imageMetadata = z
     .strictObject({

@@ -36,6 +36,7 @@ import { z } from 'zod'
 
 import {
     aiPolicyFromEnvironment,
+    DOCUMENT_MAX_OUTPUT_TOKENS,
     MAX_DEADLINE_MS,
     PIECES_DEADLINE_MS,
     type AiPolicy,
@@ -286,9 +287,9 @@ export interface MetaProvider {
     checkStep(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
     answerQuestion(input: AnswerQuestionInput, signal: AbortSignal): Promise<QuestionResult>
     secondOpinion?(input: CheckStepInput, signal: AbortSignal): Promise<CheckResult>
-    generateScreen?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
-    /** Version 2 whole-screen document: returns the flat wire value of a completed response (see document-wire.ts). */
-    generateDocument?(input: ScreenGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
+    generateScreen?(input: ScreenGenerationInput, signal: AbortSignal, deadlineMs?: number): Promise<ScreenGeneration>
+    /** Version 2 document. The service may supply its remaining shared budget; the absolute route ceiling still applies. */
+    generateDocument?(input: ScreenGenerationInput, signal: AbortSignal, deadlineMs?: number): Promise<ScreenGeneration>
     overlay?(input: OverlayInput, signal: AbortSignal): Promise<OverlayGeneration>
 }
 
@@ -686,6 +687,12 @@ const CARRIED_OVER_REQUIRED =
 /** Parse only: typed safety notes. Check/ask text is deliberately not touched (its request bytes are pinned). */
 const PARSE_SAFETY =
     'Parse safety: For every step set safetyNotes to an array. Copy each safety statement the manual prints for that step (a warning, caution, danger, prohibition, or any instruction about people, children, pets, hands, power, weight, stability, heat or sharp edges) as one entry {noteId, note}: note.value is the printed words, complete and unaltered, in the selected language, and note.sourceRefs cite the supplied page IDs that print it. Use a unique noteId per step. If a printed safety statement exists but cannot be read, emit it with note.state unknown and a specific reason; never drop it and never invent one. Use an empty array only when you read the step and its page and the manual prints no safety statement for it; use null when you could not assess the step.'
+/** Parse only: the removal kind and the tools a step uses. The shared step-kind line above stays byte-identical for check. */
+const PARSE_REMOVAL_AND_TOOLS =
+    'Parse removal and tools: Set kind to remove, instead of assembly, when the step takes parts off or disassembles existing parts (a removal or disassembly procedure). If a replacement procedure prints both taking an old part off and installing its replacement, extract separate ordered remove and assembly steps; never hide the removal inside an assembly or replace step. Its parts are the parts taken off; its requirements follow the non-assembly rule above; its sourceRefs cite the page that prints the procedure. Include each tool or accessory the step uses (for example a screwdriver or hex key printed or shown for that step) as a step part with its printed inventory name, cited to the inventory page, and its quantity from that step; never add a tool the step does not use.'
+/** Preserve source-labelled variants and the host actually used by a procedure; parse only. */
+const PARSE_PART_IDENTITIES =
+    'Parse inventory identities: Keep separate registry entries for distinct printed inventory labels or variants, even when they share one caption or grouped drawing. A group labelled A*2 B*2 describes two variants with two of each, not one generic four-piece part; retain each label in its name and label field. Link the variants the procedure actually uses, not an umbrella duplicate such as a generic accessory when it refers to those same labelled pieces. For assembly, replacement and removal, include the depicted host or base onto which a part is installed or from which it is removed as a step part when the supplied drawing clearly shows it being used. Use its source-grounded inventory name and printed or clearly depicted quantity; reuse its existing ID and carried quantity in later steps. Never invent an unseen host, a variant, or a quantity.'
 const PARSE_INSTRUCTIONS =
     INSTRUCTION_LINES.flatMap((line): string[] =>
         line.startsWith('Parse carried quantities')
@@ -694,7 +701,8 @@ const PARSE_INSTRUCTIONS =
               ? [PARSE_SAFETY, line]
               : [line],
     ).join(' ') +
-    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. For each part, copy any printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. The name sourceRefs must cite the inventory page that supplies these values. Also give drawingBox:[x,y,w,h] in normalized 0–1 top-left page coordinates tightly enclosing that part’s drawing on the same cited page, excluding nearby labels and table borders; use null if no drawing is visible. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
+    ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES}` +
+    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. A part box must enclose one complete physical outline, not a row of quantity copies. Exclude other items, hands, labels and borders. If an individual outline or its variant identity cannot be distinguished, use drawingBox:null and retain the step figure context; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; cite the whole page only when no tighter source region can be identified. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -951,7 +959,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             stream: streamingParse,
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
-            max_output_tokens: stagePolicy.maxOutputTokens,
+            max_output_tokens:
+                (operation === 'document' || operation === 'screen') && stage === 'step-pages'
+                    ? DOCUMENT_MAX_OUTPUT_TOKENS
+                    : stagePolicy.maxOutputTokens,
             reasoning: { effort, ...(streamingParse ? { summary: 'auto' } : {}) },
             prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
             instructions:
@@ -1475,27 +1486,31 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             return checkWithModel(input, signal, secondaryModel, true)
         },
 
-        async generateScreen(input, signal): Promise<ScreenGeneration> {
+        async generateScreen(input, signal, deadlineMs): Promise<ScreenGeneration> {
             const stagePolicy = policy.stages[input.stage]
-            return execute(stagePolicy.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
-                const { value, telemetry } = await dispatchDetailed(
-                    'screen',
-                    { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
-                    [],
-                    z.unknown(),
-                    deadline,
-                    stagePolicy.model,
-                    false,
-                    input.repairIssues === undefined
-                        ? undefined
-                        : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
-                    false,
-                    input.stage,
-                    false,
-                    generationEffort(input),
-                )
-                return { value, telemetry }
-            })
+            return execute(
+                deadlineMs ?? stagePolicy.deadlineMs,
+                signal,
+                async (deadline): Promise<ScreenGeneration> => {
+                    const { value, telemetry } = await dispatchDetailed(
+                        'screen',
+                        { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
+                        [],
+                        z.unknown(),
+                        deadline,
+                        stagePolicy.model,
+                        false,
+                        input.repairIssues === undefined
+                            ? undefined
+                            : { instructions: SCREEN_REPAIR_INSTRUCTIONS, data: { issues: input.repairIssues } },
+                        false,
+                        input.stage,
+                        false,
+                        generationEffort(input),
+                    )
+                    return { value, telemetry }
+                },
+            )
         },
 
         async generatePieces(input, signal): Promise<ScreenGeneration> {
@@ -1536,9 +1551,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             })
         },
 
-        async generateDocument(input, signal): Promise<ScreenGeneration> {
+        async generateDocument(input, signal, deadlineMs): Promise<ScreenGeneration> {
             const stagePolicy = policy.stages[input.stage]
-            return execute(stagePolicy.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
+            const timeoutMs = deadlineMs ?? stagePolicy.deadlineMs
+            return execute(timeoutMs, signal, async (deadline): Promise<ScreenGeneration> => {
                 const { value, telemetry } = await dispatchDetailed(
                     'document',
                     { requestId: input.requestId, ...input.stable, dynamic: input.dynamic },
