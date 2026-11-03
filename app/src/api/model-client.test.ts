@@ -428,16 +428,16 @@ describe('ModelApiClient multipart dispatch', () => {
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
             expect(MODEL_CHECK_TIMEOUT_MS).toBe(15_000)
-            expect(MODEL_PARSE_TIMEOUT_MS).toBe(175_000)
+            expect(MODEL_PARSE_TIMEOUT_MS).toBe(355_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
-            // The streamed parse route allows 170s; the client outlasts it so the server reports its timeout.
-            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(170_000)
+            // The streamed parse route allows 350s; the client outlasts it so the server reports its timeout.
+            expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(350_000)
         } finally {
             vi.useRealTimers()
         }
     })
 
-    it('accepts a parse reply delivered at 170 seconds', async () => {
+    it('accepts a parse reply delivered at 350 seconds', async () => {
         vi.useFakeTimers()
         let deliver: ((response: Response) => void) | undefined
         const fetch = vi.fn(
@@ -448,7 +448,7 @@ describe('ModelApiClient multipart dispatch', () => {
         )
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(170_000)
+            await vi.advanceTimersByTimeAsync(350_000)
             expect(fetch).toHaveBeenCalledTimes(1)
             deliver?.(jsonResponse(200, okParse()))
             expect(await pending).toMatchObject({ status: 'ok', mode: 'model', requestId: REQUEST_ID })
@@ -457,12 +457,12 @@ describe('ModelApiClient multipart dispatch', () => {
         }
     })
 
-    it('times out a hung parse at 175 seconds once without retry', async () => {
+    it('times out a hung parse at 355 seconds once without retry', async () => {
         vi.useFakeTimers()
         const fetch = vi.fn((): Promise<Response> => new Promise(() => undefined))
         try {
             const pending = client(fetch).parse(manualBinding, session.pages, [source], { requestId: REQUEST_ID })
-            await vi.advanceTimersByTimeAsync(174_999)
+            await vi.advanceTimersByTimeAsync(354_999)
             let settled = false
             void pending.then(() => (settled = true))
             await Promise.resolve()

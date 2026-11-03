@@ -3,17 +3,23 @@
  * budgets, not measured provider bounds: the overall budget covers one first attempt plus at most one repair, and the
  * route allows a small margin on top of it before it answers.
  */
-export const PARSE_DEFAULT_OVERALL_MS = 165_000 // Streaming parse correctness ceiling, including the existing one-shot repair.
+export const PARSE_DEFAULT_OVERALL_MS = 345_000 // Maximum first attempt plus one 40 s repair and response overhead.
 export const PARSE_FIRST_ATTEMPT_BASE_MS = 120_000 // Created within 15 s; reasoning silence is allowed, then visible-output idle is 30 s.
+export const PARSE_FIRST_ATTEMPT_PAGE_MS = 25_000
+export const PARSE_FIRST_ATTEMPT_MAX_MS = 300_000
 export const PARSE_REPAIR_MS = 40_000
 export const PARSE_MIN_REPAIR_MS = 20_000 // User-selected repair floor after the user-paid 31–35 s parse baseline.
 export const PARSE_RETURN_MARGIN_MS = 1_000
 /** Route allowance beyond the overall budget (admission, multipart, media, response); also the client's minimum margin. */
 export const PARSE_ROUTE_MARGIN_MS = 5_000
 
-/** The first attempt leaves budget for one 40 s repair and response overhead. */
-export function parseFirstAttemptTimeoutMs(_pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
-    return Math.min(PARSE_FIRST_ATTEMPT_BASE_MS, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
+/** Explicit overall overrides remain hard ceilings; short overrides may admit repair only after an early reply. */
+export function parseFirstAttemptTimeoutMs(pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
+    const pageBudgetMs = Math.min(
+        PARSE_FIRST_ATTEMPT_MAX_MS,
+        PARSE_FIRST_ATTEMPT_BASE_MS + Math.max(0, pageCount - 3) * PARSE_FIRST_ATTEMPT_PAGE_MS,
+    )
+    return Math.min(pageBudgetMs, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
 }
 
 /** The layered parse budgets actually executed for a configured overall budget. */

@@ -10,6 +10,7 @@ import {
     type ScreenNodeV2,
     type ScreenProposalV2,
     type ScreenKindV2,
+    semanticIssuesV2,
 } from '@truebuild/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -195,6 +196,48 @@ describe('mandatory omission and unsafe composition are rejected, never patched'
         expect(issues.join()).not.toContain(SAFETY_NOTE)
         const evaluated = evaluateWire(encodeWireProposal(dropFact(proposal, 'safety:n1')), guide)
         expect(evaluated.ok).toBe(false)
+    })
+
+    it('accepts a digit token only when the step states it verbatim, and rejects an invented one', () => {
+        const session = demoSession()
+        session.reviewedSteps[0]!.safetyNotes = [
+            {
+                noteId: 'n1',
+                note: {
+                    state: 'known',
+                    value: 'Fasten with M4x15 screws only.',
+                    sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                },
+            },
+        ]
+        const grounded = contextFor('guide', session)
+        const withLiteral = (text: string): ScreenProposalV2 => {
+            const proposal = editNodes(buildFallbackProposalV2(grounded.material), (node) =>
+                node.type === 'Text' && node.content.kind === 'fact' && node.content.factId === 'safety:n1'
+                    ? { ...node, content: { kind: 'literal', text } }
+                    : node,
+            )
+            expect(JSON.stringify(proposal)).toContain(`"text":${JSON.stringify(text)}`)
+            return { ...buildFallbackProposalV2(grounded.material), body: proposal.body }
+        }
+        const literalIssues = (issues: string[]): string[] =>
+            issues.filter((issue) => /:literal_(digits|not_listed)$/u.test(issue))
+        expect(literalIssues(semanticIssues(withLiteral('M4x15'), grounded))).toEqual([])
+        for (const invented of ['M6x20', 'M4x1', 'M4x15 bolts']) {
+            expect(literalIssues(semanticIssues(withLiteral(invented), grounded)).length).toBeGreaterThan(0)
+        }
+        // The client verifier keeps the strict rule: the same literal is still rejected without the server grounding.
+        expect(
+            semanticIssuesV2(withLiteral('M4x15'), grounded.material).some((issue) =>
+                issue.endsWith(':literal_digits'),
+            ),
+        ).toBe(true)
+        const evaluated = evaluateWire(encodeWireProposal(withLiteral('M4x15')), grounded)
+        expect(evaluated.ok, JSON.stringify(evaluated)).toBe(true)
+        if (!evaluated.ok) throw new Error('Grounded Guide rejected')
+        expect(semanticIssuesV2(evaluated.proposal, grounded.material)).toEqual([])
+        expect(guideQualityIssues(evaluated.proposal, grounded)).toEqual([])
+        expect(JSON.stringify(evaluated.proposal)).not.toContain('"text":"M4x15"')
     })
 
     it('rejects literal digits, an unlisted label, wrong coach copy and a foreign part', () => {
@@ -892,7 +935,8 @@ describe('Guide usability floor', () => {
         expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
-        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThan(34)
+        expect(DOCUMENT_PROMPT_VERSION).toBe(42)
+        expect(DOCUMENT_INSTRUCTIONS).toContain('use codes, sizes, counts and numbers only exactly as they appear')
         const corrected = goodWire('guide', session)
         const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
         expect(evaluated.ok).toBe(true)

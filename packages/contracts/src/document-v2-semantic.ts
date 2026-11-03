@@ -13,6 +13,7 @@ import {
     cameraIssuesV2,
     coachIssuesV2,
     earnedStateIssuesV2,
+    groundedFactV2,
     literalIssuesV2,
     BUSY_COPY_V2,
     CONFIRM_LABELS_V2,
@@ -117,7 +118,9 @@ export function semanticIssuesV2(
     const factIds = new Set(material.facts.map((fact) => fact.factId))
 
     const checkRef = (ref: TextRefV2, path: string): void => {
-        if (ref.kind === 'literal' && HAS_DIGIT.test(ref.text)) add(path, 'literal_digits')
+        if (ref.kind === 'literal' && HAS_DIGIT.test(ref.text) && !groundedFactV2(material, ref.text, options)) {
+            add(path, 'literal_digits')
+        }
         if (ref.kind === 'bound' && !bound.has(ref.key)) add(path, 'bound_unavailable')
         if (ref.kind === 'fact' && !factIds.has(ref.factId)) add(path, 'fact_unknown')
     }

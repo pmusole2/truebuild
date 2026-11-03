@@ -81,7 +81,7 @@ export const DOCUMENT_MAX_OUTPUT_TOKENS = 8_000
 /** Installed clients stop at 55s; leave room to validate and return the single attempt. */
 export const LEGACY_GUIDE_DEADLINE_MS = 45_000
 export const LEGACY_GUIDE_ROUTE_MS = 50_000
-/** Parse has its own 165 s ceiling; the route factory separately allows its return margin. */
+/** Parse has its own 345 s ceiling; the route factory separately allows its return margin. */
 const MAX_PARSE_BUDGET_MS = PARSE_DEFAULT_OVERALL_MS
 const MIN_OUTPUT_TOKENS = 16
 /** Documented context window; an output cap above it is meaningless. Not a claim about the output maximum. */
@@ -146,7 +146,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
     const wonder: StandardModel = 'muse-wonder-1.0'
     const base: Record<PolicyStage, Omit<StagePolicy, 'provisional' | 'measurementId'>> = {
         parse: {
-            effort: 'medium', // User-paid parse baseline: 31–35 s; a 120 s first attempt plus one repair fits the 165 s overall ceiling.
+            effort: 'medium', // User-paid parse baseline: 31–35 s; the page-scaled first attempt plus one repair fits the 345 s overall ceiling.
             maxOutputTokens: 48_000,
             deadlineMs: PARSE_DEFAULT_OVERALL_MS,
             model: defaults.parseModel,

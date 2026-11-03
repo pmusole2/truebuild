@@ -1,3 +1,5 @@
+import { PARSE_DEFAULT_OVERALL_MS, PARSE_ROUTE_MARGIN_MS } from './parse-budget'
+
 export class RequestStoppedError extends Error {
     readonly reason: 'timeout' | 'cancelled'
 
@@ -18,9 +20,9 @@ export function createDeadline(timeoutMs: number, parentSignal?: AbortSignal): D
     return deadlineWithin(timeoutMs, parentSignal, 105_000)
 }
 
-/** Parse alone may outlive 105 s: its 165 s budget includes one 120 s attempt and one 40 s repair. */
+/** Parse alone may outlive 105 s; its ceiling covers the maximum attempt, repair and route return margin. */
 export function createParseDeadline(timeoutMs: number, parentSignal?: AbortSignal): Deadline {
-    return deadlineWithin(timeoutMs, parentSignal, 170_000)
+    return deadlineWithin(timeoutMs, parentSignal, PARSE_DEFAULT_OVERALL_MS + PARSE_ROUTE_MARGIN_MS)
 }
 
 function deadlineWithin(timeoutMs: number, parentSignal: AbortSignal | undefined, maximumMs: number): Deadline {

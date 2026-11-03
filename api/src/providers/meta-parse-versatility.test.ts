@@ -103,6 +103,24 @@ const alternatives = [
 ]
 
 describe('parse prompt for versatile manuals', () => {
+    it.each([
+        ['singular counts', /singular named part.*quantity 1.*unknown only.*truly ambiguous/u],
+        ['manual step mapping', /Preserve every numbered manual step.*unnumbered procedure.*preparation.*power/u],
+        [
+            'conditions',
+            /Keep If, when and until conditions attached to their actions.*Write if\/when triggers as If.*until/u,
+        ],
+        ['repetition', /explicit repeat counts and for-each quantities/u],
+        ['options', /Never turn an optional method or conditional choice into an unconditional action/u],
+        ['safety', /at most one short warning.*one safetyNotes entry.*never drop a prohibition or condition/u],
+        ['single actions', /Every direction line must contain exactly one action.*never group multiple motions/u],
+    ])('states the %s fidelity rule', async (_rule, expected) => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean])
+        await provider.parseManual(input, new AbortController().signal)
+        expect(String(bodies[0]!.instructions)).toMatch(expected)
+    })
+
     it('preserves language-neutral diagram grounding while filtering printed text blocks', async () => {
         const { input, clean } = await fixture()
         const { provider, bodies } = queued([clean])
@@ -111,7 +129,7 @@ describe('parse prompt for versatile manuals', () => {
         expect(String(bodies[0]!.instructions)).toContain('This language filter applies to printed text only')
     })
 
-    it('asks for one parent step with cited alternatives and a recorded selection', async () => {
+    it('keeps source options conditional without selecting a path for the user', async () => {
         const { input, clean } = await fixture()
         const { provider, bodies } = queued([clean])
         await provider.parseManual(input, new AbortController().signal)
@@ -120,10 +138,19 @@ describe('parse prompt for versatile manuals', () => {
         expect(instructions).toMatch(/ONE parent step/u)
         expect(instructions).toContain('alternatives')
         expect(instructions).toContain('selectedAlternativeId')
-        expect(instructions).toMatch(/explicit default/u)
-        expect(instructions).toMatch(/first alternative as printed/u)
-        expect(instructions).toMatch(/only the selected path/u)
-        expect(instructions).toMatch(/never in the required parts or the part registry/u)
+        expect(instructions).not.toContain('choose the first alternative as printed')
+        expect(instructions).toMatch(
+            /takes precedence over earlier quantity, action grouping, option selection and safety/u,
+        )
+        expect(instructions).toMatch(/without a supplied user choice.*conditional action beginning If you have/u)
+        expect(instructions).toContain('alternatives:null and selectedAlternativeId:null rather than selecting a path')
+        expect(instructions).toMatch(/never add an unchosen option to required parts/u)
+        expect(instructions).toContain(
+            'Record each optional or mutually exclusive method in the step alternatives array with its cited description',
+        )
+        expect(instructions).toContain(
+            'selectedAlternativeId only to a method the manual explicitly marks as the default',
+        )
     })
 
     it('forbids invented quantities and names the cited user-supplied and not-specified basis', async () => {
@@ -633,7 +660,7 @@ describe('parse language', () => {
     )
 })
 
-describe('fixed first parse attempt and page limit', () => {
+describe('page-scaled first parse attempt and page limit', () => {
     it.each([
         [49_000, 2],
         [49_001, 1],
@@ -672,6 +699,32 @@ describe('fixed first parse attempt and page limit', () => {
         }
     })
 
+    it('keeps the one-shot repair available after an eight-page first attempt uses its full allowance', async () => {
+        const { input, clean } = await fixture(8)
+        const unresolved = withStep(clean, { orientation: UNKNOWN })
+        let monotonic = 100
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => monotonic)
+        const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> =>
+            timedMetaResponse(
+                envelope(fetchImpl.mock.calls.length === 1 ? unresolved : clean),
+                fetchImpl.mock.calls.length === 1 ? 244_999 : 39_999,
+                (ms): void => {
+                    monotonic += ms
+                },
+            ),
+        )
+        try {
+            const result = await createMetaProvider({ apiKey: '<synthetic>', fetchImpl }).parseManual(
+                input,
+                new AbortController().signal,
+            )
+            expect(result.steps[0]!.orientation).toEqual(clean.steps[0]!.orientation)
+            expect(fetchImpl).toHaveBeenCalledTimes(2)
+        } finally {
+            clock.mockRestore()
+        }
+    })
+
     async function timed(pageCount: number, elapsedMs: number): Promise<{ calls: number; outcome: unknown }> {
         const { input, clean } = await fixture(pageCount)
         let monotonic = 100
@@ -694,15 +747,14 @@ describe('fixed first parse attempt and page limit', () => {
     }
 
     it('times out steady output beyond the overall ceiling even for seven pages', async () => {
-        expect(await timed(7, 120_001)).toEqual({ calls: 1, outcome: 'timeout' })
+        expect(await timed(7, 220_001)).toEqual({ calls: 1, outcome: 'timeout' })
     })
 
     it.each([
         [1, 120_000],
-        [4, 120_000],
-        [5, 120_000],
-        [7, 120_000],
-        [8, 120_000],
+        [3, 120_000],
+        [6, 195_000],
+        [8, 245_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
@@ -710,15 +762,16 @@ describe('fixed first parse attempt and page limit', () => {
 
     it.each([
         [1, 120_000],
-        [4, 120_000],
-        [5, 120_000],
-        [6, 120_000],
-        [7, 120_000],
-        [8, 120_000],
-        [9, 120_000],
-        [20, 120_000],
-    ])('computes %i pages as a %i ms first attempt and never exceeds the overall return margin', (pages, expected) => {
+        [3, 120_000],
+        [6, 195_000],
+        [12, 300_000],
+        [20, 300_000],
+    ])('computes %i pages as a %i ms first attempt', (pages, expected) => {
         expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
+    })
+
+    it('honors an explicit total budget rather than extending it for more pages', () => {
+        expect(parseFirstAttemptTimeoutMs(12, 70_000)).toBe(69_000)
     })
 
     it('accepts exactly the shared page maximum', async () => {

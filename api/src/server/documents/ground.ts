@@ -1,5 +1,9 @@
 import {
     assembleDocumentV2,
+    allowedLiteralsV2,
+    groundedFactV2,
+    nodeTextRefsV2,
+    visitVariantNodesV2,
     componentPathsV2,
     screenDocumentV2Schema,
     screenProposalV2Schema,
@@ -7,6 +11,7 @@ import {
     withShellStatesV2,
     type ScreenProposalV2,
     type ScreenVariantV2,
+    type TextRefV2,
 } from '@truebuild/contracts'
 
 import { decodeWireProposal, wireIssueCodes } from '../../providers/document-wire'
@@ -15,12 +20,13 @@ import { sha256, type DocumentContext } from './context'
 /**
  * The strict gate every model document passes, after any separately enabled structural normalization. This gate only
  * REJECTS: it returns machine issue codes (a component path and a static rule, never rejected text), and the caller
- * repairs once or replaces the whole document with the complete deterministic one. It never edits authored content.
+ * repairs once or replaces the whole document with the complete deterministic one. Grounded authored text is bound to
+ * its complete witnessed fact before publication, preserving the installed app's strict literal contract.
  */
 export type Evaluation = { ok: true; proposal: ScreenProposalV2 } | { ok: false; issues: string[] }
 
 export function semanticIssues(proposal: ScreenProposalV2, context: DocumentContext): string[] {
-    return semanticIssuesV2(proposal, context.material)
+    return semanticIssuesV2(proposal, context.material, { groundedTokens: true })
 }
 
 /**
@@ -66,8 +72,29 @@ export function checkProposal(proposal: ScreenProposalV2, context: DocumentConte
  */
 function evaluateReady(ready: ScreenVariantV2, context: DocumentContext): Evaluation {
     const proposal = withShellStatesV2(context.material, ready)
-    const issues = checkProposal(proposal, context)
-    return issues.length === 0 ? { ok: true, proposal } : { ok: false, issues }
+    const issues = semanticIssues(proposal, context)
+    if (issues.length > 0) return { ok: false, issues }
+    const canonical = structuredClone(proposal)
+    const copy = (text: string): string =>
+        text
+            .normalize('NFC')
+            .toLowerCase()
+            .replace(/\s+/gu, ' ')
+            .trim()
+            .replace(/[.!…]+$/u, '')
+    const allowed = new Set(allowedLiteralsV2(context.material, 'ready').map(copy))
+    const bind = (ref: TextRefV2 | null): void => {
+        if (ref?.kind !== 'literal' || allowed.has(copy(ref.text))) return
+        const fact = groundedFactV2(context.material, ref.text, { groundedTokens: true })
+        if (fact === undefined) return
+        Reflect.deleteProperty(ref, 'text')
+        Object.assign(ref, { kind: 'fact', factId: fact.factId })
+    }
+    bind(canonical.header.title)
+    bind(canonical.header.subtitle)
+    visitVariantNodesV2(canonical, '', ({ node }) => nodeTextRefsV2(node).forEach(bind))
+    const strict = [...contractIssues(canonical, context), ...semanticIssuesV2(canonical, context.material)]
+    return strict.length === 0 ? { ok: true, proposal: canonical } : { ok: false, issues: strict }
 }
 
 /** A raw provider value (the flat wire table of a ready screen): decode, then the full gate. */
