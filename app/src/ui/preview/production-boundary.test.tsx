@@ -19,6 +19,14 @@ function sources(directory: string): string[] {
 }
 
 describe('production wiring', () => {
+    it('keeps retired wait copy out of production source, so every wait says what is running', () => {
+        const retired = ['Wait for the current request to finish.', 'Your builds are opening.']
+        const offenders = [...sources(SRC), ...sources(APP)]
+            .filter((file) => retired.some((copy) => readFileSync(file, 'utf8').includes(copy)))
+            .map((file) => relative(SRC, file))
+        expect(offenders).toEqual([])
+    })
+
     it('is not imported from the preview gallery by any production module', () => {
         const offenders = [...sources(SRC), ...sources(APP)]
             .filter(

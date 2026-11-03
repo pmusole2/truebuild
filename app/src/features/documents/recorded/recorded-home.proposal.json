@@ -205,7 +205,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Opening your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -227,17 +227,6 @@
                                 "type": "Progress",
                                 "binding": "build",
                                 "label": null
-                            },
-                            {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "One moment, please."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
                             },
                             {
                                 "type": "Card",
@@ -369,7 +358,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",
@@ -384,7 +373,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Opening your manuals"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -402,17 +391,6 @@
                         "gap": "md",
                         "align": "stretch",
                         "children": [
-                            {
-                                "type": "Text",
-                                "content": {
-                                    "kind": "literal",
-                                    "text": "One moment, please."
-                                },
-                                "role": "body",
-                                "emphasis": "normal",
-                                "tone": "info",
-                                "align": "start"
-                            },
                             {
                                 "type": "Progress",
                                 "binding": "build",
@@ -548,7 +526,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Opening…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",

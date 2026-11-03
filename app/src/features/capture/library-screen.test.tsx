@@ -262,12 +262,12 @@ describe('home title state', () => {
 
 describe('unavailable states', () => {
     it.each([
-        ['home-loading', {}, 'Your builds are opening.'],
-        ['home-empty', { pending: 'Reading your pages…' }, 'Wait for the current request to finish.'],
+        ['home-loading', {}, 'Opening…'],
+        ['home-empty', { pending: 'Reading your pages…' }, 'Reading your manual. This can take a minute.'],
     ] as const)('%s disables Add manual, says why and never calls a controller', async (id, patch, hint) => {
         const { createManual, open, restore } = await setup(id, patch)
         expect(screen.getByRole('button', { name: 'Add manual' }).props.accessibilityState.disabled).toBe(true)
-        expect(screen.getByText(hint)).toBeTruthy()
+        expect(within(screen.getByTestId('bottom-bar')).getByText(hint)).toBeTruthy()
         await fireEvent.press(screen.getByRole('button', { name: 'Add manual' }))
         expect(createManual).not.toHaveBeenCalled()
         expect(open).not.toHaveBeenCalled()
@@ -276,7 +276,7 @@ describe('unavailable states', () => {
 
     it('labels the restoring state in place', async () => {
         await setup('home-loading')
-        expect(screen.getByLabelText('Getting your builds ready.')).toBeTruthy()
+        expect(screen.getByLabelText('Opening your manuals')).toBeTruthy()
         expect(screen.queryByText('Build furniture with step-by-step help.')).toBeNull()
     })
 
@@ -314,7 +314,7 @@ describe('unavailable states', () => {
         const retry = screen.getByRole('button', { name: 'Try again' })
         expect(retry.props.accessibilityState.disabled).toBe(true)
         expect(screen.getByText('We could not open your saved photos. They are still on this device.')).toBeTruthy()
-        expect(screen.getByText('Please wait')).toBeTruthy()
+        expect(screen.getByText('Asking…')).toBeTruthy()
         await fireEvent.press(retry)
         expect(restore).not.toHaveBeenCalled()
     })

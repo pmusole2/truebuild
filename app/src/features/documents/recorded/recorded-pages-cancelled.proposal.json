@@ -142,7 +142,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Getting your pages ready"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -176,7 +176,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Preparing your manual pages to show."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",
@@ -190,7 +190,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing pages…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",
@@ -205,7 +205,7 @@
             "header": {
                 "title": {
                     "kind": "literal",
-                    "text": "Working on it"
+                    "text": "Getting your pages ready"
                 },
                 "subtitle": {
                     "kind": "literal",
@@ -234,7 +234,7 @@
                                 "type": "Text",
                                 "content": {
                                     "kind": "literal",
-                                    "text": "One moment, please."
+                                    "text": "Preparing your manual pages to show."
                                 },
                                 "role": "body",
                                 "emphasis": "normal",
@@ -253,7 +253,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing pages…",
                     "icon": null,
                     "intent": {
                         "intent": "confirm",

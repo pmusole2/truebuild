@@ -477,7 +477,7 @@ describe('only safe, nonfactual variants are carried, and only where they fit th
         align: 'start',
     })
     const cases: [string, ScreenNodeV2, boolean][] = [
-        ['a literal text', text(lit('Working on it')), true],
+        ['a literal text', text(lit('Preparing this screen')), true],
         ['a bound text', text({ kind: 'bound', key: 'pages-summary' }), true],
         ['a fact text', text({ kind: 'fact', factId: 'title' }), false],
         ['a citation', { type: 'Citation', sources: [0], label: null, display: 'chip' }, false],
@@ -543,7 +543,7 @@ describe('only safe, nonfactual variants are carried, and only where they fit th
     })
 
     it('does not carry a variant that is a fact in its header', () => {
-        const variant = variantWith(text(lit('Working on it')))
+        const variant = variantWith(text(lit('Preparing this screen')))
         expect(
             isNonfactualVariantV2({ ...variant, header: { ...variant.header, title: { kind: 'fact', factId: 'x' } } }),
         ).toBe(false)
@@ -573,7 +573,7 @@ describe('only safe, nonfactual variants are carried, and only where they fit th
     it('fails closed on a kind-specific template, and carries a generic one into any kind', () => {
         const home = inputsOf('home')
         const add = inputsOf('add', pagesUi(true))
-        // A Home pending screen keeps the title "Your manuals", which is not wording of the add screen.
+        // Home loading copy belongs to Home, not the Add screen.
         const specific = rebindGeneratedStatesV2(add, fallbackFor(add), [authored(home)], deps)
         expect(specific.carried).not.toContain('pending')
         // A generic template (its title is the state’s own listed heading) is valid wherever that heading is listed.
@@ -583,7 +583,10 @@ describe('only safe, nonfactual variants are carried, and only where they fit th
                 ...proposal,
                 states: {
                     ...proposal.states,
-                    pending: { ...pending, header: { ...pending.header, title: lit(STATE_COPY_V2.pending.heading) } },
+                    pending: {
+                        ...variantWith(text(lit(STATE_COPY_V2.pending.heading))),
+                        header: { ...pending.header, title: lit(STATE_COPY_V2.pending.heading) },
+                    },
                 },
             }
         })

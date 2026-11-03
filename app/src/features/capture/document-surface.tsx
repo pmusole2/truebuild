@@ -5,6 +5,8 @@ import { useIsFocused, usePathname } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
     baseKindV2,
+    manualOpeningTitleV2,
+    waitCopyV2,
     visitVariantNodesV2,
     type AppIntent,
     type ScreenKindV2,
@@ -26,7 +28,7 @@ import { useNavigationPreparation, useWorkflowActions } from './native-routes'
 import { rereadPrompt } from './reading-language'
 import { useMoreState, type MoreMode } from './screen-header'
 import type { QuickProgress } from '../screens/quick-progress'
-import { documentInputs } from './document-inputs'
+import { activityOf, documentInputs } from './document-inputs'
 export { documentInputs } from './document-inputs'
 import { useWorkflow, type WorkflowValue } from './workflow-context'
 import { isProblemNotice, plainNotice } from './plain-copy'
@@ -55,6 +57,7 @@ export function DocumentSurface({
     requestQuestionComposer,
     runContextAction,
     testID,
+    routeWait,
 }: {
     kind: ScreenKindV2
     quick?: QuickProgress
@@ -77,6 +80,7 @@ export function DocumentSurface({
     requestQuestionComposer?: () => void
     runContextAction?: (run: () => void) => void
     testID?: string
+    routeWait?: { readonly kind: ScreenKindV2; readonly manualTitle?: string | null }
 }): ReactElement {
     const actualWorkflow = useWorkflow()
     const routeFocused = useIsFocused()
@@ -119,7 +123,26 @@ export function DocumentSurface({
         !actualWorkflow.state.storageReadOnly &&
         !actualWorkflow.state.loading &&
         savingKey === previous.stableKey
-    const preparing = navigationPreparing || savingPreparing
+    const preparing = navigationPreparing || savingPreparing || routeWait !== undefined
+    const preparationKind = navigationPreparing ? preparation.kind : (routeWait?.kind ?? kind)
+    const preparationSession = navigationPreparing
+        ? actualWorkflow.state.entries.find((candidate) => candidate.session.manualId === preparation.manualId)?.session
+        : undefined
+    const preparationTitle =
+        preparationSession === undefined ? (routeWait?.manualTitle ?? null) : manualOpeningTitleV2(preparationSession)
+    const targetStepNumber =
+        navigationPreparing &&
+        kind === 'guide' &&
+        preparation.kind === 'guide' &&
+        actualWorkflow.entry?.session.manualId === preparation.manualId
+            ? actualWorkflow.entry.stepIndex + 1
+            : undefined
+    const waitCopy = waitCopyV2(
+        preparationKind,
+        navigationPreparing || routeWait !== undefined ? null : activityOf(actualWorkflow.state.pending),
+        navigationPreparing || routeWait !== undefined ? preparationTitle : undefined,
+        { targetStepNumber },
+    )
     const questionInputs =
         holdQuestion && kind === 'questions' ? documentInputs(kind, actualWorkflow, quick, contextualMore) : null
     const questionHeld =
@@ -346,7 +369,7 @@ export function DocumentSurface({
         if (preparing)
             return intent.intent === 'navigate' && intent.target === 'back'
                 ? { enabled: true, reason: null, run: nav.back }
-                : { enabled: false, reason: null, run: (): void => {} }
+                : { enabled: false, reason: waitCopy.action, run: (): void => {} }
         if (effectiveKind === 'more' && intent.intent === 'ask' && requestQuestionComposer !== undefined) {
             const resolved = resolveIntent(intent, {
                 kind: 'more',
@@ -365,7 +388,7 @@ export function DocumentSurface({
         if (intent.intent === 'navigate' && intent.target === 'back') {
             return {
                 enabled: !state.loading,
-                reason: state.loading ? 'Your builds are opening.' : null,
+                reason: state.loading ? waitCopyV2('home').action : null,
                 run: (): void => {
                     if (state.loading) return
                     if (effectiveKind === 'camera') controller.cancel()
@@ -382,7 +405,13 @@ export function DocumentSurface({
             const enabled = !busy && !state.storageReadOnly && entry?.session.reviewStatus === 'reviewed'
             return {
                 enabled,
-                reason: enabled ? null : 'Wait for the current request to finish.',
+                reason: enabled
+                    ? null
+                    : busy
+                      ? waitCopyV2('questions', activityOf(state.pending)).action
+                      : state.storageReadOnly
+                        ? 'Saving is paused until your builds open again.'
+                        : 'Confirm the manual facts first.',
                 run: (): void => {
                     if (enabled) requestQuestionPhoto()
                 },
@@ -448,7 +477,7 @@ export function DocumentSurface({
         if (intent.intent === 'retry' && state.storageReadOnly)
             return {
                 enabled: !state.loading,
-                reason: state.loading ? 'Your builds are opening.' : null,
+                reason: state.loading ? waitCopyV2('home').action : null,
                 run: (): void => {
                     if (!state.loading) void controller.restore()
                 },
@@ -476,6 +505,7 @@ export function DocumentSurface({
         if (effectiveKind === 'questions' && intent.intent === 'ask') {
             const ready =
                 !busy &&
+                !state.storageReadOnly &&
                 state.capture?.reusable === true &&
                 state.target !== null &&
                 state.question.trim() !== '' &&
@@ -485,8 +515,12 @@ export function DocumentSurface({
                 reason: ready
                     ? null
                     : busy
-                      ? 'Wait for the current request to finish.'
-                      : 'Choose a part and write your question.',
+                      ? waitCopyV2('answer', activityOf(state.pending)).action
+                      : state.storageReadOnly
+                        ? 'Saving is paused until your builds open again.'
+                        : entry?.session.reviewStatus !== 'reviewed'
+                          ? 'Confirm the manual facts first.'
+                          : 'Choose a part and write your question.',
                 run: (): void => {
                     if (ready) void controller.ask()
                 },
@@ -611,6 +645,9 @@ export function DocumentSurface({
                     : undefined,
         workInProgress: busy || more.open || judgeOpen,
         preparingDocument: preparing,
+        waitCopy,
+        busyActivity: inputs.uiState?.busy?.activity ?? null,
+        preparationLabel: waitCopy.action,
         onVariantShown: (document, activeState): void => {
             if (kind === 'questions' && !holdQuestion && document === queried.document)
                 shownQuestion.current = {

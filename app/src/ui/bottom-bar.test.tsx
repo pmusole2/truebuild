@@ -42,10 +42,10 @@ describe('FixedBottomBar', () => {
         await render(
             <FixedBottomBar
                 primary={{ label: 'Add manual', onPress: (): void => undefined, disabled: true }}
-                reason="Your builds are opening."
+                reason="Opening your manuals"
             />,
         )
-        expect(screen.getByText('Your builds are opening.')).toBeTruthy()
+        expect(screen.getByText('Opening your manuals')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Add manual' }).props.accessibilityState.disabled).toBe(true)
     })
 

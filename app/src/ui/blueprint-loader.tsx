@@ -1,3 +1,4 @@
+import { STATE_COPY_V2 } from '@truebuild/contracts'
 import { createContext, useContext, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { AccessibilityInfo, StyleSheet, View } from 'react-native'
 import Animated, {
@@ -17,7 +18,7 @@ import { radius, space, type Colors } from '../theme/tokens'
 import { useFeedback } from './feedback'
 import { Body, Caption } from './text'
 
-export type BlueprintPhase = 'reading' | 'guide' | 'piece' | 'check'
+export type BlueprintPhase = 'reading' | 'guide' | 'piece' | 'check' | 'screen'
 
 const AnimatedPath = Animated.createAnimatedComponent(Path)
 const AnimatedLine = Animated.createAnimatedComponent(Line)
@@ -49,6 +50,13 @@ const PHASES: Readonly<
     },
     // Shortest check: 8s (app/src/api/client.ts); model check's 15s is also below the 20s threshold.
     check: { label: 'Checking your build', slowText: null, slowAfterMs: 20_000, timeoutMs: 8_000 },
+    // A generic wait of any screen: the app prepares a validated screen (model or local fallback), so no duration is claimed.
+    screen: {
+        label: STATE_COPY_V2.pending.heading,
+        slowText: null,
+        slowAfterMs: 20_000,
+        timeoutMs: 92_000,
+    },
 }
 
 function Trace({
@@ -256,6 +264,51 @@ function BlueprintScene({
                         />
                         <Circle cx={128} cy={86} r={9} stroke={accent} strokeWidth={1.5} fill="none" />
                     </>
+                ) : phase === 'screen' ? (
+                    <>
+                        {/* Pages fan out, then flow into one stack: the screen being assembled, not a step count. */}
+                        <Trace
+                            length={250}
+                            d="M50 56H112V132H50Z"
+                            timeline={timeline}
+                            color={inkMuted}
+                            faint
+                            to={0.3}
+                        />
+                        <Trace
+                            length={250}
+                            d="M60 46H122V122H60Z"
+                            timeline={timeline}
+                            color={inkMuted}
+                            faint
+                            from={0.1}
+                            to={0.4}
+                        />
+                        <Trace
+                            length={250}
+                            d="M70 36H132V112H70Z"
+                            timeline={timeline}
+                            color={inkMuted}
+                            from={0.2}
+                            to={0.5}
+                        />
+                        <Trace
+                            length={80}
+                            d="M146 84H196 M188 78L196 84L188 90"
+                            timeline={timeline}
+                            color={accent}
+                            from={0.45}
+                            to={0.65}
+                        />
+                        <Trace
+                            length={460}
+                            d="M214 60H266V140H214Z M220 52H272V132 M226 44H278V124"
+                            timeline={timeline}
+                            color={accent}
+                            from={0.6}
+                            to={0.95}
+                        />
+                    </>
                 ) : (
                     <>
                         <Rect x={32} y={36} width={105} height={108} rx={4} fill={colors.surfaceRaised} />
@@ -326,6 +379,7 @@ function BlueprintScene({
 export function BlueprintLoader({
     phase,
     label,
+    announcementLabel,
     imageUri,
     stepNumber,
     pageCount,
@@ -334,10 +388,12 @@ export function BlueprintLoader({
     testID,
     nativeID,
     compact = false,
+    heading = false,
     height,
 }: {
     readonly phase: BlueprintPhase
     readonly label?: string
+    readonly announcementLabel?: string
     readonly imageUri?: string
     readonly stepNumber?: number
     readonly pageCount?: number
@@ -346,6 +402,7 @@ export function BlueprintLoader({
     readonly testID?: string
     readonly nativeID?: string
     readonly compact?: boolean
+    readonly heading?: boolean
     readonly height?: number
 }): ReactElement {
     const { colors } = useTheme()
@@ -358,14 +415,15 @@ export function BlueprintLoader({
     const config = PHASES[phase]
     const slow = effectiveRunning && slowPhase === phase
     const count = Number.isSafeInteger(pageCount) && (pageCount ?? 0) > 0 ? pageCount : undefined
+    // An explicit empty label draws the scene without any sentence; an omitted label keeps the phase's own sentence.
     const sentence =
-        label || (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : config.label)
+        label ?? (phase === 'reading' && count !== undefined ? `Reading your ${count}-page manual` : config.label)
     useEffect(() => {
         if (announce && effectiveRunning && !announced.current) {
             announced.current = true
-            AccessibilityInfo.announceForAccessibility(sentence)
+            AccessibilityInfo.announceForAccessibility(announcementLabel ?? sentence)
         }
-    }, [sentence, effectiveRunning, announce])
+    }, [sentence, announcementLabel, effectiveRunning, announce])
     useEffect(() => {
         setSlowPhase(null)
         if (!effectiveRunning || config.slowText === null || config.slowAfterMs >= config.timeoutMs) return undefined
@@ -409,8 +467,13 @@ export function BlueprintLoader({
                 stepNumber={stepNumber}
                 fit={height !== undefined}
             />
-            <View style={styles.copy}>
-                <Body>{sentence}</Body>
+            <View
+                style={styles.copy}
+                accessible={heading && sentence !== ''}
+                accessibilityRole={heading && sentence !== '' ? 'header' : undefined}
+                accessibilityLabel={heading && sentence !== '' ? sentence : undefined}
+            >
+                {sentence === '' ? null : <Body>{sentence}</Body>}
                 {config.slowText === null ? null : (
                     <View
                         style={[styles.slowLine, { opacity: slow ? 1 : 0 }]}

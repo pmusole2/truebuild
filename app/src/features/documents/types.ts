@@ -2,11 +2,13 @@ import type { ReactNode } from 'react'
 import type { PieceGridItem } from '../pieces/piece-viewer'
 import type {
     AppIntent,
+    BusyActivityV2,
     ManualSession,
     PieceSpec,
     ScreenDocumentV2,
     TextRefV2,
     VariantState,
+    WaitCopyV2,
 } from '@truebuild/contracts'
 import type { CaptureView, SegmentMark } from '../capture/controller'
 import type { ResolvedIntent } from '../screens/intents'
@@ -41,6 +43,11 @@ export type FrameBindings = {
     readonly workInProgress?: boolean
     /** Only navigation/document preparation; the existing authored action presents its intrinsic busy state. */
     readonly preparingDocument?: boolean
+    /** Shared contract-owned activity words for a transient native wait. */
+    readonly waitCopy?: WaitCopyV2
+    /** The actual request context that earned this busy variant, never inferred from model copy. */
+    readonly busyActivity?: BusyActivityV2 | null
+    readonly preparationLabel?: string
     /** The committed variant after the real held-photo gate; a pending photo never witnesses ready. */
     readonly onVariantShown?: (document: ScreenDocumentV2, state: 'ready' | VariantState) => void
     /** Live resolution of v2 bound text and toggles, from controller state. Absent means the control shows its label only. */

@@ -126,7 +126,7 @@ describe('what the pending check document is bound to and owes', () => {
 
     it('lists no claim wording for a check that has not returned, and the checking words only with their witness', () => {
         const ready = allowedLiteralsV2(documentMaterialV2(pending()), 'ready')
-        expect(ready).toEqual(expect.arrayContaining([BUSY_COPY_V2.checking.heading, BUSY_COPY_V2.checking.detail]))
+        expect(ready).toEqual(expect.arrayContaining([BUSY_COPY_V2.checking.heading]))
         for (const claim of ['Looks right', 'Not quite right', 'Cannot tell yet']) expect(ready).not.toContain(claim)
         // Without the checking witness (an idle app holding a photo) nothing may say a check is running.
         const idle = allowedLiteralsV2(documentMaterialV2(pending({ uiState: { capture: CAPTURE } })), 'ready')

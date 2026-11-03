@@ -200,7 +200,7 @@ describe('deterministic complete documents', () => {
             expect(variant.bar.primary.type).toBe('PrimaryAction')
             expect(variant.header.title).toBeDefined()
         }
-        expect(document.states.busy!.bar.primary.label).toBe('Working…')
+        expect(document.states.busy!.bar.primary.label).toBe('Preparing step…')
     })
 
     it('a reversed verdict document states the verdict through a VerdictCard and offers a retake', () => {

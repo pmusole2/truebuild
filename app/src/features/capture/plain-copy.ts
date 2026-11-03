@@ -1,4 +1,4 @@
-import type { CheckResult, ManualStep } from '@truebuild/contracts'
+import { waitCopyV2, type CheckResult, type ManualStep, type ScreenKindV2 } from '@truebuild/contracts'
 import { MEDIA_MESSAGES } from '../../media/media-errors'
 import { factText } from './fact-text'
 import type { WorkflowState } from './controller'
@@ -95,7 +95,7 @@ export function leadSentences(text: string, maxWords: number, count = 2): string
 }
 
 /** What a request in flight is doing, in words a person would use. Null when nothing is in flight. */
-export function plainPending(pending: string | null): string | null {
+export function plainPending(pending: string | null, kind: ScreenKindV2 = 'guide'): string | null {
     if (pending === null) {
         return null
     }
@@ -104,29 +104,36 @@ export function plainPending(pending: string | null): string | null {
         return 'Laying out steps…'
     }
     if (pending.startsWith('Reading')) {
-        return 'Reading your manual. This can take a minute.'
+        const copy = waitCopyV2('reading', 'reading')
+        return `${copy.heading}. ${copy.detail}`
     }
     if (pending.startsWith('Checking') || pending.startsWith('Freezing')) {
-        return 'Checking your photo…'
+        return waitCopyV2('guide', 'checking').heading
     }
     if (pending.startsWith('Second opinion')) {
-        return 'Taking a closer look…'
+        return waitCopyV2('guide', 'second-opinion').heading
     }
     if (pending.startsWith('Still thinking')) {
-        return 'Still thinking…'
+        return waitCopyV2('guide', 'question-waiting').heading
     }
     if (pending.startsWith('Asking')) {
-        return 'Asking…'
+        return waitCopyV2('guide', 'asking').heading
     }
-    if (pending.startsWith('Saving') || pending.startsWith('Preparing') || pending.startsWith('Choosing')) {
-        return 'Saving…'
+    if (pending.startsWith('Saving')) {
+        return waitCopyV2('guide', 'saving').heading
     }
-    return 'Working…'
+    if (pending.startsWith('Preparing')) {
+        return waitCopyV2('add', null, undefined, { phase: 'preparing-photos' }).heading
+    }
+    if (pending.startsWith('Choosing')) {
+        return waitCopyV2('add', null, undefined, { phase: 'choosing-photos' }).heading
+    }
+    return waitCopyV2(kind).heading
 }
 
 const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
     [/^Cancelled\./u, 'Stopped, so nothing more will be shown.'],
-    [/^Finishing the local save/u, 'Still saving. Please wait a moment.'],
+    [/^Finishing the local save/u, waitCopyV2('guide', 'saving').heading],
     [
         /^Local library images could not be read|^Local images could not be read/u,
         'We could not open your saved photos. They are still on this device. Try again.',
@@ -257,7 +264,7 @@ export function guideSentence(args: {
         return { kind: 'cannot', text: `We can't tell from this photo. ${reason}`.trim() }
     }
     if (state.pending !== null) {
-        return { kind: 'checking', text: plainPending(state.pending) ?? 'Working…' }
+        return { kind: 'checking', text: plainPending(state.pending) ?? waitCopyV2('guide').heading }
     }
     if (blocked) {
         return { kind: 'blocked', text: 'Answer the quick questions first so we can check your work.' }

@@ -4,7 +4,7 @@ import type { ReactElement } from 'react'
 import { reloadAppAsync } from 'expo'
 import { StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { screenDocumentV2Schema } from '@truebuild/contracts'
+import { APP_RELOAD_WAIT_COPY_V2, screenDocumentV2Schema } from '@truebuild/contracts'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
 import { DocumentRoot } from '../documents/document-renderer'
@@ -91,10 +91,11 @@ it('reloads only on an explicit Retry, prevents an overlapping attempt, and reco
     expect(reload).not.toHaveBeenCalled()
     await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
     expect(reload).toHaveBeenCalledTimes(1)
-    const working = screen.getByRole('button', { name: 'Working…' })
-    expect(working).toBeDisabled()
-    await fireEvent.press(working)
+    const retry = screen.getByRole('button', { name: 'Try again' })
+    expect(retry).toBeDisabled()
+    await fireEvent.press(retry)
     expect(reload).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText(APP_RELOAD_WAIT_COPY_V2.heading)).toBeTruthy()
 
     await act(() => reject(new Error('private initialization diagnostic must never be shown')))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled())

@@ -5,12 +5,12 @@
     "authoring": {
         "model": "Test fixture",
         "effort": "ultra",
-        "recordedAt": "2026-10-31T01:37:19.761Z",
+        "recordedAt": "2026-11-03T12:58:30.000Z",
         "fixtureId": "recorded-more-global-sol-v1"
     },
-    "recordedAt": "2026-10-31T01:37:19.761Z",
+    "recordedAt": "2026-11-03T12:58:30.000Z",
     "promptVersion": 0,
     "repaired": false,
-    "rawJsonSha256": "a9278067983ba8151af63f0fe93ee0e57d0b3bc1c360bc33fb3a19b20a321e33",
-    "proposalSha256": "d167c03a199e66d3b0d82dff2e31819051608b9778e9b1a8aca9dee26f33a865"
+    "rawJsonSha256": "5d84ba238616d1abb9e41a1f8dabfa5458173ff118e4501fb7c978f98e79548f",
+    "proposalSha256": "43d28c14f58e808936a3b0efadb7b83afaacf8e3249869f3e6339a036fbb5aff"
 }

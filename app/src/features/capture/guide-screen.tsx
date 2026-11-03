@@ -1,3 +1,4 @@
+import { waitCopyV2 } from '@truebuild/contracts'
 import { useEffect, useMemo, useRef, type ReactElement, type ReactNode } from 'react'
 import {
     I18nManager,
@@ -650,7 +651,7 @@ function GuideMore({
         <Stack gap="lg">
             {state.pending === null ? null : (
                 <Card tone="raised">
-                    <Body>{plainPending(state.pending) ?? 'Working…'}</Body>
+                    <Body>{plainPending(state.pending) ?? waitCopyV2('guide').heading}</Body>
                     <AppButton label="Cancel" variant="quiet" onPress={controller.cancel} />
                 </Card>
             )}

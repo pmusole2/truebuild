@@ -706,6 +706,7 @@ export type ScreenProgressV2 = z.infer<typeof screenProgressV2Schema>
 export const screensV2ResultSchema = z.discriminatedUnion('status', [
     z.strictObject({
         status: z.literal('ok'),
+        waitCopy: z.literal(2).optional(),
         requestId,
         mode: z.enum(['fixture', 'model']),
         value: z.strictObject({

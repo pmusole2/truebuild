@@ -13,6 +13,7 @@
  * - It owns no identity, provenance or tables: `assembleDocumentV2` (document-v2-assemble.ts) adds those for every
  *   producer, and `verifyDocumentAgainstInputsV2` (document-v2-verify.ts) lets a request-bound client check any of them.
  */
+import legacyWaitCopy from './fixtures/prompt39/wait-copy'
 import {
     DOCUMENT_V2_LIMITS,
     VARIANT_STATES,
@@ -53,6 +54,7 @@ import {
     NO_OVERVIEW_FIGURE_COPY_V2,
     NO_STEP_FIGURE_COPY_V2,
     STATE_COPY_V2,
+    waitCopyV2,
 } from './document-v2-copy'
 import {
     coachTargetsForV2,
@@ -704,7 +706,9 @@ function bodyOf(material: DocumentMaterialV2): Node[] {
                 return [
                     ...capturedImage(material),
                     text(lit(BUSY_COPY_V2.checking.heading), { role: 'heading' }),
-                    text(lit(BUSY_COPY_V2.checking.detail), { tone: 'info' }),
+                    ...(BUSY_COPY_V2.checking.detail === ''
+                        ? []
+                        : [text(lit(BUSY_COPY_V2.checking.detail), { tone: 'info' })]),
                     ...factNodes(material, true),
                 ]
             }
@@ -904,6 +908,22 @@ function overlaysOf(material: DocumentMaterialV2): OverlayV2[] {
     })
 }
 
+function legacyActivityCopy(activity: NonNullable<NonNullable<ScreenContextInputsV2['uiState']>['busy']>['activity']): {
+    heading: string
+    detail: string
+} {
+    const old = legacyWaitCopy.activities[activity as keyof typeof legacyWaitCopy.activities]
+    return {
+        heading:
+            activity === 'working'
+                ? legacyWaitCopy.headings[0]!
+                : activity === 'saving'
+                  ? legacyWaitCopy.activities.saving.heading
+                  : BUSY_COPY_V2[activity].heading,
+        detail: old?.detail ?? (activity === 'working' ? legacyWaitCopy.details[0]! : BUSY_COPY_V2[activity].detail),
+    }
+}
+
 /**
  * The header of a state variant. A screen whose ready title is a claim about the person's work (a verdict, a finished
  * build) never lends that title to a state variant: it shows the calm state heading instead. Other screens keep theirs.
@@ -913,13 +933,24 @@ function stateHeader(
     state: VariantState,
     material: DocumentMaterialV2,
     ready: ScreenVariantV2,
+    legacy = false,
 ): ScreenVariantV2['header'] {
     const { kind, uiState } = material.inputs
     // A busy screen's fixed header names what the app is doing (the body's own heading may be scrolled out of sight).
     const activity = state === 'busy' ? uiState?.busy?.activity : undefined
-    if (activity !== undefined) return { ...ready.header, title: lit(BUSY_COPY_V2[activity].heading), actions: [] }
+    if (legacy && activity !== undefined)
+        return { ...ready.header, title: lit(legacyActivityCopy(activity).heading), actions: [] }
+    if (!legacy && (state === 'busy' || state === 'pending'))
+        return { ...ready.header, title: lit(waitCopyV2(kind, activity).heading), actions: [] }
     if (kind !== 'result' && kind !== 'completion') return { ...ready.header, actions: [] }
-    const title = kind === 'completion' ? lit('Your build') : lit(STATE_COPY_V2[state].heading)
+    const title =
+        kind === 'completion'
+            ? lit('Your build')
+            : lit(
+                  legacy && (state === 'busy' || state === 'pending')
+                      ? legacyWaitCopy.headings[0]!
+                      : STATE_COPY_V2[state].heading,
+              )
     return { ...ready.header, title, actions: [] }
 }
 
@@ -929,13 +960,20 @@ function stateVariant(
     material: DocumentMaterialV2,
     ready: ScreenVariantV2,
     reason?: FallbackReasonV2,
+    legacy = false,
 ): ScreenVariantV2 {
     const { inputs } = material
     const activity = state === 'busy' ? inputs.uiState?.busy?.activity : undefined
     const screenTimeout = state === 'error' && reason === 'timeout'
     const copy =
         (screenTimeout ? { heading: 'That took too long', detail: 'Try again in a moment.' } : undefined) ??
-        (activity === undefined ? undefined : BUSY_COPY_V2[activity]) ??
+        (state === 'busy' || state === 'pending'
+            ? legacy
+                ? activity === undefined
+                    ? { heading: legacyWaitCopy.headings[0]!, detail: legacyWaitCopy.details[0]! }
+                    : legacyActivityCopy(activity)
+                : waitCopyV2(inputs.kind, activity)
+            : undefined) ??
         (state === 'empty' && inputs.kind === 'questions' && material.requirements.capture
             ? { heading: 'Ask anything about this step.', detail: 'Which part is your question about?' }
             : undefined) ??
@@ -953,7 +991,11 @@ function stateVariant(
     // while the document is only pending, guidance never blocks the shutter: the authored Take photo stays usable.
     const cameraRuns = inputs.kind === 'camera' && material.requirements.nodes.includes('CameraView')
     const holdCamera = (waiting || screenTimeout) && cameraRuns
-    const waitLabel = inputs.uiState?.busy?.activity === 'saving' ? 'Saving…' : 'Working…'
+    const waitLabel = legacy
+        ? inputs.uiState?.busy?.activity === 'saving'
+            ? 'Saving…'
+            : legacyWaitCopy.actions[0]!
+        : waitCopyV2(inputs.kind, activity).action
     const bar: BarV2 = waiting
         ? holdCamera && state === 'pending'
             ? { primary: primary('Take photo', intent('capture', 'take-photo'), 'camera'), secondary: null }
@@ -1003,8 +1045,8 @@ function stateVariant(
     ]
     return {
         header: readingFailure
-            ? { ...stateHeader(state, material, ready), title: lit(copy.heading), subtitle: null }
-            : stateHeader(state, material, ready),
+            ? { ...stateHeader(state, material, ready, legacy), title: lit(copy.heading), subtitle: null }
+            : stateHeader(state, material, ready, legacy),
         body: scroll([
             stack([
                 ...(holdCamera ? [cameraView(material), cameraTips(material)] : []),
@@ -1020,7 +1062,9 @@ function stateVariant(
                     ? [{ type: 'Progress', binding: activity === 'reading' ? 'reading' : 'build', label: null } as Node]
                     : []),
                 ...(readingFailure ? [] : [text(lit(copy.heading), { role: 'heading' })]),
-                ...(readingFailure && material.requirements.notice ? [] : [text(lit(copy.detail), { tone: 'info' })]),
+                ...((readingFailure && material.requirements.notice) || copy.detail === ''
+                    ? []
+                    : [text(lit(copy.detail), { tone: 'info' })]),
                 ...noticeNodes(material, state),
                 ...stated,
             ]),
@@ -1077,7 +1121,11 @@ function withCoverage(
 }
 
 /** The complete deterministic proposal for this material: ready variant plus every required state variant. */
-export function buildFallbackProposalV2(material: DocumentMaterialV2, reason?: FallbackReasonV2): ScreenProposalV2 {
+export function buildFallbackProposalV2(
+    material: DocumentMaterialV2,
+    reason?: FallbackReasonV2,
+    legacyWait = false,
+): ScreenProposalV2 {
     const ready: ScreenVariantV2 = {
         header: headerOf(material, true),
         body: scroll([stack(bodyOf(material))]),
@@ -1092,7 +1140,7 @@ export function buildFallbackProposalV2(material: DocumentMaterialV2, reason?: F
                 ? null
                 : state === 'confirming'
                   ? confirmingVariant()
-                  : withCoverage(stateVariant(state, material, ready, reason), material, state),
+                  : withCoverage(stateVariant(state, material, ready, reason, legacyWait), material, state),
         ]),
     ) as ScreenProposalV2['states']
     return { ...withCoverage(ready, material, 'ready'), states }

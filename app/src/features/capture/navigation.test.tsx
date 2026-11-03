@@ -250,7 +250,7 @@ async function runtime(
 async function mount(): Promise<Awaited<ReturnType<typeof renderRouter>>> {
     const view = await renderRouter(resolve(__dirname, '../../../app'))
     await waitFor(() => expect(screen.getByTestId('library-screen')).toBeTruthy())
-    await waitFor(() => expect(screen.queryByText('Getting your builds ready.')).toBeNull())
+    await waitFor(() => expect(screen.getByRole('button', { name: /^(Add a manual|Try again)$/u })).toBeEnabled())
     return view
 }
 

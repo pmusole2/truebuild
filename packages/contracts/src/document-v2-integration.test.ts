@@ -435,7 +435,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
             label: 'Take photo',
             intent: { intent: 'capture', target: 'take-photo' },
         })
-        expect(document.states.busy!.bar.primary.label).toBe('Working…')
+        expect(document.states.busy!.bar.primary.label).toBe('Preparing camera…')
         expect(document.states.busy!.bar.primary.intent).toEqual({ intent: 'capture', target: 'take-photo' })
         const saving = fallbackFor({
             ...camera(),
@@ -478,7 +478,7 @@ describe('4 camera ready: busy and pending keep the camera mounted', () => {
                 bar: {
                     primary: {
                         ...proposal.states.pending!.bar.primary,
-                        label: 'Working…',
+                        label: 'Preparing step…',
                         intent: { intent: 'navigate', target: 'guide' },
                     },
                     secondary: null,

@@ -3,7 +3,7 @@ import { URL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
     BUSY_ACTIVITIES_V2,
-    BUSY_COPY_V2,
+    waitCopyV2,
     canonicalJson,
     compileLayoutTemplateV2,
     componentPathsV2,
@@ -205,7 +205,7 @@ describe('authored current-result layout records', () => {
             const document = resultLayoutDocument({ ...inputs, uiState: { ...inputs.uiState, busy: { activity } } })!
             expect(document.states.busy?.header.title).toEqual({
                 kind: 'literal',
-                text: BUSY_COPY_V2[activity].heading,
+                text: waitCopyV2('result', activity).heading,
             })
             expect(nodesOf(document, 'busy').some((node) => node.type === 'VerdictCard')).toBe(false)
         },

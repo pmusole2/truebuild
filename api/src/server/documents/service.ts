@@ -70,6 +70,8 @@ export interface DocumentServiceOptions {
     runtimeMode: 'fixture' | 'meta'
     work: BackgroundWork
     cache?: ScreenCache<CachedDocument>
+    /** Routes explicitly select legacy (1) when waitCopy=2 is absent; direct callers retain modern defaults. */
+    waitCopy?: 1 | 2
     /** API routes set this from the query capability; in-process callers retain the existing repair behavior. */
     guideRepair?: boolean
     precomputeConcurrency?: number
@@ -270,6 +272,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                           ? (stagePolicy.quickCheckEffort ?? stagePolicy.effort)
                           : stagePolicy.effort,
                 prompt: DOCUMENT_PROMPT_VERSION,
+                waitCopy: options.waitCopy ?? 2,
                 catalog: SCREEN_CATALOG_V2_VERSION,
             }),
         )
@@ -326,7 +329,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const document = publish(
             assembleDocumentV2(
                 context.material,
-                buildFallbackProposalV2(context.material, reason),
+                buildFallbackProposalV2(context.material, reason, options.waitCopy === 1),
                 {
                     ...extra,
                     source: 'fallback',
@@ -352,7 +355,9 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         return publish(
             assembleDocumentV2(
                 context.material,
-                proposal,
+                options.waitCopy === 1
+                    ? { ...proposal, states: buildFallbackProposalV2(context.material, undefined, true).states }
+                    : proposal,
                 {
                     ...observed,
                     source: 'generated',
@@ -758,7 +763,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 {
                     manualId: session.manualId,
                     revision: session.revision,
-                    contextKey: sha256(canonicalJson(prepared.map((item) => item.context.bound.contextKey))),
+                    contextKey: jobContextKey(request),
                     mode,
                     steps: prepared.map((item) => ({
                         stepId: item.key,

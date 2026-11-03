@@ -14,6 +14,12 @@ if (listed.some((kind) => !(SCREEN_KINDS_V2 as readonly string[]).includes(kind)
     throw new Error('Unknown fixture failure kind')
 }
 const invalidDocumentKinds = listed as ScreenKindV2[]
+const parseDelayMs = Number(process.env.TRUEBUILD_FIXTURE_PARSE_DELAY_MS ?? 1400)
+if (!Number.isSafeInteger(parseDelayMs) || parseDelayMs < 0 || parseDelayMs > 30_000)
+    throw new Error('Invalid fixture parse delay')
+const stepDelayMs = Number(process.env.TRUEBUILD_FIXTURE_STEP_DELAY_MS ?? 5000)
+if (!Number.isSafeInteger(stepDelayMs) || stepDelayMs < 0 || stepDelayMs > 30_000)
+    throw new Error('Invalid fixture step delay')
 const scenarios = [
     'full',
     'all-pass',
@@ -53,6 +59,8 @@ console.info = (message: unknown): void => {
 const app = createNativeFixtureApp({
     generativeUi: mode,
     invalidDocumentKinds,
+    parseDelayMs,
+    stepDelayMs,
     overlayDelayMs: 12_000,
     scenario: scenario as NativeFixtureOptions['scenario'],
 })

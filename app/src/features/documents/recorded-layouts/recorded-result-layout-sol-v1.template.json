@@ -1173,7 +1173,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing step…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",
@@ -1396,7 +1396,7 @@
             "bar": {
                 "primary": {
                     "type": "PrimaryAction",
-                    "label": "Please wait",
+                    "label": "Preparing step…",
                     "icon": null,
                     "intent": {
                         "intent": "navigate",

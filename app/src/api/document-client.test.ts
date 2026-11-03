@@ -1,14 +1,24 @@
+import legacyWaitCopy from '../../../packages/contracts/src/fixtures/prompt39/wait-copy'
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import {
+    assembleDocumentV2,
     buildFallbackDocumentV2,
+    canonicalJson,
     createDemoManual,
+    documentMaterialV2,
     screenContextJsonV2,
     screenDocumentV2Schema,
     screenManualJsonV2,
     questionResultSchema,
     type ScreenContextInputsV2,
+    screenProposalV2Schema,
+    waitCopyV2,
+    waitVariantV2,
 } from '@truebuild/contracts'
+import legacyHome from '../../../packages/contracts/src/fixtures/prompt39/recorded-home.proposal.json'
+import legacyHomeInputs from '../../../packages/contracts/src/fixtures/prompt39/recorded-home.inputs.json'
+import legacyHomeRuntime from '../../../packages/contracts/src/fixtures/prompt39/recorded-home.runtime.json'
 import { MODEL_ROUTE_TIMEOUT_MAX_MS, type ScreensV2Result, screensV2GenerateRequest } from '@truebuild/contracts/model'
 import { createHeroResponse } from '@truebuild/contracts/hero'
 import { sha256Hex } from '../features/documents/sha256'
@@ -19,6 +29,7 @@ import {
     documentPrecomputeInputs,
     documentRequest,
     inputsFromDocumentMetadata,
+    interpretDocuments,
 } from './document-client'
 
 const session = createDemoManual()
@@ -64,6 +75,52 @@ describe('portable document SHA256', () => {
 })
 
 describe('v2 document transport', () => {
+    it.each([undefined, 2])(
+        'accepts the original legacy fixture with waitCopy echo %s without changing identity or display copy',
+        (waitCopy) => {
+            const heldInputs = legacyHomeInputs as ScreenContextInputsV2
+            const proposal = screenProposalV2Schema.parse(legacyHome)
+            expect(sha256Hex(canonicalJson(proposal))).toBe(legacyHomeRuntime.proposalSha256)
+            const raw = assembleDocumentV2(
+                documentMaterialV2(heldInputs),
+                proposal,
+                {
+                    source: 'generated',
+                    evidence: 'synthetic-fixture',
+                    fallbackReason: null,
+                },
+                { sha256Hex, now: (): Date => new Date(legacyHomeRuntime.recordedAt) },
+            )
+            const request = screensV2GenerateRequest('legacy-39', heldInputs, sha256Hex)
+            const response = interpretDocuments(
+                200,
+                JSON.stringify({
+                    ...envelope(raw),
+                    ...(waitCopy === undefined ? {} : { waitCopy }),
+                    requestId: request.requestId,
+                }),
+                request,
+            )
+            expect(response.status).toBe('ok')
+            if (response.status !== 'ok') throw new Error('legacy fixture rejected')
+            expect(response.value.document).toEqual(raw)
+            const shown = waitVariantV2(raw.states.pending!, 'home', 'pending')
+            expect(shown.header.title).toEqual({ kind: 'literal', text: waitCopyV2('home').heading })
+            const invalid = structuredClone(raw)
+            invalid.header.title = { kind: 'literal', text: legacyWaitCopy.headings[0]! }
+            expect(
+                interpretDocuments(
+                    200,
+                    JSON.stringify({
+                        ...envelope(invalid),
+                        requestId: request.requestId,
+                    }),
+                    request,
+                ),
+            ).toMatchObject({ status: 'unavailable', code: 'invalid_output' })
+        },
+    )
+
     it('keeps a Guide request alive for the bounded server generation and repair, then accepts its reply', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
         let deliver: ((response: Response) => void) | undefined
@@ -411,6 +468,7 @@ describe('v2 document transport', () => {
         const [url, init] = fetch.mock.calls[0]!
         expect(new URL(url).pathname).toBe('/api/screens/v2')
         expect(new URL(url).searchParams.get('guideRepair')).toBe('1')
+        expect(new URL(url).search).toBe('?guideRepair=1&waitCopy=2')
         expect(init).toMatchObject({
             credentials: 'omit',
             redirect: 'error',

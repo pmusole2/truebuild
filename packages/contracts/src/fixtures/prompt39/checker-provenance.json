@@ -1,0 +1,122 @@
+{
+    "commit": "fc7b706dcacac1730a8f71c7fcb7bea0592e3641",
+    "generator": "esbuild 0.28.2",
+    "entry": "Unmodified old schema and request-bound checker. Only the test wrapper is new.",
+    "external": ["zod", "node:crypto"],
+    "wrapperSha256": "ae790b3545b9054dcb0d734819b60888a4db6aefe6ea792770a246a7ae2f2d94",
+    "sources": [
+        {
+            "path": "packages/contracts/src/piece-spec.ts",
+            "sha256": "bc37e9b8a75232aa9039822107e32e62e045004b1ef6159ee98ce6b3e64ab406"
+        },
+        {
+            "path": "packages/contracts/src/telemetry.ts",
+            "sha256": "34797cc5eccb0a0d67f76eb2172f23ba43ede802f96c50224185ecb8f0996892"
+        },
+        {
+            "path": "packages/contracts/src/screen.ts",
+            "sha256": "845b8e5056d66bb0bd7604e64fc0fdafeba6978599fcca61ee03163067755f15"
+        },
+        {
+            "path": "packages/contracts/src/screen-context.ts",
+            "sha256": "de55b852a611f3bb220fc97b342015e9eeb7a7fac8dcd23fb5faad349c1b621d"
+        },
+        {
+            "path": "packages/contracts/src/document-v2.ts",
+            "sha256": "b263437274282f42bf91cf6cccaeef73b9a1b8538552cdc954513341287d1986"
+        },
+        {
+            "path": "packages/contracts/src/reading-language.ts",
+            "sha256": "bdbb3cbcb0399a1a4d222fc7c29750e0e45ffbee21558e2e00131ca1e2f74079"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-context.ts",
+            "sha256": "3f087609c11a941f480ad8d552cc85a580b46768134516efe77ab9105b3611ce"
+        },
+        {
+            "path": "packages/contracts/src/screen-facts.ts",
+            "sha256": "014fe52b9eb4e9d608d8dee386d0087d53c0624175f8c81c3f0df0458b2d0016"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-material.ts",
+            "sha256": "d7aa90e2a4805ac51d0d583cd20b9edddf047f352f186fb5907b09207b97259a"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-copy.ts",
+            "sha256": "c4cb9908cab212752cd8a377251bb570d9282d4d347bbb28f1dae4c8d1657cb0"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-action-copy.ts",
+            "sha256": "4d10ab075836e32c013707605da88bc059918f06bf2923d3a2c9cce887c3982d"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-semantic.ts",
+            "sha256": "5f2a7292cd6547e46e1fe5d194a8954dca4ae4f45326c8612d8cb4097a07a7c7"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-verify.ts",
+            "sha256": "b1e9bd4a32582c2e5fcae385f4cae468c6f491949426f0409a267fc388ddc1a0"
+        },
+        {
+            "path": "packages/contracts/src/layout.ts",
+            "sha256": "063bcdbb9110510a2dc5aba887954e51c5c0a40b9959462fdf7bac14a11c8ceb"
+        },
+        {
+            "path": "packages/contracts/src/piece-generation.ts",
+            "sha256": "10c309bf2b6f5374dbf0c1fe30a168382c1fdcd927cafe9b56038107136e1994"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-title.ts",
+            "sha256": "54dd87e8a279ecc5e7187d3ea178913bd325f505839877dfc307030c0909a579"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-assemble.ts",
+            "sha256": "0686de7c7fab1dd30f901d2945d69ef118022aee258c0524aac9943d9945a059"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-citations.ts",
+            "sha256": "3aba293479d88582d2599a10ce9e784abcb40d0d8cec9bb7076620a09e6e50b4"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-fallback.ts",
+            "sha256": "268f80194591d2baf4a29b0b18febcf5606fe74c23c626d4bd9eb71b612c9420"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-recorded.ts",
+            "sha256": "2fceadc2127f96c8d94cb271f2de156e5f535a51fcf70d7fdcd23a0977581665"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-rebind.ts",
+            "sha256": "29a172c97a45d3ae077c33572905a93927d06825e0575d615f15ebbdac73ebde"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-layout-template.ts",
+            "sha256": "c3f54dc5aca8d7dd3f6bdbcde6f38dbc36cdcfd9f6f53175b873be6bf82a4f10"
+        },
+        {
+            "path": "packages/contracts/src/document-v2-layout-template-compile.ts",
+            "sha256": "b3dcf9de7cb01e81c3d0f5c3ba80f9f7dbb11a13a968a92a8b175ee273b9ae31"
+        },
+        {
+            "path": "packages/contracts/src/overlay-job-fixtures.ts",
+            "sha256": "cfdfa9742509370024e58956d1840c9f9cd8fd559c27061cd78baa55b2a9b66f"
+        },
+        {
+            "path": "packages/contracts/src/index.ts",
+            "sha256": "164ca6af8381eec3db5873cf2b0f006131a09376a4f9cb0ca4078e153e39ab12"
+        },
+        {
+            "path": "packages/contracts/src/demo.ts",
+            "sha256": "c88d6bd1380b45c8386a2515db1747a13b801c241b3b6b7eee03c1ff29f575f2"
+        },
+        {
+            "path": "packages/contracts/src/index.ts",
+            "sha256": "164ca6af8381eec3db5873cf2b0f006131a09376a4f9cb0ca4078e153e39ab12"
+        },
+        {
+            "path": "packages/contracts/src/model.ts",
+            "sha256": "6ed869375b1ed6c615c216135de163529af6fc2581351c3cdee07585bd3bb5b9"
+        }
+    ],
+    "bundleSha256": "739be9a2640d273bd9688286ecd53c737fdbf555aaec576dd48acfb9cee035dd"
+}

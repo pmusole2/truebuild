@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
     BUSY_COPY_V2,
+    waitCopyV2,
     canonicalJson,
     cameraSpineV2,
     CAMERA_TIPS_V2,
@@ -194,11 +195,13 @@ describe('synthetic test fixture state proposals (explicit raw trees)', () => {
         expect(source).toContain('assembleDocumentV2')
     })
 
-    it.each(ARTIFACTS)('%s uses the calm generic wait in pending', (name) => {
+    it.each(ARTIFACTS)('%s uses its screen preparation copy in pending', (name) => {
         const doc = recordedDocumentForTest(name)
-        expect(doc.states.pending?.header.title).toEqual({ kind: 'literal', text: 'Working on it' })
+        const copy = waitCopyV2(doc.kind)
+        expect(doc.states.pending?.header.title).toEqual({ kind: 'literal', text: copy.heading })
         const texts = variantLiteralTexts(doc, 'pending')
-        expect(texts).toContain('One moment, please.')
+        if (copy.detail !== '') expect(texts).toContain(copy.detail)
+        expect(texts).not.toContain('')
         expect(texts).not.toContain('Getting this ready')
         expect(texts).not.toContain('Your screen will appear here.')
     })
@@ -326,7 +329,7 @@ describe('raw saving-context siblings', () => {
         expect(raw.states.busy?.header.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2.saving.heading })
         expect(variantLiteralTexts(doc, 'busy')).toEqual([
             BUSY_COPY_V2.saving.heading,
-            'One moment, please.',
+            ...(BUSY_COPY_V2.saving.detail === '' ? [] : [BUSY_COPY_V2.saving.detail]),
             ...(base === 'recorded-home'
                 ? [
                       'How it works',
@@ -342,7 +345,10 @@ describe('raw saving-context siblings', () => {
                 ? ['What we look for', 'Steps', 'Parts', 'Safety notes', 'Unclear details']
                 : []),
         ])
-        expect(raw.states.busy?.bar).toEqual(original.states.busy?.bar)
+        expect(raw.states.busy?.bar).toEqual({
+            ...original.states.busy!.bar,
+            primary: { ...original.states.busy!.bar.primary, label: waitCopyV2(doc.kind, 'saving').action },
+        })
         expect(raw.states.busy?.overlays).toEqual([])
         expect({ header: raw.header, body: raw.body, bar: raw.bar, overlays: raw.overlays }).toEqual({
             header: original.header,
@@ -536,7 +542,25 @@ describe('authored manual-page camera consent paths', () => {
                 ...base,
                 states: { ...base.states, busy: null },
             })
-            expect({ ...saving.states.busy, header: null }).toEqual({ ...base.states.busy, header: null })
+            const expectedBusy = structuredClone(base.states.busy!)
+            const savingCopy = waitCopyV2('camera', 'saving')
+            visitVariantNodesV2(expectedBusy, '', ({ node }) => {
+                if (!('children' in node)) return
+                for (let index = node.children.length - 1; index >= 0; index -= 1) {
+                    const child = node.children[index]!
+                    if (
+                        child.type === 'Text' &&
+                        child.content.kind === 'literal' &&
+                        child.content.text === waitCopyV2('camera').detail
+                    ) {
+                        if (savingCopy.detail === '') node.children.splice(index, 1)
+                        else child.content.text = savingCopy.detail
+                    }
+                }
+            })
+            expectedBusy.bar.primary.label = savingCopy.action
+            expect({ ...saving.states.busy, header: null }).toEqual({ ...expectedBusy, header: null })
+            expect(variantLiteralTexts(recordedDocumentForTest(`${name}-saving`), 'busy')).not.toContain('')
             expect(saving.states.busy!.header).toEqual({
                 ...base.states.busy!.header,
                 title: { kind: 'literal', text: BUSY_COPY_V2.saving.heading },

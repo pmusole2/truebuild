@@ -30,6 +30,7 @@ it.each<[BlueprintPhase, string]>([
     ['guide', 'Building your guide'],
     ['piece', 'Shaping the part'],
     ['check', 'Checking your build'],
+    ['screen', 'Laying out this step'],
 ])('renders the %s scene with an accessible phase label', async (phase, label) => {
     await render(frame(<BlueprintLoader phase={phase} />))
     expect(screen.getByText(label)).toBeTruthy()

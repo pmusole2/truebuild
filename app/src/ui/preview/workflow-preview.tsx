@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import type { SharedValue } from 'react-native-reanimated'
-import { baseKindV2, buildFallbackDocumentV2, type ScreenKindV2 } from '@truebuild/contracts'
+import { baseKindV2, buildFallbackDocumentV2, waitCopyV2, type ScreenKindV2 } from '@truebuild/contracts'
 import { ManualImage } from '../../features/capture/page-media'
 import type { QuickProgress } from '../../features/screens/quick-progress'
 import { useQuickProgress } from '../../features/screens/quick-progress'
@@ -321,7 +321,7 @@ function DocumentFixture({
             if (intent.intent === 'navigate' && intent.target === 'back')
                 return {
                     enabled: !state.loading,
-                    reason: state.loading ? 'Your builds are opening.' : null,
+                    reason: state.loading ? waitCopyV2('home').action : null,
                     run: more.open ? more.hide : doNothing,
                 }
             if (intent.intent === 'open-details' && intent.target === 'device-settings')

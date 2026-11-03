@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
     BUSY_ACTIVITIES_V2,
     BUSY_COPY_V2,
+    waitCopyV2,
     SCREEN_KINDS_V2,
     buildFallbackDocumentV2,
     createDemoManual,
@@ -96,7 +97,7 @@ describe('busy header states the current activity', () => {
         const document = fallbackFor(inputs)
         const busy = document.states.busy
         expect(busy).not.toBeNull()
-        expect(busy!.header.title).toEqual({ kind: 'literal', text: BUSY_COPY_V2[activity].heading })
+        expect(busy!.header.title).toEqual({ kind: 'literal', text: waitCopyV2(kind, activity).heading })
         expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
         expect(verifyDocumentAgainstInputsV2(document, inputs, sha256Hex)).toEqual([])
     })

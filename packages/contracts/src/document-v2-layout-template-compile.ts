@@ -22,7 +22,7 @@ import {
     type VariantState,
 } from './document-v2'
 import { assembleDocumentV2, type AssembleDeps } from './document-v2-assemble'
-import { BUSY_COPY_V2, STATE_COPY_V2 } from './document-v2-copy'
+import { BUSY_COPY_V2, STATE_COPY_V2, waitCopyV2 } from './document-v2-copy'
 import type { ScreenContextInputsV2 } from './document-v2-context'
 import {
     LAYOUT_DECISIONS_V2,
@@ -163,8 +163,8 @@ function expandVariant(
             ? checking
                 ? BUSY_COPY_V2.checking
                 : null
-            : name === 'busy' && activity !== undefined
-              ? BUSY_COPY_V2[activity]
+            : name === 'busy' || name === 'pending'
+              ? waitCopyV2(inputs.kind, name === 'busy' ? activity : null)
               : STATE_COPY_V2[name]
     let nodes = 0
 
@@ -203,7 +203,11 @@ function expandVariant(
     }
 
     const list = (items: TemplateNodeV2[], at: string, depth: number, scope: Scope | null): ScreenNodeV2[] => {
-        const out = items.flatMap((item, index) => place(item, `${at}.${index}`, depth, scope))
+        const out = items.flatMap((item, index) =>
+            item.type === 'Text' && item.content.kind === 'state' && copy?.[item.content.part] === ''
+                ? []
+                : place(item, `${at}.${index}`, depth, scope),
+        )
         if (out.length > DOCUMENT_V2_LIMITS.children) throw new Stop(`children:${at}`)
 
         return out

@@ -192,7 +192,7 @@
     "states": {
         "busy": {
             "header": {
-                "title": { "kind": "literal", "text": "Working on it" },
+                "title": { "kind": "literal", "text": "Opening More" },
                 "subtitle": { "kind": "literal", "text": "More" },
                 "back": null,
                 "actions": []
@@ -209,7 +209,7 @@
                             { "type": "Progress", "binding": "build", "label": null },
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "content": { "kind": "literal", "text": "Getting settings and help ready." },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "info",
@@ -232,7 +232,7 @@
         },
         "pending": {
             "header": {
-                "title": { "kind": "literal", "text": "Working on it" },
+                "title": { "kind": "literal", "text": "Opening More" },
                 "subtitle": { "kind": "literal", "text": "More" },
                 "back": null,
                 "actions": []
@@ -248,7 +248,7 @@
                         "children": [
                             {
                                 "type": "Text",
-                                "content": { "kind": "literal", "text": "One moment, please." },
+                                "content": { "kind": "literal", "text": "Getting settings and help ready." },
                                 "role": "body",
                                 "emphasis": "normal",
                                 "tone": "info",

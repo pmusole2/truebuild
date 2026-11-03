@@ -20,6 +20,21 @@ const idle: WorkflowState = {
     pageUris: {},
 }
 describe('the real v2 route document inputs', () => {
+    it.each([
+        ['Choosing manual pages…', 'working'],
+        ['Preparing page 1 of 2…', 'working'],
+        ['Saving on this device…', 'saving'],
+        ['Reading manual pages…', 'reading'],
+        ['Freezing photo…', 'checking'],
+        ['Checking frozen photo…', 'checking'],
+        ['Taking a closer look…', 'second-opinion'],
+        ['Asking about frozen photo…', 'asking'],
+        ['Still thinking about your question…', 'question-waiting'],
+    ])('keeps %s compatible with the closed activity contract', (pending, activity) => {
+        const inputs = documentInputs('pages', { state: { ...idle, pending }, entry: undefined })
+        expect(inputs.uiState?.busy?.activity).toBe(activity)
+    })
+
     it('publishes the real sole library entry while keeping Home sessionless and never guessing a review question', () => {
         const entry = flowEntry('unread', 'unparsed')
         const sole = documentInputs('home', { state: { ...idle, entries: [entry] }, entry: undefined })
