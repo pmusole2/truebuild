@@ -27,6 +27,8 @@ describe('provider runtime configuration', (): void => {
             { PROVIDER_MODE: 'unknown' },
             { MODEL_CHECK_CONTEXT: 'automatic' },
             { MODEL_CALL_LIMIT_PER_DAY: '0' },
+            { STEP_MOTION_ENABLED: 'false' },
+            { STEP_MOTION_DAILY_LIMIT: '0' },
             { MODEL_CALL_LIMIT_PER_CLIENT_DAY: '2.5' },
             { CHECK_TIMEOUT_MS: '0' },
             { CHECK_TIMEOUT_MS: '105001' },
@@ -39,6 +41,19 @@ describe('provider runtime configuration', (): void => {
         ]) {
             expect(() => createRuntimeFromEnvironment(env)).toThrow()
         }
+    })
+
+    it('defaults motion on with a daily cap and accepts the explicit off switch', () => {
+        const defaults = createRuntimeFromEnvironment({ PROVIDER_MODE: 'fixture' })
+        expect(defaults.stepMotionEnabled).toBe(true)
+        expect(defaults.stepMotionDailyLimit).toBe(300)
+        const disabled = createRuntimeFromEnvironment({
+            PROVIDER_MODE: 'fixture',
+            STEP_MOTION_ENABLED: '0',
+            STEP_MOTION_DAILY_LIMIT: '17',
+        })
+        expect(disabled.stepMotionEnabled).toBe(false)
+        expect(disabled.stepMotionDailyLimit).toBe(17)
     })
 
     it('does not dispatch while starting an unconfigured meta runtime', (): void => {

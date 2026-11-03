@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { sourceRefSchema } from './index'
+import { canonicalJson, sourceRefSchema } from './index'
 import { pieceDrawingBoxSchema } from './piece-generation'
 import { PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
@@ -98,6 +98,8 @@ export const stepMotionRequestSchema = z
             width: z.number().int().positive().max(24_000_000),
             height: z.number().int().positive().max(24_000_000),
             mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+            /** SHA-256 of the uploaded original bytes: the server verifies it before any scene is generated. */
+            contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
         }),
         figureBox: pieceDrawingBoxSchema.nullable(),
     })
@@ -133,4 +135,12 @@ export type StepMotionRequest = z.infer<typeof stepMotionRequestSchema>
 export function stepMotionCacheContent(request: StepMotionRequest): Omit<StepMotionRequest, 'requestId' | 'cacheOnly'> {
     const { requestId: _requestId, cacheOnly: _cacheOnly, ...content } = request
     return content
+}
+
+/** The one canonical text both sides hash for a scene's content identity: device and server must never diverge here. */
+export function stepMotionCacheIdentity(
+    request: StepMotionRequest,
+    promptVersion = STEP_MOTION_PROMPT_VERSION,
+): string {
+    return canonicalJson([promptVersion, stepMotionCacheContent(request)])
 }

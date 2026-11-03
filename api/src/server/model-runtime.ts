@@ -37,6 +37,8 @@ export interface ApiRuntime {
     sessionMetadata: typeof PROCESS_METADATA
     mode: 'fixture' | 'meta'
     configured: boolean
+    stepMotionEnabled: boolean
+    stepMotionDailyLimit: number
     sparkModel: SparkModel
     parseModel: StandardModel
     secondOpinionModel?: StandardModel
@@ -141,6 +143,8 @@ export function createRuntimeFromEnvironment(
     const followUpsOn = generativeUiMode(environment.GENERATIVE_UI) !== 'off'
     const overlay = followUpsOn && wonderFlag
     const segments = followUpsOn && flag(environment.MODEL_SEGMENTS, true, 'invalid_model_segments')
+    const stepMotionEnabled = flag(environment.STEP_MOTION_ENABLED, true, 'invalid_step_motion_enabled')
+    const stepMotionDailyLimit = positiveInteger(environment.STEP_MOTION_DAILY_LIMIT, 300)
     const maxConcurrency = positiveInteger(environment.MODEL_MAX_CONCURRENCY, 32, 1_024)
     // Slots only foreground work (verdict, question, overlay, second opinion, SAM, latency screens) may take.
     const foregroundReserve =
@@ -200,6 +204,8 @@ export function createRuntimeFromEnvironment(
         sessionMetadata: PROCESS_METADATA,
         mode,
         configured,
+        stepMotionEnabled,
+        stepMotionDailyLimit,
         sparkModel: model,
         parseModel: parse,
         secondOpinionModel: secondary,
@@ -224,6 +230,8 @@ export function createRuntimeFromEnvironment(
             layout,
             policy,
             runtimeMode: mode,
+            stepMotionEnabled,
+            stepMotionDailyLimit,
             followUps: { overlay, segments },
             maxConcurrency,
             foregroundReserve,

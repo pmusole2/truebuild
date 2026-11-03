@@ -1,12 +1,21 @@
+import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import sharp from 'sharp'
 import { paddedStepFigureBox, STEP_MOTION_PROMPT_VERSION, type StepMotionRequest } from '@truebuild/contracts'
 import { createMetaProvider, stepMotionTextBytes } from '../providers/meta-provider'
 import { aiPolicyFromEnvironment, STEP_MOTION_POLICY } from './ai-policy'
+import * as media from './media'
+import { MetaTransport } from '../providers/meta-transport'
 import { SharedKeyAuth } from './auth'
 import { BudgetError, ConcurrencyGate, ModelCallCounter } from './budget'
 import { createBackgroundWork, guardModelFetch } from './model-service'
-import { createStepMotionHandler, estimatedStepMotionCostUsd, stepMotionCacheKey } from './step-motion'
+import {
+    createStepMotionHandler,
+    estimatedStepMotionCostUsd,
+    figureWindow,
+    stepMotionCacheKey,
+    stepMotionContentKey,
+} from './step-motion'
 
 const metadata: StepMotionRequest = {
     requestId: 'recorded-motion',
@@ -19,7 +28,8 @@ const metadata: StepMotionRequest = {
     actions: ['Raise the part.', 'Turn the fastener.'],
     orientation: 'Upright.',
     connection: 'At the joint.',
-    page: { pageId: 'page-1', width: 64, height: 64, mimeType: 'image/png' },
+    // The claimed hash is replaced by the hash of the uploaded bytes in request(); this placeholder is only a shape.
+    page: { pageId: 'page-1', width: 1024, height: 1024, mimeType: 'image/png', contentHash: '0'.repeat(64) },
     figureBox: paddedStepFigureBox([0.25, 0.25, 0.5, 0.5]),
 }
 const shape = {
@@ -43,16 +53,33 @@ const scene = {
     caption: 'Raise the part.',
 }
 
-async function request(overrides: Partial<StepMotionRequest> = {}, key = 'motion-fixture-key'): Promise<Request> {
-    const form = new FormData()
-    const value = { ...metadata, ...overrides }
-    const page = await sharp({
-        create: { width: value.page.width, height: value.page.height, channels: 3, background: '#456789' },
-    })
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+
+async function solidPng(width: number, height: number, background: string): Promise<Buffer> {
+    return sharp({ create: { width, height, channels: 3, background } })
         .png()
         .toBuffer()
+}
+
+interface Upload {
+    /** The page hash the device claims. Defaults to the hash of the uploaded bytes, which is what a truthful device sends. */
+    claimedHash?: string
+    /** The original uploaded as the page. Defaults to a solid page of the metadata's size. */
+    bytes?: Buffer
+}
+
+async function request(
+    overrides: Partial<StepMotionRequest> = {},
+    key = 'motion-fixture-key',
+    upload: Upload = {},
+): Promise<Request> {
+    const form = new FormData()
+    const value = { ...metadata, ...overrides }
+    const bytes = upload.bytes ?? (await solidPng(value.page.width, value.page.height, '#456789'))
+    value.page = { ...value.page, contentHash: upload.claimedHash ?? sha256Hex(bytes) }
     form.set('metadata', JSON.stringify(value))
-    if (!value.cacheOnly) form.set(`page:${value.page.pageId}`, new File([page], 'page.png', { type: 'image/png' }))
+    if (!value.cacheOnly)
+        form.set(`page:${value.page.pageId}`, new File([new Uint8Array(bytes)], 'page.png', { type: 'image/png' }))
     return new Request('http://localhost/api/step-motion', {
         method: 'POST',
         headers: { 'x-truebuild-key': key },
@@ -81,12 +108,14 @@ function setup(
     limit = 8,
     transportResponse?: () => Response,
     cacheLimit?: number,
+    motion: { enabled?: boolean; dailyLimit?: number; clock?: () => number } = {},
 ): {
     handler: ReturnType<typeof createStepMotionHandler>
     fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>
     counter: ModelCallCounter
     bodies: Record<string, unknown>[]
     run: ReturnType<typeof vi.spyOn>
+    provider: ReturnType<typeof createMetaProvider>
 } {
     const bodies: Record<string, unknown>[] = []
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
@@ -117,11 +146,13 @@ function setup(
             runtimeMode: 'meta',
             work,
             cacheLimit,
+            ...motion,
         }),
         fetchImpl,
         counter,
         bodies,
         run,
+        provider,
     }
 }
 
@@ -175,16 +206,17 @@ it('caches one call per step/language/version and sends verbatim manual text bef
     })
     expect(content[1]!.type).toBe('input_image')
     const image = Buffer.from(content[1]!.image_url!.split(',')[1]!, 'base64')
-    expect(await sharp(image).metadata()).toMatchObject({ width: 39, height: 39 })
+    // The cited box is 615 px on this 1024 px page, so it is neither too thin nor too small to crop.
+    expect(await sharp(image).metadata()).toMatchObject({ width: 615, height: 615 })
     expect(JSON.parse(content[2]!.text!)).toMatchObject({
         parts: metadata.parts,
         actions: metadata.actions,
         orientation: metadata.orientation,
         connection: metadata.connection,
     })
-    expect(stepMotionCacheKey(metadata)).not.toBe(stepMotionCacheKey(metadata, STEP_MOTION_PROMPT_VERSION + 1))
-    expect(stepMotionCacheKey(metadata)).not.toBe(stepMotionCacheKey({ ...metadata, readingLanguage: 'es' }))
-    expect(stepMotionCacheKey(metadata)).not.toBe(stepMotionCacheKey({ ...metadata, stepId: 'step-2' }))
+    expect(stepMotionContentKey(metadata)).not.toBe(stepMotionContentKey(metadata, STEP_MOTION_PROMPT_VERSION + 1))
+    expect(stepMotionContentKey(metadata)).not.toBe(stepMotionContentKey({ ...metadata, readingLanguage: 'es' }))
+    expect(stepMotionContentKey(metadata)).not.toBe(stepMotionContentKey({ ...metadata, stepId: 'step-2' }))
     expect((await handler(await request({ readingLanguage: 'es' }))).status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     expect(stepMotionTextBytes({ ...metadata, readingLanguage: 'es' })).toBe(wireTextBytes(bodies[1]!))
@@ -198,6 +230,31 @@ it('misses a cached scene after its instruction content changes under the same p
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     expect((await handler(await request({ instructionText: 'Press the part.' }))).status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it('misses a cached scene when the same step arrives with a different verified page', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene })
+    expect((await handler(await request())).status).toBe(200)
+    const other = await solidPng(1024, 1024, '#abcdef')
+    expect((await handler(await request({}, 'motion-fixture-key', { bytes: other }))).status).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it('verifies the uploaded original before serving a cached scene for the page it claims', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene })
+    const original = await solidPng(1024, 1024, '#456789')
+    expect((await handler(await request())).status).toBe(200)
+    const swapped = await handler(
+        await request({ requestId: 'swapped' }, 'motion-fixture-key', {
+            claimedHash: sha256Hex(original),
+            bytes: await solidPng(1024, 1024, '#abcdef'),
+        }),
+    )
+    expect(swapped.status).toBe(400)
+    expect(await swapped.json()).toMatchObject({ code: 'invalid_input', notDispatched: true })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
 })
 
 it('keeps a post-dispatch failure terminal so revisits and cache reads never pay again', async () => {
@@ -331,6 +388,77 @@ it.each([null, [0, 0, 1, 1]] as const)(
     },
 )
 
+it.each([
+    [
+        'keeps the width and grows a thin region about its centre to the minimum edge',
+        [0.25, 0.5, 0.5, 0.0625],
+        1000,
+        2000,
+        { left: 250, top: 935, width: 500, height: 256 },
+    ],
+    [
+        'grows both sides in proportion when the region is under four percent of the page',
+        [0.5, 0.5, 0.125, 0.125],
+        2048,
+        2048,
+        { left: 947, top: 947, width: 410, height: 410 },
+    ],
+    [
+        'shifts inside the page instead of shrinking when the grown window meets the edge',
+        [0.75, 0.5, 0.25, 0.0625],
+        1000,
+        2000,
+        { left: 717, top: 921, width: 283, height: 283 },
+    ],
+    [
+        'sends a page under the minimum edge whole',
+        [0.25, 0.25, 0.1, 0.1],
+        200,
+        2000,
+        { left: 0, top: 0, width: 200, height: 2000 },
+    ],
+] as const)('%s', (_name, box, width, height, expected) => {
+    expect(figureWindow([...box], { width, height })).toEqual(expected)
+})
+
+it('sends a thin cited figure grown to the minimum window with its pixels in place', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const region = { x: 0.25, y: 0.5, width: 0.5, height: 93 / 4096 }
+    const red = await sharp({ create: { width: 837, height: 93, channels: 3, background: '#ff0000' } })
+        .png()
+        .toBuffer()
+    const original = await sharp({ create: { width: 1674, height: 4096, channels: 3, background: '#ffffff' } })
+        .composite([{ input: red, left: 418, top: 2048 }])
+        .png()
+        .toBuffer()
+    const { handler, bodies } = setup({ scene: null })
+    const page = { ...metadata.page, width: 1674, height: 4096 }
+    const figureBox = paddedStepFigureBox([region.x, region.y, region.width, region.height])
+    const sourceRefs = [{ pageId: 'page-1', region }]
+    expect(
+        (await handler(await request({ page, sourceRefs, figureBox }, 'motion-fixture-key', { bytes: original })))
+            .status,
+    ).toBe(200)
+    const input = bodies[0]!.input as { content: { type: string; image_url?: string }[] }[]
+    const picture = input[0]!.content.find((part) => part.type === 'input_image')!
+    const sent = await sharp(Buffer.from(picture.image_url!.split(',')[1]!, 'base64'))
+        .raw()
+        .toBuffer({ resolveWithObject: true })
+    const { data, info } = sent
+    expect(info.width).toBeGreaterThanOrEqual(256)
+    expect(info.height).toBeGreaterThanOrEqual(256)
+    const pixel = (x: number, y: number): number[] => {
+        const offset = (y * info.width + x) * info.channels
+        return [...data.subarray(offset, offset + 3)]
+    }
+    const [red1, green1, blue1] = pixel(Math.floor(info.width / 2), Math.floor(info.height / 2))
+    expect(red1!).toBeGreaterThan(200)
+    expect(green1!).toBeLessThan(60)
+    expect(blue1!).toBeLessThan(60)
+    // The top row lies above the 93 px band, so the window reaches past the region rather than clipping to it.
+    expect(pixel(Math.floor(info.width / 2), 0).every((channel) => channel > 200)).toBe(true)
+})
+
 it('evicts the oldest completed result while retaining an in-flight result and admitting a new step', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const { handler, fetchImpl } = setup({ scene: null }, 8, undefined, 1)
@@ -352,7 +480,9 @@ it('evicts the oldest completed result while retaining an in-flight result and a
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1))
     const sibling = handler(await request({ stepId: 'step-2' }))
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2))
+    const imageWork = vi.spyOn(media, 'validateAndNormalizeImages')
     const busy = await handler(await request({ stepId: 'step-3' }))
+    expect(imageWork).not.toHaveBeenCalled()
     expect(busy.status).toBe(503)
     expect(await busy.json()).toMatchObject({ code: 'busy', notDispatched: true })
     finishSibling(response({ scene: null }))
@@ -408,5 +538,117 @@ it('coalesces simultaneous callers while a provider attempt is still in flight',
     finish(response({ scene: null }))
     expect((await pending).map((result) => result.status)).toEqual([200, 200])
     expect(counter.used).toBe(1)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+})
+
+it('keys the full result by the exact JPEG bytes the model receives, separately from the content identity', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const pixels = Uint8Array.from({ length: 768 * 768 * 3 }, (_, i) => (i * 17 + Math.floor(i / 7) * 29) % 256)
+    const bytes = await sharp(pixels, { raw: { width: 768, height: 768, channels: 3 } })
+        .png()
+        .toBuffer()
+    const { handler, bodies, provider } = setup({ scene: null })
+    const generation = vi.spyOn(provider, 'generateStepMotion')
+    const uploaded = await request({ page: { ...metadata.page, width: 768, height: 768 } }, 'motion-fixture-key', {
+        bytes,
+    })
+    expect((await handler(uploaded)).status).toBe(200)
+    const prepared = generation.mock.calls[0]![0]
+    const sent = bodies[0]!.input as { content: { type: string; image_url?: string }[] }[]
+    const image = sent[0]!.content.find((part) => part.type === 'input_image')!
+    const actualBytes = Buffer.from(image.image_url!.split(',')[1]!, 'base64')
+    expect(actualBytes).toEqual(Buffer.from(prepared.image.bytes))
+    const full = stepMotionCacheKey(prepared.request, sha256Hex(actualBytes))
+    expect(full).not.toBe(stepMotionContentKey(prepared.request))
+    expect(stepMotionCacheKey(prepared.request, 'b'.repeat(64))).not.toBe(full)
+    expect(stepMotionCacheKey(prepared.request, sha256Hex(actualBytes), STEP_MOTION_PROMPT_VERSION + 1)).not.toBe(full)
+})
+
+it('reserves the UTC-day cap after transport pacing, immediately before the send', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    try {
+        let now = Date.UTC(2026, 10, 3, 23, 59, 50)
+        const { handler, fetchImpl } = setup({ scene: null }, 8, undefined, undefined, {
+            dailyLimit: 2,
+            clock: () => now,
+        })
+        fetchImpl.mockImplementationOnce(async () => {
+            const result = response({ scene: null })
+            result.headers.set('x-ratelimit-remaining-requests', '0')
+            return result
+        })
+        expect((await handler(await request())).status).toBe(200)
+        const sending = vi.spyOn(MetaTransport.prototype, 'send')
+        const paced = handler(await request({ stepId: 'step-2' }))
+        await vi.waitFor(() => expect(sending).toHaveBeenCalledTimes(1))
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+        now += 60_000
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect((await paced).status).toBe(200)
+        expect((await handler(await request({ stepId: 'step-3' }))).status).toBe(200)
+        expect((await handler(await request({ stepId: 'step-4' }))).status).toBe(429)
+        expect(fetchImpl).toHaveBeenCalledTimes(3)
+    } finally {
+        vi.useRealTimers()
+    }
+})
+
+it('does not consume the feature cap when preparation fails before any transport send', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene: null }, 8, undefined, undefined, { dailyLimit: 1 })
+    vi.spyOn(MetaTransport.prototype, 'send').mockRejectedValueOnce(new Error('pre-send failure'))
+    const failure = await handler(await request())
+    expect(failure.status).toBe(503)
+    expect(await failure.json()).toMatchObject({ notDispatched: true })
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect((await handler(await request())).status).toBe(200)
+    expect((await handler(await request({ stepId: 'step-2' }))).status).toBe(429)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+})
+
+it('answers 404 before authentication, body reads, quota or provider work when disabled', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl, counter, run } = setup({ scene }, 8, undefined, undefined, { enabled: false })
+    expect((await handler(await request({}, 'wrong-fixture-key'))).status).toBe(404)
+    expect((await handler(await request())).status).toBe(404)
+    expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(counter.used).toBe(0)
+    expect(run).not.toHaveBeenCalled()
+})
+
+it('caps paid dispatches per UTC day, serves cache hits when full, and resets on the next day', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    let now = Date.UTC(2026, 10, 3, 23)
+    const { handler, fetchImpl, counter } = setup({ scene: null }, 8, undefined, undefined, {
+        dailyLimit: 1,
+        clock: () => now,
+    })
+    expect((await handler(await request())).status).toBe(200)
+    const refused = await handler(await request({ stepId: 'step-2' }))
+    expect(refused.status).toBe(429)
+    expect(await refused.json()).toEqual({ status: 'unavailable', code: 'budget_exhausted', notDispatched: true })
+    expect((await handler(await request())).status).toBe(200)
+    expect((await handler(await request({ stepId: 'step-2', cacheOnly: true }))).status).toBe(404)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    // The refused attempt never reached the shared public claim, so only the dispatched call is counted.
+    expect(counter.used).toBe(1)
+    now += 60 * 60_000
+    expect((await handler(await request({ stepId: 'step-2' }))).status).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it('does not charge the daily cap when the shared public claim refuses before dispatch', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl, counter } = setup({ scene: null }, 8, undefined, undefined, { dailyLimit: 1 })
+    vi.spyOn(counter, 'claim').mockImplementationOnce(() => {
+        throw new BudgetError()
+    })
+    expect(await (await handler(await request())).json()).toMatchObject({
+        code: 'budget_exhausted',
+        notDispatched: true,
+    })
+    expect((await handler(await request())).status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 })

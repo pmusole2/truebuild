@@ -11,6 +11,7 @@ import {
     FIXTURE_EVIDENCE,
     LIMITS,
     type ObservedCallTelemetry,
+    type StepExtension,
     manualSessionSchema,
     manualStepSchema,
     matchesBinding,
@@ -145,6 +146,8 @@ type EffectContext = {
     deadline: Deadline
     dispatched: boolean
     counter?: ModelCallCounter
+    /** Trusted first-send admission, after provider preparation and transport pacing. */
+    beforeSend?: () => void
     retry: false | 'network' | 'rate_limit'
     networkRetried?: boolean
     rateLimitRetried?: boolean
@@ -221,6 +224,7 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                 if (context.retry === 'network') context.networkRetried = true
                 if (context.retry === 'rate_limit') context.rateLimitRetried = true
             }
+            if (!context.dispatched) context.beforeSend?.()
             context.dispatched = true
             context.retry = false
             context.retryAt = undefined
@@ -288,7 +292,7 @@ export async function runModelParseRepair<T>(work: () => Promise<T>): Promise<T>
 export function createBackgroundWork(counter: ModelCallCounter, gate: ConcurrencyGate): BackgroundWork {
     return {
         async run<T>(
-            { deadlineMs, signal }: { deadlineMs: number; signal: AbortSignal },
+            { deadlineMs, signal, beforeSend }: { deadlineMs: number; signal: AbortSignal; beforeSend?: () => void },
             work: () => Promise<T>,
         ): Promise<T> {
             const deadline = createDeadline(Math.min(deadlineMs, MAX_DEADLINE_MS), signal)
@@ -301,6 +305,7 @@ export function createBackgroundWork(counter: ModelCallCounter, gate: Concurrenc
                 attempts: 0,
                 repair: { used: false },
                 counter,
+                beforeSend,
             }
             try {
                 check()
@@ -675,6 +680,10 @@ export function createModelHandlers(options: {
     documentFixtures?: DocumentFixtureGenerator | null
     /** How long a question request waits for its answer before returning a 202 ticket. */
     questionSyncWaitMs?: number
+    /** Defaults to enabled; explicitly disabled runtimes admit no motion work. */
+    stepMotionEnabled?: boolean
+    /** Process-local motion generation cap; defaults to 300 per UTC day. */
+    stepMotionDailyLimit?: number
 }): {
     parse: Handler
     pieces: Handler
@@ -830,7 +839,7 @@ export function createModelHandlers(options: {
         schema: z.ZodType<M>,
         output: z.ZodType<T>,
         duration: number,
-        prepare: (metadata: M, files: Map<string, File>, deadline: Deadline) => Promise<I>,
+        prepare: (metadata: M, files: Map<string, File>, deadline: Deadline, request: Request) => Promise<I>,
         dispatch: ((input: I, signal: AbortSignal, progress?: ProgressSink) => Promise<T>) | null,
         validate: (value: T, metadata: M) => boolean,
         scopeHeaders?: (metadata: M) => Record<string, string>,
@@ -871,7 +880,7 @@ export function createModelHandlers(options: {
                 execution.check()
                 metadata = parsed.metadata
                 policy.onMetadata?.(metadata)
-                const input = await prepare(metadata, parsed.files, execution.deadline)
+                const input = await prepare(metadata, parsed.files, execution.deadline, request)
                 execution.check()
                 counter.claim()
                 execution.context.counter = counter
@@ -960,11 +969,21 @@ export function createModelHandlers(options: {
         }
     }
 
+    const parseStepFields = (request: Request): ReadonlySet<StepExtension> => {
+        const query = new URL(request.url).searchParams
+        const fields = requestedStepExtensions(query)
+        // Shipped c03fa2d clients advertised this future field beside the legacy alias before modeling it.
+        // The single-field negotiation form is the capability signal for printed text extraction.
+        return query.has('stepActions') ? new Set([...fields].filter((field) => field !== 'sourceText')) : fields
+    }
     const parseRun = jsonHandler(
         parseRouteMetadataSchema,
         parsedManualSchema,
         policy.stages.parse.deadlineMs + PARSE_ROUTE_MARGIN_MS,
-        parseFiles,
+        async (metadata, files, deadline, request): Promise<ParseManualInput> => ({
+            ...(await parseFiles(metadata, files, deadline)),
+            stepFields: [...parseStepFields(request)],
+        }),
         provider
             ? (input, signal, progress): ReturnType<MetaProvider['parseManual']> =>
                   provider.parseManual(input, signal, progress)
@@ -992,7 +1011,7 @@ export function createModelHandlers(options: {
                 const publicValue = asPublic(value)
                 const query = new URL(request.url).searchParams
                 const removal = query.get('stepKinds') === 'remove'
-                const fields = requestedStepExtensions(query)
+                const fields = parseStepFields(request)
                 // Old installed clients have strict step schemas. Project only the response; preserve canonical data.
                 return parsedManualSchema.parse({
                     ...publicValue,
@@ -1011,9 +1030,7 @@ export function createModelHandlers(options: {
     const parse: Handler = async (request): Promise<Response> => {
         const response = await parseRun(request)
         if (response.ok) {
-            const fields = [...requestedStepExtensions(new URL(request.url).searchParams)].filter(
-                (name) => name in manualStepSchema.shape,
-            )
+            const fields = [...parseStepFields(request)].filter((name) => name in manualStepSchema.shape)
             response.headers.set('x-truebuild-step-fields', fields.join(','))
             response.headers.set('access-control-expose-headers', 'x-truebuild-step-fields')
         }
@@ -1875,6 +1892,8 @@ export function createModelHandlers(options: {
     }
     return {
         stepMotion: createStepMotionHandler({
+            enabled: options.stepMotionEnabled,
+            dailyLimit: options.stepMotionDailyLimit,
             auth,
             provider,
             runtimeMode: options.runtimeMode ?? 'meta',

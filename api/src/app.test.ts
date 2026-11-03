@@ -19,6 +19,29 @@ function app(environment: Record<string, string | undefined> = {}): ReturnType<t
 }
 
 describe('Hono HTTP boundary', (): void => {
+    it('returns an off-switch 404 before exhausted quota or motion work', async () => {
+        const runtime = createRuntimeFromEnvironment({
+            PROVIDER_MODE: 'fixture',
+            API_SHARED_SECRET: 'truebuild-fixture-demo',
+            STEP_MOTION_ENABLED: '0',
+            MODEL_CALL_LIMIT_PER_DAY: '1',
+        })
+        runtime.counter.claim()
+        const quota = vi.spyOn(runtime.counter, 'runForClient')
+        const claim = vi.spyOn(runtime.counter, 'claim')
+        const motion = vi.spyOn(runtime.model, 'stepMotion')
+        const api = createApp({ runtime, onDuration: () => {} })
+        const response = await api.request('/api/step-motion', {
+            method: 'POST',
+            headers: { 'x-truebuild-key': 'truebuild-fixture-demo' },
+            body: 'unread',
+        })
+        expect(response.status).toBe(404)
+        expect(quota).not.toHaveBeenCalled()
+        expect(claim).not.toHaveBeenCalled()
+        expect(motion).not.toHaveBeenCalled()
+    })
+
     it('allows cache-only motion reads after quota exhaustion without bypassing actual per-client claims', async () => {
         const runtime = createRuntimeFromEnvironment({
             PROVIDER_MODE: 'fixture',
@@ -41,7 +64,7 @@ describe('Hono HTTP boundary', (): void => {
                 actions: [],
                 orientation: null,
                 connection: null,
-                page: { pageId: 'page-1', width: 1, height: 1, mimeType: 'image/png' },
+                page: { pageId: 'page-1', width: 1, height: 1, mimeType: 'image/png', contentHash: 'b'.repeat(64) },
                 figureBox: null,
                 cacheOnly: true,
             }),

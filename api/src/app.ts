@@ -140,6 +140,20 @@ export function createApp(
             if (method && request.method === 'OPTIONS') {
                 return preflight(request, method, runtime.allowedOrigins)
             }
+            if (context.req.path === '/api/step-motion' && !runtime.stepMotionEnabled) {
+                await request.body?.cancel().catch(() => {})
+                return corsResponse(
+                    request,
+                    Response.json(
+                        { status: 'unavailable', code: 'not_found' },
+                        {
+                            status: 404,
+                            headers: { 'cache-control': 'no-store' },
+                        },
+                    ),
+                    runtime.allowedOrigins,
+                )
+            }
             if (method && !['/health', '/api/health'].includes(context.req.path)) {
                 try {
                     runtime.auth.authenticate(request)

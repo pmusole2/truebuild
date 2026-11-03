@@ -12,7 +12,7 @@ import {
     motionRequestForStep,
     stepMotionCacheKey as deviceCacheKey,
 } from '../../../app/src/features/step-motion/step-motion-registry'
-import { stepMotionCacheKey as serverCacheKey } from './step-motion'
+import { stepMotionContentKey as serverCacheKey } from './step-motion'
 import { BoundedApiClient, SIMULATED_LABEL } from '../../../app/src/api/client'
 
 const digest = (bytes: Uint8Array): Promise<string> => Promise.resolve(createHash('sha256').update(bytes).digest('hex'))

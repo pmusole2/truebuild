@@ -370,6 +370,24 @@ const requestedPieceSchema = pieceSpecSchema.extend({
         .max(PIECE_SPEC_LIMITS.parts),
 })
 
+/** Negotiation changes only the model-sent shape; providerParseSchema retains every runtime refinement. */
+export const metaParseSourceTextOutputSchema = strictSchema(
+    z.toJSONSchema(providerParseSchema, { target: 'draft-7', io: 'input' }),
+)
+
+function parseWithoutSourceTextOutputSchema(): Schema {
+    const schema = structuredClone(metaParseSourceTextOutputSchema)
+    const steps = object(schema.properties) ? schema.properties.steps : undefined
+    const step = object(steps) ? steps.items : undefined
+    if (!object(step) || !object(step.properties) || !Array.isArray(step.required))
+        throw new Error('invalid_provider_schema')
+    delete step.properties.sourceText
+    step.required = step.required.filter((name) => name !== 'sourceText')
+    assertStrictSchema(schema)
+
+    return schema
+}
+
 export const metaOutputSchemas = {
     stepMotion: strictSchema(z.toJSONSchema(stepMotionResultSchema, { target: 'draft-7', io: 'input' })),
     pieces: strictSchema(
@@ -380,7 +398,7 @@ export const metaOutputSchemas = {
             { target: 'draft-7', io: 'input' },
         ),
     ),
-    parse: strictSchema(z.toJSONSchema(providerParseSchema, { target: 'draft-7', io: 'input' })),
+    parse: parseWithoutSourceTextOutputSchema(),
     // Legacy wire schemas: no layout or regions. The provider sends these unless MODEL_LAYOUT=1 selects the variants below.
     check: strictSchema(
         z.toJSONSchema(

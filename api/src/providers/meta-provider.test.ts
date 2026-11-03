@@ -438,6 +438,7 @@ describe('inactive direct Meta transport', (): void => {
                 requestId: input.requestId,
                 binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
                 pages: input.sourceImages,
+                stepFields: ['sourceText'],
             },
             signal(),
         )

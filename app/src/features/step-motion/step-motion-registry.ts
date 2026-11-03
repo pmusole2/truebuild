@@ -2,8 +2,8 @@ import {
     canonicalJson,
     paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
+    stepMotionCacheIdentity,
     stepMotionRequestSchema,
-    stepMotionCacheContent,
     stepMotionResultSchema,
     type ManualSession,
     type ManualStep,
@@ -20,7 +20,7 @@ type Generate = (
 ) => Promise<StepMotionAttempt | null>
 
 export function stepMotionCacheKey(request: StepMotionRequest, version = STEP_MOTION_PROMPT_VERSION): string {
-    return `truebuild/step-motion/${sha256Hex(canonicalJson([version, stepMotionCacheContent(request)]))}`
+    return `truebuild/step-motion/${sha256Hex(stepMotionCacheIdentity(request, version))}`
 }
 
 /** A review action is plain text or an action object; each contributes its instruction text and anything else is ignored. */
@@ -90,7 +90,13 @@ export function motionRequestForStep(
         actions,
         orientation: step.orientation.state === 'known' ? step.orientation.value.description : null,
         connection: step.connection.state === 'known' ? step.connection.value.description : null,
-        page: { pageId: page.pageId, width: page.width, height: page.height, mimeType: page.mimeType },
+        page: {
+            pageId: page.pageId,
+            width: page.width,
+            height: page.height,
+            mimeType: page.mimeType,
+            contentHash: page.contentHash,
+        },
         figureBox: figureBoxFor(step, page.pageId),
     })
     return request.success ? request.data : null

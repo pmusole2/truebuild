@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { paddedStepFigureBox, stepMotionSceneSchema } from './step-motion'
+import {
+    paddedStepFigureBox,
+    stepMotionCacheIdentity,
+    stepMotionRequestSchema,
+    stepMotionSceneSchema,
+    type StepMotionRequest,
+} from './step-motion'
 import { createDemoManual, manualStepSchema } from './index'
 
 const shape = {
@@ -13,6 +19,20 @@ const motions = [
     { kind: 'translate', from: [0, 2, 0], to: [0, 0, 0] },
     { kind: 'screw', axis: [0, 1, 0], travel: 0.5, turns: 2 },
 ]
+const request: StepMotionRequest = {
+    requestId: 'request-1',
+    manualHash: 'a'.repeat(64),
+    stepId: 'step-1',
+    readingLanguage: 'en',
+    instructionText: 'Turn the part.',
+    sourceRefs: [{ pageId: 'page-1', region: null }],
+    parts: [],
+    actions: [],
+    orientation: null,
+    connection: null,
+    page: { pageId: 'page-1', width: 1024, height: 768, mimeType: 'image/png', contentHash: 'b'.repeat(64) },
+    figureBox: null,
+}
 const scene = (motion: unknown): object => ({
     version: 1,
     stepId: 'step-1',
@@ -69,5 +89,22 @@ describe('step motion contract', () => {
         )
         const invalidShape = { ...shape, position: [0, 1001, 0] }
         expect(stepMotionSceneSchema.safeParse({ ...scene(motions[0]), still: [invalidShape] }).success).toBe(false)
+    })
+
+    it('requires the verified raw page hash and keeps cache identity free of transport ids', () => {
+        expect(stepMotionRequestSchema.parse(request)).toEqual(request)
+        const { contentHash: _contentHash, ...unhashed } = request.page
+        for (const page of [
+            unhashed,
+            { ...request.page, contentHash: 'B'.repeat(64) },
+            { ...request.page, contentHash: 'b' },
+        ])
+            expect(stepMotionRequestSchema.safeParse({ ...request, page }).success).toBe(false)
+        const identity = stepMotionCacheIdentity(request)
+        expect(stepMotionCacheIdentity({ ...request, requestId: 'other', cacheOnly: true })).toBe(identity)
+        expect(
+            stepMotionCacheIdentity({ ...request, page: { ...request.page, contentHash: 'c'.repeat(64) } }),
+        ).not.toBe(identity)
+        expect(stepMotionCacheIdentity(request, 3)).not.toBe(identity)
     })
 })

@@ -90,6 +90,7 @@ export async function validateAndNormalizeImages(
     images: readonly ObservationImage[],
     signal?: AbortSignal,
     maxImages: number = LIMITS.requestImages,
+    preservePreparedJpeg = false,
 ): Promise<ValidatedImage[]> {
     checkpoint(signal)
 
@@ -146,17 +147,20 @@ export async function validateAndNormalizeImages(
                 throw new MediaValidationError('invalid_input')
             }
 
-            const { data, info } = await pipeline
-                .autoOrient()
-                .jpeg({ quality: 85 })
-                .toBuffer({ resolveWithObject: true })
+            if (preservePreparedJpeg && (mimeType !== 'image/jpeg' || (metadata.orientation ?? 1) !== 1))
+                throw new MediaValidationError('invalid_input')
+            // A prepared motion JPEG is decoded for validation, while its owned encoded bytes stay authoritative.
+            const { data, info } = await (
+                preservePreparedJpeg ? pipeline.raw() : pipeline.autoOrient().jpeg({ quality: 85 })
+            ).toBuffer({ resolveWithObject: true })
             checkpoint(signal)
+            const bytes = preservePreparedJpeg ? image.bytes : new Uint8Array(data)
 
-            if (info.width !== image.width || info.height !== image.height || data.byteLength > LIMITS.imageBytes) {
+            if (info.width !== image.width || info.height !== image.height || bytes.byteLength > LIMITS.imageBytes) {
                 throw new MediaValidationError('invalid_input')
             }
 
-            outputBytes += data.byteLength
+            outputBytes += bytes.byteLength
 
             if (outputBytes > LIMITS.requestBytes) {
                 throw new MediaValidationError('invalid_input')
@@ -164,7 +168,7 @@ export async function validateAndNormalizeImages(
 
             results.push({
                 mimeType: 'image/jpeg',
-                bytes: new Uint8Array(data),
+                bytes,
                 width: info.width,
                 height: info.height,
             })

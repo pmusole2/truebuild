@@ -98,6 +98,19 @@ describe('step motion device registry', () => {
         expect(request.figureBox).toBeNull()
     })
 
+    it('copies the manual page raw hash into the request, so the cache identity names the bytes it claims', () => {
+        const session = createDemoManual()
+        const request = motionRequestForStep(session, 'step-1', 'request-1')!
+        expect(request.page.contentHash).toBe(session.pages[0]!.contentHash)
+        const reuploaded = { ...session, pages: [{ ...session.pages[0]!, contentHash: 'c'.repeat(64) }] }
+        const changed = motionRequestForStep(reuploaded, 'step-1', 'request-1')!
+        expect(changed.page.contentHash).toBe('c'.repeat(64))
+        expect(stepMotionCacheKey(changed)).not.toBe(stepMotionCacheKey(request))
+        expect(stepMotionCacheKey({ ...request, requestId: 'other', cacheOnly: true })).toBe(
+            stepMotionCacheKey(request),
+        )
+    })
+
     it('keys both caches by scene content, preserving only request and lookup identity', async () => {
         const request = motionRequestForStep(createDemoManual(), 'step-1', 'original')!
         const generate = vi.fn(async () => ({ scene: null }))

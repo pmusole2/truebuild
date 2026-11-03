@@ -4,8 +4,8 @@ import {
     canonicalJson,
     LIMITS,
     STEP_MOTION_PROMPT_VERSION,
+    stepMotionCacheIdentity,
     stepMotionRequestSchema,
-    stepMotionCacheContent,
     stepMotionResultSchema,
     type StepMotionRequest,
     type StepMotionResult,
@@ -28,13 +28,51 @@ import type { BackgroundWork } from './screens/service'
 const EMPTY: StepMotionResult = { scene: null }
 /** Completed entries are bounded; at most two additional entries can be in flight. Restarts/replicas have separate caches. */
 const CACHE_LIMIT = 1024
+/** Process-wide UTC-day ceiling on paid dispatches to this endpoint. Cache hits, refusals and failed admissions never count. */
+export const STEP_MOTION_DAILY_LIMIT = 300
+const DAY_MS = 86_400_000
+/** A cited figure smaller than this on either side is sent with more surrounding page, so its text stays readable. */
+const MIN_FIGURE_EDGE = 256
+/** A cited figure covering less of the page than this is grown to it, after the minimum edge. */
+const MIN_FIGURE_AREA = 0.04
+
 interface CacheEntry {
     pending: Promise<StepMotionResult>
     completed: boolean
+    /** The content identity this entry answers; a metadata-only lookup reaches the entry through it. */
+    contentKey: string
 }
 class BeforeMotionDispatch extends Error {
     constructor(readonly failure: unknown) {
         super('not_dispatched')
+    }
+}
+
+/** UTC-day ceiling on paid dispatches. Only the dispatch boundary reserves, and a failed attempt is never refunded. */
+class StepMotionDailyCap {
+    #day = -1
+    #dispatched = 0
+
+    constructor(
+        readonly limit: number,
+        private readonly now: () => number,
+    ) {
+        if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('invalid_step_motion_daily_limit')
+    }
+
+    available(): boolean {
+        const day = Math.floor(this.now() / DAY_MS)
+        if (day !== this.#day) {
+            this.#day = day
+            this.#dispatched = 0
+        }
+        return this.#dispatched < this.limit
+    }
+
+    /** Check and increment in one synchronous step, so concurrent callers can never exceed the ceiling. */
+    reserve(): void {
+        if (!this.available()) throw new BudgetError()
+        this.#dispatched += 1
     }
 }
 
@@ -54,25 +92,74 @@ export function estimatedStepMotionCostUsd(usage: {
     return ((inputTokens - cachedTokens) * 4 + cachedTokens * 0.2 + outputTokens * 20) / 1_000_000
 }
 
-export function stepMotionCacheKey(request: StepMotionRequest, promptVersion = STEP_MOTION_PROMPT_VERSION): string {
-    return createHash('sha256')
-        .update(canonicalJson([promptVersion, stepMotionCacheContent(request)]))
-        .digest('hex')
+const sha256Hex = (value: Uint8Array | string): string => createHash('sha256').update(value).digest('hex')
+
+/** Content identity: the verified raw page, its crop and every text input. Pixels are not part of it. */
+export function stepMotionContentKey(request: StepMotionRequest, promptVersion = STEP_MOTION_PROMPT_VERSION): string {
+    return sha256Hex(stepMotionCacheIdentity(request, promptVersion))
+}
+
+/** Full key: the content identity plus the SHA-256 of the exact JPEG bytes the model received. */
+export function stepMotionCacheKey(
+    request: StepMotionRequest,
+    imageSha256: string,
+    promptVersion = STEP_MOTION_PROMPT_VERSION,
+): string {
+    return sha256Hex(canonicalJson([promptVersion, stepMotionContentKey(request, promptVersion), imageSha256]))
+}
+
+export interface FigureWindow {
+    left: number
+    top: number
+    width: number
+    height: number
+}
+
+/**
+ * The pixels sent for a cited figure. A region under 256 px on either side, or under 4% of the page, grows about its
+ * centre until both hold. It shifts inside the page rather than shrinking, and a page under 256 px is sent whole.
+ */
+export function figureWindow(
+    figureBox: readonly [number, number, number, number] | null,
+    page: { width: number; height: number },
+): FigureWindow {
+    const whole: FigureWindow = { left: 0, top: 0, width: page.width, height: page.height }
+    if (figureBox === null || Math.min(page.width, page.height) < MIN_FIGURE_EDGE) return whole
+    const [x, y, width, height] = figureBox
+    const left = Math.floor(x * page.width)
+    const top = Math.floor(y * page.height)
+    const region: FigureWindow = {
+        left,
+        top,
+        width: Math.max(1, Math.min(page.width - left, Math.ceil(width * page.width))),
+        height: Math.max(1, Math.min(page.height - top, Math.ceil(height * page.height))),
+    }
+    const needed = Math.max(MIN_FIGURE_EDGE * MIN_FIGURE_EDGE, Math.ceil(page.width * page.height * MIN_FIGURE_AREA))
+    if (region.width >= MIN_FIGURE_EDGE && region.height >= MIN_FIGURE_EDGE && region.width * region.height >= needed)
+        return region
+    const edgeWidth = Math.max(region.width, MIN_FIGURE_EDGE)
+    const edgeHeight = Math.max(region.height, MIN_FIGURE_EDGE)
+    const scale = Math.max(1, Math.sqrt(needed / (edgeWidth * edgeHeight)))
+    let grownWidth = Math.min(page.width, Math.ceil(edgeWidth * scale))
+    let grownHeight = Math.min(page.height, Math.ceil(edgeHeight * scale))
+    // A side already at the page edge hands its missing area to the other side, which stays within the page.
+    if (grownWidth === page.width)
+        grownHeight = Math.min(page.height, Math.max(grownHeight, Math.ceil(needed / grownWidth)))
+    else if (grownHeight === page.height)
+        grownWidth = Math.min(page.width, Math.max(grownWidth, Math.ceil(needed / grownHeight)))
+    const centreX = region.left + region.width / 2
+    const centreY = region.top + region.height / 2
+    return {
+        left: Math.min(page.width - grownWidth, Math.max(0, Math.round(centreX - grownWidth / 2))),
+        top: Math.min(page.height - grownHeight, Math.max(0, Math.round(centreY - grownHeight / 2))),
+        width: grownWidth,
+        height: grownHeight,
+    }
 }
 
 async function figure(request: StepMotionRequest, image: ObservationImage): Promise<ObservationImage> {
     let pipeline = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels })
-    if (request.figureBox !== null) {
-        const [x, y, width, height] = request.figureBox
-        const left = Math.floor(x * image.width)
-        const top = Math.floor(y * image.height)
-        pipeline = pipeline.extract({
-            left,
-            top,
-            width: Math.max(1, Math.min(image.width - left, Math.ceil(width * image.width))),
-            height: Math.max(1, Math.min(image.height - top, Math.ceil(height * image.height))),
-        })
-    }
+    if (request.figureBox !== null) pipeline = pipeline.extract(figureWindow(request.figureBox, image))
     const { data, info } = await pipeline
         .resize({
             width: STEP_MOTION_POLICY.maxImageEdge,
@@ -85,25 +172,64 @@ async function figure(request: StepMotionRequest, image: ObservationImage): Prom
     return { bytes: data, width: info.width, height: info.height, mimeType: 'image/jpeg' }
 }
 
+/** Reads the uploaded original, proves it is the claimed page, then crops it. Nothing here can dispatch or be paid. */
+async function verifiedFigure(
+    request: StepMotionRequest,
+    files: Map<string, File>,
+    fileName: string,
+    deadline: ReturnType<typeof createDeadline>,
+): Promise<ObservationImage> {
+    try {
+        const bytes = await modelFileBytes(files, fileName, request.page.mimeType, LIMITS.imageBytes, deadline)
+        if (sha256Hex(bytes) !== request.page.contentHash) throw new ModelBodyError(400)
+        const [image] = await validateAndNormalizeImages([{ ...request.page, bytes }], deadline.signal, 1)
+        return await figure(request, image!)
+    } catch (error) {
+        throw new BeforeMotionDispatch(error)
+    }
+}
+
 export function createStepMotionHandler(options: {
     auth: SharedKeyAuth
     provider: Pick<MetaProvider, 'generateStepMotion'> | null
     runtimeMode: 'meta' | 'fixture'
     work: BackgroundWork
+    /** A disabled endpoint answers 404 before authentication, body reads, quota or model work. Default: enabled. */
+    enabled?: boolean
+    /** Process-wide UTC-day ceiling on paid dispatches to this endpoint. Default: STEP_MOTION_DAILY_LIMIT. */
+    dailyLimit?: number
+    /** Clock for the UTC-day boundary; tests inject one. */
+    clock?: () => number
     /** Allows a small bounded cache in tests; production keeps the default completed-result limit. */
     cacheLimit?: number
 }): (request: Request) => Promise<Response> {
+    const enabled = options.enabled ?? true
     const cacheLimit = options.cacheLimit ?? CACHE_LIMIT
     if (!Number.isSafeInteger(cacheLimit) || cacheLimit < 1 || cacheLimit > CACHE_LIMIT)
         throw new Error('invalid_cache_limit')
+    const dailyCap = new StepMotionDailyCap(options.dailyLimit ?? STEP_MOTION_DAILY_LIMIT, options.clock ?? Date.now)
     const cache = new Map<string, CacheEntry>()
+    /** Content identity to the full key of its newest entry, so a metadata-only lookup can find the verified scene. */
+    const byContent = new Map<string, string>()
     const calls = new ConcurrencyGate(2, 0)
+    const forget = (key: string): void => {
+        const entry = cache.get(key)
+        if (entry === undefined) return
+        cache.delete(key)
+        if (byContent.get(entry.contentKey) === key) byContent.delete(entry.contentKey)
+    }
     const trimCompleted = (): void => {
         const completed = [...cache].filter(([, entry]) => entry.completed)
-        for (const [key] of completed.slice(0, Math.max(0, completed.length - cacheLimit))) cache.delete(key)
+        for (const [key] of completed.slice(0, Math.max(0, completed.length - cacheLimit))) forget(key)
     }
     return async (request): Promise<Response> => {
+        if (!enabled)
+            return Response.json(
+                { status: 'unavailable', code: 'not_found', notDispatched: true },
+                { status: 404, headers: { 'cache-control': 'no-store' } },
+            )
         const deadline = createDeadline(105_000, request.signal)
+        let releaseImageWork: (() => void) | undefined
         try {
             options.auth.authenticate(request)
             const { metadata, files } = await readModelMultipart(
@@ -115,58 +241,65 @@ export function createStepMotionHandler(options: {
             )
             if (new URL(request.url).searchParams.get('cacheOnly') === '1' && metadata.cacheOnly !== true)
                 throw new BeforeMotionDispatch(new ModelBodyError(400))
-            const fileName = `page:${metadata.page.pageId}`
-            exactModelFiles(files, metadata.cacheOnly ? [] : [fileName], false)
-            const key = stepMotionCacheKey(metadata)
-            let entry = cache.get(key)
-            if (metadata.cacheOnly && entry === undefined)
-                return Response.json(
-                    { status: 'unavailable', code: 'cache_miss' },
-                    { status: 404, headers: { 'cache-control': 'no-store' } },
-                )
-            if (entry === undefined) {
-                if (options.runtimeMode !== 'meta' || !options.provider?.generateStepMotion)
+            const contentKey = stepMotionContentKey(metadata)
+            if (metadata.cacheOnly === true) {
+                exactModelFiles(files, [], false)
+                const cachedKey = byContent.get(contentKey)
+                const cached = cachedKey === undefined ? undefined : cache.get(cachedKey)
+                if (cached === undefined)
                     return Response.json(
-                        { status: 'unavailable', code: 'unconfigured', notDispatched: true },
-                        { status: 503 },
+                        { status: 'unavailable', code: 'cache_miss' },
+                        { status: 404, headers: { 'cache-control': 'no-store' } },
                     )
-                if (
-                    Buffer.byteLength(JSON.stringify(metadata), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
-                    stepMotionTextBytes(metadata) > STEP_MOTION_POLICY.maxTextBytes
+                const result = await withinModelDeadline(cached.pending, deadline)
+                return Response.json(result, { headers: { 'cache-control': 'no-store' } })
+            }
+            const fileName = `page:${metadata.page.pageId}`
+            exactModelFiles(files, [fileName], false)
+            if (options.runtimeMode !== 'meta' || !options.provider?.generateStepMotion)
+                return Response.json(
+                    { status: 'unavailable', code: 'unconfigured', notDispatched: true },
+                    { status: 503 },
                 )
-                    throw new BeforeMotionDispatch(new ModelBodyError(400))
-                const release = calls.tryAcquire()
-                if (!release)
-                    return Response.json({ status: 'unavailable', code: 'busy', notDispatched: true }, { status: 503 })
-                // Store the promise synchronously before any image work or dispatch: concurrent callers share one attempt.
+            if (
+                Buffer.byteLength(JSON.stringify(metadata), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
+                stepMotionTextBytes(metadata) > STEP_MOTION_POLICY.maxTextBytes
+            )
+                throw new BeforeMotionDispatch(new ModelBodyError(400))
+            releaseImageWork = calls.tryAcquire() ?? undefined
+            if (!releaseImageWork)
+                return Response.json({ status: 'unavailable', code: 'busy', notDispatched: true }, { status: 503 })
+            // Full uploads, including cache hits, need an image slot to prove their bytes.
+            // The metadata-only recovery path above stays outside this two-entry gate.
+            const cropped = await verifiedFigure(metadata, files, fileName, deadline)
+            const key = stepMotionCacheKey(metadata, sha256Hex(cropped.bytes))
+            let entry = cache.get(key)
+            if (entry === undefined) {
+                // A cache hit never reaches here, so only a new paid attempt is checked against the daily ceiling.
+                if (!dailyCap.available()) throw new BeforeMotionDispatch(new BudgetError())
+                const release = releaseImageWork
+                releaseImageWork = undefined
+                // Store the promise synchronously before dispatch: concurrent callers share one attempt.
                 const pending = (async (): Promise<StepMotionResult> => {
                     let releaseWork: (() => void) | undefined
                     let generationDeadline: ReturnType<typeof createDeadline> | undefined
                     let dispatched = false
                     try {
-                        const bytes = await modelFileBytes(
-                            files,
-                            fileName,
-                            metadata.page.mimeType,
-                            LIMITS.imageBytes,
-                            deadline,
-                        )
-                        const [image] = await validateAndNormalizeImages(
-                            [{ ...metadata.page, bytes }],
-                            deadline.signal,
-                            1,
-                        )
-                        const cropped = await figure(metadata, image!)
-                        deadline.checkpoint()
                         releaseWork = await options.work.acquire(deadline.signal)
                         deadline.checkpoint()
                         // Once admitted, work has its own finite lifetime. A disconnected reader cannot erase a paid result.
                         generationDeadline = createDeadline(STEP_MOTION_POLICY.deadlineMs)
                         const generation = await options.work.run(
-                            { deadlineMs: STEP_MOTION_POLICY.deadlineMs, signal: generationDeadline.signal },
+                            {
+                                deadlineMs: STEP_MOTION_POLICY.deadlineMs,
+                                signal: generationDeadline.signal,
+                                beforeSend: () => {
+                                    dailyCap.reserve()
+                                    dispatched = true
+                                },
+                            },
                             () => {
                                 deadline.checkpoint()
-                                dispatched = true
                                 return options.provider!.generateStepMotion!(
                                     { request: metadata, image: cropped },
                                     generationDeadline!.signal,
@@ -209,8 +342,9 @@ export function createStepMotionHandler(options: {
                         release()
                     }
                 })()
-                const started: CacheEntry = { pending, completed: false }
+                const started: CacheEntry = { pending, completed: false, contentKey }
                 cache.set(key, started)
+                byContent.set(contentKey, key)
                 // Reinsert on completion so iteration is completion order, rather than request or access order.
                 void pending.then(
                     () => {
@@ -221,11 +355,13 @@ export function createStepMotionHandler(options: {
                         trimCompleted()
                     },
                     () => {
-                        if (cache.get(key) === started) cache.delete(key)
+                        if (cache.get(key) === started) forget(key)
                     },
                 )
                 entry = started
             }
+            releaseImageWork?.()
+            releaseImageWork = undefined
             const result = await withinModelDeadline(entry.pending, deadline)
             return Response.json(result, { headers: { 'cache-control': 'no-store' } })
         } catch (error) {
@@ -254,6 +390,7 @@ export function createStepMotionHandler(options: {
                 { status },
             )
         } finally {
+            releaseImageWork?.()
             deadline.dispose()
         }
     }
