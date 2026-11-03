@@ -175,7 +175,7 @@ it.each(['unparsed', 'unreviewed'] as const)(
         await press('Back')
         await press('Keep reading')
         expect(mounted.controller.getSnapshot().pending).toMatch(/^Reading/u)
-        expect(mounted.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1)
+        expect(mounted.calls.filter((call) => call === '/api/manuals/parse')).toHaveLength(1)
         await act(async () => parse.resolve())
         await flush()
         expect(mounted.controller.getSnapshot().route).toBe('overview')
@@ -202,7 +202,7 @@ it('stops a re-read at the actual Pages destination and keeps its cancel notice 
     const before = structuredClone(mounted.controller.current!.session)
     await press('Read again')
     await waitFor(() => expect(mounted!.view.getPathname()).toBe('/reading/reread-stop'))
-    await waitFor(() => expect(mounted!.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1))
+    await waitFor(() => expect(mounted!.calls.filter((call) => call === '/api/manuals/parse')).toHaveLength(1))
     await press('Back')
     await press('Stop reading')
     await waitFor(() => expect(mounted!.view.getPathname()).toBe('/add'))
@@ -214,7 +214,7 @@ it('stops a re-read at the actual Pages destination and keeps its cancel notice 
     expect(mounted.view.getPathname()).toBe('/add')
     expect(mounted.controller.current!.session).toEqual(before)
     expect((await mounted.storage.restore()).entries[0]!.session).toEqual(before)
-    expect(mounted.calls.filter((call) => call.endsWith('/parse'))).toHaveLength(1)
+    expect(mounted.calls.filter((call) => call === '/api/manuals/parse')).toHaveLength(1)
 })
 
 it('preserves the actual generated last result while saved completion prepares, then shows generated Done', async () => {

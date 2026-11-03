@@ -878,27 +878,38 @@ describe('piece figure capability negotiation', () => {
         durationMs: 1,
     }
 
-    it.each([false, true])('sends figureBox only with explicit server support (%s)', async (supported) => {
+    it.each([false, true])('sends figureBox only while the server advertises support (%s)', async (supported) => {
         expect(oldRequest.safeParse(request).success).toBe(false)
         const calls: Recorded[] = []
+        const wireRequests: unknown[] = []
+        let probes = 0
+        let advertised = false
         const fetch: ModelFetch = async (url, init) => {
             calls.push({ url, init })
             if (new URL(url).pathname === '/api/session') {
                 expect(init.method).toBe('GET')
+                probes += 1
+                advertised = supported && probes === 1
                 return jsonResponse(200, {
                     status: 'ok',
-                    ...(supported ? { capabilities: { pieceFigureBox: true } } : {}),
+                    ...(advertised ? { capabilities: { pieceFigureBox: true } } : {}),
                 })
             }
             const metadata: unknown = JSON.parse(String((init.body as FormData).get('metadata')))
-            expect(oldRequest.safeParse(metadata).success).toBe(!supported)
+            wireRequests.push(metadata)
             return jsonResponse(200, result)
         }
         const api = client(fetch)
         for (let batch = 0; batch < 2; batch++) {
             expect(await api.pieceBatch(request, { 'page-1': 'data:image/png;base64,AQID' })).toEqual(result)
         }
-        expect(calls.map((call) => new URL(call.url).pathname)).toEqual(['/api/session', '/api/pieces', '/api/pieces'])
+        expect(wireRequests.map((metadata) => oldRequest.safeParse(metadata).success)).toEqual([!supported, true])
+        expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+            '/api/session',
+            '/api/pieces',
+            '/api/session',
+            '/api/pieces',
+        ])
         expect(request.parts[0]!.figureBox).toEqual([0, 0, 1, 1])
     })
 

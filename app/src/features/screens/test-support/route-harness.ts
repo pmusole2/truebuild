@@ -105,7 +105,8 @@ export async function runtime(
     const calls: string[] = []
     let askedPages: string[] | undefined
     const fetch: ModelFetch = async (url, init) => {
-        calls.push(new URL(url).pathname)
+        const path = new URL(url).pathname
+        calls.push(path)
         // A ticketed question is collected with a JSON body that names no pages; they were named by the question itself.
         const collecting = url.endsWith('/questions/result')
         const meta = JSON.parse(String(collecting ? init.body : (init.body as FormData).get('metadata'))) as {
@@ -114,7 +115,7 @@ export async function runtime(
             pages?: { pageId: string }[]
             sourcePageIds?: string[]
         }
-        if (url.endsWith('/parse')) await replies.parse
+        if (path === '/api/manuals/parse') await replies.parse
         if (url.endsWith('/checks') && replies.failCheck === true) return new Response('', { status: 502 })
         if (url.endsWith('/checks')) await replies.check_gate
         const closer = url.endsWith('/second-opinion')
@@ -154,19 +155,20 @@ export async function runtime(
                 : typeof replies.check === 'function'
                   ? await replies.check()
                   : (replies.check ?? {})
-        const value = url.endsWith('/parse')
-            ? parsed(meta.pages![0]!.pageId)
-            : url.endsWith('/questions') || collecting
-              ? { answer: 'The groove faces inward.', sourceRefs: [ref], missingEvidence: [], ...replies.answer }
-              : ({
-                    decision: 'pass',
-                    reason: 'The groove faces inward.',
-                    sourceRefs: [ref],
-                    observedRegion: null,
-                    missingEvidence: [],
-                    ...(replies.followUps === undefined ? {} : { followUps: replies.followUps }),
-                    ...overrides,
-                } satisfies CheckResult)
+        const value =
+            path === '/api/manuals/parse'
+                ? parsed(meta.pages![0]!.pageId)
+                : url.endsWith('/questions') || collecting
+                  ? { answer: 'The groove faces inward.', sourceRefs: [ref], missingEvidence: [], ...replies.answer }
+                  : ({
+                        decision: 'pass',
+                        reason: 'The groove faces inward.',
+                        sourceRefs: [ref],
+                        observedRegion: null,
+                        missingEvidence: [],
+                        ...(replies.followUps === undefined ? {} : { followUps: replies.followUps }),
+                        ...overrides,
+                    } satisfies CheckResult)
         return new Response(
             JSON.stringify({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value }),
             { headers: { 'content-type': 'application/json' } },

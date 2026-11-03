@@ -318,7 +318,6 @@ export class ModelApiClient {
     private readonly fetchImpl: ModelFetch
     private readonly streamImpl: StreamFetch
     private readonly consent: AiConsentStore | null
-    private pieceFigureBoxSupport?: Promise<boolean>
 
     constructor(options: ModelClientOptions) {
         this.baseUrl = parseBaseUrl(options.baseUrl)
@@ -907,34 +906,31 @@ export class ModelApiClient {
         }
     }
 
-    /** Discover once per client; a missing/failed advertisement takes the strict legacy wire path without a POST retry. */
-    private supportsPieceFigureBox(signal: AbortSignal): Promise<boolean> {
-        this.pieceFigureBoxSupport ??= (async (): Promise<boolean> => {
-            const guard = createCallGuard(5_000, signal)
-            let response: Response | undefined
-            try {
-                response = await awaitStopped(
-                    this.fetchImpl(new URL('/api/session', this.baseUrl).toString(), {
-                        method: 'GET',
-                        headers: { 'x-truebuild-key': this.secret, Accept: 'application/json' },
-                        credentials: 'omit',
-                        redirect: 'error',
-                        signal: guard.signal,
-                    }),
-                    guard.signal,
-                    discardResponse,
-                )
-                if (!response.ok) return false
-                const text = await readBoundedText(response, guard.signal, guard.checkpoint, 32_768)
-                return pieceCapabilitiesSchema.safeParse(JSON.parse(text)).success
-            } catch {
-                return false
-            } finally {
-                if (response !== undefined) discardResponse(response)
-                guard.dispose()
-            }
-        })()
-        return this.pieceFigureBoxSupport
+    /** Recheck each batch so a backend rollback takes the strict legacy wire path without a POST retry. */
+    private async supportsPieceFigureBox(signal: AbortSignal): Promise<boolean> {
+        const guard = createCallGuard(5_000, signal)
+        let response: Response | undefined
+        try {
+            response = await awaitStopped(
+                this.fetchImpl(new URL('/api/session', this.baseUrl).toString(), {
+                    method: 'GET',
+                    headers: { 'x-truebuild-key': this.secret, Accept: 'application/json' },
+                    credentials: 'omit',
+                    redirect: 'error',
+                    signal: guard.signal,
+                }),
+                guard.signal,
+                discardResponse,
+            )
+            if (!response.ok) return false
+            const text = await readBoundedText(response, guard.signal, guard.checkpoint, 32_768)
+            return pieceCapabilitiesSchema.safeParse(JSON.parse(text)).success
+        } catch {
+            return false
+        } finally {
+            if (response !== undefined) discardResponse(response)
+            guard.dispose()
+        }
     }
 
     private async post<T, P = never>(spec: {
