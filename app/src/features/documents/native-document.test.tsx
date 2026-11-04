@@ -786,10 +786,11 @@ describe('the actual v2 catalog renderer', () => {
                     />,
                 ),
             )
-            expect(screen.getByText('This manual picture is unavailable.')).toBeTruthy()
+            expect(screen.getByTestId('guide-manual-thumb-0')).toHaveTextContent('This manual picture is unavailable.')
+            expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
             expect(screen.queryByTestId('guide-hero-frame')).toBeNull()
             await fireEvent.press(screen.getAllByRole('link', { name: 'See it in the manual' })[0]!)
-            expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(2)
+            expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(3)
         },
     )
 
