@@ -1504,12 +1504,6 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     partsAssessment === 'matches' &&
                     connectionAssessment === 'matches' &&
                     checks.every((check) => check.assessment === 'matches')
-                const mismatchEvidence =
-                    value.orientationAssessment === 'reversed' ||
-                    partsAssessment === 'mismatch' ||
-                    connectionAssessment === 'mismatch' ||
-                    checks.some((check) => check.assessment === 'mismatch')
-
                 const orientationUngrounded =
                     (value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
                     (step.orientation.state !== 'known' ||
@@ -1522,6 +1516,16 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                                         JSON.stringify(expected.region) === JSON.stringify(ref.region),
                                 ),
                         ))
+                // An orientation claim the step's own facts can't back (no known orientation, or no matching citation)
+                // is dropped to 'uncertain' rather than failing the whole answer: it then can't support a refusal or a
+                // panel-orientation pass, but it no longer throws away an otherwise grounded verdict.
+                const orientationAssessment = orientationUngrounded ? 'uncertain' : value.orientationAssessment
+                const mismatchEvidence =
+                    orientationAssessment === 'reversed' ||
+                    partsAssessment === 'mismatch' ||
+                    connectionAssessment === 'mismatch' ||
+                    checks.some((check) => check.assessment === 'mismatch')
+
                 const failures = [
                     !validChecks ? 'checks:invalid' : null,
                     !refsResolve(value.sourceRefs, prepared.input.sourceImages) ? 'refs:unresolved' : null,
@@ -1534,10 +1538,9 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         : null,
                     value.decision === 'pass' &&
                     isPanelOrientationCheck(step, parsed.session) &&
-                    value.orientationAssessment !== 'correct'
+                    orientationAssessment !== 'correct'
                         ? 'pass:panel_orientation'
                         : null,
-                    orientationUngrounded ? 'orientation:ungrounded' : null,
                 ].filter((code): code is string => code !== null)
                 if (failures.length > 0) {
                     // A well-formed answer that breaks a grounding rule is never shown as a verdict, and never as an
@@ -1565,8 +1568,20 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
 
                 deadline.checkpoint()
 
+                if (orientationUngrounded) {
+                    console.info(
+                        JSON.stringify({
+                            event: 'check_orientation_dropped',
+                            model,
+                            decision: value.decision,
+                            stepId: step.stepId,
+                        }),
+                    )
+                }
+
                 return {
                     ...value,
+                    orientationAssessment,
                     ...guidance({ layout, nextPartRegion, targetRegion }, withLayout),
                     model,
                     telemetry: observedTelemetry(sent.telemetry),
