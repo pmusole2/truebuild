@@ -127,6 +127,8 @@ export function checkContextMode(value: string | undefined): CheckContextMode {
     if (!parsed.success) throw new Error('invalid_check_context')
     return parsed.data
 }
+/** Shown when the model's answer could not be tied to this step's manual evidence. */
+const CHECK_UNGROUNDED = 'The photo could not be matched to this step with confidence. Try a closer, well-lit photo.'
 const COMPACT_UNAVAILABLE =
     'Compact context cannot cover every required citation within two manual pages. No model request was sent.'
 const MAX_RESPONSE_BYTES = 1_048_576
@@ -1508,32 +1510,57 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     connectionAssessment === 'mismatch' ||
                     checks.some((check) => check.assessment === 'mismatch')
 
-                if (
-                    !validChecks ||
-                    !refsResolve(value.sourceRefs, prepared.input.sourceImages) ||
-                    (value.decision === 'pass' && !passEvidence) ||
-                    (value.decision === 'refuse' &&
-                        (!mismatchEvidence ||
-                            (!verdictOnly && !value.observedRegion) ||
-                            !value.sourceRefs.some((ref) =>
-                                stepRefs(step).some((expected) => sameRef(ref, expected)),
-                            ))) ||
-                    (value.decision === 'pass' &&
-                        isPanelOrientationCheck(step, parsed.session) &&
-                        value.orientationAssessment !== 'correct') ||
-                    ((value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
-                        (step.orientation.state !== 'known' ||
-                            !value.sourceRefs.some(
-                                (ref) =>
-                                    step.orientation.state === 'known' &&
-                                    step.orientation.sourceRefs.some(
-                                        (expected) =>
-                                            expected.pageId === ref.pageId &&
-                                            JSON.stringify(expected.region) === JSON.stringify(ref.region),
-                                    ),
-                            )))
-                ) {
-                    throw new MetaProviderError('invalid_output')
+                const orientationUngrounded =
+                    (value.orientationAssessment === 'reversed' || value.orientationAssessment === 'correct') &&
+                    (step.orientation.state !== 'known' ||
+                        !value.sourceRefs.some(
+                            (ref) =>
+                                step.orientation.state === 'known' &&
+                                step.orientation.sourceRefs.some(
+                                    (expected) =>
+                                        expected.pageId === ref.pageId &&
+                                        JSON.stringify(expected.region) === JSON.stringify(ref.region),
+                                ),
+                        ))
+                const failures = [
+                    !validChecks ? 'checks:invalid' : null,
+                    !refsResolve(value.sourceRefs, prepared.input.sourceImages) ? 'refs:unresolved' : null,
+                    value.decision === 'pass' && !passEvidence ? 'pass:evidence' : null,
+                    value.decision === 'refuse' && !mismatchEvidence ? 'refuse:no_mismatch' : null,
+                    value.decision === 'refuse' && !verdictOnly && !value.observedRegion ? 'refuse:no_region' : null,
+                    value.decision === 'refuse' &&
+                    !value.sourceRefs.some((ref) => stepRefs(step).some((expected) => sameRef(ref, expected)))
+                        ? 'refuse:no_step_ref'
+                        : null,
+                    value.decision === 'pass' &&
+                    isPanelOrientationCheck(step, parsed.session) &&
+                    value.orientationAssessment !== 'correct'
+                        ? 'pass:panel_orientation'
+                        : null,
+                    orientationUngrounded ? 'orientation:ungrounded' : null,
+                ].filter((code): code is string => code !== null)
+                if (failures.length > 0) {
+                    // A well-formed answer that breaks a grounding rule is never shown as a verdict, and never as an
+                    // outage either: it becomes "can't tell", which can only hold the person back, never pass them.
+                    console.info(
+                        JSON.stringify({
+                            event: 'check_downgraded',
+                            model,
+                            decision: value.decision,
+                            stepId: step.stepId,
+                            issueCodes: failures,
+                        }),
+                    )
+                    return {
+                        decision: 'cannot_verify',
+                        orientationAssessment: 'uncertain',
+                        reason: CHECK_UNGROUNDED,
+                        sourceRefs: [],
+                        observedRegion: null,
+                        missingEvidence: [CHECK_UNGROUNDED],
+                        model,
+                        telemetry: observedTelemetry(sent.telemetry),
+                    }
                 }
 
                 deadline.checkpoint()
