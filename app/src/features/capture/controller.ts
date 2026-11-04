@@ -3,6 +3,7 @@ import { releaseTemporaryImage } from '../../media/owned-temporary-images'
 import { selectedStepSourcePageIds } from '../assembly/source-selection'
 import {
     checkResultSchema,
+    isQuantityNotStated,
     LIMITS,
     manualSessionSchema,
     matchesBinding,
@@ -66,6 +67,7 @@ export type CaptureView = { binding: CaptureBinding; observation: Observation; c
 export type StepFactResolution = {
     readonly orientation?: { readonly partId: string; readonly description: string }
     readonly visibleChecks?: readonly string[]
+    readonly quantity?: { readonly partId: string; readonly value: number }
 }
 /** What one background follow-up of a published verdict did, from observed facts only. */
 export type StageStatus =
@@ -828,14 +830,26 @@ export class CaptureController {
         if (
             resolution === null ||
             typeof resolution !== 'object' ||
-            Object.keys(resolution).some((key) => key !== 'orientation' && key !== 'visibleChecks') ||
+            Object.keys(resolution).some(
+                (key) => key !== 'orientation' && key !== 'visibleChecks' && key !== 'quantity',
+            ) ||
             (resolution.visibleChecks !== undefined && !Array.isArray(resolution.visibleChecks))
         ) {
             return reject('Enter a valid orientation or visible checks before accepting.')
         }
         const hasOrientation = resolution.orientation !== undefined
         const hasChecks = resolution.visibleChecks !== undefined
-        if (!hasOrientation && !hasChecks) {
+        const hasQuantity = resolution.quantity !== undefined
+        if (
+            hasQuantity &&
+            (resolution.quantity === null ||
+                !Number.isSafeInteger(resolution.quantity.value) ||
+                resolution.quantity.value < 1 ||
+                !step.parts.some((part) => part.partId === resolution.quantity!.partId && isQuantityNotStated(part)))
+        ) {
+            return reject('Enter a positive whole count for a part whose count is not stated in the manual.')
+        }
+        if (!hasOrientation && !hasChecks && !hasQuantity) {
             return reject('Enter a missing orientation or visible checks before accepting.')
         }
         if ((hasOrientation && step.orientation.state !== 'unknown') || (hasChecks && step.visibleChecks.length > 0)) {
@@ -857,6 +871,19 @@ export class CaptureController {
                     ? current
                     : {
                           ...step,
+                          parts: step.parts.map((part) =>
+                              part.partId !== resolution.quantity?.partId
+                                  ? part
+                                  : {
+                                        ...part,
+                                        quantity: {
+                                            state: 'known',
+                                            value: resolution.quantity.value,
+                                            sourceRefs: step.sourceRefs,
+                                        },
+                                        quantityBasis: { kind: 'user_supplied', sourceRefs: step.sourceRefs },
+                                    },
+                          ),
                           orientation:
                               resolution.orientation === undefined
                                   ? step.orientation

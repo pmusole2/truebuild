@@ -265,17 +265,18 @@ describe('parse validation of alternatives, quantity basis and step kinds', () =
         },
     )
 
-    it('keeps an ungrounded unknown quantity as an unresolved fact and spends the single repair', async () => {
+    it('keeps an unreadable printed quantity unresolved and spends the single repair', async () => {
         const { input, clean } = await fixture()
         const step = clean.steps[0]!
+        const unreadable = { state: 'unknown' as const, reason: 'The printed count is blurred.' }
         const ungrounded = withStep(clean, {
-            parts: step.parts.map((part) => ({ ...part, quantity: UNKNOWN, quantityBasis: null })),
+            parts: step.parts.map((part) => ({ ...part, quantity: unreadable, quantityBasis: null })),
         })
         const { provider, fetchImpl, bodies } = queued([ungrounded, ungrounded])
         const result = await provider.parseManual(input, new AbortController().signal)
         expect(fetchImpl).toHaveBeenCalledTimes(2)
         expect(String(bodies[1]!.instructions)).toContain('quantity of')
-        expect(result.steps[0]!.parts[0]!.quantity).toEqual(UNKNOWN)
+        expect(result.steps[0]!.parts[0]!.quantity).toEqual(unreadable)
     })
 
     it('accepts a tighten step without orientation, connection or visible checks and no repair', async () => {
@@ -581,14 +582,13 @@ describe('parse prompt and validation for carried-over quantities', () => {
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
-    it('still spends exactly one bounded repair for a truly unstated supplied quantity after a known earlier use', async () => {
+    it('keeps an unstated count unknown without copying an earlier same-part count or spending a repair', async () => {
         const { input, clean } = await fixture()
-        // Step 2 states no count and no basis: an earlier known same-part value is not an automatic waiver.
+        // An omitted count can continue without borrowing the earlier same-part number.
         const unstated = setPart(clean, 1, { quantity: UNKNOWN, quantityBasis: null })
-        const { provider, fetchImpl, bodies } = queued([unstated, unstated])
+        const { provider, fetchImpl } = queued([unstated])
         const result = await provider.parseManual(input, new AbortController().signal)
-        expect(fetchImpl).toHaveBeenCalledTimes(2)
-        expect(String(bodies[1]!.instructions)).toContain('quantity of side-panel')
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
         expect(result.steps[1]!.parts[0]!.quantity).toEqual(UNKNOWN)
     })
 
@@ -776,6 +776,7 @@ describe('page-scaled first parse attempt and page limit', () => {
         [3, 120_000],
         [6, 195_000],
         [8, 245_000],
+        [12, 300_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
         expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
@@ -802,11 +803,11 @@ describe('page-scaled first parse attempt and page limit', () => {
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
-    it('keeps the shared page maximum at eight', () => {
-        expect(MAX_PARSE_PAGES).toBe(8)
+    it('keeps the shared page maximum at twelve', () => {
+        expect(MAX_PARSE_PAGES).toBe(12)
     })
 
-    it.each([9, 10])(
+    it.each([13, 20])(
         'rejects %i pages before normalization or any request without leaking a message',
         async (pageCount) => {
             const { input, clean } = await fixture(pageCount)

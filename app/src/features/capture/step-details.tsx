@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { View } from 'react-native'
-import { stepEvidenceRequirements, type ManualSession, type SourceRef } from '@truebuild/contracts'
+import { isQuantityNotStated, stepEvidenceRequirements, type ManualSession, type SourceRef } from '@truebuild/contracts'
 import { Stack } from '../../ui/surface'
 import { Body, Caption, Heading } from '../../ui/text'
 import { stepPartChoices } from '../assembly/question-state'
@@ -47,7 +47,9 @@ export function StepDetails({
                 const quantity =
                     part.quantity.state === 'known'
                         ? `${part.quantity.value} of these`
-                        : plainFact(factText(part.quantity, String))
+                        : isQuantityNotStated(part)
+                          ? 'count not stated in the manual'
+                          : plainFact(factText(part.quantity, String))
                 const basis = part.quantityBasis
                 const earlier =
                     basis?.kind === 'carried_over'
@@ -57,14 +59,16 @@ export function StepDetails({
                     basis?.kind === 'carried_over'
                         ? ` Same count as step ${earlier?.order ?? 'before'}.`
                         : basis?.kind === 'user_supplied'
-                          ? ' This one is supplied by you.'
+                          ? part.quantity.state === 'known'
+                              ? ' Count entered by you.'
+                              : ' This one is supplied by you.'
                           : ''
                 const basisPages = basis === null || basis === undefined ? [] : pageNumbers(session, basis.sourceRefs)
                 return (
                     <View key={part.partId}>
                         <Body>{`${name}: ${quantity}.${carried}`}</Body>
                         {basisPages.length === 0 ? null : (
-                            <Caption>{`Count from ${basisPages.length === 1 ? 'page' : 'pages'} ${basisPages.join(', ')}.`}</Caption>
+                            <Caption>{`${basis?.kind === 'user_supplied' && part.quantity.state === 'known' ? 'Part' : 'Count'} from ${basisPages.length === 1 ? 'page' : 'pages'} ${basisPages.join(', ')}.`}</Caption>
                         )}
                     </View>
                 )

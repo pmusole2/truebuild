@@ -185,7 +185,9 @@ export function PagesScreen({
                         </Instruction>
                     </>
                     {pages.length > MAX_PARSE_PAGES ? (
-                        <Caption>We can read 8 pages at a time. Remove a few pages to read your manual.</Caption>
+                        <Caption>
+                            We can read {MAX_PARSE_PAGES} pages at a time. Remove a few pages to read your manual.
+                        </Caption>
                     ) : null}
                     {pages.map((page, index) => (
                         <PageArrival

@@ -73,6 +73,7 @@ import { PieceViewer, PiecesGrid } from '../pieces/piece-viewer'
 import { ViewerScrollView } from '../pieces/viewer-scroll-lock'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
 import { plainPending } from '../capture/plain-copy'
+import { ReviewCounts } from '../capture/review-counts'
 import type { FrameBindings } from './types'
 import { GuideStepMotion } from '../step-motion/guide-step-motion'
 import { capturePlacement } from './capture-placement'
@@ -1518,6 +1519,46 @@ function Coverage(): ReactElement {
     )
 }
 
+/** Current-step inventory detail stays readable beside the directions without changing the document wire facts. */
+function GuidePartDirections({
+    document,
+    bindings,
+}: {
+    document: ScreenDocumentV2
+    bindings: FrameBindings
+}): ReactElement | null {
+    const session = bindings.session
+    if (
+        document.kind !== 'guide' ||
+        document.metadata.stepActions !== 1 ||
+        session === undefined ||
+        session.manualId !== document.bound.manualId ||
+        session.revision !== document.bound.revision
+    )
+        return null
+    const facts = screenFacts(session)
+    const step = facts?.steps.find((item) => item.stepId === document.bound.stepId)
+    const parts = new Map(facts?.parts.map((part) => [part.partId, part]))
+    const details = (step?.parts ?? []).flatMap((required) => {
+        const part = parts.get(required.partId)
+        if (part?.name.state !== 'known') return []
+        const size = part.dimensions
+        const count = required.quantity.state === 'known' ? `×${required.quantity.value}` : null
+        if (!size && count === null) return []
+        return [{ partId: required.partId, text: [part.name.value, size, count].filter(Boolean).join(' · ') }]
+    })
+    if (details.length === 0) return null
+    return (
+        <RenderOriginProvider origin="shell">
+            <View nativeID={originId('shell')} style={styles.stack}>
+                {details.map((part) => (
+                    <Body key={part.partId}>{part.text}</Body>
+                ))}
+            </View>
+        </RenderOriginProvider>
+    )
+}
+
 /** Guide cards own the visible name/count; parsed part ids and registry ids are different namespaces. */
 function guideCardIncludesPart(document: ScreenDocumentV2, bindings: FrameBindings, partId: string): boolean {
     if (document.kind !== 'guide' || bindings.session === undefined) return false
@@ -1758,6 +1799,9 @@ function NodeContent({
                 </View>
             )
         case 'Section': {
+            const directions =
+                document.kind === 'guide' && document.metadata.stepActions === 1 && text(node.title) === 'Directions'
+            const partDirections = directions ? <GuidePartDirections document={document} bindings={bindings} /> : null
             const tail = (environment.relocated[path] ?? []).map((opener) => (
                 <Node
                     key={opener.path}
@@ -1776,12 +1820,14 @@ function NodeContent({
                     mark={mark}
                 >
                     {children}
+                    {partDirections}
                     {tail}
                 </Disclosure>
             ) : (
-                <View nativeID={mark} style={styles.stack}>
+                <View nativeID={mark} style={styles.stack} testID={directions ? 'guide-directions' : undefined}>
                     {node.title === null ? null : <Heading>{text(node.title)}</Heading>}
                     {children}
+                    {partDirections}
                     {tail}
                 </View>
             )
@@ -2472,6 +2518,16 @@ export function NativeDocumentRenderer({
     environment.trailing = (
         <>
             {document.kind === 'guide' ? <GuidePieces environment={environment} /> : null}
+            {document.kind === 'more' &&
+            bindings.live?.state.route === 'overview' &&
+            bindings.session !== undefined &&
+            bindings.readOnly !== true ? (
+                <ReviewCounts
+                    session={bindings.session}
+                    controller={bindings.live.controller}
+                    busy={bindings.live.state.pending !== null || bindings.live.state.storageReadOnly}
+                />
+            ) : null}
             {bindings.inspect && document.kind !== 'judge' ? (
                 <Judge
                     environment={environment}

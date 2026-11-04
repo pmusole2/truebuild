@@ -39,8 +39,8 @@ import { z } from 'zod'
 
 import { pieceIdSchema, piecesSpecSchema } from './piece-spec'
 
-export const MAX_PARSE_PAGES = 8
-export const PARSE_SPLIT_MESSAGE = 'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.'
+export const MAX_PARSE_PAGES = 12
+export const PARSE_SPLIT_MESSAGE = `Read up to ${MAX_PARSE_PAGES} pages at a time. Split this manual into sections of ${MAX_PARSE_PAGES} pages or fewer.`
 export { parseLanguageSchema } from './reading-language'
 import { parseLanguageSchema } from './reading-language'
 

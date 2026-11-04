@@ -302,39 +302,36 @@ export function sanitizeManualStepActions(value: unknown, allowedPageIds?: Reado
     }
 }
 
-/** A clearly singular name can waive a missing count only for one occurrence in the entire procedure. */
-function isSingleUseSingularPart(
-    part: PartRequirement,
-    steps: readonly ManualStep[],
-    parts: readonly ManualPart[],
-): boolean {
-    const { partId, quantity } = part
-    if (
-        quantity.state !== 'unknown' ||
-        !/\b(?:(?:not|n't) (?:state|show|specif|print|list|give|given|provid|indicat)|(?:no|missing|omitted|unstated|unspecified|absent).*?(?:quantity|count)|(?:quantity|count).*?(?:missing|omitted|unstated|unspecified|absent))/iu.test(
-            quantity.reason,
+const countWords =
+    '(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|dozen|pair|both|several|multiple)'
+const writtenCountStatement = new RegExp(
+    `\\b(?:manual|sheet|page|label|table|text|instructions?|count|quantity|number)(?:\\s+[a-z]+){0,3}\\s+(?:states?|prints?|lists?|reads?|shows?|says?|is|was)\\s+(?:a count of\\s+)?${countWords}\\b`,
+    'iu',
+)
+const visibleCountStatement = new RegExp(`\\b(?:reads?|shows?|prints?|states?|lists?)\\s+${countWords}\\b`, 'iu')
+
+/** An explicitly omitted count stays unknown; unreadable or conflicting printed counts still need review. */
+export function isQuantityNotStated(part: PartRequirement): boolean {
+    if (part.quantity.state !== 'unknown') return false
+    if (part.quantityBasis?.kind === 'not_specified') return true
+    const { reason } = part.quantity
+    // Step labels identify the evidence; their numbers are not part counts.
+    const countEvidence = reason.replace(/\bsteps?\s+\d+\b/giu, '')
+    return (
+        /\b(?:(?:not|n't) (?:state|show|specif|print|list|give|given|provid|indicat)|without (?:an? |the )?(?:printed |installed |specified )?(?:quantity|count)|(?:no|missing|omitted|unstated|unspecified|absent) (?:printed |installed )?(?:quantity|count)|(?:quantity|count).*?(?:missing|omitted|unstated|unspecified|absent))/iu.test(
+            reason,
+        ) &&
+        !/\b(?:whether|either|between|possibly|may|might|could|suggests?|appears?|unclear|uncertain|ambig\w*|hidden|vary|varies|conflict\w*|contradict\w*|blur\w*|illegib\w*|unread\w*|occluded|obscur\w*)\b/iu.test(
+            reason,
+        ) &&
+        !/\d|\b(?:hard to read|printed as|total of)\b/iu.test(countEvidence) &&
+        !writtenCountStatement.test(reason) &&
+        // An explicit absence of an installed count can coexist with numbered visual groups, such as holes or stacks.
+        (/\b(?:(?:no |without (?:an? |the )?)installed count|installed count (?:is )?(?:not (?:stated|shown|specified|printed|listed|given)|missing|omitted|unstated|unspecified|absent))\b/iu.test(
+            reason,
         ) ||
-        /\d|\b(?:or|whether|between|either|ambig\w*|unclear|uncertain|hidden|occluded|may|might|could|vary|varies|variable|conflict\w*|blur\w*|illegib\w*|unread\w*|obscur\w*|one|two|three|four|five|six|several|multiple)\b/iu.test(
-            quantity.reason,
-        )
-    ) {
-        return false
-    }
-    const entries = parts.filter((part) => part.partId === partId)
-    if (entries.length !== 1 || entries[0]!.name.state !== 'known') return false
-    if (steps.reduce((count, step) => count + step.parts.filter((part) => part.partId === partId).length, 0) !== 1) {
-        return false
-    }
-    const name = entries[0]!.name.value.trim()
-    // Reject plural, collective and joined labels; unfamiliar grammatical forms remain blocked.
-    if (
-        /\b(?:and|or|pair|set|some|several|multiple|both|two|three|four|five|six|feet|teeth|people|children|mice|geese|oxen)\b|[&/]|\d/iu.test(
-            name,
-        )
-    ) {
-        return false
-    }
-    return /^[a-z][a-z '-]*[a-z]$/iu.test(name) && !/\b[a-z]+s\b/iu.test(name)
+            !visibleCountStatement.test(reason))
+    )
 }
 
 /** Validate every link by identity and order; the public numeric Fact shape stays unchanged. */
@@ -342,7 +339,7 @@ export function hasValidQuantityEvidence(
     step: ManualStep,
     part: PartRequirement,
     steps: readonly ManualStep[],
-    parts: readonly ManualPart[] = [],
+    _parts: readonly ManualPart[] = [],
 ): boolean {
     let currentStep = step
     let currentPart = part
@@ -354,11 +351,7 @@ export function hasValidQuantityEvidence(
         }
         const basis = currentPart.quantityBasis
         if (basis?.kind !== 'carried_over') {
-            return (
-                currentPart.quantity.state === 'known' ||
-                basis != null ||
-                isSingleUseSingularPart(currentPart, steps, parts)
-            )
+            return currentPart.quantity.state === 'known' || basis != null || isQuantityNotStated(currentPart)
         }
         if (currentPart.quantity.state !== 'known' || visited.has(currentStep.stepId)) {
             return false

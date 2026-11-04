@@ -823,7 +823,7 @@ it('validates and serializes parse language, defaults English, and rejects large
         language: 'free text',
     })
     expect(invalid.status).toBe('unavailable')
-    const pages = Array.from({ length: 9 }, (_, index) => ({
+    const pages = Array.from({ length: 13 }, (_, index) => ({
         ...session.pages[0]!,
         pageId: `page-${index}`,
         assetId: `asset-${index}`,
@@ -834,7 +834,7 @@ it('validates and serializes parse language, defaults English, and rejects large
         pages.map(() => source),
         { requestId: REQUEST_ID },
     )
-    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('8 pages') })
+    expect(large).toMatchObject({ status: 'unavailable', message: expect.stringContaining('12 pages') })
     expect(run.calls).toHaveLength(2)
 })
 

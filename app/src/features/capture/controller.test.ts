@@ -1872,15 +1872,15 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
     })
 })
 
-it('rejects over-eight-page parsing before reading local bytes or dispatching', async () => {
+it('rejects over-twelve-page parsing before reading local bytes or dispatching', async () => {
     const { controller, store, calls } = setup()
     controllers.push(controller)
     await controller.restore()
     await controller.createManual()
-    await controller.importPages(async () => Array.from({ length: 9 }, () => photo))
+    await controller.importPages(async () => Array.from({ length: 13 }, () => photo))
     const read = vi.spyOn(store, 'readAsset')
     await controller.parse()
-    expect(controller.getSnapshot().notice).toContain('8 pages')
+    expect(controller.getSnapshot().notice).toContain('12 pages')
     expect(read).not.toHaveBeenCalled()
     expect(calls).toHaveLength(0)
 })

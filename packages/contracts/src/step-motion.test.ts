@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+    clampStepMotionBevels,
     paddedStepFigureBox,
+    STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
     stepMotionRequestSchema,
+    stepMotionResultSchema,
     stepMotionSceneSchema,
     type StepMotionRequest,
 } from './step-motion'
@@ -105,6 +108,30 @@ describe('step motion contract', () => {
         expect(
             stepMotionCacheIdentity({ ...request, page: { ...request.page, contentHash: 'c'.repeat(64) } }),
         ).not.toBe(identity)
-        expect(stepMotionCacheIdentity(request, 3)).not.toBe(identity)
+        expect(stepMotionCacheIdentity(request, STEP_MOTION_PROMPT_VERSION + 1)).not.toBe(identity)
+    })
+
+    it('clamps an out-of-range extrude bevel to its limit, and only that field', () => {
+        const extrude = {
+            type: 'extrude',
+            outline: [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 1],
+            ],
+            depth: 0.2,
+            bevel: 0.5,
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+        }
+        const value = { scene: { ...scene(motions[0]), still: [extrude] } }
+        expect(stepMotionResultSchema.safeParse(value).success).toBe(false)
+        const clamped = stepMotionResultSchema.safeParse(clampStepMotionBevels(value))
+        expect(clamped.success).toBe(true)
+        expect(clamped.success && clamped.data.scene?.still[0]).toMatchObject({ bevel: 0.2 * 0.25 })
+        expect(clampStepMotionBevels({ scene: null })).toEqual({ scene: null })
+        const inRange = { scene: { ...scene(motions[0]), still: [{ ...extrude, bevel: 0.01 }] } }
+        expect(clampStepMotionBevels(inRange)).toEqual(inRange)
     })
 })

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated from 'react-native-reanimated'
-import type { ManualSession, ManualStep } from '@truebuild/contracts'
+import { isQuantityNotStated, type ManualSession, type ManualStep } from '@truebuild/contracts'
 import { AppButton } from '../../ui/button'
 import { FixedBottomBar, type BarAction } from '../../ui/bottom-bar'
 import { ProgressBar } from '../../ui/progress'
@@ -26,6 +26,7 @@ import { PlainNotice, ScreenBody, TextRegion, useHeroHeight } from './screen-lay
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
 import { StepDetails } from './step-details'
+import { OptionalCount } from './review-counts'
 import { StepPicture } from './step-picture'
 import type { WorkflowScreenProps } from './workflow-types'
 import { useQuickProgress, type QuickProgress } from '../screens/quick-progress'
@@ -356,6 +357,16 @@ function QuickCheckMore({
                     {session.reviewedSteps.map((step: ManualStep, index) => (
                         <Card tone="raised" key={step.stepId} testID="step-card">
                             <StepDetails session={session} index={index} />
+                            {step.parts.filter(isQuantityNotStated).map((part) => (
+                                <OptionalCount
+                                    key={`${session.revision}:${part.partId}`}
+                                    session={session}
+                                    step={step}
+                                    partId={part.partId}
+                                    controller={controller}
+                                    busy={busy}
+                                />
+                            ))}
                         </Card>
                     ))}
                     <AppButton

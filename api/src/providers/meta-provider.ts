@@ -1675,7 +1675,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             if (
                 Buffer.byteLength(JSON.stringify(request.data), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
                 stepMotionTextBytes(request.data) > STEP_MOTION_POLICY.maxTextBytes ||
-                Math.max(input.image.width, input.image.height) > STEP_MOTION_POLICY.maxImageEdge
+                input.image.width * input.image.height > LIMITS.imagePixels
             )
                 throw new MetaProviderError('invalid_input')
             return execute(STEP_MOTION_POLICY.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {

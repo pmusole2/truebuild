@@ -9,4 +9,7 @@ it('keeps motion instructions generic, manual-first, finished-pose and fail-clos
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Before answering, check that it does')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Return {scene:null}')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('text and figure do not make the motion clear')
+    expect(STEP_MOTION_INSTRUCTIONS).toContain(
+        'Extrude bevel is nonnegative and at most 0.25 of the smallest of depth and the two outline spans',
+    )
 })

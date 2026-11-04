@@ -13,6 +13,7 @@ import {
     createStepMotionHandler,
     estimatedStepMotionCostUsd,
     figureWindow,
+    modelFrameSize,
     stepMotionCacheKey,
     stepMotionContentKey,
 } from './step-motion'
@@ -637,6 +638,85 @@ it('caps paid dispatches per UTC day, serves cache hits when full, and resets on
     now += 60 * 60_000
     expect((await handler(await request({ stepId: 'step-2' }))).status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it('accepts a scene with an out-of-range extrude bevel by clamping that bevel to its limit', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const extrude = {
+        type: 'extrude',
+        outline: [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+        ],
+        depth: 0.2,
+        bevel: 0.5,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+    }
+    const { handler } = setup({ scene: { ...scene, still: [extrude] } })
+    const body = (await (await handler(await request())).json()) as { scene: { still: { bevel?: number }[] } | null }
+    expect(body.scene?.still[0]?.bevel).toBeCloseTo(0.2 * 0.25)
+})
+
+it('logs a short reason code for a refused scene, never the model text', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler } = setup({ scene: { ...scene, stepId: 'step-9' } })
+    expect(await (await handler(await request())).json()).toEqual({ scene: null })
+    const logged = info.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.includes('step_motion_generation'))
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toMatchObject({ accepted: false, reason: 'step_id' })
+    expect(JSON.stringify(logged)).not.toContain(scene.caption)
+})
+
+it('sends a narrow whole page with a 512px shorter side, and the cache keys the exact JPEG bytes sent', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const bytes = await solidPng(214, 1280, '#456789')
+    const { handler, bodies, provider } = setup({ scene: null })
+    const generation = vi.spyOn(provider, 'generateStepMotion')
+    const narrow = await request(
+        { page: { ...metadata.page, width: 214, height: 1280 }, sourceRefs: [{ pageId: 'page-1', region: null }], figureBox: null },
+        'motion-fixture-key',
+        { bytes },
+    )
+    expect((await handler(narrow)).status).toBe(200)
+    const sent = bodies[0]!.input as { content: { type: string; image_url?: string }[] }[]
+    const image = sent[0]!.content.find((part) => part.type === 'input_image')!
+    const sentBytes = Buffer.from(image.image_url!.split(',')[1]!, 'base64')
+    const meta = await sharp(sentBytes).metadata()
+    expect(meta.format).toBe('jpeg')
+    expect(meta.width).toBe(512)
+    expect(meta.height).toBe(Math.round((1280 * 512) / 214))
+    const prepared = generation.mock.calls[0]![0]
+    expect(sentBytes).toEqual(Buffer.from(prepared.image.bytes))
+    expect(stepMotionCacheKey(prepared.request, sha256Hex(sentBytes))).not.toBe(stepMotionContentKey(prepared.request))
+})
+
+it.each([
+    [214, 1280, { width: 512, height: 3062 }],
+    [2048, 1536, { width: 1024, height: 768 }],
+    [1024, 1024, { width: 1024, height: 1024 }],
+    [400, 60_000, null],
+])('sizes a %ix%i frame to a 512px shorter side within the pixel budget, or refuses it: %j', (width, height, frame) => {
+    expect(modelFrameSize(width, height)).toEqual(frame)
+})
+
+it('refuses a narrow page whose 512px shorter side would exceed the pixel budget, before any model call', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene: null })
+    const extreme = await request({
+        page: { ...metadata.page, width: 400, height: 60_000 },
+        sourceRefs: [{ pageId: 'page-1', region: null }],
+        figureBox: null,
+    })
+    const response = await handler(extreme)
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({ notDispatched: true })
+    expect(fetchImpl).not.toHaveBeenCalled()
 })
 
 it('does not charge the daily cap when the shared public claim refuses before dispatch', async () => {

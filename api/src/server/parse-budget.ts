@@ -1,3 +1,5 @@
+import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
+
 /**
  * Parse time budget, in one place so the route, the provider and `/api/session` cannot disagree. These are application
  * budgets, not measured provider bounds: the overall budget covers one first attempt plus at most one repair, and the
@@ -17,7 +19,8 @@ export const PARSE_ROUTE_MARGIN_MS = 5_000
 export function parseFirstAttemptTimeoutMs(pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
     const pageBudgetMs = Math.min(
         PARSE_FIRST_ATTEMPT_MAX_MS,
-        PARSE_FIRST_ATTEMPT_BASE_MS + Math.max(0, pageCount - 3) * PARSE_FIRST_ATTEMPT_PAGE_MS,
+        PARSE_FIRST_ATTEMPT_BASE_MS +
+            Math.max(0, Math.min(MAX_PARSE_PAGES, pageCount) - 3) * PARSE_FIRST_ATTEMPT_PAGE_MS,
     )
     return Math.min(pageBudgetMs, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
 }

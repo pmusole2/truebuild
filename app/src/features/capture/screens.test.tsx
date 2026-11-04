@@ -20,6 +20,7 @@ import {
 import { isProblemNotice, plainNotice } from './plain-copy'
 import { PRIVACY_COPY } from './privacy-copy'
 import { StepDetails } from './step-details'
+import { ReviewCounts } from './review-counts'
 
 const hidden = { includeHiddenElements: true } as const
 
@@ -462,8 +463,11 @@ it('maps controller notices to plain words and never repeats a recovery that doe
     )
     // The controller refuses an over-long manual and the app does not split it, so the words must not promise a split.
     const split = plainNotice(PARSE_SPLIT_MESSAGE)
-    expect(split).toBe('We can read 8 pages at a time. Remove a few pages and try again.')
+    expect(split).toBe('We can read 12 pages at a time. Remove a few pages and try again.')
     expect(split).not.toMatch(/rest|later|split/iu)
+    expect(plainNotice('Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.')).toBe(
+        'We can read 8 pages at a time. Remove a few pages and try again.',
+    )
     // Unknown text is never shown raw.
     expect(plainNotice('Cannot verify: something internal about the frozen photo')).not.toMatch(/frozen|verify/iu)
     expect(plainNotice('A string nobody mapped')).toBe('Something went wrong. Please try again.')
@@ -781,19 +785,24 @@ describe('PagesScreen', () => {
         ).toBe(false)
     })
 
-    it('tells the person plainly when more than 8 pages cannot be read at once, without claiming a split', async () => {
-        const { controller } = setup()
-        controllers.push(controller)
-        await render(
-            <PagesScreen
-                state={controller.getSnapshot()}
-                controller={controller}
-                entry={pagesEntry(9)}
-                choosePages={noop}
-            />,
-        )
-        expect(screen.getByText('We can read 8 pages at a time. Remove a few pages to read your manual.')).toBeTruthy()
-    })
+    it.each([12, 13])(
+        'warns only above the 12-page parse limit (%i pages), without claiming a split',
+        async (count) => {
+            const { controller } = setup()
+            controllers.push(controller)
+            await render(
+                <PagesScreen
+                    state={controller.getSnapshot()}
+                    controller={controller}
+                    entry={pagesEntry(count)}
+                    choosePages={noop}
+                />,
+            )
+            expect(
+                screen.queryByText('We can read 12 pages at a time. Remove a few pages to read your manual.') !== null,
+            ).toBe(count > 12)
+        },
+    )
 
     it('shows the empty page state with Take photo as the one primary and no skeleton until a read is pending', async () => {
         const { controller } = setup()
@@ -860,4 +869,41 @@ describe('PagesScreen', () => {
             expect(screen.getByRole('button', { name: 'Read my manual' }).props.accessibilityState.disabled).toBe(true)
         },
     )
+})
+
+it('continues with an unstated plural count and lets the user enter an optional count', async () => {
+    const session = unreviewedDemo()
+    session.reviewedSteps = [session.reviewedSteps[0]!]
+    session.parts[0]!.name = { state: 'known', value: 'Batteries', sourceRefs: session.reviewedSteps[0]!.sourceRefs }
+    session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'Manual gives no count.' }
+    const rawBefore = structuredClone(session.rawExtraction)
+    const { controller } = await renderManual(session)
+    expect(screen.getByRole('button', { name: 'Start building' })).toBeTruthy()
+    await openMore()
+    expect(screen.getByText('Batteries: count not stated in the manual.')).toBeTruthy()
+    await fireEvent.changeText(screen.getByLabelText('Count for Batteries (optional)'), '0')
+    await fireEvent.press(screen.getByRole('button', { name: 'Save count for Batteries' }))
+    expect(screen.getByText('Enter a positive whole number.')).toBeTruthy()
+    expect(controller.current?.session.reviewedSteps[0]!.parts[0]!.quantity.state).toBe('unknown')
+    await fireEvent.changeText(screen.getByLabelText('Count for Batteries (optional)'), '2')
+    await fireEvent.press(screen.getByRole('button', { name: 'Save count for Batteries' }))
+    await waitFor(() =>
+        expect(controller.current?.session.reviewedSteps[0]!.parts[0]!.quantity).toMatchObject({
+            state: 'known',
+            value: 2,
+        }),
+    )
+    expect(controller.current?.session.reviewedSteps[0]!.parts[0]!.quantityBasis?.kind).toBe('user_supplied')
+    expect(await screen.findByText('Batteries: 2 of these. Count entered by you.')).toBeTruthy()
+    expect(controller.current?.session.rawExtraction).toEqual(rawBefore)
+})
+
+it('production review counts list keeps unstated counts optional', async () => {
+    const session = unreviewedDemo()
+    session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'The manual gives no count.' }
+    const { controller } = setup()
+    controllers.push(controller)
+    await render(<ReviewCounts session={session} controller={controller} busy={false} />)
+    expect(screen.getByText('Side panel: count not stated in the manual.')).toBeTruthy()
+    expect(screen.getByLabelText('Count for Side panel (optional)')).toBeTruthy()
 })

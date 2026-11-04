@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import {
     stepEvidenceRequirements,
+    isQuantityNotStated,
     type ManualSession,
     type ParsedManual,
     type SourceRef,
@@ -100,7 +101,9 @@ function quantityText(part: PartRequirement): string {
     if (part.quantityBasis?.kind === 'user_supplied') {
         return 'supplied by you'
     }
-    return `the manual does not say how many. ${part.quantity.reason}`
+    return isQuantityNotStated(part)
+        ? 'count not stated in the manual'
+        : `count needs confirming. ${part.quantity.reason}`
 }
 
 /** Server provenance only. Notes remain bounded plain text and never change a verdict or answer's meaning. */
