@@ -10,7 +10,7 @@ Always compare AI output with the original manual.
 - **Health:** https://truebuild-suhsi.sevalla.app/health
 - **Privacy:** https://truebuild-suhsi.sevalla.app/privacy
 - **TestFlight:** [Join the TestFlight beta](https://testflight.apple.com/join/WyxEtK4u)
-- **Demo video:** `<demo video link>`
+- **Demo video:** [Watch the demo on YouTube](https://youtu.be/Lkzun9TevNg)
 
 Built for the Meta hackathon with Meta's Muse Spark, Muse Wonder and SAM models through the Meta API.
 
