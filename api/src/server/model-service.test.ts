@@ -599,7 +599,7 @@ describe('protected model composition', (): void => {
             headers: template.headers,
             body: new ReadableStream<Uint8Array>({
                 pull(controller): void {
-                    now = 13_000
+                    now = 40_001
                     controller.enqueue(bytes)
                 },
                 cancel(): void {
@@ -743,7 +743,7 @@ describe('protected model composition', (): void => {
     })
 })
 
-describe('per-attempt accounting for pre-response network retries', () => {
+describe('per-attempt accounting for primary-check socket reset retries', () => {
     it.each([1, 2])('counts every attempt and refuses exhausted retry with cap %i', async (limit) => {
         const state = await setup()
         state.counter = new ModelCallCounter(limit)
@@ -752,7 +752,7 @@ describe('per-attempt accounting for pre-response network retries', () => {
             apiKey: 'synthetic',
             fetchImpl: guardModelFetch(async () => {
                 calls++
-                if (calls === 1) throw new TypeError('fetch failed')
+                if (calls === 1) throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } })
                 return Response.json({
                     status: 'completed',
                     model: 'muse-spark-1.3',
@@ -1376,6 +1376,55 @@ async function outcome(run: () => Promise<unknown>): Promise<string> {
 }
 
 describe('one-use parse repair grant', (): void => {
+    it('admits a silent-timeout low-effort rerun through the production runtime and spends one repair claim', async () => {
+        const state = await setup()
+        const bodies: Record<string, unknown>[] = []
+        let firstSent!: () => void
+        const sent = new Promise<void>((resolve) => {
+            firstSent = resolve
+        })
+        const transport = vi.fn<typeof fetch>(async (_url, init) => {
+            bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+            if (bodies.length === 1) {
+                firstSent()
+                return new Response(
+                    new ReadableStream<Uint8Array>({
+                        start(controller): void {
+                            controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'))
+                        },
+                    }),
+                    { headers: { 'content-type': 'text/event-stream' } },
+                )
+            }
+            return asRequestedMetaResponse(Response.json(completed(unresolvedParsed())), init)
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        try {
+            const runtime = createRuntimeFromEnvironment(
+                { MODEL_API_KEY: '<synthetic>', API_SHARED_SECRET: state.key, GENERATIVE_UI: 'off' },
+                transport,
+            )
+            const claim = vi.spyOn(runtime.counter, 'claim')
+            const pending = runtime.model.parse(parseRequest(state))
+            await sent
+            await vi.advanceTimersByTimeAsync(0)
+            expect(runtime.counter.used).toBe(1)
+            await vi.advanceTimersByTimeAsync(200_000)
+            const response = await pending
+            expect(response.status).toBe(200)
+            expect(await response.json()).toMatchObject({
+                status: 'ok',
+                value: { parts: [{ name: { state: 'unknown' } }, {}] },
+            })
+            expect(bodies).toHaveLength(2)
+            expect(bodies[1]).toEqual({ ...bodies[0], reasoning: { effort: 'low', summary: 'auto' } })
+            expect(runtime.counter.used).toBe(2)
+            expect(claim).toHaveBeenCalledTimes(2)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('refuses the runner outside any admitted effect context', async (): Promise<void> => {
         let work = 0
         expect(await outcome(() => runModelParseRepair(async () => (work += 1)))).toBe('unauthorized')
@@ -1792,5 +1841,143 @@ describe('parse page limit and language at the route boundary', (): void => {
         const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
         expect((await handlers.parse(await pagedRequest(state, 1))).status).toBe(200)
         expect(seen).toBeUndefined()
+    })
+})
+
+describe('bounded primary check retry', () => {
+    function envelope(decision: 'pass' | 'cannot_verify' = 'pass'): unknown {
+        return {
+            status: 'completed',
+            model: 'muse-spark-1.3',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    status: 'completed',
+                    content: [
+                        {
+                            type: 'output_text',
+                            text: JSON.stringify({
+                                ...checked,
+                                decision,
+                                orientationAssessment: decision === 'pass' ? 'correct' : 'uncertain',
+                                partsAssessment: decision === 'pass' ? 'matches' : 'unobservable',
+                                connectionAssessment: decision === 'pass' ? 'matches' : 'unobservable',
+                                checks: [
+                                    {
+                                        checkId: 'groove-inward',
+                                        assessment: decision === 'pass' ? 'matches' : 'unobservable',
+                                        sourceRefs: checked.sourceRefs,
+                                    },
+                                ],
+                                missingEvidence: decision === 'pass' ? [] : ['The connection is not visible.'],
+                            }),
+                        },
+                    ],
+                },
+            ],
+        }
+    }
+
+    async function runtimeCheck(transport: typeof fetch, virtualTime = false): Promise<Response> {
+        const state = await setup()
+        if (virtualTime) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        const runtime = createRuntimeFromEnvironment(
+            {
+                PROVIDER_MODE: 'meta',
+                MODEL_API_KEY: '<synthetic>',
+                API_SHARED_SECRET: state.key,
+                GENERATIVE_UI: 'off',
+                MODEL_SECOND_OPINION: 'off',
+            },
+            transport,
+        )
+        expect(runtime.policy.stages.verdict.deadlineMs).toBe(25_000)
+        return runtime.model.check(request(state))
+    }
+
+    it.each(['502', 'unparseable', 'reset'] as const)(
+        'retries %s once with identical request bytes and attempt=2 logged',
+        async (failure) => {
+            const bodies: unknown[] = []
+            const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+            const transport = vi.fn<typeof fetch>(async (_url, init) => {
+                bodies.push(init?.body)
+                if (bodies.length === 1) {
+                    if (failure === '502') return new Response(null, { status: 502 })
+                    if (failure === 'reset') throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } })
+                    const malformed = envelope() as { output: { content: { text: string }[] }[] }
+                    malformed.output[0]!.content[0]!.text = '{unparseable'
+                    return Response.json(malformed)
+                }
+                return Response.json(envelope())
+            })
+            const response = await runtimeCheck(transport)
+            expect(response.status).toBe(200)
+            expect(await response.json()).toMatchObject({ status: 'ok', value: { decision: 'pass' } })
+            expect(bodies).toHaveLength(2)
+            expect(bodies[1]).toBe(bodies[0])
+            expect(log.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)).toContainEqual(
+                expect.objectContaining({ route: 'check', requestId: 'request-1', attempt: 2 }),
+            )
+        },
+    )
+
+    it('returns the existing provider_error envelope after two 502 failures', async () => {
+        const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 502 }))
+        const response = await runtimeCheck(transport)
+        expect(response.status).toBe(502)
+        expect(await response.json()).toMatchObject({ status: 'unavailable', code: 'provider_error', retryable: false })
+        expect(transport).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([400, 429, 'unclassified network failure'] as const)(
+        'does not retry %s, even with a short Retry-After',
+        async (status) => {
+            const transport = vi.fn<typeof fetch>(async () => {
+                if (typeof status === 'string') throw new TypeError('fetch failed')
+                return new Response(null, { status, headers: { 'retry-after': '0' } })
+            })
+            const response = await runtimeCheck(transport)
+            expect(response.status).toBe(502)
+            expect(await response.json()).toMatchObject({ code: 'provider_error' })
+            expect(transport).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it('does not retry a valid not-yet verdict', async () => {
+        const transport = vi.fn<typeof fetch>(async () => Response.json(envelope('cannot_verify')))
+        const response = await runtimeCheck(transport)
+        expect(await response.json()).toMatchObject({ status: 'ok', value: { decision: 'cannot_verify' } })
+        expect(transport).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry parsed JSON that fails the verdict schema', async () => {
+        const body = envelope() as { output: { content: { text: string }[] }[] }
+        body.output[0]!.content[0]!.text = JSON.stringify({ decision: 'pass' })
+        const transport = vi.fn<typeof fetch>(async () => Response.json(body))
+        const response = await runtimeCheck(transport)
+        expect(await response.json()).toMatchObject({ code: 'invalid_output' })
+        expect(transport).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+        { elapsed: 14_000, attempts: 2, status: 200 },
+        { elapsed: 14_001, attempts: 1, status: 502 },
+        { elapsed: 25_000, attempts: 1, status: 504 },
+    ])('applies the retry and timeout budgets after $elapsed ms', async ({ elapsed, attempts, status }) => {
+        // Image preparation stays real; virtual time starts only at the first upstream send.
+        const transport = vi.fn<typeof fetch>(async () => {
+            if (transport.mock.calls.length > 1) return Response.json(envelope())
+            await vi.advanceTimersByTimeAsync(elapsed)
+            return new Response(null, { status: 502 })
+        })
+        try {
+            const response = await runtimeCheck(transport, true)
+            expect(response.status).toBe(status)
+            expect(transport).toHaveBeenCalledTimes(attempts)
+        } finally {
+            vi.useRealTimers()
+        }
     })
 })

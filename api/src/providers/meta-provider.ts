@@ -44,6 +44,7 @@ import { z } from 'zod'
 
 import {
     aiPolicyFromEnvironment,
+    CHECK_ATTEMPT_TIMEOUT_MS,
     STEP_MOTION_POLICY,
     DOCUMENT_MAX_OUTPUT_TOKENS,
     MAX_DEADLINE_MS,
@@ -56,6 +57,8 @@ import { MetaTransport, usageMetrics, type ProviderMetrics, type TransportObserv
 import { admission as requestClock } from '../server/request-clock'
 import {
     PARSE_REPAIR_MS,
+    PARSE_SILENT_RETRY_MS,
+    PARSE_MIN_SILENT_RETRY_MS,
     PARSE_MIN_REPAIR_MS,
     PARSE_RETURN_MARGIN_MS,
     parseFirstAttemptTimeoutMs,
@@ -143,6 +146,10 @@ export type MetaProviderErrorDetail = 'incomplete' | 'malformed' | 'repair_budge
 export class MetaProviderError extends Error {
     /** What the failed call observed (timings, usage), when the provider answered at all. */
     telemetry?: CallTelemetry
+    /** Internal classification only: JSON could not be parsed, rather than a parsed but invalid verdict. */
+    unparseable?: boolean
+    /** Defined only after a parse stream confirmed response.created; unknown is never proof of no output. */
+    parseOutputSeen?: boolean
 
     constructor(
         readonly code: MetaProviderErrorCode,
@@ -334,8 +341,10 @@ export interface MetaProviderOptions {
     onMetrics?: (metrics: ProviderMetrics) => void
     /** Trusted admission grants and accounts for at most one parse repair; never supplied by a request. */
     runParseRepair?: <T>(work: () => Promise<T>) => Promise<T>
-    /** Trusted server configuration only; defaults to the twelve-second verdict budget (any value up to 105 s). */
+    /** Trusted server configuration only; defaults to the 25-second verdict attempt budget. */
     checkTimeoutMs?: number
+    /** The admitted check route owns its single retry, so transport cannot add nested attempts. */
+    checkRetriesManaged?: boolean
     /** Per-stage effort, output headroom, deadline and model. Defaults come from `aiPolicyFromEnvironment({})`. */
     policy?: AiPolicy
     /** Same one-shot repair runner as parse; admitted and counted by trusted server composition. */
@@ -682,7 +691,9 @@ export function decodeMetaJson(bytes: Uint8Array, deadline: Deadline): unknown {
     } catch (error: unknown) {
         deadline.checkpoint()
         if (error instanceof MetaProviderError) throw error
-        throw new MetaProviderError('invalid_output')
+        const failure = new MetaProviderError('invalid_output')
+        failure.unparseable = true
+        throw failure
     }
 }
 
@@ -871,7 +882,7 @@ export function stepMotionTextBytes(
 
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
 export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
-    const checkTimeoutMs = options.checkTimeoutMs ?? 12_000 // t5 Spark low verdict 7.96 s; user-selected headroom.
+    const checkTimeoutMs = options.checkTimeoutMs ?? CHECK_ATTEMPT_TIMEOUT_MS
     if (!Number.isFinite(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > MAX_DEADLINE_MS) {
         throw new MetaProviderError('invalid_input')
     }
@@ -937,11 +948,13 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             try {
                 deadline.checkpoint()
             } catch (stopped: unknown) {
-                throw new MetaProviderError(
+                const failure = new MetaProviderError(
                     stopped instanceof RequestStoppedError && stopped.reason === 'timeout'
                         ? 'timeout'
                         : 'provider_error',
                 )
+                if (error instanceof MetaProviderError) failure.parseOutputSeen = error.parseOutputSeen
+                throw failure
             }
 
             if (error instanceof RequestStoppedError && error.reason === 'timeout')
@@ -996,6 +1009,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         effort: AiEffort = policy.stages[stage].effort,
         onParseProgress?: (phase: ParseProgress) => void,
         parseSourceText = false,
+        attemptNumber = repair === undefined ? 1 : 2,
     ): Promise<{ value: T; telemetry: VerifiedCallTelemetry }> {
         deadline.checkpoint()
         const clockStart = requestClock.getStore()?.start ?? performance.now()
@@ -1143,9 +1157,13 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
                 },
                 // Other operations allow one short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
-                operation === 'stepMotion' ? 1 : 2,
+                operation === 'stepMotion' || (operation === 'check' && !secondary && options.checkRetriesManaged)
+                    ? 1
+                    : 2,
                 transportObservation,
-                operation === 'stepMotion' ? 1 : 2,
+                operation === 'stepMotion' || (operation === 'check' && !secondary && options.checkRetriesManaged)
+                    ? 1
+                    : 2,
             )
 
             // Even a response that settles beyond the absolute deadline retains explicit body custody.
@@ -1223,7 +1241,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                                   timeToFirstSummaryMs: streamGuard.timing.timeToFirstSummaryMs,
                                   timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
                                   streamEventCount: streamGuard.timing.eventCount,
-                                  attempt: repair === undefined ? 1 : 2,
+                                  attempt: attemptNumber,
                               }),
                     })
                     return telemetry
@@ -1289,6 +1307,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 } catch {
                     reject(['response:invalid_json'])
                     const failed = new MetaProviderError('invalid_output', 'malformed')
+                    failed.unparseable = true
                     failed.telemetry = emit(Math.max(0, performance.now() - received))
                     throw failed
                 }
@@ -1343,7 +1362,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     latencyMs: Math.max(0, performance.now() - sendStart),
                     stage,
                     effort,
-                    attempt: repair === undefined ? 1 : 2,
+                    attempt: attemptNumber,
                     timeToCreatedMs: streamGuard.timing.timeToCreatedMs,
                     timeToFirstSummaryMs: streamGuard.timing.timeToFirstSummaryMs,
                     timeToFirstOutputMs: streamGuard.timing.timeToFirstOutputMs,
@@ -1351,6 +1370,15 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     outputTokens: streamOutputTokens,
                     totalMs: Math.max(0, performance.now() - clockStart),
                 })
+            }
+            if (
+                streamGuard?.timing.timeToCreatedMs !== undefined &&
+                error instanceof RequestStoppedError &&
+                error.reason === 'timeout'
+            ) {
+                const failure = new MetaProviderError('timeout')
+                failure.parseOutputSeen = streamGuard.timing.timeToFirstOutputMs !== undefined
+                throw failure
             }
             throw error
         } finally {
@@ -1550,13 +1578,21 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                         (value) => sanitizeManualStepActions(value, allowedPageIds),
                         providerParseSchema,
                     )
-                    const firstAttemptMs = parseFirstAttemptTimeoutMs(parsed.pages.length, overallMs)
+                    const firstAttemptMs = parseFirstAttemptTimeoutMs(
+                        parsed.pages.length,
+                        overallMs,
+                        performance.now() - startedAt,
+                    )
                     let lastTelemetry: VerifiedCallTelemetry | undefined
                     const remainingRepairMs = (): number =>
                         overallMs - (performance.now() - startedAt) - PARSE_RETURN_MARGIN_MS
-                    const attempt = (repair?: ParseRepair): Promise<ParsedManual> =>
+                    const attempt = (repair?: ParseRepair, silentRetry = false): Promise<ParsedManual> =>
                         execute(
-                            repair ? Math.min(PARSE_REPAIR_MS, remainingRepairMs()) : firstAttemptMs,
+                            silentRetry
+                                ? Math.min(PARSE_SILENT_RETRY_MS, remainingRepairMs())
+                                : repair
+                                  ? Math.min(PARSE_REPAIR_MS, remainingRepairMs())
+                                  : firstAttemptMs,
                             deadline.signal,
                             async (attemptDeadline): Promise<ParsedManual> => {
                                 const sent = await dispatchDetailed(
@@ -1571,9 +1607,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                                     false,
                                     'parse',
                                     false,
-                                    policy.stages.parse.effort,
+                                    silentRetry ? 'low' : policy.stages.parse.effort,
                                     onProgress,
                                     parsed.stepFields?.includes('sourceText') === true,
+                                    repair || silentRetry ? 2 : 1,
                                 )
                                 const value = sent.value
                                 lastTelemetry = sent.telemetry
@@ -1594,7 +1631,31 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                             },
                             true,
                         )
-                    const first = await attempt()
+                    let first: ParsedManual
+                    try {
+                        first = await attempt()
+                    } catch (error) {
+                        deadline.checkpoint()
+                        if (
+                            !(error instanceof MetaProviderError) ||
+                            error.code !== 'timeout' ||
+                            error.parseOutputSeen !== false ||
+                            remainingRepairMs() < PARSE_MIN_SILENT_RETRY_MS
+                        )
+                            throw error
+                        const retry = (): Promise<ParsedManual> => attempt(undefined, true)
+                        const second = await waitWithin(
+                            options.runParseRepair ? options.runParseRepair(retry) : retry(),
+                            deadline,
+                        )
+                        deadline.checkpoint()
+                        // The low-effort rerun spent the only repair slot; its result cannot trigger a third attempt.
+                        return {
+                            ...second,
+                            model: extractionModel,
+                            ...(lastTelemetry === undefined ? {} : { telemetry: observedTelemetry(lastTelemetry) }),
+                        }
+                    }
                     const firstTelemetry = lastTelemetry
                     const issues = unresolvedCriticalFacts({ parts: first.parts, reviewedSteps: first.steps })
                     // Keep the valid first result unless at least 20 s of repair work plus return margin remains.

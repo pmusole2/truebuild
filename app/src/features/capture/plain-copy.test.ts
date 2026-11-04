@@ -24,6 +24,7 @@ describe('legacy pending copy', () => {
         expect(plainPending('Reading manual pages…')).toBe('Reading your manual. This can take a minute.')
         expect(plainPending('Reading manual pages: laying out steps…')).toBe('Laying out steps…')
         expect(plainPending('Checking frozen photo…')).toBe('Checking your photo…')
+        expect(plainPending('Still checking your photo…')).toBe('Still checking your photo…')
         expect(plainPending('Freezing photo…')).toBe('Checking your photo…')
         expect(plainPending('Second opinion pending…')).toBe('Taking a closer look…')
         expect(plainPending('Still thinking about your question…')).toBe('Still thinking…')

@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createMetaProvider, parseFirstAttemptTimeoutMs, stepRefs, type ParseManualInput } from './meta-provider'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
+import {
+    PARSE_DEFAULT_OVERALL_MS,
+    PARSE_FIRST_ATTEMPT_MAX_MS,
+    PARSE_REPAIR_MS,
+    PARSE_RETURN_MARGIN_MS,
+} from '../server/parse-budget'
 import { asRequestedMetaResponse, timedMetaResponse } from '../test-support/meta-stream'
 
 // Everything here is synthetic and mocked: no recorded provider output, no live request.
@@ -728,7 +734,7 @@ describe('page-scaled first parse attempt and page limit', () => {
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> =>
             timedMetaResponse(
                 envelope(fetchImpl.mock.calls.length === 1 ? unresolved : clean),
-                fetchImpl.mock.calls.length === 1 ? 244_999 : 39_999,
+                fetchImpl.mock.calls.length === 1 ? 252_999 : 39_999,
                 (ms): void => {
                     monotonic += ms
                 },
@@ -767,29 +773,71 @@ describe('page-scaled first parse attempt and page limit', () => {
         }
     }
 
-    it('times out steady output beyond the overall ceiling even for seven pages', async () => {
-        expect(await timed(7, 220_001)).toEqual({ calls: 1, outcome: 'timeout' })
+    it('bounds a seven-page silent attempt and its low-effort retry within the overall deadline', async () => {
+        const { input } = await fixture(7)
+        let firstSent!: () => void
+        const sent = new Promise<void>((resolve) => {
+            firstSent = resolve
+        })
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            firstSent()
+            return new Response(
+                new ReadableStream<Uint8Array>({
+                    start(controller): void {
+                        controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'))
+                    },
+                }),
+                { headers: { 'content-type': 'text/event-stream' } },
+            )
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+        try {
+            const pending = createMetaProvider({ apiKey: 'synthetic', fetchImpl })
+                .parseManual(input, new AbortController().signal)
+                .then(
+                    () => ({ code: 'accepted', elapsed: performance.now() }),
+                    (error: unknown) => ({ code: (error as { code?: string }).code, elapsed: performance.now() }),
+                )
+            await sent
+            await vi.advanceTimersByTimeAsync(0)
+            await vi.advanceTimersByTimeAsync(parseFirstAttemptTimeoutMs(7))
+            expect(fetchImpl).toHaveBeenCalledTimes(2)
+            await vi.advanceTimersByTimeAsync(PARSE_DEFAULT_OVERALL_MS - parseFirstAttemptTimeoutMs(7))
+            expect(await pending).toMatchObject({ code: 'timeout' })
+            expect((await pending).elapsed).toBeLessThanOrEqual(PARSE_DEFAULT_OVERALL_MS)
+            expect(fetchImpl).toHaveBeenCalledTimes(2)
+        } finally {
+            vi.useRealTimers()
+        }
     })
 
     it.each([
-        [1, 120_000],
-        [3, 120_000],
-        [6, 195_000],
-        [8, 245_000],
-        [12, 300_000],
+        [1, 200_000],
+        [3, 200_000],
+        [4, 225_000],
+        [6, 253_000],
+        [8, 253_000],
+        [12, 253_000],
     ])('allows %i pages up to %i ms and times out one millisecond beyond', async (pages, budget) => {
         expect(await timed(pages, budget - 1_000)).toEqual({ calls: 1, outcome: 'accepted' })
-        expect(await timed(pages, budget + 1)).toEqual({ calls: 1, outcome: 'timeout' })
+        expect(await timed(pages, budget + 1)).toEqual({ calls: 2, outcome: 'timeout' })
     })
 
     it.each([
-        [1, 120_000],
-        [3, 120_000],
-        [6, 195_000],
-        [12, 300_000],
-        [20, 300_000],
+        [1, 200_000],
+        [3, 200_000],
+        [4, 225_000],
+        [6, 253_000],
+        [12, 253_000],
+        [20, 253_000],
     ])('computes %i pages as a %i ms first attempt', (pages, expected) => {
         expect(parseFirstAttemptTimeoutMs(pages)).toBe(expected)
+    })
+
+    it('fits the declared first-attempt maximum and ordinary repair within the overall parse budget', () => {
+        expect(PARSE_FIRST_ATTEMPT_MAX_MS + PARSE_REPAIR_MS + PARSE_RETURN_MARGIN_MS).toBeLessThanOrEqual(
+            PARSE_DEFAULT_OVERALL_MS,
+        )
     })
 
     it('honors an explicit total budget rather than extending it for more pages', () => {

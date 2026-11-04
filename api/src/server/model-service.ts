@@ -88,6 +88,9 @@ import { withResolvedLayout } from './layout'
 import { SEGMENT_PROMPT_LIMIT } from '@truebuild/contracts'
 import {
     aiPolicyFromEnvironment,
+    CHECK_ATTEMPT_TIMEOUT_MS,
+    CHECK_OVERALL_TIMEOUT_MS,
+    CHECK_RETURN_MARGIN_MS,
     LEGACY_GUIDE_ROUTE_MS,
     MAX_DEADLINE_MS,
     PIECES_DEADLINE_MS,
@@ -148,7 +151,8 @@ type EffectContext = {
     counter?: ModelCallCounter
     /** Trusted first-send admission, after provider preparation and transport pacing. */
     beforeSend?: () => void
-    retry: false | 'network' | 'rate_limit'
+    retry: false | 'network' | 'rate_limit' | 'check'
+    primaryCheck?: boolean
     networkRetried?: boolean
     rateLimitRetried?: boolean
     retryAt?: number
@@ -248,7 +252,10 @@ export function guardModelFetch(transport: typeof fetch = fetch): typeof fetch {
                 },
                 (error: unknown): never => {
                     context.check()
-                    context.retry = !context.networkRetried && retryableNetworkFailure(error) ? 'network' : false
+                    context.retry =
+                        !context.networkRetried && retryableNetworkFailure(error, context.primaryCheck)
+                            ? 'network'
+                            : false
                     context.retryAt = context.retry ? performance.now() + 100 : undefined
                     throw error
                 },
@@ -705,7 +712,7 @@ export function createModelHandlers(options: {
     options: typeof modelOptions
 } {
     const { provider, samProvider, auth, counter, allowedOrigins } = options
-    const checkTimeoutMs = options.checkTimeoutMs ?? 12_000 // t5 Spark low verdict 7.96 s; match runtime/provider headroom.
+    const checkTimeoutMs = options.checkTimeoutMs ?? CHECK_ATTEMPT_TIMEOUT_MS
     if (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0 || checkTimeoutMs > MAX_DEADLINE_MS) {
         throw new Error('invalid_timeout')
     }
@@ -875,6 +882,7 @@ export function createModelHandlers(options: {
             try {
                 execution = admit(request, auth, duration, allowedOrigins, policy.deadlineFor, cancellation)
                 if (policy.repairable) execution.context.repair = { used: false }
+                execution.context.primaryCheck = policy.route === 'check'
                 if (!dispatch) {
                     throw new AdmissionError('unconfigured', 503)
                 }
@@ -892,12 +900,46 @@ export function createModelHandlers(options: {
                 execution.check()
                 const providerSignal = execution.deadline.signal
                 const active = execution
-                const raw = await withinModelDeadline(
-                    admission.run({ start: active.startedAt }, () =>
-                        effects.run(active.context, (): Promise<T> => dispatch(input, providerSignal, progress)),
-                    ),
-                    execution.deadline,
-                )
+                let raw: T
+                for (let attempt = 1; ; attempt++) {
+                    const attemptDeadline = active.context.primaryCheck
+                        ? createDeadline(checkTimeoutMs, providerSignal)
+                        : null
+                    try {
+                        raw = await withinModelDeadline(
+                            admission.run({ start: active.startedAt }, () =>
+                                effects.run(active.context, (): Promise<T> =>
+                                    dispatch(input, attemptDeadline?.signal ?? providerSignal, progress),
+                                ),
+                            ),
+                            attemptDeadline ?? active.deadline,
+                        )
+                        break
+                    } catch (error) {
+                        active.check()
+                        const transient =
+                            error instanceof MetaProviderError &&
+                            ((error.code === 'provider_error' &&
+                                (active.context.firstStatus === 502 || active.context.retry === 'network')) ||
+                                (error.code === 'invalid_output' && error.unparseable === true))
+                        const retryFits =
+                            performance.now() - active.startedAt + checkTimeoutMs + CHECK_RETURN_MARGIN_MS <= duration
+                        if (!active.context.primaryCheck || attempt !== 1 || !transient || !retryFits) throw error
+                        // Injected provider ports without a guarded send still spend the admitted retry.
+                        if (!active.context.dispatched) counter.claim()
+                        active.context.retry = 'check'
+                        active.context.retryAt = undefined
+                        logOutcome({
+                            route: 'check',
+                            path: policy.path,
+                            requestId: metadata.requestId,
+                            attempt: 2,
+                            outcome: 'retry',
+                        })
+                    } finally {
+                        attemptDeadline?.dispose()
+                    }
+                }
                 execution.check()
                 const value = output.safeParse(policy.normalize ? policy.normalize(raw, metadata) : raw)
                 if (!value.success || !validate(value.data, metadata)) {
@@ -1087,7 +1129,7 @@ export function createModelHandlers(options: {
     const check = jsonHandler(
         modelCheckMetadataSchema,
         checkResultSchema,
-        checkTimeoutMs,
+        CHECK_OVERALL_TIMEOUT_MS,
         prepareCheck,
         provider
             ? async (input, signal): ReturnType<MetaProvider['checkStep']> =>

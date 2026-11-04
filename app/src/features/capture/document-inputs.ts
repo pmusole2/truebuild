@@ -18,7 +18,8 @@ export function activityOf(pending: string | null): BusyActivityV2 | null {
     if (pending.startsWith('Taking a closer look') || pending.startsWith('Second opinion')) return 'second-opinion'
     if (pending.startsWith('Still thinking')) return 'question-waiting'
     if (pending.startsWith('Reading')) return 'reading'
-    if (pending.startsWith('Checking') || pending.startsWith('Freezing')) return 'checking'
+    if (pending.startsWith('Checking') || pending.startsWith('Still checking') || pending.startsWith('Freezing'))
+        return 'checking'
     if (pending.startsWith('Asking')) return 'asking'
     if (pending.startsWith('Saving')) return 'saving'
     // Page selection and local image preparation share the screen preparation vocabulary, not a provider activity.

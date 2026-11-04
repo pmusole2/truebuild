@@ -159,26 +159,32 @@ describe('AI policy', (): void => {
 
 describe('runtime policy wiring', (): void => {
     it('uses daily call ceilings and accepts a verdict deadline beyond eight seconds', (): void => {
-        const runtime = createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '20000' })
+        const runtime = createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '30000' })
         expect(runtime.counter.limit).toBe(1_500)
-        expect(createRuntimeFromEnvironment({}).policy.stages.verdict.deadlineMs).toBe(12_000)
-        expect(runtime.policy.stages.verdict.deadlineMs).toBe(20_000)
+        expect(createRuntimeFromEnvironment({}).policy.stages.verdict.deadlineMs).toBe(25_000)
+        expect(runtime.policy.stages.verdict.deadlineMs).toBe(30_000)
         expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT: '8' }).counter.limit).toBe(1_500)
         expect(createRuntimeFromEnvironment({ MODEL_CALL_LIMIT_PER_DAY: '5' }).counter.limit).toBe(5)
     })
 
     it('resolves the verdict deadline from CHECK_TIMEOUT_MS or its alias and rejects disagreement or invalid values', (): void => {
-        expect(createRuntimeFromEnvironment({ AI_DEADLINE_VERDICT_MS: '12000' }).policy.stages.verdict.deadlineMs).toBe(
-            12_000,
+        expect(createRuntimeFromEnvironment({ AI_DEADLINE_VERDICT_MS: '25000' }).policy.stages.verdict.deadlineMs).toBe(
+            25_000,
         )
         expect(
-            createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '12000', AI_DEADLINE_VERDICT_MS: '12000' }).policy.stages
+            createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '25000', AI_DEADLINE_VERDICT_MS: '25000' }).policy.stages
                 .verdict.deadlineMs,
-        ).toBe(12_000)
+        ).toBe(25_000)
         expect(() =>
-            createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '12000', AI_DEADLINE_VERDICT_MS: '9000' }),
+            createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '25000', AI_DEADLINE_VERDICT_MS: '9000' }),
         ).toThrow('conflicting_verdict_deadline')
         expect(() => createRuntimeFromEnvironment({ AI_DEADLINE_VERDICT_MS: '0' })).toThrow()
+        expect(() => createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '14000' })).toThrow(
+            'invalid_runtime_configuration',
+        )
+        expect(() => createRuntimeFromEnvironment({ CHECK_TIMEOUT_MS: '40000' })).toThrow(
+            'invalid_runtime_configuration',
+        )
         expect(() => createRuntimeFromEnvironment({ AI_DEADLINE_PARSE_MS: '1' })).toThrow('invalid_ai_deadline')
         expect(createRuntimeFromEnvironment({ AI_DEADLINE_PARSE_MS: '70000' }).policy.stages.parse.deadlineMs).toBe(
             70_000,

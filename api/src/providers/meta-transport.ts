@@ -1,16 +1,16 @@
 import type { Deadline } from '../server/deadline'
 
-/** Native fetch does not expose whether a reset happened before the body was sent: deny every observed reset or closed socket. */
-export function retryableNetworkFailure(error: unknown): boolean {
-    let eligible = error instanceof TypeError && error.message === 'fetch failed'
+/** Primary checks permit an explicit reset even when upstream receipt is unknown; other operations keep their prior rules. */
+export function retryableNetworkFailure(error: unknown, resetOnly = false): boolean {
+    let eligible = !resetOnly && error instanceof TypeError && error.message === 'fetch failed'
     const pending: unknown[] = [error]
     const seen = new Set<object>()
     while (pending.length > 0) {
         const current = pending.pop()
         if (typeof current !== 'object' || current === null || seen.has(current)) continue
         seen.add(current)
-        if ('code' in current && (current.code === 'ECONNRESET' || current.code === 'UND_ERR_SOCKET')) return false
-        if ('code' in current && current.code === 'ETIMEDOUT') eligible = true
+        if ('code' in current && (current.code === 'ECONNRESET' || current.code === 'UND_ERR_SOCKET')) return resetOnly
+        if (!resetOnly && 'code' in current && current.code === 'ETIMEDOUT') eligible = true
         if ('cause' in current) pending.push(current.cause)
         if (current instanceof AggregateError) {
             const nested: unknown = current.errors

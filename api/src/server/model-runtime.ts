@@ -20,9 +20,11 @@ import { createSamProvider } from '../providers/sam'
 import { SharedKeyAuth } from './auth'
 import {
     aiPolicyFromEnvironment,
+    CHECK_ATTEMPT_TIMEOUT_MS,
+    CHECK_OVERALL_TIMEOUT_MS,
+    CHECK_RETURN_MARGIN_MS,
     describeAiPolicy,
     generativeUiMode,
-    MAX_DEADLINE_MS,
     type AiPolicy,
 } from './ai-policy'
 import { PublicModelCallCounter } from './public-limits'
@@ -121,13 +123,16 @@ export function createRuntimeFromEnvironment(
     const wonderFlag = flag(environment.MODEL_LAYOUT_WONDER, true, 'invalid_model_layout_wonder')
     const layoutWonder = wonderFlag && layout && environment.MODEL_LAYOUT_WONDER === '1'
     if (environment.MODEL_SAM !== undefined && environment.MODEL_SAM !== 'sam-3.1') throw new Error('invalid_model_sam')
-    // t5 Spark low verdict took 7.96 s; the user-selected 12 s default leaves latency headroom (105 s ceiling).
+    // Short legacy overrides must fail visibly instead of silently restoring the old production deadline.
     // CHECK_TIMEOUT_MS and its documented alias AI_DEADLINE_VERDICT_MS name the same value; both set must agree.
     const verdictDeadlines = [environment.CHECK_TIMEOUT_MS, environment.AI_DEADLINE_VERDICT_MS]
         .filter((value) => value !== undefined && value !== '')
-        .map((value) => positiveInteger(value, 12_000, MAX_DEADLINE_MS))
+        .map((value) =>
+            positiveInteger(value, CHECK_ATTEMPT_TIMEOUT_MS, CHECK_OVERALL_TIMEOUT_MS - CHECK_RETURN_MARGIN_MS),
+        )
     if (new Set(verdictDeadlines).size > 1) throw new Error('conflicting_verdict_deadline')
-    const checkTimeoutMs = verdictDeadlines[0] ?? 12_000
+    const checkTimeoutMs = verdictDeadlines[0] ?? CHECK_ATTEMPT_TIMEOUT_MS
+    if (checkTimeoutMs < CHECK_ATTEMPT_TIMEOUT_MS) throw new Error('invalid_runtime_configuration')
     // MODEL_CALL_LIMIT was process-lifetime and is deliberately ignored, including old local .env values.
     const counter = new PublicModelCallCounter(
         positiveInteger(environment.MODEL_CALL_LIMIT_PER_DAY, 1_500),
@@ -189,6 +194,7 @@ export function createRuntimeFromEnvironment(
         onMetrics,
         fetchImpl: guardModelFetch(transport),
         checkTimeoutMs,
+        checkRetriesManaged: true,
         model,
         parseModel: parse,
         secondOpinionModel: secondary,

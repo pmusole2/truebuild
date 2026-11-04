@@ -84,8 +84,9 @@ export { MODEL_METADATA_MAX_BYTES, MODEL_STEP_PAGE_TIMEOUT_MS } from '@truebuild
 export const MODEL_REQUEST_MAX_BYTES = LIMITS.requestBytes
 // Outlast the 345s parse budget and 350s route, so the server's own timeout answer arrives first.
 export const MODEL_PARSE_TIMEOUT_MS = 355_000
-// Live checks reached 11.6–11.75s; 15s lets the 12s server budget return honest result/timeout feedback.
-export const MODEL_CHECK_TIMEOUT_MS = 15_000
+// The server bounds a check at CHECK_OVERALL_TIMEOUT_MS (40s); 45s adds a five-second return margin so its own answer wins.
+// The outer capture guard shares this constant, so photo preparation and the check stay on one budget.
+export const MODEL_CHECK_TIMEOUT_MS = 45_000
 export const MODEL_SECOND_OPINION_TIMEOUT_MS = 60_000
 export const MODEL_SEGMENT_TIMEOUT_MS = 30_000
 // The server answers a question within QUESTION_SYNC_WAIT_MS (8 s by default) or hands back a 202 ticket. The first

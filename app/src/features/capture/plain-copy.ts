@@ -107,6 +107,9 @@ export function plainPending(pending: string | null, kind: ScreenKindV2 = 'guide
         const copy = waitCopyV2('reading', 'reading')
         return `${copy.heading}. ${copy.detail}`
     }
+    if (pending.startsWith('Still checking')) {
+        return 'Still checking your photo…'
+    }
     if (pending.startsWith('Checking') || pending.startsWith('Freezing')) {
         return waitCopyV2('guide', 'checking').heading
     }
