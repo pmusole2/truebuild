@@ -1795,7 +1795,13 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     : z
                           .strictObject({
                               repairIssues: z
-                                  .array(z.string().regex(/^movers\.\d+\.shapes\.\d+:deep_static_overlap:still\.\d+$/u))
+                                  .array(
+                                      z
+                                          .string()
+                                          .regex(
+                                              /^(?:movers\.\d+\.shapes\.\d+:deep_static_overlap:still\.\d+|quality_no_anchor|quality_(?:detached|speck):movers\.\d+|suspect_on_edge:still\.\d+)$/u,
+                                          ),
+                                  )
                                   .min(1)
                                   .max(48),
                               previousScene: stepMotionSceneSchema.unwrap(),

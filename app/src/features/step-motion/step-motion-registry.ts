@@ -3,6 +3,8 @@ import {
     paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
+    stepMotionHardQualityIssues,
+    stepMotionQualityIssues,
     stepMotionRequestSchema,
     stepMotionResultSchema,
     type ManualSession,
@@ -102,6 +104,14 @@ export function motionRequestForStep(
     return request.success ? request.data : null
 }
 
+/**
+ * A scene missing the body its parts attach to, or with a part floating away or drawn as a speck, confuses more than it
+ * helps: the step shows its manual picture instead. A suspected on-edge plate alone stays visible.
+ */
+function readable(scene: StepMotionScene): StepMotionScene | null {
+    return stepMotionHardQualityIssues(scene).length === 0 ? scene : null
+}
+
 /** A dispatch marker survives a crash or ambiguous response. No implicit resend can spend for the same device key. */
 export class StepMotionRegistry {
     private readonly pending = new Map<string, Promise<StepMotionScene | null>>()
@@ -128,17 +138,28 @@ export class StepMotionRegistry {
         pageUris: Readonly<Record<string, string>>,
     ): Promise<StepMotionScene | null> {
         try {
+            const checkedKey = `${key}/quality-checked`
+            let permitted = false
             const raw = await this.storage.getItem(key)
             if (raw !== null) {
                 if (raw.length > 500_000) return null
                 const parsed = stepMotionResultSchema.safeParse(JSON.parse(raw))
-                return parsed.success && (parsed.data.scene === null || parsed.data.scene.stepId === request.stepId)
-                    ? parsed.data.scene
-                    : null
+                const cached =
+                    parsed.success && (parsed.data.scene === null || parsed.data.scene.stepId === request.stepId)
+                        ? parsed.data.scene
+                        : null
+                if (cached === null || stepMotionQualityIssues(cached).length === 0) return cached
+                // A scene saved before the quality gate existed is asked for once more; after that it is final.
+                permitted =
+                    this.generate !== null &&
+                    (await this.storage.getItem(checkedKey)) === null &&
+                    (await this.canGenerate())
+                if (!permitted) return readable(cached)
+                await this.storage.removeItem(key)
             }
             if (this.generate === null) return null
             // Resolve permission before creating a marker that must survive a crash.
-            if (!(await this.canGenerate())) {
+            if (!permitted && !(await this.canGenerate())) {
                 this.pending.delete(key)
                 return null
             }
@@ -158,8 +179,10 @@ export class StepMotionRegistry {
             const result = stepMotionResultSchema.safeParse(outcome)
             if (!result.success || (result.data.scene !== null && result.data.scene.stepId !== request.stepId))
                 return null
+            // This result came through the server quality gate, so it is never requalified again.
+            await this.storage.setItem(checkedKey, '1')
             await this.storage.setItem(key, JSON.stringify(result.data))
-            return result.data.scene
+            return result.data.scene === null ? null : readable(result.data.scene)
         } catch {
             return null
         }

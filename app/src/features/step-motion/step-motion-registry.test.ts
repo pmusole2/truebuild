@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDemoManual, paddedStepFigureBox, STEP_MOTION_PROMPT_VERSION } from '@truebuild/contracts'
+import {
+    createDemoManual,
+    paddedStepFigureBox,
+    STEP_MOTION_PROMPT_VERSION,
+    stepMotionHardQualityIssues,
+    stepMotionQualityIssues,
+} from '@truebuild/contracts'
 import { motionRequestForStep, StepMotionRegistry, stepMotionCacheKey } from './step-motion-registry'
 import type { KeyValueStorage } from '../capture/library'
 import { RECORDED_STEP_MOTION_SCENES } from './__fixtures__/recorded-scenes'
@@ -210,5 +216,82 @@ describe('step motion device registry', () => {
         expect(await new StepMotionRegistry(disk, ready, noConsent).load(request, {})).toEqual(scene)
         expect(noConsent).not.toHaveBeenCalled()
         expect(ready).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks once more for a cached scene saved before the quality gate, then keeps the gated answer', async () => {
+        const request = motionRequestForStep(createDemoManual(), 'step-1', 'request-1')!
+        const good = { ...RECORDED_STEP_MOTION_SCENES.press, stepId: request.stepId }
+        expect(stepMotionQualityIssues(good)).toEqual([])
+        // The moving part ends far from every still part: the confusing scene an older build saved.
+        const floating = structuredClone(good)
+        for (const shape of floating.movers[0]!.shapes) shape.position[0] += 500
+        expect(stepMotionHardQualityIssues(floating)).not.toEqual([])
+        const disk = storage()
+        await disk.setItem(stepMotionCacheKey(request), JSON.stringify({ scene: floating }))
+        const repaired = vi.fn(async () => ({ scene: good }))
+        expect(await new StepMotionRegistry(disk, repaired).load(request, {})).toEqual(good)
+        expect(await new StepMotionRegistry(disk, repaired).load(request, {})).toEqual(good)
+        expect(repaired).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows the manual picture for a floating scene and never pays again once it was requalified', async () => {
+        const request = motionRequestForStep(createDemoManual(), 'step-1', 'request-1')!
+        const floating = structuredClone({ ...RECORDED_STEP_MOTION_SCENES.press, stepId: request.stepId })
+        for (const shape of floating.movers[0]!.shapes) shape.position[0] += 500
+        const disk = storage()
+        await disk.setItem(stepMotionCacheKey(request), JSON.stringify({ scene: floating }))
+        // Without generation or consent the saved scene is only hidden, never deleted.
+        expect(await new StepMotionRegistry(disk, null).load(request, {})).toBeNull()
+        const noConsent = vi.fn(async (): Promise<boolean> => false)
+        const unused = vi.fn(async () => ({ scene: null }))
+        expect(await new StepMotionRegistry(disk, unused, noConsent).load(request, {})).toBeNull()
+        expect(unused).not.toHaveBeenCalled()
+        expect(await disk.getItem(stepMotionCacheKey(request))).not.toBeNull()
+        // An older server may answer with the same floating scene: it is cached but hidden, and never re-sent.
+        const same = vi.fn(async () => ({ scene: floating }))
+        expect(await new StepMotionRegistry(disk, same).load(request, {})).toBeNull()
+        expect(await new StepMotionRegistry(disk, same).load(request, {})).toBeNull()
+        expect(same).toHaveBeenCalledTimes(1)
+    })
+
+    it('never re-sends a readable cached scene, and keeps a suspected on-edge plate visible', async () => {
+        const request = motionRequestForStep(createDemoManual(), 'step-1', 'request-1')!
+        const good = { ...RECORDED_STEP_MOTION_SCENES.hinge, stepId: request.stepId }
+        expect(stepMotionQualityIssues(good)).toEqual([])
+        const disk = storage()
+        await disk.setItem(stepMotionCacheKey(request), JSON.stringify({ scene: good }))
+        const generate = vi.fn(async () => ({ scene: null }))
+        expect(await new StepMotionRegistry(disk, generate).load(request, {})).toEqual(good)
+        expect(generate).not.toHaveBeenCalled()
+
+        const panel = {
+            ...good,
+            still: [
+                {
+                    type: 'box' as const,
+                    dimensions: { width: 30, height: 40, depth: 1 },
+                    position: [0, 20, 0] as [number, number, number],
+                    rotation: [0, 0, 0] as [number, number, number],
+                },
+            ],
+            movers: [
+                {
+                    ...good.movers[0]!,
+                    shapes: [
+                        {
+                            type: 'box' as const,
+                            dimensions: { width: 4, height: 4, depth: 4 },
+                            position: [0, 20, 2.5] as [number, number, number],
+                            rotation: [0, 0, 0] as [number, number, number],
+                        },
+                    ],
+                },
+            ],
+        }
+        expect(stepMotionQualityIssues(panel)).toEqual(['suspect_on_edge:still.0'])
+        expect(stepMotionHardQualityIssues(panel)).toEqual([])
+        const other = { ...request, readingLanguage: 'fr' as const }
+        await disk.setItem(stepMotionCacheKey(other), JSON.stringify({ scene: { ...panel, stepId: other.stepId } }))
+        expect(await new StepMotionRegistry(disk, null).load(other, {})).toEqual(panel)
     })
 })

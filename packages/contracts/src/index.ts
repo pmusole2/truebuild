@@ -900,3 +900,4 @@ export * from './piece-generation'
 
 export * from './manual-session-extensions'
 export * from './step-motion'
+export * from './step-motion-quality'

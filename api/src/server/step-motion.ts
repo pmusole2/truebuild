@@ -8,6 +8,8 @@ import {
     LIMITS,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
+    stepMotionHardQualityIssues,
+    stepMotionQualityIssues,
     stepMotionRequestSchema,
     stepMotionResultSchema,
     type StepMotionRequest,
@@ -220,7 +222,7 @@ async function verifiedFigure(
     }
 }
 
-type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index' | 'declined' | 'overlap'
+type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index' | 'declined' | 'overlap' | 'quality'
 type MotionFailureReason =
     | SceneRejection
     | `repair_${SceneRejection}`
@@ -248,6 +250,7 @@ const REMEMBERED_REFUSALS: ReadonlySet<MotionFailureReason> = new Set<MotionFail
     'repair_declined',
     'repair_overlap',
     'repair_degraded',
+    'repair_quality',
 ])
 
 /** Refused before any transport: a local budget check, so no provider call was made and nothing was billed. */
@@ -274,6 +277,18 @@ function logGeneration(telemetry: CallTelemetry | undefined, reason: MotionFailu
                 reasoningTokens: observed(telemetry?.usage.reasoningTokens),
             },
             estimatedCostUsd: telemetry === undefined ? null : estimatedStepMotionCostUsd(telemetry.usage),
+        }),
+    )
+}
+
+/** Geometry quality codes only (never model text), so a refused or repaired scene shows which rule it broke. */
+function logQuality(issues: readonly string[]): void {
+    if (issues.length === 0) return
+    console.info(
+        JSON.stringify({
+            event: 'step_motion_quality',
+            promptVersion: STEP_MOTION_PROMPT_VERSION,
+            issues: issues.slice(0, 8),
         }),
     )
 }
@@ -508,13 +523,26 @@ export function createStepMotionHandler(options: {
                                     if (rejection === 'declined') return EMPTY
                                     throw new MotionGenerationFailure(rejection ?? 'schema')
                                 }
-                                const repairIssues = stepMotionOverlapIssues(parsed.data.scene)
+                                const overlapIssues = stepMotionOverlapIssues(parsed.data.scene)
+                                const qualityIssues = stepMotionQualityIssues(parsed.data.scene)
+                                // Quality codes are few and lead, so the provider's 48-issue cap can only trim overlap detail.
+                                const repairIssues = [...qualityIssues, ...overlapIssues].slice(0, 48)
                                 if (repairIssues.length === 0) {
                                     logGeneration(first.telemetry, null)
                                     return parsed.data
                                 }
-                                logGeneration(first.telemetry, 'overlap')
-                                if (stepMotionRepairBudgetMs(performance.now() - startedAt) === null) {
+                                const softOnly =
+                                    overlapIssues.length === 0 &&
+                                    !qualityIssues.some((issue) => issue.startsWith('quality_'))
+                                const repairable = stepMotionRepairBudgetMs(performance.now() - startedAt) !== null
+                                logQuality(qualityIssues)
+                                // A soft orientation suspicion alone never discards a scene that cannot be repaired.
+                                if (softOnly && !repairable) {
+                                    logGeneration(first.telemetry, null)
+                                    return parsed.data
+                                }
+                                logGeneration(first.telemetry, overlapIssues.length > 0 ? 'overlap' : 'quality')
+                                if (!repairable) {
                                     logStatus('repair_budget')
                                     throw new MotionGenerationFailure('repair_budget')
                                 }
@@ -540,7 +568,10 @@ export function createStepMotionHandler(options: {
                                       ? 'repair_degraded'
                                       : valid && stepMotionOverlapIssues(valid).length > 0
                                         ? 'repair_overlap'
-                                        : null
+                                        : valid && stepMotionHardQualityIssues(valid).length > 0
+                                          ? 'repair_quality'
+                                          : null
+                                if (valid) logQuality(stepMotionQualityIssues(valid))
                                 logGeneration(repaired.telemetry, reason)
                                 if (reason !== null || !result.success)
                                     throw new MotionGenerationFailure(reason ?? 'repair_schema')

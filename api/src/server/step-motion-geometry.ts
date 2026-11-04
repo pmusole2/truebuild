@@ -1,94 +1,21 @@
-import { PIECE_SPEC_LIMITS, type StepMotionScene } from '@truebuild/contracts'
+import {
+    PIECE_SPEC_LIMITS,
+    stepMotionShapeLocalBounds,
+    stepMotionShapeRotation,
+    stepMotionShapeVolume,
+    stepMotionShapeWorldBounds,
+    type StepMotionScene,
+} from '@truebuild/contracts'
 
 type Shape = StepMotionScene['still'][number]
 type Point = [number, number, number]
-type Bounds = { min: Point; max: Point }
 type Matrix = [Point, Point, Point]
 
-/** Three's default Euler XYZ uses R = Rx * Ry * Rz, then Mesh.position adds the world translation. */
-function rotation([x, y, z]: Point): Matrix {
-    const a = Math.cos(x),
-        b = Math.sin(x),
-        c = Math.cos(y),
-        d = Math.sin(y),
-        e = Math.cos(z),
-        f = Math.sin(z)
-    return [
-        [c * e, -c * f, d],
-        [a * f + b * d * e, a * e - b * d * f, -b * c],
-        [b * f - a * d * e, b * e + a * d * f, a * c],
-    ]
-}
-
-function localBounds(shape: Shape): Bounds {
-    if (shape.type === 'extrude') {
-        const bevel = shape.bevel ?? 0
-        return {
-            min: [
-                Math.min(...shape.outline.map(([x]) => x)) - bevel,
-                Math.min(...shape.outline.map(([, y]) => y)) - bevel,
-                -bevel,
-            ],
-            max: [
-                Math.max(...shape.outline.map(([x]) => x)) + bevel,
-                Math.max(...shape.outline.map(([, y]) => y)) + bevel,
-                shape.depth + bevel,
-            ],
-        }
-    }
-    if (shape.type === 'lathe') {
-        const radius = Math.max(...shape.profile.map(([r]) => r))
-        return {
-            min: [-radius, Math.min(...shape.profile.map(([, y]) => y)), -radius],
-            max: [radius, Math.max(...shape.profile.map(([, y]) => y)), radius],
-        }
-    }
-    let half: Point
-    switch (shape.type) {
-        case 'box':
-            half = [shape.dimensions.width / 2, shape.dimensions.height / 2, shape.dimensions.depth / 2]
-            break
-        case 'cylinder':
-        case 'cone':
-            half = [shape.dimensions.radius, shape.dimensions.height / 2, shape.dimensions.radius]
-            break
-        case 'sphere':
-            half = [shape.dimensions.radius, shape.dimensions.radius, shape.dimensions.radius]
-            break
-        case 'torus':
-            half = [
-                shape.dimensions.radius + shape.dimensions.tube,
-                shape.dimensions.radius + shape.dimensions.tube,
-                shape.dimensions.tube,
-            ]
-            break
-        case 'capsule':
-            half = [
-                shape.dimensions.radius,
-                shape.dimensions.length / 2 + shape.dimensions.radius,
-                shape.dimensions.radius,
-            ]
-            break
-    }
-    return { min: [-half[0], -half[1], -half[2]], max: half }
-}
+const rotation = stepMotionShapeRotation,
+    localBounds = stepMotionShapeLocalBounds
 
 /** Primitive bounds only: never a union across a chair frame, ring or separated supports. End motion is identity. */
-export function shapeWorldBounds(shape: Shape): Bounds {
-    const local = localBounds(shape),
-        matrix = rotation(shape.rotation)
-    const bounds: Bounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] }
-    for (const x of [local.min[0], local.max[0]])
-        for (const y of [local.min[1], local.max[1]])
-            for (const z of [local.min[2], local.max[2]]) {
-                matrix.forEach((row, axis) => {
-                    const value = row[0] * x + row[1] * y + row[2] * z + shape.position[axis]!
-                    bounds.min[axis] = Math.min(bounds.min[axis]!, value)
-                    bounds.max[axis] = Math.max(bounds.max[axis]!, value)
-                })
-            }
-    return bounds
-}
+export const shapeWorldBounds = stepMotionShapeWorldBounds
 
 /** Strict interior of a simple polygon, excluding a margin around every boundary edge. */
 function insidePolygon(x: number, y: number, outline: readonly (readonly [number, number])[], margin: number): boolean {
@@ -368,10 +295,7 @@ const COLLAPSE_RATIO = 0.25
 /** A solid primitive replaced by a torus must keep at least this share of its bounding volume. */
 const RING_REPLACEMENT_RATIO = 0.2
 
-function boundingVolume(shape: Shape): number {
-    const { min, max } = localBounds(shape)
-    return (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2])
-}
+const boundingVolume = stepMotionShapeVolume
 
 function primitiveSlots(scene: StepMotionScene): Map<string, Shape> {
     const slots = new Map<string, Shape>()
