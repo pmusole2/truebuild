@@ -182,3 +182,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .idea/
+
+# Small public test images for the README's sample runs.
+!/samples/
+!/samples/**/
+!/samples/**/*.jpg

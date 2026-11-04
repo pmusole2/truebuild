@@ -1,1 +1,110 @@
-{"scene":{"caption":"Lift the handrail upright and secure it to the bottom frame with two knobs.","movers":[{"actionIndex":0,"label":"Handrail","motion":{"axis":[1,0,0],"fromDeg":-90,"kind":"rotate","pivot":[0,7,40],"toDeg":0},"shapes":[{"dimensions":{"height":47,"radius":2.5},"position":[-26,30.5,40],"rotation":[0,0,0],"type":"cylinder"},{"dimensions":{"height":47,"radius":2.5},"position":[26,30.5,40],"rotation":[0,0,0],"type":"cylinder"},{"dimensions":{"height":52,"radius":2.5},"position":[0,54,40],"rotation":[0,0,1.5707963267948966],"type":"cylinder"}]},{"actionIndex":1,"label":"Left knob","motion":{"axis":[1,0,0],"kind":"screw","travel":8,"turns":2},"shapes":[{"dimensions":{"height":6,"radius":1.2},"position":[-25.5,7,40],"rotation":[0,0,1.5707963267948966],"type":"cylinder"},{"dimensions":{"height":3,"radius":3.2},"position":[-30,7,40],"rotation":[0,0,1.5707963267948966],"type":"cylinder"}]},{"actionIndex":1,"label":"Right knob","motion":{"axis":[-1,0,0],"kind":"screw","travel":8,"turns":2},"shapes":[{"dimensions":{"height":6,"radius":1.2},"position":[25.5,7,40],"rotation":[0,0,1.5707963267948966],"type":"cylinder"},{"dimensions":{"height":3,"radius":3.2},"position":[30,7,40],"rotation":[0,0,1.5707963267948966],"type":"cylinder"}]}],"stepId":"step-2","still":[{"dimensions":{"depth":110,"height":4,"width":60},"position":[0,2,0],"rotation":[0,0,0],"type":"box"},{"dimensions":{"depth":84,"height":1,"width":44},"position":[0,4.2,-8],"rotation":[0,0,0],"type":"box"},{"dimensions":{"depth":8,"height":6,"width":58},"position":[0,4,40],"rotation":[0,0,0],"type":"box"},{"dimensions":{"depth":8,"height":6,"width":58},"position":[0,4,-50],"rotation":[0,0,0],"type":"box"},{"dimensions":{"depth":6,"height":10,"width":5},"position":[-26,7,40],"rotation":[0,0,0],"type":"box"},{"dimensions":{"depth":6,"height":10,"width":5},"position":[26,7,40],"rotation":[0,0,0],"type":"box"}],"version":1}}
+{
+    "scene": {
+        "caption": "Lift the handrail upright and secure it to the bottom frame with two knobs.",
+        "movers": [
+            {
+                "actionIndex": 0,
+                "label": "Handrail",
+                "motion": { "axis": [1, 0, 0], "fromDeg": -90, "kind": "rotate", "pivot": [0, 7, 40], "toDeg": 0 },
+                "shapes": [
+                    {
+                        "dimensions": { "height": 47, "radius": 2.5 },
+                        "position": [-26, 30.5, 40],
+                        "rotation": [0, 0, 0],
+                        "type": "cylinder"
+                    },
+                    {
+                        "dimensions": { "height": 47, "radius": 2.5 },
+                        "position": [26, 30.5, 40],
+                        "rotation": [0, 0, 0],
+                        "type": "cylinder"
+                    },
+                    {
+                        "dimensions": { "height": 52, "radius": 2.5 },
+                        "position": [0, 54, 40],
+                        "rotation": [0, 0, 1.5707963267948966],
+                        "type": "cylinder"
+                    }
+                ]
+            },
+            {
+                "actionIndex": 1,
+                "label": "Left knob",
+                "motion": { "axis": [1, 0, 0], "kind": "screw", "travel": 8, "turns": 2 },
+                "shapes": [
+                    {
+                        "dimensions": { "height": 6, "radius": 1.2 },
+                        "position": [-25.5, 7, 40],
+                        "rotation": [0, 0, 1.5707963267948966],
+                        "type": "cylinder"
+                    },
+                    {
+                        "dimensions": { "height": 3, "radius": 3.2 },
+                        "position": [-30, 7, 40],
+                        "rotation": [0, 0, 1.5707963267948966],
+                        "type": "cylinder"
+                    }
+                ]
+            },
+            {
+                "actionIndex": 1,
+                "label": "Right knob",
+                "motion": { "axis": [-1, 0, 0], "kind": "screw", "travel": 8, "turns": 2 },
+                "shapes": [
+                    {
+                        "dimensions": { "height": 6, "radius": 1.2 },
+                        "position": [25.5, 7, 40],
+                        "rotation": [0, 0, 1.5707963267948966],
+                        "type": "cylinder"
+                    },
+                    {
+                        "dimensions": { "height": 3, "radius": 3.2 },
+                        "position": [30, 7, 40],
+                        "rotation": [0, 0, 1.5707963267948966],
+                        "type": "cylinder"
+                    }
+                ]
+            }
+        ],
+        "stepId": "step-2",
+        "still": [
+            {
+                "dimensions": { "depth": 110, "height": 4, "width": 60 },
+                "position": [0, 2, 0],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            },
+            {
+                "dimensions": { "depth": 84, "height": 1, "width": 44 },
+                "position": [0, 4.2, -8],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            },
+            {
+                "dimensions": { "depth": 8, "height": 6, "width": 58 },
+                "position": [0, 4, 40],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            },
+            {
+                "dimensions": { "depth": 8, "height": 6, "width": 58 },
+                "position": [0, 4, -50],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            },
+            {
+                "dimensions": { "depth": 6, "height": 10, "width": 5 },
+                "position": [-26, 7, 40],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            },
+            {
+                "dimensions": { "depth": 6, "height": 10, "width": 5 },
+                "position": [26, 7, 40],
+                "rotation": [0, 0, 0],
+                "type": "box"
+            }
+        ],
+        "version": 1
+    }
+}

@@ -197,7 +197,11 @@ it('offers "It\'s done, next step" only on a can\'t-tell result, never on a refu
             <FeedbackProvider reduceMotion>
                 <EssentialDocumentControls
                     kind="result"
-                    variant={{ ...variant, body: { type: 'Stack', gap: 'md', align: 'stretch', children: [] }, overlays: [] }}
+                    variant={{
+                        ...variant,
+                        body: { type: 'Stack', gap: 'md', align: 'stretch', children: [] },
+                        overlays: [],
+                    }}
                     state={{ ...snapshot, check: { decision } } as typeof snapshot}
                     entry={seeded}
                     busy={false}

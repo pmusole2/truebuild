@@ -105,8 +105,7 @@ export function EssentialDocumentControls({
         entry.session.reviewedSteps[entry.stepIndex] !== undefined
             ? entry
             : undefined
-    const ownDoneLast =
-        ownDone !== undefined && ownDone.stepIndex >= ownDone.session.reviewedSteps.length - 1
+    const ownDoneLast = ownDone !== undefined && ownDone.stepIndex >= ownDone.session.reviewedSteps.length - 1
     if (
         primary === undefined &&
         secondary === undefined &&

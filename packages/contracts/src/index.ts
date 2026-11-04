@@ -533,7 +533,9 @@ const strictParsedManualSchema = z
             .max(80)
             .nullable()
             .optional()
-            .describe('The product name printed in the manual, such as its cover title or model name; null when none is printed. Never invent one.'),
+            .describe(
+                'The product name printed in the manual, such as its cover title or model name; null when none is printed. Never invent one.',
+            ),
         parts: z.array(manualPartSchema).max(256),
         steps: z.array(manualStepSchema).max(200),
         unknowns: z.array(descriptionSchema).max(200),

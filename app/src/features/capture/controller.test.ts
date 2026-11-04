@@ -860,7 +860,13 @@ describe('explicit acceptance of missing step facts', () => {
                     pages: { pageId: string }[]
                 }
                 const value = { ...parsed(meta.pages[0]!.pageId), productName: 'Folding Treadmill T200' }
-                return Response.json({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value })
+                return Response.json({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    value,
+                })
             })
             controllers.push(runtime.controller)
             await runtime.controller.restore()
