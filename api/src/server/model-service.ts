@@ -174,6 +174,11 @@ function telemetryFields(value: unknown): Record<string, unknown> {
 }
 
 /** One structured line per model request: ids, counts and timings only; never a prompt, body or generated text. */
+/** Upstream server failures (500, 502, 503, 504) that one bounded check retry may outlast; 4xx is never retried. */
+function isRetryableUpstreamStatus(status: number | undefined): boolean {
+    return status === 500 || status === 502 || status === 503 || status === 504
+}
+
 function logOutcome(fields: Record<string, unknown>): void {
     console.info(JSON.stringify({ event: 'model_outcome', ...fields }))
 }
@@ -920,7 +925,7 @@ export function createModelHandlers(options: {
                         const transient =
                             error instanceof MetaProviderError &&
                             ((error.code === 'provider_error' &&
-                                (active.context.firstStatus === 502 || active.context.retry === 'network')) ||
+                                (isRetryableUpstreamStatus(active.context.firstStatus) || active.context.retry === 'network')) ||
                                 (error.code === 'invalid_output' && error.unparseable === true))
                         const retryFits =
                             performance.now() - active.startedAt + checkTimeoutMs + CHECK_RETURN_MARGIN_MS <= duration
@@ -985,6 +990,10 @@ export function createModelHandlers(options: {
                     http: failure.status,
                     path: policy.path,
                     dispatched: execution?.context.dispatched ?? false,
+                    // The provider's own HTTP status, when one arrived; it tells a provider outage from our failure.
+                    ...(execution?.context.firstStatus === undefined
+                        ? {}
+                        : { upstreamStatus: execution.context.firstStatus }),
                     ...(execution === undefined
                         ? {}
                         : { elapsedMs: Math.max(0, performance.now() - execution.startedAt) }),

@@ -1896,7 +1896,7 @@ describe('bounded primary check retry', () => {
         return runtime.model.check(request(state))
     }
 
-    it.each(['502', 'unparseable', 'reset'] as const)(
+    it.each(['502', '500', '503', '504', 'unparseable', 'reset'] as const)(
         'retries %s once with identical request bytes and attempt=2 logged',
         async (failure) => {
             const bodies: unknown[] = []
@@ -1904,7 +1904,8 @@ describe('bounded primary check retry', () => {
             const transport = vi.fn<typeof fetch>(async (_url, init) => {
                 bodies.push(init?.body)
                 if (bodies.length === 1) {
-                    if (failure === '502') return new Response(null, { status: 502 })
+                    if (failure === '502' || failure === '500' || failure === '503' || failure === '504')
+                        return new Response(null, { status: Number(failure) })
                     if (failure === 'reset') throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } })
                     const malformed = envelope() as { output: { content: { text: string }[] }[] }
                     malformed.output[0]!.content[0]!.text = '{unparseable'
