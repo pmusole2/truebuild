@@ -155,6 +155,14 @@ export function createStepMotionObject(
         for (const mover of movers) mover.group.matrix.identity()
         const center = bounds.getCenter(new Vector3())
         const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.001)
+        // The studio fade belongs to the floor. Keep still pieces and the entire moving sweep crisp.
+        root.traverse((child) => {
+            if (!(child instanceof Mesh)) return
+            const materials = Array.isArray(child.material) ? child.material : [child.material]
+            for (const material of materials) {
+                if (material instanceof MeshStandardMaterial) material.fog = false
+            }
+        })
         const ground = new Mesh(
             new PlaneGeometry(radius * 5, radius * 5),
             new MeshStandardMaterial({ color: groundColor, roughness: 1, metalness: 0 }),

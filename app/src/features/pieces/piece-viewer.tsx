@@ -407,13 +407,17 @@ function ValidPieceViewer({
     if (failed) return fallback
     const webEvents = Platform.OS === 'web' ? { onContextLost: (): void => fail('context_lost') } : {}
     return (
-        <View style={styles.viewer} testID="piece-viewer">
+        <View style={[styles.viewer, fullscreen && styles.fill]} testID="piece-viewer">
             {showName ? <Heading>{piece.name}</Heading> : null}
             <View
                 ref={host}
                 testID="piece-viewer-gesture-surface"
                 accessibilityLabel={`${piece.name}, interactive 3D view`}
-                style={[styles.viewport, { height, backgroundColor: colors.surfaceSunken }]}
+                style={[
+                    styles.viewport,
+                    fullscreen ? styles.fill : { height },
+                    { backgroundColor: colors.surfaceSunken },
+                ]}
                 onTouchStart={(event): void => {
                     const { pageX, pageY, touches } = event.nativeEvent
                     tap.current = { x: pageX, y: pageY, moved: touches.length > 1 }
@@ -641,7 +645,7 @@ function GuidePieceCard({
         />
     )
     return (
-        <View style={styles.guideCard} testID={`piece-card-${row.pieceId}`}>
+        <View style={[styles.guideCard, fullscreen && styles.fill]} testID={`piece-card-${row.pieceId}`}>
             <View style={styles.guideHeader}>
                 <Body>{partDisplayName(row.name)}</Body>
                 {row.quantity === null ? null : (
@@ -652,7 +656,11 @@ function GuidePieceCard({
             </View>
             {/* The 3D view arrives in place of its own waiting drawing; a terminal unavailable card never waits. */}
             {/* While the spec is pending only the one overlaid waiting drawing exists; the viewer replaces it in place. */}
-            <LoaderSwap waiting={row.spec === undefined && row.state !== 'unavailable'} loader={placeholder}>
+            <LoaderSwap
+                fill={fullscreen}
+                waiting={row.spec === undefined && row.state !== 'unavailable'}
+                loader={placeholder}
+            >
                 {row.spec !== undefined ? (
                     <GuidePieceView
                         key={`${row.pieceId}:${JSON.stringify(row.spec)}`}
@@ -911,6 +919,7 @@ function GuidePieceModal({
 }
 
 const styles = StyleSheet.create({
+    fill: { flex: 1, minHeight: 0 },
     viewer: { gap: space.lg },
     fullscreen: { flex: 1, padding: space.md, gap: space.sm },
     viewerButton: {

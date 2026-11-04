@@ -280,20 +280,15 @@ export function StepMotionHint({
     }, [])
 
     const availability: StepMotionAvailability =
-        !glAvailable || failed
-            ? 'fallback'
-            : parsed !== null
-              ? live && readySurface !== surface
-                  ? 'loading'
-                  : 'motion'
-              : loading
-                ? 'loading'
-                : 'fallback'
+        !glAvailable || failed ? 'fallback' : parsed !== null ? 'motion' : loading ? 'loading' : 'fallback'
     useEffect(() => {
         onAvailabilityChange?.(availability)
     }, [availability, onAvailabilityChange])
 
     if (availability === 'fallback' && fallback === undefined) return null
+    // Scene availability owns the surrounding Guide layout; transient GL readiness only owns this frame's overlay.
+    const waitingForSurface = availability === 'motion' && (!live || readySurface !== surface)
+    const showFallback = availability === 'fallback' || (availability === 'motion' && !live && fallback !== undefined)
     const replayable = live && finished && !reduceMotion
     const loader = <BlueprintLoader phase="piece" label={copy.loading} compact height={viewportHeight} />
     return (
@@ -306,8 +301,8 @@ export function StepMotionHint({
                     if (height > 0) setViewportHeight(height)
                 }}
             >
-                <View pointerEvents={availability === 'fallback' ? 'auto' : 'none'} style={styles.content}>
-                    {availability === 'fallback' ? (
+                <View pointerEvents={showFallback ? 'auto' : 'none'} style={styles.content}>
+                    {showFallback ? (
                         fallback
                     ) : parsed !== null && live ? (
                         <GLBoundary key={generation} onFail={fail}>
@@ -316,7 +311,7 @@ export function StepMotionHint({
                             </Suspense>
                         </GLBoundary>
                     ) : null}
-                    {availability === 'loading' ? (
+                    {availability === 'loading' || (waitingForSurface && !showFallback) ? (
                         <View pointerEvents="none" style={styles.content}>
                             {loader}
                         </View>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Box3, Vector3, type Mesh } from 'three'
+import { Box3, Vector3, type Mesh, type MeshStandardMaterial } from 'three'
 import { stepMotionResultSchema, type StepMotionScene } from '@truebuild/contracts'
 import { STEP_MOTION_EXAMPLE } from '../../../../api/src/providers/step-motion-prompt'
 import {
@@ -117,6 +117,25 @@ it('embeds a schema-valid screw example that fits the rendered hole and ends tou
         expect(headEnd.min.y).toBeCloseTo(plate.max.y)
         poseStepMotionObject(object, { finished: false, mover: 0, eased: 0 })
         expect(new Box3().setFromObject(shaft!).min.y).toBeCloseTo(shaftEnd.min.y + 10)
+    } finally {
+        disposePieceObject(object.root)
+    }
+})
+
+it('fogs only the studio ground, keeping the full part sweep at its original contrast', () => {
+    const object = createStepMotionObject(scene)
+    try {
+        const materials: MeshStandardMaterial[] = []
+        object.root.traverse((child) => {
+            const mesh = child as Mesh
+            if (mesh.isMesh)
+                materials.push(
+                    ...((Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as MeshStandardMaterial[]),
+                )
+        })
+        expect(materials.length).toBeGreaterThan(1)
+        expect(materials.slice(0, -1).every((material) => material.fog === false)).toBe(true)
+        expect(materials.at(-1)?.fog).toBe(true)
     } finally {
         disposePieceObject(object.root)
     }

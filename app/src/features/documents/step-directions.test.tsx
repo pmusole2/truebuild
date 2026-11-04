@@ -251,7 +251,7 @@ describe('step directions', () => {
             })
         })
         const thumb = screen.getByTestId('guide-manual-thumb-1')
-        expect(thumb).toBeTruthy()
+        expect(thumb).toHaveTextContent('This manual picture is unavailable.')
         const button = thumb.parent
         if (button === null) throw new Error('Missing manual thumbnail control')
         await fireEvent.press(button)

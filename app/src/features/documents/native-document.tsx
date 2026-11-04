@@ -717,13 +717,26 @@ function GuideManualStrip({
                         onPress={(): void => setSelected(source)}
                         style={{ width: 72, minHeight: 72 }}
                     >
-                        <StepPicture
-                            reference={source}
-                            session={session}
-                            pageUris={environment.bindings.pageUris}
-                            height={72}
-                            testID={`guide-manual-thumb-${index}`}
-                        />
+                        {images.some(({ node }) => {
+                            const reference = manualImageSource(node, environment)
+                            return (
+                                reference !== undefined &&
+                                sourceKeyV2(reference) === sourceKeyV2(source) &&
+                                unavailableManualImage(node, environment)
+                            )
+                        }) ? (
+                            <View testID={`guide-manual-thumb-${index}`} style={{ minHeight: 72 }}>
+                                <Caption>This manual picture is unavailable.</Caption>
+                            </View>
+                        ) : (
+                            <StepPicture
+                                reference={source}
+                                session={session}
+                                pageUris={environment.bindings.pageUris}
+                                height={72}
+                                testID={`guide-manual-thumb-${index}`}
+                            />
+                        )}
                     </Pressable>
                 ))}
             </View>

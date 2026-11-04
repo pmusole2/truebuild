@@ -490,11 +490,13 @@ export function BlueprintLoader({
 
 /** Retain the measured wait footprint only while waiting and during the 200ms outgoing fade. */
 export function LoaderSwap({
+    fill = false,
     waiting,
     loader,
     children,
     testID,
 }: {
+    readonly fill?: boolean
     readonly waiting: boolean
     readonly loader: ReactNode
     readonly children: ReactNode
@@ -533,12 +535,12 @@ export function LoaderSwap({
     const contentStyle = useAnimatedStyle(() => ({ opacity: progress.value }))
     const loaderStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.value }))
     return (
-        <View testID={testID} style={[styles.swap, showLoader && { minHeight: footprint }]}>
+        <View testID={testID} style={[styles.swap, fill && { flex: 1 }, showLoader && { minHeight: footprint }]}>
             <Animated.View
                 pointerEvents={waiting ? 'none' : 'auto'}
                 accessibilityElementsHidden={waiting}
                 importantForAccessibility={waiting ? 'no-hide-descendants' : 'auto'}
-                style={[waiting && StyleSheet.absoluteFill, contentStyle]}
+                style={[fill && { flex: 1 }, waiting && StyleSheet.absoluteFill, contentStyle]}
             >
                 {children}
             </Animated.View>

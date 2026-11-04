@@ -215,6 +215,12 @@ it('shows one wrapping chip row and opens only the selected part in a rotatable 
         expect(screen.getAllByTestId('stalled-gl-surface')).toHaveLength(1)
         expect(screen.getByLabelText('M4 * 15 screw, interactive 3D view')).toBeTruthy()
         expect(screen.getByText('Drag to rotate. Pinch to zoom. Double-tap to reset.')).toBeTruthy()
+        expect(screen.getByTestId('piece-viewer-gesture-surface')).toHaveStyle({ flex: 1 })
+        expect(
+            StyleSheet.flatten(screen.getByTestId('piece-viewer-gesture-surface').props.style).height,
+        ).toBeUndefined()
+        expect(screen.getByTestId('piece-card-screw')).toHaveStyle({ flex: 1 })
+        expect(screen.getByTestId('piece-viewer')).toHaveStyle({ flex: 1 })
         expect(screen.queryByTestId('piece-viewer-expand')).toBeNull()
         await fireEvent.press(screen.getByTestId('piece-viewer-close'))
         expect(screen.queryByTestId('stalled-gl-surface')).toBeNull()

@@ -391,7 +391,7 @@ describe('part chip', () => {
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
-    it.each(['USB cable', 'PVC', 'IKEA bracket'])(
+    it.each(['USB cable', 'PVC', 'IKEA bracket', 'eBay', 'iPhone case'])(
         'keeps acronym casing from %s in the displayed name',
         async (name) => {
             await render(<PartChip name={name} count={1} onPress={(): void => undefined} />)

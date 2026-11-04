@@ -13,7 +13,8 @@ const THUMB = 40
 export function partDisplayName(name: string): string {
     const trimmed = name.trim()
     if (trimmed.length === 0) return trimmed
-    // All-capital phrases are display casing. Mixed-case source names and single acronyms keep their interior case.
+    // Preserve source brands and acronyms; only uniform casing needs sentence-case presentation.
+    if (trimmed !== trimmed.toLocaleUpperCase() && trimmed !== trimmed.toLocaleLowerCase()) return trimmed
     const phrase =
         /\s/u.test(trimmed) && trimmed === trimmed.toLocaleUpperCase() ? trimmed.toLocaleLowerCase() : trimmed
     return phrase.charAt(0).toLocaleUpperCase() + phrase.slice(1)
