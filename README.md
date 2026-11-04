@@ -47,11 +47,11 @@ Built for the Meta hackathon with Meta's Muse Spark, Muse Wonder and SAM models 
 
 These are the roles wired up in the server code, not claims about accuracy:
 
-| Model | What it does in TrueBuild |
-| --- | --- |
-| **Muse Spark** (`muse-spark-1.3`) | Reads manual pages (default parser), judges build photos (pass / refuse / cannot verify), answers questions, and writes the generated screens outside the guides. |
+| Model                               | What it does in TrueBuild                                                                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Muse Spark** (`muse-spark-1.3`)   | Reads manual pages (default parser), judges build photos (pass / refuse / cannot verify), answers questions, and writes the generated screens outside the guides.                                    |
 | **Muse Wonder** (`muse-wonder-1.0`) | Writes guide pages, 3D piece geometry and the 3D step-motion scenes; also the grounded overlay stage and, when enabled, the second-opinion check. It can be picked as the parser with `MODEL_PARSE`. |
-| **SAM 3.1** (`sam-3.1`) | After a check, finds and outlines named parts on your build photo (masks and boxes shown on the result). Turned off by `MODEL_SEGMENTS=0` or `GENERATIVE_UI=off`. |
+| **SAM 3.1** (`sam-3.1`)             | After a check, finds and outlines named parts on your build photo (masks and boxes shown on the result). Turned off by `MODEL_SEGMENTS=0` or `GENERATIVE_UI=off`.                                    |
 
 A second opinion only runs after a `cannot_verify` verdict and can never turn it into a pass. It is
 off when `MODEL_SECOND_OPINION` is empty, which is the default in `.env.example`.
@@ -192,7 +192,7 @@ works best). The walkthrough below is what the fixture flow shows on the web:
 7. **Check your work.** Press **Take photo**, then **Take photo** again on the camera screen (also
    synthetic). The result is "Looks right — Groove faces inward toward the divider.", with parts
    outlined on the photo.
-8. **Ask a question.** Press **Ask about this step**, type a question and press **Ask**. An
+8. **Ask a question.** Press **Ask about this step**, select **Side panel**, type a question and press **Ask**. An
    "Answer" screen appears.
 
 **Use Take photo, not Choose photos, in fixture mode.** The fixture flags only accept the bundled
@@ -208,7 +208,8 @@ TestFlight build) to see them.
 
 To stop, press **Ctrl-C** in both terminals.
 
-`truebuild-fixture-demo` is a public test key for fixture mode only. Production builds reject
+`truebuild-fixture-demo` is a public test key for the local fixture server and the test mock
+(which uses it with `PROVIDER_MODE=meta`). Production builds reject
 fixture flags.
 
 Other fixture scenarios, set with `TRUEBUILD_FIXTURE_SCENARIO` on the fixture API: `full`
@@ -244,8 +245,11 @@ npm run web -- --localhost --port 8091
 Open http://localhost:8091, skip the tips, press **Add a manual**, then **Choose photos** and pick
 `samples/treadmill/manual-p3.jpg` to `manual-p6.jpg` together. "Your pages" shows "4 manual pages".
 From there the steps match the fixture walkthrough above (Read manual, Agree and continue, Looks
-right, the guide, Take photo for a check, Ask about this step); the check uses your browser camera
-on the web, so allow camera access. Press **Ctrl-C** in both terminals to stop.
+right, the guide, Take photo for a check, Ask about this step). In this path both photo checks and questions need your browser camera:
+asking a question without a captured photo opens the camera too, so allow camera access. A
+headless or automated browser may deny camera access, which leaves the screen on "Camera access
+needed". The test mock also supplies no 3D pieces or step motion: part tiles show "3D view
+unavailable" and the guide shows the manual picture, as in fixture mode. Press **Ctrl-C** in both terminals to stop.
 
 ## Run with a Meta API key
 
@@ -279,10 +283,10 @@ in `.env.example` cap spend on a running server.
 
 Small test images Prince used while building TrueBuild, committed so anyone can try the flow:
 
-| File | What it is |
-| --- | --- |
+| File                                                | What it is                                                                                                                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `samples/treadmill/manual-p3.jpg` … `manual-p6.jpg` | Photos of a folding walking-pad treadmill manual, pages 3-6. Steps are on pages 5-6: place flat, raise the handrail and fix it with two knobs, fit the phone support with two screws. |
-| `samples/drone/manual-p1.jpg` … `manual-p4.jpg` | Photos of a kids' 3-in-1 mini drone manual, pages 1-4 (fan blades and battery). Resized to 1600 px. |
+| `samples/drone/manual-p1.jpg` … `manual-p4.jpg`     | Photos of a kids' 3-in-1 mini drone manual, pages 1-4 (fan blades and battery). Resized to 1600 px.                                                                                   |
 
 Fixture mode does not accept these images (see [fixture mode](#run-with-no-key-fixture-mode)). Use
 the [test mock](#try-the-sample-images-with-no-key) to click through with them and no key, or live
@@ -314,7 +318,8 @@ everything above, they make **live, billable** calls and need `MODEL_API_KEY`.
 - **3D step motion is best effort.** Scenes that fail the server's quality checks fall back to the
   manual picture, and some steps may show no motion.
 - **Fixture mode is synthetic.** It shows the flow, not model quality. It only accepts its own
-  synthetic pages (use Take photo), and it shows no 3D pieces or 3D step motion.
+  synthetic pages (use Take photo), and it shows no 3D pieces or 3D step motion. The
+  sample-image test mock is the same: no 3D pieces or step motion in either no-key path.
 - **Web is for development.** The real camera flow is the iOS app (TestFlight). The web build is
   for trying the flow and for tests.
 - **Limits reset on restart.** Rate limits and counters live in server memory (UTC windows).
