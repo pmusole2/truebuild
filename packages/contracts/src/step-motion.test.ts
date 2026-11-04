@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     clampStepMotionBevels,
+    dropDegenerateStepMotionShapes,
     paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
@@ -134,4 +135,154 @@ describe('step motion contract', () => {
         const inRange = { scene: { ...scene(motions[0]), still: [{ ...extrude, bevel: 0.01 }] } }
         expect(clampStepMotionBevels(inRange)).toEqual(inRange)
     })
+})
+
+it('drops only otherwise-valid zero-area or near-zero-depth extrudes before strict validation', () => {
+    const extrude = {
+        type: 'extrude',
+        outline: [
+            [0, 0],
+            [1, 0],
+            [2, 0],
+        ],
+        depth: 0.2,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+    }
+    const thin = {
+        ...extrude,
+        outline: [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+        ],
+        depth: 0.00001,
+    }
+    const value = { scene: { ...scene(motions[0]), still: [shape, extrude, thin] } }
+    expect(stepMotionResultSchema.safeParse(value).success).toBe(false)
+    expect(stepMotionResultSchema.parse(dropDegenerateStepMotionShapes(value)).scene?.still).toEqual([shape])
+    expect(
+        stepMotionResultSchema.parse(
+            dropDegenerateStepMotionShapes({
+                scene: {
+                    ...scene(motions[0]),
+                    movers: [{ label: 'Part', shapes: [shape, extrude], motion: motions[0], actionIndex: null }],
+                },
+            }),
+        ).scene?.movers[0]?.shapes,
+    ).toEqual([shape])
+    for (const invalid of [
+        null,
+        { ...extrude, surprise: true },
+        { ...extrude, position: [Infinity, 0, 0] },
+        {
+            ...extrude,
+            outline: [
+                [0, 0],
+                [1001, 0],
+                [2, 0],
+            ],
+        },
+        { ...thin, depth: -1 },
+        {
+            ...extrude,
+            outline: [
+                [0, 0],
+                [1, 1],
+                [0, 1],
+                [1, 0],
+            ],
+        },
+    ]) {
+        expect(
+            stepMotionResultSchema.safeParse(
+                dropDegenerateStepMotionShapes({
+                    scene: { ...scene(motions[0]), still: [shape, invalid] },
+                }),
+            ).success,
+        ).toBe(false)
+    }
+    const duplicated = {
+        ...thin,
+        depth: 0.2,
+        outline: [
+            [0, 0],
+            [1, 0],
+            [1, 0],
+            [1, 1],
+            [0, 0],
+        ],
+    }
+    const normalized = stepMotionResultSchema.parse(
+        dropDegenerateStepMotionShapes({
+            scene: {
+                ...scene(motions[0]),
+                still: [duplicated],
+            },
+        }),
+    ).scene
+    expect(normalized?.still[0]).toMatchObject({
+        outline: [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+        ],
+    })
+    expect(
+        stepMotionResultSchema.safeParse(
+            dropDegenerateStepMotionShapes({
+                scene: {
+                    ...scene(motions[0]),
+                    still: [shape, ...Array(24).fill(extrude)],
+                },
+            }),
+        ).success,
+    ).toBe(false)
+    expect(
+        stepMotionResultSchema.safeParse(
+            dropDegenerateStepMotionShapes({
+                scene: {
+                    ...scene(motions[0]),
+                    movers: [{ label: 'Part', shapes: [extrude], motion: motions[0], actionIndex: null }],
+                },
+            }),
+        ).success,
+    ).toBe(false)
+})
+
+it('keeps nonzero-area outlines independent of cyclic ordering, leaving tiny edges to strict validation', () => {
+    for (const firstEdge of [0.00005, 0.002]) {
+        const outline = [
+            [0, 0],
+            [firstEdge, 0],
+            [100, 0],
+            [100, 0.01],
+            [0, 0.01],
+        ]
+        for (const ordered of [outline, [...outline.slice(1), outline[0]!]]) {
+            const plate = { type: 'extrude', outline: ordered, depth: 1, position: [0, 0, 0], rotation: [0, 0, 0] }
+            const value = { scene: { ...scene(motions[0]), still: [shape, plate] } }
+            const normalized = dropDegenerateStepMotionShapes(value)
+            expect(normalized).toEqual(value)
+            expect(stepMotionResultSchema.safeParse(normalized).success).toBe(firstEdge > 0.001)
+        }
+    }
+})
+
+it.each([0, 1])('drops a collinear outline with a tiny edge in cyclic ordering %i', (offset) => {
+    const outline = [
+        [0, 0],
+        [0.00005, 0],
+        [100, 0],
+        [50, 0],
+    ]
+    const extrude = {
+        type: 'extrude',
+        outline: [...outline.slice(offset), ...outline.slice(0, offset)],
+        depth: 1,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+    }
+    const value = { scene: { ...scene(motions[0]), still: [shape, extrude] } }
+    expect(stepMotionResultSchema.parse(dropDegenerateStepMotionShapes(value)).scene?.still).toEqual([shape])
 })

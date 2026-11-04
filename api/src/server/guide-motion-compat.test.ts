@@ -24,6 +24,9 @@ import { expect, it, vi } from 'vitest'
 const root = resolve(import.meta.dirname, '../../..')
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex')
 const key = 'synthetic-local-compatibility-key'
+const currentMain = 'db12e004d5a79e3790823cd34a125f69be04f3a6'
+const appRefs = ['fc7b706', 'decf006', 'de08511', 'head']
+const serverRefs = ['decf006', currentMain, 'head']
 
 /** Each frozen source tree resolves its own contracts, while using the installed external dependencies. */
 function archive(ref: string, destination: string): string {
@@ -91,23 +94,28 @@ function sessionFor(contracts: Contracts, bytes: Uint8Array): ManualSession {
     return contracts.manualSessionSchema.parse(session)
 }
 
-it('keeps the actual installed clients compatible with old and current HTTP servers using only a synthetic model', async () => {
+it('keeps the actual installed clients compatible with pinned current-main and working-tree HTTP servers using only a synthetic model', async () => {
     mkdirSync(resolve(root, '.local'), { recursive: true })
     const scratch = mkdtempSync(resolve(root, '.local/guide-motion-compat-'))
     const rows: Row[] = []
     const logs: string[] = []
+    const serverPromptVersions: Record<string, number> = {}
+    let completed = false
     const log = vi.spyOn(console, 'info').mockImplementation((value: unknown): void => {
         logs.push(String(value))
     })
     const trees = new Map<string, string>([
-        ...['fc7b706', 'decf006', 'de08511'].map((ref): [string, string] => [ref, archive(ref, resolve(scratch, ref))]),
+        ...[...appRefs.filter((ref) => ref !== 'head'), currentMain].map((ref): [string, string] => [
+            ref,
+            archive(ref, resolve(scratch, ref)),
+        ]),
         ['head', root],
     ])
     const bytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#abcdef' } })
         .png()
         .toBuffer()
     try {
-        for (const serverRef of ['decf006', 'head']) {
+        for (const serverRef of serverRefs) {
             const serverTree = trees.get(serverRef)!
             const serverContracts = await source<Contracts>(serverTree, 'packages/contracts/src/index.ts')
             const runtimeModule = await source<typeof RuntimeExports>(serverTree, 'api/src/server/model-runtime.ts')
@@ -115,10 +123,16 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
             const contextModule = await source<typeof ContextExports>(serverTree, 'api/src/server/documents/context.ts')
             const wireModule = await source<typeof WireExports>(serverTree, 'api/src/providers/document-wire.ts')
             const fixtureModule = await source<typeof FixtureExports>(serverTree, 'api/src/test-support/meta-stream.ts')
+            expect(serverContracts.LIMITS.requestBytes).toBe(8_388_608)
+            expect(serverContracts.STEP_MOTION_PROMPT_VERSION).toBe(
+                serverRef === 'head' ? 4 : serverRef === 'decf006' ? 2 : 3,
+            )
+            serverPromptVersions[serverRef] = serverContracts.STEP_MOTION_PROMPT_VERSION
             const parsed = sessionFor(serverContracts, bytes).rawExtraction!
-            for (const appRef of ['fc7b706', 'decf006', 'de08511', 'head']) {
+            for (const appRef of appRefs) {
                 for (const protocol of ['json', 'sse']) {
                     let guideWire: unknown
+                    let motionValues: unknown[] = []
                     let parsePageId = 'demo-page-1'
                     let modelCalls = 0
                     const transport: typeof fetch = async (url, init) => {
@@ -138,7 +152,7 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                                 for (const step of (value as typeof parsed).steps) delete step.sourceText
                             }
                         } else if (operation === 'truebuild_document') value = guideWire
-                        else if (operation === 'truebuild_stepMotion') value = { scene: null }
+                        else if (operation === 'truebuild_stepMotion') value = motionValues.shift() ?? { scene: null }
                         else throw new Error(`Unexpected model operation: ${operation}`)
                         return fixtureModule.asRequestedMetaResponse(
                             Response.json({
@@ -186,6 +200,7 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                             'packages/contracts/src/model.ts',
                         )
                         expect(modelContracts.MAX_PARSE_PAGES).toBe(appRef === 'head' ? 12 : 8)
+                        expect(contracts.LIMITS.requestBytes).toBe(8_388_608)
                         const clients = await source<ClientModule>(appTree, 'app/src/api/model-client.ts')
                         const documents = await source<DocumentModule>(appTree, 'app/src/api/document-client.ts')
                         const session = sessionFor(contracts, bytes)
@@ -286,7 +301,8 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                             query: lastQuery,
                         })
                         expect(guide.status, JSON.stringify(rows.at(-1))).toBe('ok')
-                        expect(modelCalls - beforeGuide).toBe(appRef !== 'fc7b706' && serverRef === 'head' ? 0 : 1)
+                        // PR16 serves deterministic Guides for actions-capable clients; decf006 still calls the model.
+                        expect(modelCalls - beforeGuide).toBe(appRef === 'fc7b706' || serverRef === 'decf006' ? 1 : 0)
                         expect(lastType).toContain('application/json')
                         if (guide.status === 'ok') {
                             expect(guide.value.document).not.toBeNull()
@@ -337,6 +353,121 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                             expect(modelCalls - beforeMotion).toBe(request !== null ? 1 : 0)
                             expect(lastType).toContain('application/json')
                             expect(session).toEqual(original)
+                            if (serverRef === 'head') {
+                                const motionSession = structuredClone(session)
+                                for (const step of [
+                                    motionSession.rawExtraction!.steps[0]!,
+                                    motionSession.reviewedSteps[0]!,
+                                ])
+                                    step.sourceRefs = [
+                                        {
+                                            pageId: 'demo-page-1',
+                                            region: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+                                        },
+                                    ]
+                                const fixtureScene = (
+                                    name: string,
+                                ): NonNullable<ContractExports.StepMotionResult['scene']> => {
+                                    const raw: unknown = JSON.parse(
+                                        readFileSync(
+                                            resolve(root, `api/src/test-support/motion-scenes/${name}.json`),
+                                            'utf8',
+                                        ),
+                                    )
+                                    const value = serverContracts.stepMotionResultSchema.parse(
+                                        serverContracts.dropDegenerateStepMotionShapes(raw),
+                                    ).scene!
+                                    value.stepId = 'step-1'
+                                    for (const mover of value.movers) mover.actionIndex = null
+                                    return value
+                                }
+                                const overlapping = fixtureScene('noble-step-1')
+                                const repaired = fixtureScene('noble-step-2')
+                                for (const accepted of [false, true]) {
+                                    const operation = accepted ? 'motion-overlap-repaired' : 'motion-overlap-terminal'
+                                    const motionRequest = registry.motionRequestForStep(
+                                        motionSession,
+                                        'step-1',
+                                        `${appRef}-${serverRef}-${protocol}-${operation}`,
+                                    )!
+                                    expect(motionRequest).not.toBeNull()
+                                    // Distinct source context prevents either scenario from reading the other's cache.
+                                    motionRequest.instructionText += accepted
+                                        ? ' Repaired output.'
+                                        : ' Terminal output.'
+                                    motionValues = [
+                                        { scene: overlapping },
+                                        { scene: accepted ? repaired : overlapping },
+                                    ]
+                                    const beforeRepair = modelCalls
+                                    const values = new Map<string, string>()
+                                    const storage = {
+                                        getAllKeys: async (): Promise<string[]> => [...values.keys()],
+                                        getItem: async (item: string): Promise<string | null> =>
+                                            values.get(item) ?? null,
+                                        setItem: async (item: string, value: string): Promise<void> => {
+                                            values.set(item, value)
+                                        },
+                                        removeItem: async (item: string): Promise<void> => {
+                                            values.delete(item)
+                                        },
+                                    }
+                                    const generate = client.stepMotion.bind(client)
+                                    const deviceRegistry = new registry.StepMotionRegistry(storage, generate)
+                                    const pageUris = {
+                                        'demo-page-1': `data:image/png;base64,${bytes.toString('base64')}`,
+                                    }
+                                    const outcome = await deviceRegistry.load(motionRequest, pageUris)
+                                    rows.push({
+                                        app: appRef,
+                                        server: serverRef,
+                                        operation,
+                                        protocol,
+                                        http: lastHttp,
+                                        result: outcome === null ? 'hint-hidden' : `scene-v${outcome.version}`,
+                                        modelCalls: modelCalls - beforeRepair,
+                                        query: lastQuery,
+                                    })
+                                    expect(outcome).toEqual(accepted ? repaired : null)
+                                    expect(modelCalls - beforeRepair).toBe(2)
+                                    expect(motionValues).toEqual([])
+                                    expect(lastHttp).toBe(200)
+                                    expect(lastType).toContain('application/json')
+                                    const reread = new registry.StepMotionRegistry(storage, generate)
+                                    expect(await reread.load(motionRequest, pageUris)).toEqual(outcome)
+                                    const cached = await client.stepMotion({ ...motionRequest, cacheOnly: true }, {})
+                                    expect(cached).toEqual({ scene: accepted ? repaired : null })
+                                    expect(lastQuery).toBe('?cacheOnly=1')
+                                    expect(modelCalls - beforeRepair).toBe(2)
+                                    if (!accepted) {
+                                        values.clear()
+                                        const refused = new clients.ModelApiClient({
+                                            baseUrl,
+                                            secret: 'synthetic-refused-key',
+                                            fetch: clientFetch,
+                                            streamFetch: clientFetch,
+                                        })
+                                        const errorRegistry = new registry.StepMotionRegistry(
+                                            storage,
+                                            refused.stepMotion.bind(refused),
+                                        )
+                                        const beforeRefusal = modelCalls
+                                        expect(await errorRegistry.load(motionRequest, pageUris)).toBeNull()
+                                        rows.push({
+                                            app: appRef,
+                                            server: serverRef,
+                                            operation: 'motion-http-refused',
+                                            protocol,
+                                            http: lastHttp,
+                                            result: 'hint-hidden',
+                                            modelCalls: modelCalls - beforeRefusal,
+                                            query: lastQuery,
+                                        })
+                                        expect(lastHttp).toBe(401)
+                                        expect(modelCalls).toBe(beforeRefusal)
+                                    }
+                                }
+                            }
                         }
                         if (appRef === 'head') {
                             const pages = Array.from({ length: 12 }, (_, index) => ({
@@ -466,13 +597,29 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                 }
             }
         }
+        completed = true
     } finally {
         log.mockRestore()
         writeFileSync(
-            resolve(root, '.local/guide-motion-compat-results.json'),
+            resolve(root, '.local/prompt24-compat-results.json'),
             JSON.stringify(
                 {
+                    completed,
                     headBase: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+                    currentMain,
+                    revisions: Object.fromEntries(
+                        [...appRefs.filter((ref) => ref !== 'head'), currentMain].map((ref) => [
+                            ref,
+                            execFileSync('git', ['rev-parse', `${ref}^{commit}`], {
+                                cwd: root,
+                                encoding: 'utf8',
+                            }).trim(),
+                        ]),
+                    ),
+                    serverPromptVersions,
+                    responseSceneVersion: 1,
+                    requestBytes: 8_388_608,
+                    currentParsePages: 12,
                     workingDiffSha256: hash(
                         execFileSync(
                             'git',
@@ -502,14 +649,14 @@ it('keeps the actual installed clients compatible with old and current HTTP serv
                                 .map((path) => [path, hash(readFileSync(resolve(root, path)))]),
                         ),
                     ),
-                    basis: 'Actual frozen clients fc7b706/decf006/de08511 and current working tree; frozen decf006 and working-tree Hono servers; loopback HTTP only; injected synthetic Meta transport; Guide and motion are JSON-only.',
+                    basis: 'Actual frozen clients fc7b706/decf006/de08511 and current working tree; frozen decf006, pinned current-main db12e00 and working-tree Hono servers; loopback HTTP only; injected synthetic Meta transport; Guide and motion are JSON-only. Head overlap cells use saved scene fixtures and the actual client registry, including device and server cache rereads. Older servers have no overlap guard; their overlapping-scene pass-through is not exercised. No live model, device, visual-quality or deployment proof.',
                     rows,
                 },
                 null,
                 2,
             ),
         )
-        writeFileSync(resolve(root, '.local/guide-motion-compat.log'), logs.join('\n'))
+        writeFileSync(resolve(root, '.local/prompt24-compat.log'), logs.join('\n'))
         rmSync(scratch, { recursive: true, force: true })
     }
 }, 60_000)

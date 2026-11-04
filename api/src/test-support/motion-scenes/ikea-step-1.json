@@ -1,0 +1,77 @@
+{
+    "scene": {
+        "caption": "Twist a screw into the upside-down table top corner, then twist a leg onto the exposed screw until tight.",
+        "movers": [
+            {
+                "actionIndex": 0,
+                "label": "Double-ended screw",
+                "motion": { "axis": [0, -1, 0], "kind": "screw", "travel": 10, "turns": 2 },
+                "shapes": [
+                    {
+                        "bevel": 0,
+                        "depth": 20,
+                        "outline": [
+                            [-2.5, -2.5],
+                            [2.5, -2.5],
+                            [2.5, 2.5],
+                            [-2.5, 2.5]
+                        ],
+                        "position": [45, 0, 28],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    }
+                ]
+            },
+            {
+                "actionIndex": 1,
+                "label": "Table leg",
+                "motion": { "axis": [0, -1, 0], "kind": "screw", "travel": 16, "turns": -1 },
+                "shapes": [
+                    {
+                        "bevel": 0,
+                        "depth": 85,
+                        "outline": [
+                            [34, 17],
+                            [56, 17],
+                            [56, 39],
+                            [34, 39]
+                        ],
+                        "position": [0, 10, 0],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    }
+                ]
+            }
+        ],
+        "stepId": "step-1",
+        "still": [
+            {
+                "bevel": 0,
+                "depth": 2,
+                "outline": [
+                    [-110, -90],
+                    [110, -90],
+                    [110, 90],
+                    [-110, 90]
+                ],
+                "position": [0, -2, 0],
+                "rotation": [0, 0, 0],
+                "type": "extrude"
+            },
+            {
+                "bevel": 0,
+                "depth": 10,
+                "outline": [
+                    [-65, -45],
+                    [65, -45],
+                    [65, 45],
+                    [-65, 45]
+                ],
+                "position": [0, 0, 0],
+                "rotation": [0, 0, 0],
+                "type": "extrude"
+            }
+        ],
+        "version": 1
+    }
+}

@@ -6,9 +6,13 @@ import { ownTemporaryImage, releaseTemporaryImage } from './owned-temporary-imag
 import { readImage, probeImage } from './read-image'
 import {
     normalizedSize,
-    NORMALIZED_MAX_EDGE,
     NORMALIZED_TARGET_BYTES,
+    NORMALIZED_MAX_PIXELS,
+    NORMALIZED_MAX_DIMENSION,
     RAW_IMAGE_MAX_BYTES,
+    shortEdgeFloor,
+    shrunkSize,
+    type PixelSize,
 } from './normalization-policy'
 
 export type SourceImageAsset = {
@@ -25,7 +29,8 @@ export type NormalizedImage = {
     readonly uri: string
 }
 
-/** Decode through Expo's EXIF-aware loader, then resize without cropping and encode JPEG, stripping source metadata.
+/** Decode through Expo's EXIF-aware loader at the policy's target size, then encode JPEG, stripping source metadata.
+ * Quality retries lower the encoding first and shrink only while the readability floor allows it.
  * Full-resolution phone photos may exceed upload ceilings: those ceilings apply only AFTER normalization.
  * HEIC supported by the native loader is converted locally; only the final JPEG goes to the backend.
  */
@@ -33,17 +38,18 @@ export async function normalizeImage(asset: SourceImageAsset): Promise<Normalize
     if (asset.fileSize !== undefined && asset.fileSize > RAW_IMAGE_MAX_BYTES) {
         throw new MediaRejectedError('oversize')
     }
+    let target: PixelSize
     try {
-        normalizedSize(asset.width, asset.height)
+        target = normalizedSize(asset.width, asset.height)
     } catch {
         throw new MediaRejectedError('pixels')
     }
+    const floor = shortEdgeFloor(asset.width, asset.height)
     // Raw input has its own read cap. SDK 58 downsamples during EXIF-aware decode, before allocating full-resolution pixels.
     await probeImage(asset.uri, RAW_IMAGE_MAX_BYTES)
-    const context = ImageManipulator.manipulate(asset.uri, {
-        maxWidth: NORMALIZED_MAX_EDGE,
-        maxHeight: NORMALIZED_MAX_EDGE,
-    })
+    // A symmetric decode box preserves EXIF swaps and the existing normal-page decode path.
+    const edge = Math.max(target.width, target.height)
+    const context = ImageManipulator.manipulate(asset.uri, { maxWidth: edge, maxHeight: edge })
     const outputs = new Set<string>()
     let finalUri: string | undefined
     let rendered: Awaited<ReturnType<typeof context.renderAsync>> | undefined
@@ -65,6 +71,12 @@ export async function normalizeImage(asset: SourceImageAsset): Promise<Normalize
                 throw error
             }
             const info = inspectSourceImage(bytes)
+            if (
+                info.width * info.height > NORMALIZED_MAX_PIXELS ||
+                Math.max(info.width, info.height) > NORMALIZED_MAX_DIMENSION
+            ) {
+                throw new MediaRejectedError('pixels')
+            }
             if (bytes.length <= NORMALIZED_TARGET_BYTES) {
                 finalUri = saved.uri
                 if (asset.uri !== finalUri) {
@@ -75,13 +87,20 @@ export async function normalizeImage(asset: SourceImageAsset): Promise<Normalize
             if (index === qualities.length - 1) {
                 break
             }
-            const reduced = ImageManipulator.manipulate(saved.uri).resize({
-                width: Math.max(1, Math.round(saved.width * 0.8)),
-            })
+            const size = { width: info.width, height: info.height }
+            const next = shrunkSize(size, floor)
+            if (next.width === size.width && next.height === size.height) {
+                // The readability floor binds: this retry only lowers quality, and the superseded file goes now.
+                await releaseTemporaryImage(saved.uri)
+                continue
+            }
+            const reduced = ImageManipulator.manipulate(saved.uri).resize(
+                floor === 0 ? { width: next.width } : { width: next.width, height: next.height },
+            )
             try {
-                const next = await reduced.renderAsync()
+                const resized = await reduced.renderAsync()
                 rendered.release?.()
-                rendered = next
+                rendered = resized
             } finally {
                 reduced.release?.()
                 await releaseTemporaryImage(saved.uri)

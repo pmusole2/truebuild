@@ -37,6 +37,8 @@ import {
     pieceIdSchema,
     stepMotionRequestSchema,
     type StepMotionRequest,
+    type StepMotionScene,
+    stepMotionSceneSchema,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
@@ -133,9 +135,10 @@ export type MetaProviderErrorCode = 'unconfigured' | 'invalid_input' | 'timeout'
 /**
  * `incomplete`: the provider said the response did not complete (for example the output cap was reached).
  * `malformed`: a completed response whose content was not valid JSON or failed schema validation.
- * Only `malformed` can justify the single same-model repair; an incomplete response is reported honestly instead.
+ * Only `malformed` can justify the single same-model parse repair; an incomplete response is reported honestly instead.
+ * `repair_budget`: validated motion repair context exceeded its local allowance before transport.
  */
-export type MetaProviderErrorDetail = 'incomplete' | 'malformed'
+export type MetaProviderErrorDetail = 'incomplete' | 'malformed' | 'repair_budget'
 
 export class MetaProviderError extends Error {
     /** What the failed call observed (timings, usage), when the provider answered at all. */
@@ -285,11 +288,16 @@ export interface AnswerQuestionInput extends CheckStepInput {
     target: QuestionTarget
 }
 
+export interface StepMotionGenerationInput {
+    request: StepMotionRequest
+    image: ObservationImage
+    /** Server-only repair context; never accepted from the public request. */
+    repairIssues?: readonly string[]
+    previousScene?: StepMotionScene
+}
+
 export interface MetaProvider {
-    generateStepMotion?(
-        input: { request: StepMotionRequest; image: ObservationImage },
-        signal: AbortSignal,
-    ): Promise<ScreenGeneration>
+    generateStepMotion?(input: StepMotionGenerationInput, signal: AbortSignal): Promise<ScreenGeneration>
     generatePieces?(
         input: {
             requestId: string
@@ -838,18 +846,24 @@ function stepMotionTextContent(context: Readonly<Record<string, unknown>>): [Mot
                 actions: context.actions,
                 orientation: context.orientation,
                 connection: context.connection,
+                ...(context.repairIssues === undefined
+                    ? {}
+                    : { repairIssues: context.repairIssues, previousScene: context.previousScene }),
             }),
         },
     ]
 }
 
 /** Exact UTF-8 size of the same instructions, output format and text parts sent by step-motion; images are budgeted separately. */
-export function stepMotionTextBytes(request: StepMotionRequest): number {
+export function stepMotionTextBytes(
+    request: StepMotionRequest,
+    repair?: Pick<StepMotionGenerationInput, 'repairIssues' | 'previousScene'>,
+): number {
     return Buffer.byteLength(
         JSON.stringify({
             instructions: STEP_MOTION_INSTRUCTIONS,
             text: { format: STEP_MOTION_FORMAT },
-            input: stepMotionTextContent(request),
+            input: stepMotionTextContent({ ...request, ...repair }),
         }),
         'utf8',
     )
@@ -1672,12 +1686,33 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         async generateStepMotion(input, signal): Promise<ScreenGeneration> {
             const request = stepMotionRequestSchema.safeParse(input.request)
             if (!request.success || request.data.cacheOnly) throw new MetaProviderError('invalid_input')
+            const repair =
+                input.repairIssues === undefined && input.previousScene === undefined
+                    ? undefined
+                    : z
+                          .strictObject({
+                              repairIssues: z
+                                  .array(z.string().regex(/^movers\.\d+\.shapes\.\d+:deep_static_overlap:still\.\d+$/u))
+                                  .min(1)
+                                  .max(48),
+                              previousScene: stepMotionSceneSchema.unwrap(),
+                          })
+                          .safeParse({ repairIssues: input.repairIssues, previousScene: input.previousScene })
+            if (repair && !repair.success) throw new MetaProviderError('invalid_input')
+            const repairContext = repair?.success ? repair.data : {}
             if (
                 Buffer.byteLength(JSON.stringify(request.data), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
                 stepMotionTextBytes(request.data) > STEP_MOTION_POLICY.maxTextBytes ||
                 input.image.width * input.image.height > LIMITS.imagePixels
             )
                 throw new MetaProviderError('invalid_input')
+            if (
+                repair &&
+                (Buffer.byteLength(JSON.stringify(repairContext), 'utf8') > STEP_MOTION_POLICY.maxRepairContextBytes ||
+                    stepMotionTextBytes(request.data, repairContext) >
+                        STEP_MOTION_POLICY.maxTextBytes + STEP_MOTION_POLICY.maxRepairContextBytes)
+            )
+                throw new MetaProviderError('invalid_input', 'repair_budget')
             return execute(STEP_MOTION_POLICY.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
                 const images = await validateAndNormalizeImages([input.image], deadline.signal, 1, true)
                 const {
@@ -1689,7 +1724,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 } = request.data
                 return dispatchDetailed(
                     'stepMotion',
-                    context,
+                    { ...context, ...repairContext },
                     images,
                     z.unknown(),
                     deadline,

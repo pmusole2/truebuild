@@ -277,6 +277,7 @@ export async function runModelParseRepair<T>(work: () => Promise<T>): Promise<T>
             check: parent.check,
             deadline: parent.deadline,
             counter: parent.counter,
+            beforeSend: parent.beforeSend,
             dispatched: false,
             retry: false,
             attempts: 0,

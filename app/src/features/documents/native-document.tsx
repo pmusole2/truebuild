@@ -1544,7 +1544,6 @@ function GuidePartDirections({
         if (part?.name.state !== 'known') return []
         const size = part.dimensions
         const count = required.quantity.state === 'known' ? `×${required.quantity.value}` : null
-        if (!size && count === null) return []
         return [{ partId: required.partId, text: [part.name.value, size, count].filter(Boolean).join(' · ') }]
     })
     if (details.length === 0) return null

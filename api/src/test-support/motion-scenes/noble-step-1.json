@@ -1,0 +1,77 @@
+{
+    "scene": {
+        "caption": "The mechanism is lowered onto the upturned chair seat and bolted down with washers, its front end toward the seat front.",
+        "movers": [
+            {
+                "actionIndex": 1,
+                "label": "Mechanism (C)",
+                "motion": { "from": [0, 34, 0], "kind": "translate", "to": [0, 18, 0] },
+                "shapes": [
+                    {
+                        "bevel": 0,
+                        "depth": 3.0,
+                        "outline": [
+                            [-14, -16],
+                            [14, -16],
+                            [14, 16],
+                            [-14, 16]
+                        ],
+                        "position": [0, 18.5, 0],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    }
+                ]
+            },
+            {
+                "actionIndex": 2,
+                "label": "Bolts with spring washers and washers",
+                "motion": { "axis": [0, -1, 0], "kind": "screw", "travel": 12, "turns": 3 },
+                "shapes": [
+                    {
+                        "bevel": 0,
+                        "depth": 6,
+                        "outline": [
+                            [-10, -10],
+                            [10, -10],
+                            [10, 10],
+                            [-10, 10]
+                        ],
+                        "position": [0, 22, 0],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    }
+                ]
+            }
+        ],
+        "stepId": "step-1",
+        "still": [
+            {
+                "bevel": 0,
+                "depth": 4,
+                "outline": [
+                    [-55, -38],
+                    [55, -38],
+                    [55, 38],
+                    [-55, 38]
+                ],
+                "position": [0, 2, 0],
+                "rotation": [0, 0, 0],
+                "type": "extrude"
+            },
+            {
+                "bevel": 0,
+                "depth": 12,
+                "outline": [
+                    [-34, -28],
+                    [34, -28],
+                    [34, 28],
+                    [-34, 28]
+                ],
+                "position": [0, 10, 0],
+                "rotation": [0, 0, 0],
+                "type": "extrude"
+            }
+        ],
+        "version": 1
+    }
+}
