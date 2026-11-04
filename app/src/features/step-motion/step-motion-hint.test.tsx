@@ -30,12 +30,17 @@ jest.mock('../pieces/piece-gl', () => ({
             const { View } = jest.requireActual<typeof ReactNativeModule>('react-native')
             // External GPU boundary only: the test drives context creation and records the surface's props.
             mockSurface.props = props
-            return React.createElement(View, { testID: 'step-motion-gl-surface' })
+            return React.createElement(View, {
+                testID: 'step-motion-gl-surface',
+                pointerEvents: props.pointerEvents,
+            })
         },
     }),
     loadStepMotionScene: (): Promise<unknown> => mockLoadScene(),
     isGLAvailable: (): boolean => mockGL.available,
 }))
+
+type Instance = ReturnType<typeof screen.getByTestId>
 
 const gl = {} as ExpoWebGLRenderingContext
 const box = (x: number): StepMotionScene['still'][number] => ({
@@ -103,6 +108,18 @@ async function createSurface(): Promise<void> {
     await act(async () => {
         await create?.(gl)
     })
+}
+
+// The host views between a node and an ancestor test id, so a test can prove every wrapper in that path is pass-through.
+function hostWrappersBetween(node: Instance, ancestorTestID: string): Instance[] {
+    const wrappers: Instance[] = []
+    let parent = node.parent
+    while (parent !== null && parent.props.testID !== ancestorTestID) {
+        if (typeof parent.type === 'string') wrappers.push(parent)
+        parent = parent.parent
+    }
+    expect(parent).not.toBeNull()
+    return wrappers
 }
 
 // Async act flushes React's timer-scheduled effects before and after the clock moves.
@@ -337,6 +354,7 @@ it('reserves one hero frame through loading, motion and manual fallback, with av
     const view = await render(ui({ scene: null, loading: true, ...props }))
     expect(screen.getByTestId('step-motion-viewport')).toHaveStyle({ aspectRatio: 1.6, borderRadius: 16 })
     expect(screen.getByTestId('blueprint-loader-piece')).toBeTruthy()
+    expect(screen.queryByText('Manual reference')).toBeNull()
     expect(screen.queryByText('Step 2')).toBeNull()
     expect(availability).toHaveBeenLastCalledWith('loading')
     await view.rerender(ui({ scene, ...props }))
@@ -419,4 +437,15 @@ it('lets hero swipes pass through while the fallback image remains an interactiv
     }
     await fireEvent.press(picture)
     expect(open).toHaveBeenCalledTimes(1)
+})
+
+it('makes the GL host and its content wrapper pass-through, not only the outer viewport', async () => {
+    await render(ui({ scene }))
+    await createSurface()
+    expect(mockSurface.props?.pointerEvents).toBe('none')
+    const surface = screen.getByTestId('step-motion-gl-surface')
+    expect(surface.props.pointerEvents).toBe('none')
+    const wrappers = hostWrappersBetween(surface, 'step-motion-viewport')
+    expect(wrappers.length).toBeGreaterThan(0)
+    for (const wrapper of wrappers) expect(wrapper.props.pointerEvents).toBe('none')
 })

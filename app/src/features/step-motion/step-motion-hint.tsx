@@ -303,11 +303,16 @@ export function StepMotionHint({
                         if (height > 0) setViewportHeight(height)
                     }}
                 >
-                    <View style={styles.content}>
+                    <View pointerEvents="none" style={styles.content}>
                         {!showFallback && parsed !== null && live ? (
                             <GLBoundary key={generation} onFail={fail}>
                                 <Suspense fallback={null}>
-                                    <LazyGLView style={styles.gl} onContextCreate={create} onLayout={redraw} />
+                                    <LazyGLView
+                                        pointerEvents="none"
+                                        style={styles.gl}
+                                        onContextCreate={create}
+                                        onLayout={redraw}
+                                    />
                                 </Suspense>
                             </GLBoundary>
                         ) : null}

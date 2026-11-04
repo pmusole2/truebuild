@@ -5,7 +5,6 @@ import { cleanup, screen, waitFor } from '@testing-library/react-native'
 import { createController, createDocuments, createScreens } from './controller-factory'
 import { flush, mount, press, type Mounted } from '../screens/test-support/flow'
 import { entry } from '../screens/test-support/route-harness'
-import { guideMotionInsertionPath } from '../documents/native-document'
 
 jest.mock('expo-router/build/testing-library/mocks', () => ({}))
 jest.mock('react', () => {
@@ -101,21 +100,9 @@ it('places the motion hero before directions and parts without changing the cont
     const probe = tokens.indexOf('#motion-probe')
     expect(tokens.filter((token) => token === '#motion-probe')).toHaveLength(1)
     expect(tokens.indexOf('"Do this"')).toBeGreaterThan(-1)
-    // Prompt25 re-slots the motion in the hero. The exported legacy helper remains independently covered below.
+    // Motion is extra context in the hero, before the authored numbered directions.
     expect(probe).toBeLessThan(tokens.indexOf('"Do this"'))
     expect(tokens.indexOf('"Watch it"')).toBeLessThan(probe)
     expect(probe).toBeLessThan(tokens.indexOf('"Check your work"'))
     expect(probe).toBeLessThan(tokens.indexOf('#guide-pieces-step-1'))
-})
-
-it.each([
-    {
-        numbered: ['body.0.1.0', 'body.0.1.2'],
-        directions: ['body.0.0', 'body.0.1.0', 'body.0.1.2'],
-        expected: 'body.0.1.2',
-    },
-    { numbered: [], directions: ['body.0', 'body.1'], expected: 'body.1' },
-    { numbered: [], directions: [], expected: null },
-])('selects the last numbered direction, else the final flat instruction', ({ numbered, directions, expected }) => {
-    expect(guideMotionInsertionPath(numbered, directions)).toBe(expected)
 })

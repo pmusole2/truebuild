@@ -100,13 +100,23 @@ it('uses the production plan when a manual-page opener comes after fact citation
     expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
 })
 
+// Source replanning needs a real nonempty disclosure; a duplicate-only section is intentionally pruned.
+const sourceDetail: ScreenNodeV2 = {
+    type: 'Text',
+    content: { kind: 'literal', text: 'Detail from this manual.' },
+    role: 'body',
+    emphasis: 'normal',
+    tone: 'neutral',
+    align: 'start',
+}
+
 it.each(['Hidden detail', 'Parts'])('keeps one opener per reference when %s opens first', async (first) => {
     const closed = (title: string, node: ScreenNodeV2): ScreenNodeV2 => ({
         type: 'Section',
         title: { kind: 'literal', text: title },
         collapsible: true,
         initiallyOpen: false,
-        children: [node],
+        children: [sourceDetail, node],
     })
     // This region is not already reachable from the visible fixture facts.
     await renderSources(
@@ -142,7 +152,10 @@ it('replans the single source affordance when its section opens and restores it 
             title: { kind: 'literal', text: 'Parts' },
             collapsible: true,
             initiallyOpen: false,
-            children: [{ type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: false }],
+            children: [
+                sourceDetail,
+                { type: 'ManualPage', sources: [0], fit: 'contain', label: null, initiallyOpen: false },
+            ],
         },
     ])
     expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)

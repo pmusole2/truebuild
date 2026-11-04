@@ -38,6 +38,7 @@ export function GuideStepMotion({
     readOnly,
     fallback,
     stepLabel,
+    pageImageStatus,
     onAvailabilityChange,
 }: {
     session: ManualSession | undefined
@@ -47,6 +48,7 @@ export function GuideStepMotion({
     readOnly: boolean
     fallback?: ReactNode
     stepLabel?: string
+    pageImageStatus?: 'pending' | 'ready' | 'unavailable'
     onAvailabilityChange?: (status: StepMotionAvailability) => void
 }): ReactElement | null {
     const request = useMemo(
@@ -61,6 +63,10 @@ export function GuideStepMotion({
     const [loading, setLoading] = useState(false)
     const pageUri = request === null ? undefined : pageUris[request.page.pageId]
     const enabled = active && !readOnly && DEMO_MODE === 'model' && GENERATIVE_UI !== 'off'
+    const possible = enabled && identity !== null
+    // A page image still resolving keeps the loader; only a settled page state lets the manual image take the frame.
+    const awaitingPage =
+        possible && pageUri === undefined && pageImageStatus !== 'ready' && pageImageStatus !== 'unavailable'
     useEffect(() => {
         if (!enabled || request === null || identity === null || pageUri === undefined) {
             setLoading(false)
@@ -80,13 +86,13 @@ export function GuideStepMotion({
             current = false
         }
     }, [enabled, request, identity, pageUri])
-    const canPresent = enabled && identity !== null && pageUri !== undefined
+    const canPresent = possible && pageUri !== undefined
     const scene = canPresent && result?.identity === identity ? result.scene : null
     return (
         <StepMotionHint
             key={identity}
             scene={scene}
-            loading={canPresent && (loading || result?.identity !== identity)}
+            loading={awaitingPage || (canPresent && (loading || result?.identity !== identity))}
             fallback={fallback}
             stepLabel={stepLabel}
             onAvailabilityChange={onAvailabilityChange}

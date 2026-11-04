@@ -86,7 +86,8 @@ import { ReviewCounts } from '../capture/review-counts'
 import type { FrameBindings } from './types'
 import { GuideStepMotion } from '../step-motion/guide-step-motion'
 import { StepMotionHint } from '../step-motion/step-motion-hint'
-import { DEMO_MODE } from '../../config'
+import { DEMO_MODE, GENERATIVE_UI } from '../../config'
+import { motionRequestForStep } from '../step-motion/step-motion-registry'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
 import Animated from 'react-native-reanimated'
@@ -210,13 +211,6 @@ type Environment = {
     sectionChanged: (path: string, open: boolean) => void
     leading: ReactNode
     trailing: ReactNode
-    /** The Guide's motion hint, rendered once under its directions Section or final flat instruction. */
-    motion: ReactNode
-    /** The innermost directions Section, or the last instruction Text when the body has no Section. */
-    motionPath: string | null
-    motionAvailable: boolean
-    endStates: readonly { node: ScreenNodeV2; path: string }[]
-    checkSectionPath: string | null
     sourceOverlay?: boolean
     /** Guide pills already shown by resolved text, so a repeated quantity or status reads once. */
     guidePillPaths: ReadonlySet<string>
@@ -288,12 +282,7 @@ function heldResultForDocument(
         : null
 }
 
-function shortGuideChecks(
-    node: ScreenNodeV2,
-    document: ScreenDocumentV2,
-    bindings: FrameBindings,
-    motionAvailable: boolean,
-): boolean {
+function shortGuideChecks(node: ScreenNodeV2, document: ScreenDocumentV2, bindings: FrameBindings): boolean {
     if (
         document.kind !== 'guide' ||
         document.metadata.stepActions !== 1 ||
@@ -307,9 +296,6 @@ function shortGuideChecks(
         if ('children' in item) item.children.forEach(collect)
     }
     collect(node)
-    if (motionAvailable && !document.facts.some((fact) => fact.factId.startsWith('action:')))
-        for (const fact of document.facts)
-            if (fact.kind === 'orientation' || fact.kind === 'connection') ids.add(fact.factId)
     return ids.size <= 4
 }
 
@@ -324,7 +310,6 @@ function citationVariant(
     sections: Readonly<Record<string, boolean>>,
     planSources: DocumentSourceV2[],
     lowPriorityPaths: Set<string>,
-    motionAvailable: boolean,
 ): ScreenVariantV2 {
     const planNode = (node: ScreenNodeV2, path: string): ScreenNodeV2 => {
         // A deduplicated fact citation is not an opener. Keep its path position without claiming any source.
@@ -360,7 +345,7 @@ function citationVariant(
                       ...node,
                       initiallyOpen:
                           containsSafety(node, document) ||
-                          shortGuideChecks(node, document, bindings, motionAvailable) ||
+                          shortGuideChecks(node, document, bindings) ||
                           (sections[path] ?? node.initiallyOpen),
                   }
                 : node
@@ -501,21 +486,22 @@ function duplicateFactPaths(
 /**
  * The Guide's Directions, numbered 1, 2, 3 in document order. The numbered facts are exactly the shared Directions group
  * of the document's facts, so the renderer never infers which fact is a direction. A repeat already omitted takes no
- * number. Only the number is added; the instruction's own words are shown unchanged. A compatibility document (no
- * `stepActions` echo) keeps its own layout and is never numbered here.
+ * number. Only the number is added; the instruction's own words are shown unchanged, including compatibility documents.
  */
-function actionNumbers(
-    document: ScreenDocumentV2,
-    variant: ScreenVariantV2,
-    prefix: string,
-    omitted: ReadonlySet<string>,
-): Record<string, number> {
+function actionNumbers(environment: Environment, variant: ScreenVariantV2, prefix: string): Record<string, number> {
+    const { document } = environment
     const numbers: Record<string, number> = {}
-    if (document.kind !== 'guide' || document.metadata.stepActions !== 1) return numbers
+    if (document.kind !== 'guide') return numbers
     const directions = new Set(manualDirectionGroups(document.facts).directions.map((fact) => fact.factId))
     let next = 0
     visitVariantNodesV2(variant, prefix, ({ node, path, hidden }) => {
-        if (hidden || !path.startsWith(`${prefix}body`) || omitted.has(path) || node.type !== 'Text') return
+        if (
+            hidden ||
+            !path.startsWith(`${prefix}body`) ||
+            node.type !== 'Text' ||
+            !hasVisibleContent(node, path, environment)
+        )
+            return
         if (node.content.kind !== 'fact') return
         if (directions.has(node.content.factId)) numbers[path] = ++next
     })
@@ -534,7 +520,6 @@ function relocatedOpeners(
     variant: ScreenVariantV2,
     prefix: string,
     citations: Readonly<Record<string, CitationPlanEntryV2>>,
-    _numbers: Readonly<Record<string, number>>,
     omitted: ReadonlySet<string>,
 ): { relocated: Record<string, RelocatedOpener[]>; moved: ReadonlySet<string> } {
     const relocated: Record<string, RelocatedOpener[]> = {}
@@ -663,14 +648,6 @@ function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean
     return 'children' in node && node.children.some((child) => containsSafety(child, document))
 }
 
-/**
- * The motion hint follows its last numbered direction, so checks and source openers keep their own place after it.
- * A Guide without numbered directions uses its last direction instruction.
- */
-export function guideMotionInsertionPath(numbered: readonly string[], directions: readonly string[]): string | null {
-    return numbered.at(-1) ?? directions.at(-1) ?? null
-}
-
 /** Presentation equality only: the saved title still owns its source and original words. */
 const normalizedGuideTitle = (value: string): string =>
     value
@@ -680,21 +657,42 @@ const normalizedGuideTitle = (value: string): string =>
         .toLocaleLowerCase()
 
 function hasVisibleContent(node: ScreenNodeV2, path: string, environment: Environment): boolean {
-    if (environment.omittedDuplicates.has(path) || environment.movedOpeners.has(path)) return false
-    return 'children' in node
-        ? node.children.some((child, index) => hasVisibleContent(child, `${path}.${index}`, environment))
-        : true
+    if (
+        environment.omittedDuplicates.has(path) ||
+        environment.movedOpeners.has(path) ||
+        environment.headerDuplicatePaths.has(path)
+    )
+        return false
+    if (node.type === 'Badge' && environment.document.kind === 'guide') return environment.guidePillPaths.has(path)
+    if (node.type === 'CoachMark') return false
+    if (node.type === 'Text')
+        return documentText(environment.document, environment.bindings, node.content).trim() !== ''
+    if (node.type === 'Citation' || node.type === 'ManualPage')
+        return (
+            environment.bindings.session !== undefined &&
+            (environment.citations[path]?.show ?? node.sources).some(
+                (index) => environment.planSources[index] !== undefined,
+            )
+        )
+    if ('children' in node) {
+        if (node.children.some((child, index) => hasVisibleContent(child, `${path}.${index}`, environment))) return true
+        return (
+            node.type === 'Section' &&
+            (environment.relocated[path] ?? []).some((opener) =>
+                hasVisibleContent(opener.node, opener.path, { ...environment, movedOpeners: NO_MOVED_OPENERS }),
+            )
+        )
+    }
+    return true
 }
 
 /** Exact manual references are compact until opened; no second cropped page competes with the motion. */
 function GuideManualStrip({
     images,
     environment,
-    showHeading = true,
 }: {
     images: readonly { node: Extract<ScreenNodeV2, { type: 'Image' }>; path: string }[]
     environment: Environment
-    showHeading?: boolean
 }): ReactElement | null {
     const [selected, setSelected] = useState<DocumentSourceV2 | null>(null)
     const session = environment.bindings.session
@@ -707,7 +705,7 @@ function GuideManualStrip({
     if (session === undefined || sources.length === 0) return null
     return (
         <>
-            {showHeading ? <SectionHeader title="From the manual" /> : null}
+            <SectionHeader title="From the manual" />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
                 {sources.map((source, index) => (
                     <Pressable
@@ -730,7 +728,7 @@ function GuideManualStrip({
                             </View>
                         ) : (
                             <StepPicture
-                                reference={source}
+                                reference={{ ...source, region: null }}
                                 session={session}
                                 pageUris={environment.bindings.pageUris}
                                 height={72}
@@ -1775,7 +1773,7 @@ function Node(props: NodeProps): ReactElement {
 
 function PageNode(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
-    if (props.environment.omittedDuplicates.has(props.path)) return <></>
+    if (props.node.type !== 'Scroll' && !hasVisibleContent(props.node, props.path, props.environment)) return <></>
     // Photo/camera ancestors and their siblings retain their React ancestry across the wait handoff.
     const content = <NodeContent {...props} />
     if (!props.environment.bindings.inspect)
@@ -1854,7 +1852,6 @@ function NodeContent({
     const targetStep = facts?.steps.find((step) => step.stepId === document.bound.stepId)
     switch (node.type) {
         case 'Stack':
-            if (!hasVisibleContent(node, path, environment)) return null
             return (
                 <View nativeID={mark} style={{ gap: gap(node.gap), alignItems: align[node.align] }}>
                     {children}
@@ -1877,46 +1874,56 @@ function NodeContent({
                               }
                     }
                 >
-                    {node.children.map((child, index) => (
-                        <View
-                            key={index}
-                            nativeID={mark}
-                            style={
-                                large
-                                    ? { minWidth: 0 }
-                                    : {
-                                          minWidth: 0,
-                                          flexShrink: 1,
-                                          ...(['Image', 'ManualPage', 'Card', 'PageList', 'CompareColumns'].includes(
-                                              child.type,
-                                          )
-                                              ? { flex: 1 }
-                                              : {}),
+                    {node.children.flatMap((child, index) =>
+                        !hasVisibleContent(child, `${path}.${index}`, environment)
+                            ? []
+                            : [
+                                  <View
+                                      key={index}
+                                      nativeID={mark}
+                                      style={
+                                          large
+                                              ? { minWidth: 0 }
+                                              : {
+                                                    minWidth: 0,
+                                                    flexShrink: 1,
+                                                    ...([
+                                                        'Image',
+                                                        'ManualPage',
+                                                        'Card',
+                                                        'PageList',
+                                                        'CompareColumns',
+                                                    ].includes(child.type)
+                                                        ? { flex: 1 }
+                                                        : {}),
+                                                }
                                       }
-                            }
-                        >
-                            <Node node={child} environment={environment} path={`${path}.${index}`} />
-                        </View>
-                    ))}
+                                  >
+                                      <Node node={child} environment={environment} path={`${path}.${index}`} />
+                                  </View>,
+                              ],
+                    )}
                 </View>
             )
         case 'Grid':
-            if (!hasVisibleContent(node, path, environment)) return null
             return (
                 <View nativeID={mark} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: gap(node.gap) }}>
-                    {node.children.map((child, index) => (
-                        <View
-                            key={index}
-                            nativeID={mark}
-                            style={{ flexBasis: large ? '100%' : `${100 / node.columns - 3}%`, flexGrow: 1 }}
-                        >
-                            <Node node={child} environment={environment} path={`${path}.${index}`} />
-                        </View>
-                    ))}
+                    {node.children.flatMap((child, index) =>
+                        !hasVisibleContent(child, `${path}.${index}`, environment)
+                            ? []
+                            : [
+                                  <View
+                                      key={index}
+                                      nativeID={mark}
+                                      style={{ flexBasis: large ? '100%' : `${100 / node.columns - 3}%`, flexGrow: 1 }}
+                                  >
+                                      <Node node={child} environment={environment} path={`${path}.${index}`} />
+                                  </View>,
+                              ],
+                    )}
                 </View>
             )
         case 'Card':
-            if (!hasVisibleContent(node, path, environment)) return null
             return (
                 <View
                     nativeID={mark}
@@ -1945,11 +1952,9 @@ function NodeContent({
                 </View>
             )
         case 'Section': {
-            const directions =
-                document.kind === 'guide' && document.metadata.stepActions === 1 && text(node.title) === 'Directions'
+            const directions = document.kind === 'guide' && text(node.title) === 'Directions'
             const title = directions ? 'Do this' : text(node.title)
-            const collapsible =
-                node.collapsible && !shortGuideChecks(node, document, bindings, environment.motionAvailable)
+            const collapsible = node.collapsible && !shortGuideChecks(node, document, bindings)
             const tail = (environment.relocated[path] ?? []).map((opener) => (
                 <Node
                     key={opener.path}
@@ -1958,43 +1963,18 @@ function NodeContent({
                     path={opener.path}
                 />
             ))
-            const movedChecks =
-                path === environment.checkSectionPath && environment.endStates.length > 0 ? (
-                    <Card>
-                        <Caption>It should look like this</Caption>
-                        {environment.endStates.map((item) => (
-                            <Node
-                                key={item.path}
-                                {...item}
-                                environment={{
-                                    ...environment,
-                                    omittedDuplicates: new Set(
-                                        [...environment.omittedDuplicates].filter((at) => at !== item.path),
-                                    ),
-                                    actionNumbers: {},
-                                }}
-                            />
-                        ))}
-                    </Card>
-                ) : null
-            const emptyDirections =
-                directions && !Object.keys(environment.actionNumbers).some((at) => at.startsWith(`${path}.`))
-            const follow =
-                emptyDirections && environment.motionAvailable ? (
-                    <Card>
-                        <Body>Follow the motion above</Body>
-                    </Card>
-                ) : null
             const content = (
                 <>
                     {node.title === null && !collapsible && tail.length > 0 ? (
                         <View style={{ alignSelf: 'flex-end' }}>{tail}</View>
                     ) : null}
-                    {follow}
                     {children}
-                    {movedChecks}
                 </>
             )
+            if (directions && !Object.keys(environment.actionNumbers).some((at) => at.startsWith(`${path}.`)))
+                return tail.length === 0 ? null : <View style={{ alignSelf: 'flex-end' }}>{tail}</View>
+            const sectionContent =
+                document.kind === 'guide' && title === 'Check your work' ? <Card>{content}</Card> : content
             return (
                 <View
                     nativeID={mark}
@@ -2016,10 +1996,10 @@ function NodeContent({
                             trailing={tail.length === 0 ? undefined : tail}
                             mark={mark}
                         >
-                            {content}
+                            {sectionContent}
                         </Disclosure>
                     ) : (
-                        <View style={styles.stack}>{content}</View>
+                        <View style={styles.stack}>{sectionContent}</View>
                     )}
                 </View>
             )
@@ -2069,14 +2049,22 @@ function NodeContent({
         case 'Spacer':
             return <View nativeID={mark} style={{ height: gap(node.size) }} />
         case 'Text': {
-            const Typography = {
-                display: LargeTitle,
-                title: Title,
-                heading: Heading,
-                body: node.emphasis === 'strong' ? Instruction : Body,
-                label: Label,
-                caption: Caption,
-            }[node.role]
+            const check =
+                document.kind === 'guide' &&
+                node.content.kind === 'fact' &&
+                manualDirectionGroups(document.facts).checks.some(
+                    (fact) => fact.factId === (node.content.kind === 'fact' ? node.content.factId : ''),
+                )
+            const Typography = check
+                ? Body
+                : {
+                      display: LargeTitle,
+                      title: Title,
+                      heading: Heading,
+                      body: node.emphasis === 'strong' ? Instruction : Body,
+                      label: Label,
+                      caption: Caption,
+                  }[node.role]
             const line = (
                 <Typography
                     tone={
@@ -2091,7 +2079,19 @@ function NodeContent({
             )
             const number = environment.actionNumbers[path]
             return (
-                <View nativeID={mark} style={{ alignItems: node.align === 'start' ? 'stretch' : align[node.align] }}>
+                <View
+                    nativeID={mark}
+                    style={{
+                        alignItems: node.align === 'start' ? 'stretch' : align[node.align],
+                        ...(check
+                            ? {
+                                  paddingVertical: space.sm,
+                                  borderBottomWidth: StyleSheet.hairlineWidth,
+                                  borderBottomColor: colors.border,
+                              }
+                            : {}),
+                    }}
+                >
                     {number === undefined ? (
                         line
                     ) : (
@@ -2462,25 +2462,51 @@ export function NativeDocumentRenderer({
     const { width } = useWindowDimensions()
     const insets = useSafeAreaInsets()
     const [barHeight, setBarHeight] = useState(0)
-    const [motionState, setMotionState] = useState<{ step: string | null; available: boolean }>({
+    const [motionState, setMotionState] = useState<{ step: string | null; status: 'loading' | 'motion' | 'fallback' }>({
         step: null,
-        available: false,
+        status: 'loading',
     })
     const motionIdentity = `${document.bound.manualId}:${document.bound.revision}:${document.bound.stepId}`
     const motionManualMatches = bindings.session?.manualId === document.bound.manualId
-    const motionAvailable = motionManualMatches && motionState.step === motionIdentity && motionState.available
     const motionChanged = useCallback(
         (status: 'motion' | 'loading' | 'fallback'): void => {
             setMotionState((current) =>
-                current.step === motionIdentity && current.available === (status === 'motion')
+                current.step === motionIdentity && current.status === status
                     ? current
-                    : { step: motionIdentity, available: status === 'motion' },
+                    : { step: motionIdentity, status },
             )
         },
         [motionIdentity],
     )
     const scope = useCoachScope()
     const attention = useCoachAttention()
+    const motionCandidate = useMemo(
+        () =>
+            motionManualMatches && bindings.session !== undefined && document.bound.stepId !== null
+                ? motionRequestForStep(bindings.session, document.bound.stepId, 'presentation')
+                : null,
+        [motionManualMatches, bindings.session, document.bound.stepId],
+    )
+    const motionAssetMissing =
+        motionCandidate !== null &&
+        bindings.pageUris[motionCandidate.page.pageId] === undefined &&
+        (bindings.pageImageStatus === 'ready' || bindings.pageImageStatus === 'unavailable')
+    const motionPossible =
+        motionManualMatches &&
+        ((__DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined) ||
+            (scope.active &&
+                !attention &&
+                bindings.readOnly !== true &&
+                DEMO_MODE === 'model' &&
+                GENERATIVE_UI !== 'off' &&
+                motionCandidate !== null &&
+                !motionAssetMissing))
+    const motionStatus = !motionPossible
+        ? 'fallback'
+        : motionState.step === motionIdentity
+          ? motionState.status
+          : 'loading'
+    const motionHero = motionStatus !== 'fallback'
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
     const previousStep = useRef(bindings.live?.entry?.stepIndex ?? 0)
     const stepIndex = bindings.live?.entry?.stepIndex ?? 0
@@ -2571,7 +2597,6 @@ export function NativeDocumentRenderer({
         sections,
         planSources,
         lowPriorityPaths,
-        motionAvailable,
     )
     const subtitle = selected.variant.header.subtitle
     const subtitleText = documentText(document, bindings, subtitle).trim().replace(/\s+/gu, ' ')
@@ -2637,7 +2662,6 @@ export function NativeDocumentRenderer({
             )
                 headerDuplicatePaths.add(path)
         })
-    const numbers = actionNumbers(document, selected.variant, selected.prefix, omitted)
     const citations = oneOpenerPerSection(
         plannedVariant,
         selected.prefix,
@@ -2647,14 +2671,7 @@ export function NativeDocumentRenderer({
         }),
         planSources,
     )
-    const { relocated, moved } = relocatedOpeners(
-        document,
-        selected.variant,
-        selected.prefix,
-        citations,
-        numbers,
-        omitted,
-    )
+    const { relocated, moved } = relocatedOpeners(document, selected.variant, selected.prefix, citations, omitted)
     const environment: Environment = {
         document,
         bindings,
@@ -2663,7 +2680,7 @@ export function NativeDocumentRenderer({
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
         omittedDuplicates: omitted,
-        actionNumbers: numbers,
+        actionNumbers: {},
         relocated,
         movedOpeners: moved,
         planSources,
@@ -2677,11 +2694,6 @@ export function NativeDocumentRenderer({
         citations,
         leading: null,
         trailing: null,
-        motion: null,
-        motionPath: null,
-        motionAvailable,
-        endStates: [],
-        checkSectionPath: null,
         guidePillPaths: new Set<string>(),
         rootScroll,
         scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
@@ -2723,9 +2735,6 @@ export function NativeDocumentRenderer({
     if (guideReady) {
         const step = screenFacts(bindings.session ?? null)?.steps.find((item) => item.stepId === document.bound.stepId)
         const normalizedTitle = normalizedGuideTitle(step?.title ?? '')
-        const hasActions = document.facts.some((fact) => fact.factId.startsWith('action:'))
-        const endStates: { node: ScreenNodeV2; path: string }[] = []
-        const numberOmissions = new Set(omitted)
         visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
             if (hidden || !path.startsWith(`${selected.prefix}body`)) return
             if (node.type === 'Image' && node.source.kind !== 'capture') {
@@ -2770,28 +2779,17 @@ export function NativeDocumentRenderer({
                     normalizedGuideTitle(documentText(document, bindings, node.content)) === normalizedTitle
                 ) {
                     omitted.add(path)
-                    numberOmissions.add(path)
                 }
             }
-            if (node.type !== 'Text' || document.metadata.stepActions !== 1) return
-            if (node.content.kind === 'literal' && /^[·\s]+$/u.test(node.content.text)) omitted.add(path)
-            if (node.content.kind !== 'fact') return
-            const fact = document.facts.find(
-                (item) => item.factId === (node.content.kind === 'fact' ? node.content.factId : ''),
+            if (
+                node.type === 'Text' &&
+                document.metadata.stepActions === 1 &&
+                node.content.kind === 'literal' &&
+                /^[·\s]+$/u.test(node.content.text)
             )
-            if (fact === undefined || fact.kind === 'safety' || fact.basis === 'safety-note') return
-            if (normalizedTitle !== '' && normalizedGuideTitle(fact.text) === normalizedTitle) {
                 omitted.add(path)
-                numberOmissions.add(path)
-            } else if (!hasActions && motionAvailable && (fact.kind === 'orientation' || fact.kind === 'connection')) {
-                endStates.push({ node, path })
-                omitted.add(path)
-                numberOmissions.add(path)
-            }
         })
-        environment.actionNumbers = actionNumbers(document, selected.variant, selected.prefix, numberOmissions)
-        environment.endStates = endStates
-        environment.checkSectionPath = checkSlots[0]?.path ?? null
+        environment.actionNumbers = actionNumbers(environment, selected.variant, selected.prefix)
         const reference = guideImages[0]
         const fallback =
             reference === undefined ? (
@@ -2801,7 +2799,7 @@ export function NativeDocumentRenderer({
             ) : (
                 <ReferenceImage node={reference.node} environment={environment} path={reference.path} hero />
             )
-        environment.motion = !motionManualMatches ? (
+        const motion = !motionManualMatches ? (
             <StepMotionHint scene={null} fallback={fallback} />
         ) : __DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined ? (
             <StepMotionHint
@@ -2816,6 +2814,7 @@ export function NativeDocumentRenderer({
                 session={bindings.session}
                 stepId={document.bound.stepId}
                 pageUris={bindings.pageUris}
+                pageImageStatus={bindings.pageImageStatus}
                 active={scope.active && !attention}
                 readOnly={bindings.readOnly === true}
                 fallback={fallback}
@@ -2835,33 +2834,24 @@ export function NativeDocumentRenderer({
         )
         environment.leading = (
             <>
-                <SectionHeader title={motionAvailable ? 'Watch it' : 'From the manual'} />
+                <SectionHeader title={motionHero ? 'Watch it' : 'From the manual'} />
                 <CoachTarget id="guide-hero" label="Manual picture">
                     <CoachTarget id="guide-hero-frame" label="Manual picture">
-                        <View testID="guide-motion-hero" style={{ marginVertical: space.lg }}>
-                            {environment.motion}
+                        <View testID="guide-motion-hero" style={{ marginBottom: space.lg }}>
+                            {motion}
                         </View>
                     </CoachTarget>
                 </CoachTarget>
                 {safetySlots.map(slot)}
-                <GuideManualStrip images={guideImages} environment={environment} showHeading={motionAvailable} />
+                <GuideManualStrip images={guideImages} environment={environment} />
             </>
         )
-        // Section source planning preceded presentation omissions, so title/end-state sources remain reachable.
+        // Section source planning preceded title omissions, so their sources remain reachable.
         environment.trailing = (
             <>
                 <GuidePieces environment={environment} />
                 {partSlots.length === 0 ? null : <View style={{ gap: space.sm }}>{partSlots.map(slot)}</View>}
                 {checkSlots.map(slot)}
-                {checkSlots.length > 0 || endStates.length === 0 ? null : (
-                    <>
-                        <SectionHeader title="Check your work" />
-                        <Card>
-                            <Caption>It should look like this</Caption>
-                            {endStates.map(slot)}
-                        </Card>
-                    </>
-                )}
             </>
         )
     }
