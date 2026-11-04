@@ -278,8 +278,11 @@ describe('inactive direct Meta transport', (): void => {
             sourceRefs: [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }],
         }
         await localServer(jsonResponder(responseBody(value)), async (transport) => {
-            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                code: 'invalid_output',
+            await expect(transport.provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+                decision: 'cannot_verify',
+                orientationAssessment: 'uncertain',
+                sourceRefs: [],
+                observedRegion: null,
             })
         })
     })
@@ -288,8 +291,11 @@ describe('inactive direct Meta transport', (): void => {
         const value = createHeroResponse('reversed')
         value.sourceRefs = [{ pageId: 'demo-page-1', region: { x: 0, y: 0, width: 0.1, height: 0.1 } }]
         await localServer(jsonResponder(responseBody(value)), async (transport) => {
-            await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                code: 'invalid_output',
+            await expect(transport.provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+                decision: 'cannot_verify',
+                orientationAssessment: 'uncertain',
+                sourceRefs: [],
+                observedRegion: null,
             })
         })
     })
@@ -705,13 +711,25 @@ describe('inactive direct Meta transport', (): void => {
             ],
         },
         { status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'incomplete', content: [] }] },
-        responseBody({ ...result, sourceRefs: [{ pageId: 'wrong-page', region: null }] }),
         responseBody({ ...result, sourceRefs: [] }),
     ])('rejects incomplete/refusal/tool/semantic output without retry: %#', async (body): Promise<void> => {
         await localServer(jsonResponder(body), async (transport): Promise<void> => {
             await expect(transport.provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
                 code: 'invalid_output',
                 message: 'invalid_output',
+            })
+            expect(transport.dispatches()).toBe(1)
+        })
+    })
+
+    it("turns a verdict citing pages it was never shown into can't tell, without retry", async (): Promise<void> => {
+        const body = responseBody({ ...result, sourceRefs: [{ pageId: 'wrong-page', region: null }] })
+        await localServer(jsonResponder(body), async (transport): Promise<void> => {
+            await expect(transport.provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+                decision: 'cannot_verify',
+                orientationAssessment: 'uncertain',
+                sourceRefs: [],
+                observedRegion: null,
             })
             expect(transport.dispatches()).toBe(1)
         })
@@ -1034,12 +1052,25 @@ describe('documented Meta conformance', () => {
                 ],
             }
             const noCitation = { ...(withoutGeometry(createHeroResponse('reversed')) as object), sourceRefs: [] }
-            for (const value of [noChecks, noMismatch, noCitation]) {
+            for (const [label, value] of [
+                ['noChecks', noChecks],
+                ['noMismatch', noMismatch],
+                ['noCitation', noCitation],
+            ] as const) {
                 await localServer(
                     jsonResponder(responseBody(value)),
                     async ({ provider }) => {
-                        await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                            code: 'invalid_output',
+                        const outcome = provider.checkStep(await validInput(), signal())
+                        if (label === 'noCitation') {
+                            // A refusal with no citation is malformed at the schema, before the evidence rules run.
+                            await expect(outcome, label).rejects.toMatchObject({ code: 'invalid_output' })
+                            return
+                        }
+                        await expect(outcome, label).resolves.toMatchObject({
+                            decision: 'cannot_verify',
+                            orientationAssessment: 'uncertain',
+                            sourceRefs: [],
+                            observedRegion: null,
                         })
                     },
                     undefined,
@@ -1073,8 +1104,11 @@ describe('documented Meta conformance', () => {
         await localServer(
             jsonResponder(responseBody({ ...createHeroResponse('reversed'), observedRegion: null })),
             async ({ provider }) => {
-                await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                    code: 'invalid_output',
+                await expect(provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+                    decision: 'cannot_verify',
+                    orientationAssessment: 'uncertain',
+                    sourceRefs: [],
+                    observedRegion: null,
                 })
             },
         )
@@ -1360,8 +1394,11 @@ it.each(['checks', 'partsAssessment', 'connectionAssessment'] as const)(
     async (field) => {
         const value = { ...result, [field]: field === 'checks' ? [] : 'unobservable' }
         await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
-            await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({
-                code: 'invalid_output',
+            await expect(provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+                decision: 'cannot_verify',
+                orientationAssessment: 'uncertain',
+                sourceRefs: [],
+                observedRegion: null,
             })
         })
     },
@@ -1374,7 +1411,12 @@ it('refuses fabricated or foreign visible-check evidence even for a refusal', as
         checks: [{ checkId: 'invented-check', assessment: 'mismatch', sourceRefs: result.sourceRefs }],
     }
     await localServer(jsonResponder(responseBody(value)), async ({ provider }) => {
-        await expect(provider.checkStep(await validInput(), signal())).rejects.toMatchObject({ code: 'invalid_output' })
+        await expect(provider.checkStep(await validInput(), signal())).resolves.toMatchObject({
+            decision: 'cannot_verify',
+            orientationAssessment: 'uncertain',
+            sourceRefs: [],
+            observedRegion: null,
+        })
     })
 })
 
