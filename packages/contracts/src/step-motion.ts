@@ -4,7 +4,7 @@ import { pieceDrawingBoxSchema } from './piece-generation'
 import { extrudeBevelLimit, PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
 
-export const STEP_MOTION_PROMPT_VERSION = 5
+export const STEP_MOTION_PROMPT_VERSION = 6
 /** Ten percent on each side, clamped to the cited page, keeps nearby movement marks in the crop. */
 export function paddedStepFigureBox(box: readonly [number, number, number, number]): [number, number, number, number] {
     const [x, y, width, height] = box
@@ -94,10 +94,39 @@ function clampShapeBevel(shape: unknown): unknown {
  * Only bevels are touched; every other field still decides acceptance. Anything unrecognised passes through unchanged.
  */
 export function clampStepMotionBevels(value: unknown): unknown {
+    return mapStepMotionShapes(value, clampShapeBevel)
+}
+
+/** Clamp only the generated tube thickness; leave every other field to strict scene validation. */
+export function clampStepMotionTori(value: unknown): unknown {
+    return mapStepMotionShapes(value, (candidate) => {
+        if (!isRecord(candidate) || candidate.type !== 'torus' || !isRecord(candidate.dimensions)) return candidate
+        const { radius, tube } = candidate.dimensions
+        if (
+            typeof radius !== 'number' ||
+            !Number.isFinite(radius) ||
+            radius <= PIECE_SPEC_LIMITS.minDimension ||
+            radius > PIECE_SPEC_LIMITS.extent ||
+            typeof tube !== 'number' ||
+            !Number.isFinite(tube) ||
+            tube < radius
+        )
+            return candidate
+        return {
+            ...candidate,
+            dimensions: {
+                ...candidate.dimensions,
+                tube: Math.max(PIECE_SPEC_LIMITS.minDimension, radius * (1 - 1e-6)),
+            },
+        }
+    })
+}
+
+function mapStepMotionShapes(value: unknown, transform: (shape: unknown) => unknown): unknown {
     if (!isRecord(value)) return value
     const scene = value.scene
     if (!isRecord(scene)) return value
-    const shapes = (list: unknown): unknown => (Array.isArray(list) ? list.map(clampShapeBevel) : list)
+    const shapes = (list: unknown): unknown => (Array.isArray(list) ? list.map(transform) : list)
     return {
         ...value,
         scene: {

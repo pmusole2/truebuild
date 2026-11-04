@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     clampStepMotionBevels,
+    clampStepMotionTori,
     dropDegenerateStepMotionShapes,
     paddedStepFigureBox,
     STEP_MOTION_PROMPT_VERSION,
@@ -43,6 +44,53 @@ const scene = (motion: unknown): object => ({
     still: [shape],
     movers: [{ label: 'Part', shapes: [shape], motion, actionIndex: null }],
     caption: 'Place the part as shown.',
+})
+
+it('clamps only an oversized torus tube while keeping the strict shape contract', () => {
+    for (const [radius, tube] of [
+        [3, 3],
+        [3, 5],
+        [0.002, 0.003],
+    ] as const) {
+        const torus = {
+            type: 'torus',
+            dimensions: { radius, tube },
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+        }
+        const value = {
+            scene: {
+                ...scene(motions[0]),
+                still: [torus],
+                movers: [{ label: 'Part', shapes: [torus], motion: motions[0], actionIndex: null }],
+            },
+        }
+        expect(stepMotionResultSchema.safeParse(value).success).toBe(false)
+        const clamped = stepMotionResultSchema.parse(clampStepMotionTori(value)).scene!
+        expect(clamped.still[0]).toMatchObject({ type: 'torus', dimensions: { radius } })
+        expect(clamped.movers[0]!.shapes).toEqual(clamped.still)
+        const torusShape = clamped.still[0]!
+        if (torusShape.type !== 'torus') throw new Error('Expected torus')
+        expect(torusShape.dimensions.tube).toBeLessThan(radius)
+        expect(torus.dimensions.tube).toBe(tube)
+        expect(
+            stepMotionResultSchema.safeParse(
+                clampStepMotionTori({ scene: { ...scene(motions[0]), still: [{ ...torus, surprise: true }] } }),
+            ).success,
+        ).toBe(false)
+    }
+    expect(clampStepMotionTori({ scene: null })).toEqual({ scene: null })
+    for (const dimensions of [
+        { radius: 0.001, tube: 0.1 },
+        { radius: 1001, tube: 1002 },
+        { radius: 3, tube: Number.NaN },
+    ]) {
+        const invalid = { type: 'torus', dimensions, position: [0, 0, 0], rotation: [0, 0, 0] }
+        expect(
+            stepMotionResultSchema.safeParse(clampStepMotionTori({ scene: { ...scene(motions[0]), still: [invalid] } }))
+                .success,
+        ).toBe(false)
+    }
 })
 
 describe('step motion contract', () => {

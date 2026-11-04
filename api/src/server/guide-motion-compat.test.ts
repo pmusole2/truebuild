@@ -13,6 +13,7 @@ import type * as ClientExports from '../../../app/src/api/model-client'
 import type * as DocumentExports from '../../../app/src/api/document-client'
 import type * as RegistryExports from '../../../app/src/features/step-motion/step-motion-registry'
 import type * as RuntimeExports from './model-runtime'
+import type * as PolicyExports from './ai-policy'
 import type * as AppExports from '../app'
 import type * as ContextExports from './documents/context'
 import type * as WireExports from '../providers/document-wire'
@@ -24,9 +25,10 @@ import { expect, it, vi } from 'vitest'
 const root = resolve(import.meta.dirname, '../../..')
 const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex')
 const key = 'synthetic-local-compatibility-key'
-const currentMain = '50d8c72f079933bb1a923327d98bd1353911d5e8'
-const appRefs = ['fc7b706', 'decf006', 'de08511', 'db12e00', 'head']
-const serverRefs = ['decf006', 'db12e00', currentMain, 'head']
+const currentMain = '0d5d92b8bebd8336a964a5517cf40c8523498714'
+const appRefs = ['fc7b706', 'decf006', 'de08511', 'db12e00', '50d8c72', 'head']
+const serverRefs = ['decf006', 'db12e00', '50d8c72', currentMain, 'head']
+const archiveRefs = [...new Set([...appRefs, ...serverRefs])].filter((ref) => ref !== 'head')
 
 /** Each frozen source tree resolves its own contracts, while using the installed external dependencies. */
 function archive(ref: string, destination: string): string {
@@ -100,17 +102,18 @@ it('keeps the actual installed clients compatible with pinned current-main and w
     const rows: Row[] = []
     const logs: string[] = []
     const serverPromptVersions: Record<string, number> = {}
+    const clientMotionTimeouts: Record<string, number> = {}
     let completed = false
     const log = vi.spyOn(console, 'info').mockImplementation((value: unknown): void => {
         logs.push(String(value))
     })
     const trees = new Map<string, string>([
-        ...[...appRefs.filter((ref) => ref !== 'head'), currentMain].map((ref): [string, string] => [
-            ref,
-            archive(ref, resolve(scratch, ref)),
-        ]),
+        ...archiveRefs.map((ref): [string, string] => [ref, archive(ref, resolve(scratch, ref))]),
         ['head', root],
     ])
+    const headPolicy = await source<typeof PolicyExports>(root, 'api/src/server/ai-policy.ts')
+    const motionModelCutoffMs =
+        headPolicy.STEP_MOTION_POLICY.routeDeadlineMs - headPolicy.STEP_MOTION_POLICY.returnMarginMs
     const bytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#abcdef' } })
         .png()
         .toBuffer()
@@ -125,7 +128,15 @@ it('keeps the actual installed clients compatible with pinned current-main and w
             const fixtureModule = await source<typeof FixtureExports>(serverTree, 'api/src/test-support/meta-stream.ts')
             expect(serverContracts.LIMITS.requestBytes).toBe(8_388_608)
             expect(serverContracts.STEP_MOTION_PROMPT_VERSION).toBe(
-                serverRef === 'head' ? 5 : serverRef === 'decf006' ? 2 : serverRef === 'db12e00' ? 3 : 4,
+                serverRef === 'head'
+                    ? 6
+                    : serverRef === currentMain
+                      ? 5
+                      : serverRef === 'decf006'
+                        ? 2
+                        : serverRef === 'db12e00'
+                          ? 3
+                          : 4,
             )
             serverPromptVersions[serverRef] = serverContracts.STEP_MOTION_PROMPT_VERSION
             const parsed = sessionFor(serverContracts, bytes).rawExtraction!
@@ -199,7 +210,9 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                             appTree,
                             'packages/contracts/src/model.ts',
                         )
-                        expect(modelContracts.MAX_PARSE_PAGES).toBe(['head', 'db12e00'].includes(appRef) ? 12 : 8)
+                        expect(modelContracts.MAX_PARSE_PAGES).toBe(
+                            ['head', 'db12e00', '50d8c72'].includes(appRef) ? 12 : 8,
+                        )
                         expect(contracts.LIMITS.requestBytes).toBe(8_388_608)
                         const clients = await source<ClientModule>(appTree, 'app/src/api/model-client.ts')
                         const documents = await source<DocumentModule>(appTree, 'app/src/api/document-client.ts')
@@ -322,6 +335,19 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                                 query: '',
                             })
                         } else {
+                            // The actual installed client must outlive the server's model cutoff plus response headroom.
+                            expect(clients.MODEL_PIECES_TIMEOUT_MS).toBeGreaterThan(motionModelCutoffMs + 15_000)
+                            const clientSource = readFileSync(resolve(appTree, 'app/src/api/model-client.ts'), 'utf8')
+                            const stepMotionStart = clientSource.indexOf('async stepMotion(')
+                            const stepMotionEnd = clientSource.indexOf('\n    /**', stepMotionStart)
+                            const stepMotionSource = clientSource.slice(
+                                stepMotionStart,
+                                stepMotionEnd === -1 ? undefined : stepMotionEnd,
+                            )
+                            expect(stepMotionSource).toMatch(
+                                /const guard = createCallGuard\(MODEL_PIECES_TIMEOUT_MS, undefined\)/,
+                            )
+                            clientMotionTimeouts[appRef] = clients.MODEL_PIECES_TIMEOUT_MS
                             const registry = await source<RegistryModule>(
                                 appTree,
                                 'app/src/features/step-motion/step-motion-registry.ts',
@@ -438,7 +464,7 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                                     expect(modelCalls - beforeRepair).toBe(2)
                                     expect(motionValues).toEqual([])
                                     expect(httpResponses[beforeHttp]!.status).toBe(accepted ? 200 : 503)
-                                    // A failed generation is unknown to shipped clients; their recovery lookup cannot dispatch.
+                                    // Shipped clients keep the failed generation unknown; metadata-only recovery still misses.
                                     expect(httpResponses.slice(beforeHttp).map(({ status }) => status)).toEqual(
                                         accepted ? [200] : [503, 404],
                                     )
@@ -453,6 +479,22 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                                     expect(lastQuery).toBe('?cacheOnly=1')
                                     expect(modelCalls - beforeRepair).toBe(2)
                                     if (!accepted) {
+                                        const beforeReplay = httpResponses.length
+                                        expect(await client.stepMotion(motionRequest, pageUris)).toEqual({
+                                            status: 'unknown',
+                                        })
+                                        expect(httpResponses.slice(beforeReplay)).toEqual([{ status: 503, query: '' }])
+                                        expect(modelCalls - beforeRepair).toBe(2)
+                                        rows.push({
+                                            app: appRef,
+                                            server: serverRef,
+                                            operation: 'motion-overlap-terminal-replay',
+                                            protocol,
+                                            http: lastHttp,
+                                            result: 'unknown',
+                                            modelCalls: 0,
+                                            query: lastQuery,
+                                        })
                                         values.clear()
                                         const refused = new clients.ModelApiClient({
                                             baseUrl,
@@ -614,14 +656,14 @@ it('keeps the actual installed clients compatible with pinned current-main and w
     } finally {
         log.mockRestore()
         writeFileSync(
-            resolve(root, '.local/prompt24b-compat-results.json'),
+            resolve(root, '.local/prompt24c-compat-results.json'),
             JSON.stringify(
                 {
                     completed,
                     headBase: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
                     currentMain,
                     revisions: Object.fromEntries(
-                        [...appRefs.filter((ref) => ref !== 'head'), currentMain].map((ref) => [
+                        archiveRefs.map((ref) => [
                             ref,
                             execFileSync('git', ['rev-parse', `${ref}^{commit}`], {
                                 cwd: root,
@@ -630,6 +672,9 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                         ]),
                     ),
                     serverPromptVersions,
+                    clientMotionTimeouts,
+                    motionModelCutoffMs,
+                    clientResponseMarginMs: 15_000,
                     responseSceneVersion: 1,
                     requestBytes: 8_388_608,
                     currentParsePages: 12,
@@ -662,14 +707,14 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                                 .map((path) => [path, hash(readFileSync(resolve(root, path)))]),
                         ),
                     ),
-                    basis: 'Actual frozen clients fc7b706/decf006/de08511/db12e00 and current working tree; frozen decf006/db12e00, pinned current-main 50d8c72 and working-tree Hono servers; loopback HTTP only; injected synthetic Meta transport; Guide and motion are JSON-only. Head overlap cells use a saved first scene and a placement-only synthetic repair through the actual client registry. Failed repairs return 503, recovery/cache-only reads miss without dispatch, and device markers prevent implicit resends; accepted scenes cache. Older-server failure caches and physical-quality behavior are unchanged and not exercised here. No live model, device, visual-quality or deployment proof.',
+                    basis: 'Actual frozen clients fc7b706/decf006/de08511/db12e00/50d8c72 and current working tree; frozen decf006 v2/db12e00 v3/50d8c72 v4, pinned current-main 0d5d92b8 v5 and working-tree v6 Hono servers; loopback HTTP only; injected synthetic Meta transport; Guide and motion are JSON-only. Actual motion client timeout exports and guard references are checked against the head server model cutoff plus 15 s response margin. Head overlap cells use a saved first scene and a placement-only synthetic repair through the actual client registry. Failed repairs and normal generation replays return 503 without redispatch; metadata-only recovery/cache-only reads retain 404 misses, and device markers prevent implicit resends; accepted scenes cache. Older-server failure caches and physical-quality behavior are unchanged and not exercised here. No live model, device, visual-quality or deployment proof.',
                     rows,
                 },
                 null,
                 2,
             ),
         )
-        writeFileSync(resolve(root, '.local/prompt24b-compat.log'), logs.join('\n'))
+        writeFileSync(resolve(root, '.local/prompt24c-compat.log'), logs.join('\n'))
         rmSync(scratch, { recursive: true, force: true })
     }
 }, 60_000)

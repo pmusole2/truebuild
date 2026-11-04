@@ -198,7 +198,7 @@ it('caches one call per step/language/version and sends verbatim manual text bef
     expect(body).toMatchObject({
         model: 'muse-wonder-1.0',
         reasoning: { effort: 'high' },
-        max_output_tokens: 14_000,
+        max_output_tokens: 8_000,
         text: { format: { strict: true, schema: { required: ['scene'] } } },
     })
     const input = body.input as { content: { type: string; text?: string; image_url?: string }[] }[]
@@ -357,19 +357,22 @@ it.each([
         },
         genuineDecline: false,
     },
-])('caches only a genuine model decline: $genuineDecline', async ({ candidate, genuineDecline }) => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
-    const { handler, fetchImpl } = setup({ scene: candidate })
-    for (let index = 0; index < 2; index++) {
-        const result = await handler(await request())
-        expect(result.status).toBe(genuineDecline ? 200 : 503)
-        expect(await result.json()).toEqual(
-            genuineDecline ? { scene: null } : { status: 'unavailable', code: 'provider_error' },
-        )
-    }
-    expect((await handler(await request({ cacheOnly: true }))).status).toBe(genuineDecline ? 200 : 404)
-    expect(fetchImpl).toHaveBeenCalledTimes(genuineDecline ? 1 : 2)
-})
+])(
+    'remembers a deterministic outcome without a second paid call: genuine decline $genuineDecline',
+    async ({ candidate, genuineDecline }) => {
+        vi.spyOn(console, 'info').mockImplementation(() => {})
+        const { handler, fetchImpl } = setup({ scene: candidate })
+        for (let index = 0; index < 2; index++) {
+            const result = await handler(await request())
+            expect(result.status).toBe(genuineDecline ? 200 : 503)
+            expect(await result.json()).toEqual(
+                genuineDecline ? { scene: null } : { status: 'unavailable', code: 'provider_error' },
+            )
+        }
+        expect((await handler(await request({ cacheOnly: true }))).status).toBe(genuineDecline ? 200 : 404)
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    },
+)
 
 it('applies authentication, input bounds, cited-crop validation and the shared call ceiling', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -610,7 +613,7 @@ it('finishes and caches paid work after the first caller disconnects, then recov
     expect(await (await recovered).json()).toEqual({ scene })
     expect(counter.used).toBe(1)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
-    expect(STEP_MOTION_POLICY.maxOutputTokens).toBe(14_000)
+    expect(STEP_MOTION_POLICY.maxOutputTokens).toBe(8_000)
 })
 
 it('coalesces simultaneous callers while a provider attempt is still in flight', async () => {
@@ -848,7 +851,7 @@ it('repairs deep overlap exactly once with the validated previous scene and coun
 })
 
 it.each([
-    { limit: 8, dailyLimit: 8, calls: 2, claims: 2, reason: 'overlap' },
+    { limit: 8, dailyLimit: 8, calls: 2, claims: 2, reason: 'repair_overlap' },
     { limit: 1, dailyLimit: 8, calls: 1, claims: 1, reason: 'repair_quota' },
     { limit: 8, dailyLimit: 1, calls: 1, claims: 2, reason: 'repair_quota' },
 ])(
@@ -971,3 +974,173 @@ it.each([
         }
     },
 )
+
+const degraded = {
+    ...scene,
+    movers: [
+        {
+            ...scene.movers[0],
+            shapes: [
+                { type: 'torus', dimensions: { radius: 0.1, tube: 0.01 }, position: [0, 1, 0], rotation: [0, 0, 0] },
+            ],
+        },
+    ],
+}
+const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+
+it.each([
+    {
+        name: 'schema refusal',
+        responses: [{ scene: { ...scene, still: 'not-a-list' } }],
+        status: 503,
+        reason: 'schema',
+        calls: 1,
+        cacheOnly: 404,
+    },
+    {
+        name: 'genuine decline',
+        responses: [{ scene: null }],
+        status: 200,
+        reason: 'declined',
+        calls: 1,
+        cacheOnly: 200,
+    },
+    {
+        name: 'overlap repair still overlapping',
+        responses: [{ scene: overlapping }],
+        status: 503,
+        reason: 'repair_overlap',
+        calls: 2,
+        cacheOnly: 404,
+    },
+    {
+        name: 'repair that degrades the scene',
+        responses: [{ scene: overlapping }, { scene: degraded }],
+        status: 503,
+        reason: 'repair_degraded',
+        calls: 2,
+        cacheOnly: 404,
+    },
+])(
+    'suppresses a repeated $name for 15 minutes of wall-clock time, then pays once more',
+    async ({ responses, status, reason, calls, cacheOnly }) => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+        let now = Date.UTC(2026, 10, 3, 12)
+        let attempt = 0
+        const { handler, fetchImpl } = setup(
+            null,
+            8,
+            () => response(responses[Math.min(attempt++, responses.length - 1)]),
+            undefined,
+            {
+                clock: () => now,
+            },
+        )
+        const send = async (): Promise<Response> => handler(await request())
+        expect((await send()).status).toBe(status)
+        expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        now += 14 * 60_000
+        expect((await send()).status).toBe(status)
+        expect((await handler(await request({ cacheOnly: true }))).status).toBe(cacheOnly)
+        expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        now += 60_000
+        attempt = 0
+        expect((await send()).status).toBe(status)
+        expect(fetchImpl).toHaveBeenCalledTimes(2 * calls)
+        const logged = info.mock.calls
+            .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+            .filter((value) => value.event === 'step_motion_generation')
+        expect(logged.at(-1)).toMatchObject({ accepted: false, reason })
+        expect(JSON.stringify(logged)).not.toContain(scene.caption)
+    },
+)
+
+it('logs the observed usage of an incomplete first output once, with its estimated cost', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup(null, 8, () =>
+        Response.json({
+            status: 'incomplete',
+            model: 'muse-wonder-1.0',
+            usage: { input_tokens: 731, output_tokens: 8_000 },
+            output: [],
+        }),
+    )
+    expect((await handler(await request())).status).toBe(503)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const logged = info.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((value) => value.event === 'step_motion_generation')
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toMatchObject({
+        accepted: false,
+        reason: 'provider_failure',
+        model: 'muse-wonder-1.0',
+        usage: { inputTokens: 731, cachedTokens: null, outputTokens: 8_000, reasoningTokens: null },
+    })
+    expect(logged[0]!.estimatedCostUsd).toBeCloseTo(
+        estimatedStepMotionCostUsd({ inputTokens: 731, outputTokens: 8_000 })!,
+    )
+})
+
+it.each([
+    {
+        outcome: 'observed',
+        repair: (): Response =>
+            Response.json({
+                status: 'incomplete',
+                model: 'muse-wonder-1.0',
+                usage: { input_tokens: 400, output_tokens: 8_000 },
+                output: [],
+            }),
+        usage: { inputTokens: 400, cachedTokens: null, outputTokens: 8_000, reasoningTokens: null },
+        cost: estimatedStepMotionCostUsd({ inputTokens: 400, outputTokens: 8_000 }),
+    },
+    {
+        outcome: 'unobserved',
+        repair: (): Response => {
+            throw new Error('synthetic transport failure')
+        },
+        usage: { inputTokens: null, cachedTokens: null, outputTokens: null, reasoningTokens: null },
+        cost: null,
+    },
+])('logs a failed repair with its $outcome usage, and the first attempt once', async ({ repair, usage, cost }) => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    let attempt = 0
+    const { handler, fetchImpl, counter } = setup(null, 8, () =>
+        ++attempt === 1 ? response({ scene: overlapping }) : repair(),
+    )
+    expect((await handler(await request())).status).toBe(503)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(counter.used).toBe(2)
+    const logged = info.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((value) => value.event === 'step_motion_generation')
+    expect(logged).toHaveLength(2)
+    expect(logged[0]).toMatchObject({
+        reason: 'overlap',
+        usage: { inputTokens: 731, cachedTokens: null, outputTokens: 248, reasoningTokens: null },
+    })
+    expect(logged[1]).toMatchObject({
+        accepted: false,
+        reason: 'repair_provider_failure',
+        usage,
+        estimatedCostUsd: cost,
+    })
+})
+
+it('clamps an out-of-range torus tube before the strict parse, as it clamps bevels', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const torus = {
+        type: 'torus',
+        dimensions: { radius: 0.1, tube: 0.2 },
+        position: [-3, 0, 0],
+        rotation: [0, 0, 0],
+    }
+    const { handler } = setup({ scene: { ...scene, still: [torus] } })
+    const result = await handler(await request())
+    expect(result.status).toBe(200)
+    const body = (await result.json()) as {
+        scene: { still: { dimensions: { radius: number; tube: number } }[] } | null
+    }
+    expect(body.scene?.still[0]?.dimensions.tube).toBeLessThan(0.1)
+})
