@@ -456,7 +456,7 @@ export function BlueprintLoader({
                 styles.loader,
                 { backgroundColor: colors.surfaceSunken, borderColor: colors.border },
                 compact && styles.compact,
-                height === undefined ? undefined : { height },
+                height === undefined ? undefined : { height: Math.max(0, height - space.lg * 2) },
             ]}
         >
             <BlueprintScene
@@ -473,14 +473,14 @@ export function BlueprintLoader({
                 accessibilityRole={heading && sentence !== '' ? 'header' : undefined}
                 accessibilityLabel={heading && sentence !== '' ? sentence : undefined}
             >
-                {sentence === '' ? null : <Body>{sentence}</Body>}
+                {sentence === '' ? null : <Body style={styles.centered}>{sentence}</Body>}
                 {config.slowText === null ? null : (
                     <View
                         style={[styles.slowLine, { opacity: slow ? 1 : 0 }]}
                         accessibilityElementsHidden={!slow}
                         importantForAccessibility={slow ? 'auto' : 'no-hide-descendants'}
                     >
-                        <Caption>{config.slowText}</Caption>
+                        <Caption style={styles.centered}>{config.slowText}</Caption>
                     </View>
                 )}
             </View>
@@ -490,11 +490,13 @@ export function BlueprintLoader({
 
 /** Retain the measured wait footprint only while waiting and during the 200ms outgoing fade. */
 export function LoaderSwap({
+    fill = false,
     waiting,
     loader,
     children,
     testID,
 }: {
+    readonly fill?: boolean
     readonly waiting: boolean
     readonly loader: ReactNode
     readonly children: ReactNode
@@ -533,12 +535,12 @@ export function LoaderSwap({
     const contentStyle = useAnimatedStyle(() => ({ opacity: progress.value }))
     const loaderStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.value }))
     return (
-        <View testID={testID} style={[styles.swap, showLoader && { minHeight: footprint }]}>
+        <View testID={testID} style={[styles.swap, fill && { flex: 1 }, showLoader && { minHeight: footprint }]}>
             <Animated.View
                 pointerEvents={waiting ? 'none' : 'auto'}
                 accessibilityElementsHidden={waiting}
                 importantForAccessibility={waiting ? 'no-hide-descendants' : 'auto'}
-                style={[waiting && StyleSheet.absoluteFill, contentStyle]}
+                style={[fill && { flex: 1 }, waiting && StyleSheet.absoluteFill, contentStyle]}
             >
                 {children}
             </Animated.View>
@@ -560,16 +562,20 @@ export function LoaderSwap({
 }
 
 const styles = StyleSheet.create({
+    // The loader card is centred in its column with 24 points around it; the scene and its copy are centred within it.
     loader: {
-        width: '100%',
+        alignSelf: 'stretch',
+        margin: space.lg,
         borderRadius: radius.lg,
         borderWidth: StyleSheet.hairlineWidth,
         padding: space.md,
         gap: space.xs,
+        alignItems: 'center',
     },
     compact: { padding: space.sm },
     scene: { width: '100%', aspectRatio: 320 / 180 },
-    copy: { gap: space.xxs },
+    copy: { gap: space.xxs, alignSelf: 'stretch' },
+    centered: { textAlign: 'center' },
     slowLine: { minHeight: 40 },
     swap: { width: '100%' },
 })

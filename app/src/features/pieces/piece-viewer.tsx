@@ -30,6 +30,7 @@ import { pieceSpecSchema, type PieceSpec } from '@truebuild/contracts'
 import { BlueprintLoader, LoaderSwap } from '../../ui/blueprint-loader'
 import { useLargeText } from '../../ui/large-text'
 import { Heading, Caption, Body } from '../../ui/text'
+import { PartChip, partDisplayName } from '../../ui/part-chip'
 import { radius, space, touchTarget } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
 import type { PieceScene } from './piece-scene'
@@ -40,7 +41,7 @@ import { lockPageScroll, unlockPageScroll } from './viewer-scroll-lock'
 const LazyGLView = lazy(loadPieceGL)
 
 const DEFAULT_VIEWER_HEIGHT = 320
-/** The guide card's inline viewer; its waiting placeholder keeps the same footprint so the swap does not jump. */
+/** The Guide modal's viewer; its waiting placeholder reserves the same footprint. */
 const GUIDE_VIEWER_HEIGHT = 240
 
 type FallbackReason =
@@ -145,6 +146,8 @@ type ViewerProps = {
     readonly height?: number
     /** A guide card already prints the name beside its quantity; the accessible label still names the piece. */
     readonly showName?: boolean
+    /** A Guide chip opens this viewer inside its existing modal. */
+    readonly fullscreen?: boolean
     /** Render completion samples, used by the explicit fixture route; never starts an animation loop. */
     readonly onFrame?: (timestampMs: number) => void
 }
@@ -156,6 +159,7 @@ export function PieceViewer({
     height = DEFAULT_VIEWER_HEIGHT,
     showName = true,
     onFrame,
+    fullscreen = false,
 }: ViewerProps): ReactElement {
     const parsed = useMemo(() => validatedPiece(piece), [piece])
     const size = Number.isFinite(height) ? Math.max(160, Math.min(640, height)) : DEFAULT_VIEWER_HEIGHT
@@ -178,6 +182,7 @@ export function PieceViewer({
             showName={showName}
             fallback={fallback}
             onFrame={onFrame}
+            fullscreen={fullscreen}
         />
     )
 }
@@ -402,13 +407,17 @@ function ValidPieceViewer({
     if (failed) return fallback
     const webEvents = Platform.OS === 'web' ? { onContextLost: (): void => fail('context_lost') } : {}
     return (
-        <View style={styles.viewer} testID="piece-viewer">
+        <View style={[styles.viewer, fullscreen && styles.fill]} testID="piece-viewer">
             {showName ? <Heading>{piece.name}</Heading> : null}
             <View
                 ref={host}
                 testID="piece-viewer-gesture-surface"
                 accessibilityLabel={`${piece.name}, interactive 3D view`}
-                style={[styles.viewport, { height, backgroundColor: colors.surfaceSunken }]}
+                style={[
+                    styles.viewport,
+                    fullscreen ? styles.fill : { height },
+                    { backgroundColor: colors.surfaceSunken },
+                ]}
                 onTouchStart={(event): void => {
                     const { pageX, pageY, touches } = event.nativeEvent
                     tap.current = { x: pageX, y: pageY, moved: touches.length > 1 }
@@ -437,7 +446,7 @@ function ValidPieceViewer({
                     </Suspense>
                 </GLBoundary>
             </View>
-            <Caption>Drag to rotate. Pinch to zoom. Double-tap to reset.</Caption>
+            {fullscreen ? <Caption>Drag to rotate. Pinch to zoom. Double-tap to reset.</Caption> : null}
             {fullscreen ? null : (
                 <ViewerButton
                     label="Expand"
@@ -518,7 +527,7 @@ function FullscreenPieceViewer({
 
 const MAX_GRID_ITEMS = 30
 
-/** One closed step-catalog entry; a named tile exists even while its 3D spec is still pending. */
+/** One closed step-catalog entry; a named chip exists even while its 3D spec is pending. */
 export type PieceGridItem = {
     pieceId: string
     name: string
@@ -571,7 +580,9 @@ function GuidePieceView({
     piece,
     cutout,
     onFrame,
+    fullscreen = false,
 }: {
+    fullscreen?: boolean
     piece: PieceSpec
     cutout: string | undefined
     onFrame: ((timestampMs: number) => void) | undefined
@@ -594,6 +605,7 @@ function GuidePieceView({
                 fallbackImageUri={cutout}
                 height={GUIDE_VIEWER_HEIGHT}
                 showName={false}
+                fullscreen={fullscreen}
                 onFrame={pieceFrame}
             />
             {ready ? <View testID={`piece-viewer-ready-${piece.id}`} style={styles.marker} /> : null}
@@ -601,17 +613,19 @@ function GuidePieceView({
     )
 }
 
-/** One linked piece in Guide mode: its own inline viewer, with a ready marker set by the first real 3D frame. */
+/** The selected Guide part, inside its modal, with readiness set by the first real 3D frame. */
 function GuidePieceCard({
     row,
     cutout,
     onFrame,
     wait,
+    fullscreen = false,
 }: {
+    fullscreen?: boolean
     row: GridRow
     cutout: string | undefined
     onFrame: ((timestampMs: number) => void) | undefined
-    /** Whether this card's waiting drawing runs its loop and announces; the screen picks one primary when pieces share a wait. */
+    /** Only the selected modal owns a waiting drawing and its announcement. */
     wait: { running: boolean; announce: boolean }
 }): ReactElement {
     useFallbackLog(
@@ -631,24 +645,29 @@ function GuidePieceCard({
         />
     )
     return (
-        <View style={styles.guideCard} testID={`piece-card-${row.pieceId}`}>
+        <View style={[styles.guideCard, fullscreen && styles.fill]} testID={`piece-card-${row.pieceId}`}>
             <View style={styles.guideHeader}>
-                <Body>{row.name}</Body>
+                <Body>{partDisplayName(row.name)}</Body>
                 {row.quantity === null ? null : (
-                    <View testID={`piece-quantity-${row.pieceId}`}>
+                    <View>
                         <Caption>{`×${row.quantity}`}</Caption>
                     </View>
                 )}
             </View>
             {/* The 3D view arrives in place of its own waiting drawing; a terminal unavailable card never waits. */}
             {/* While the spec is pending only the one overlaid waiting drawing exists; the viewer replaces it in place. */}
-            <LoaderSwap waiting={row.spec === undefined && row.state !== 'unavailable'} loader={placeholder}>
+            <LoaderSwap
+                fill={fullscreen}
+                waiting={row.spec === undefined && row.state !== 'unavailable'}
+                loader={placeholder}
+            >
                 {row.spec !== undefined ? (
                     <GuidePieceView
                         key={`${row.pieceId}:${JSON.stringify(row.spec)}`}
                         piece={row.spec}
                         cutout={cutout}
                         onFrame={onFrame}
+                        fullscreen={fullscreen}
                     />
                 ) : row.state === 'unavailable' ? (
                     placeholder
@@ -715,14 +734,16 @@ function PiecePlaceholder({
     )
 }
 
-/** Guides show every linked piece inline; other grids share one GPU viewer selected by the 2D tiles. */
+/** Step parts stay in one wrapping chip row until a chip opens its selected viewer. */
 export function PiecesGrid({
     pieces,
     pieceIds,
     cutouts,
     onFrame,
     items,
+    presentation = 'inline',
 }: {
+    readonly presentation?: 'inline' | 'chips'
     readonly pieces: readonly PieceSpec[]
     readonly pieceIds?: readonly string[]
     /** 2D cutout by piece id: the fallback picture while a piece has no usable 3D view. */
@@ -755,80 +776,151 @@ export function PiecesGrid({
         }))
     }, [accepted, items, pieces, pieceIds])
     const [selected, setSelected] = useState<string | null>(null)
-    const current = rows.find((row) => row.pieceId === selected) ?? rows[0]
-    // The screen announces its wait once, for its first pending piece; a promoted piece takes the loop without a new announcement.
-    const pendingIds = rows
-        .filter((row) => row.spec === undefined && row.state !== 'unavailable')
-        .map((row) => row.pieceId)
-    const primaryId = pendingIds[0] ?? null
+    const current = rows.find((row) => row.pieceId === selected) ?? (presentation === 'inline' ? rows[0] : undefined)
+    const primaryId = rows.find((row) => row.spec === undefined && row.state !== 'unavailable')?.pieceId ?? null
     const announcedRef = useRef(false)
     useEffect(() => {
-        if (primaryId !== null) announcedRef.current = true
-    }, [primaryId])
-    if (current === undefined) return <PieceCard name="Assembly pieces" height={240} />
-    // Guide mode: every linked piece shows its own 3D view; the legacy single shared viewer stays for non-guide grids.
-    if (items !== undefined)
+        if (presentation === 'inline' && primaryId !== null) announcedRef.current = true
+    }, [presentation, primaryId])
+    const close = useCallback((): void => setSelected(null), [])
+    if (rows.length === 0) return <PieceCard name="Assembly pieces" height={240} />
+    if (presentation === 'inline' && items !== undefined)
         return (
-            <View style={styles.viewer} testID="pieces-grid">
-                {rows.map((row) => {
-                    const primary = row.pieceId === primaryId
-                    return (
-                        <GuidePieceCard
+            <View style={[styles.viewer, { gap: space.lg }]} testID="pieces-grid">
+                {rows.map((row) => (
+                    <GuidePieceCard
+                        key={row.pieceId}
+                        row={row}
+                        cutout={cutouts?.[row.pieceId]}
+                        onFrame={onFrame}
+                        wait={{
+                            running: row.pieceId === primaryId,
+                            announce: row.pieceId === primaryId && !announcedRef.current,
+                        }}
+                    />
+                ))}
+            </View>
+        )
+    if (presentation === 'inline' && current !== undefined)
+        return (
+            <View style={[styles.viewer, { gap: space.lg }]} testID="pieces-grid">
+                {current.spec === undefined ? (
+                    <PiecePlaceholder
+                        pieceId={current.pieceId}
+                        name={current.name}
+                        state={current.state}
+                        imageUri={cutouts?.[current.pieceId]}
+                    />
+                ) : (
+                    <PieceViewer piece={current.spec} fallbackImageUri={cutouts?.[current.pieceId]} onFrame={onFrame} />
+                )}
+                <View style={styles.grid}>
+                    {rows.map((row) => (
+                        <Pressable
                             key={row.pieceId}
-                            row={row}
-                            cutout={cutouts?.[row.pieceId]}
-                            onFrame={onFrame}
-                            wait={{ running: primary, announce: primary && !announcedRef.current }}
-                        />
-                    )
-                })}
+                            testID={`piece-tile-${row.pieceId}`}
+                            accessibilityRole="button"
+                            accessibilityLabel={`View ${row.name}`}
+                            accessibilityState={{ selected: current.pieceId === row.pieceId }}
+                            onPress={(): void => setSelected(row.pieceId)}
+                            style={{
+                                minHeight: touchTarget,
+                                padding: space.sm,
+                                borderRadius: radius.sm,
+                                backgroundColor: colors.surface,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: current.pieceId === row.pieceId ? colors.accent : colors.border,
+                            }}
+                        >
+                            <Body>{row.name}</Body>
+                            {row.quantity === null ? null : (
+                                <View testID={`piece-quantity-${row.pieceId}`}>
+                                    <Caption>{`×${row.quantity}`}</Caption>
+                                </View>
+                            )}
+                        </Pressable>
+                    ))}
+                </View>
             </View>
         )
     return (
-        <View style={styles.viewer} testID="pieces-grid">
-            {current.spec === undefined ? (
-                <PiecePlaceholder
-                    pieceId={current.pieceId}
-                    name={current.name}
-                    state={current.state}
-                    imageUri={cutouts?.[current.pieceId]}
+        <View style={styles.grid} testID="pieces-grid">
+            {rows.map((row) => (
+                <PartChip
+                    key={row.pieceId}
+                    testID={`piece-tile-${row.pieceId}`}
+                    quantityTestID={`piece-quantity-${row.pieceId}`}
+                    accessibilityLabel={`Expand ${row.name} 3D view`}
+                    name={row.name}
+                    count={row.quantity}
+                    imageUri={cutouts?.[row.pieceId]}
+                    color={row.spec?.color}
+                    onPress={(): void => setSelected(row.pieceId)}
                 />
-            ) : (
-                <PieceViewer piece={current.spec} fallbackImageUri={cutouts?.[current.pieceId]} onFrame={onFrame} />
+            ))}
+            {current === undefined ? null : (
+                <Modal testID="piece-viewer-fullscreen-modal" visible animationType="slide" onRequestClose={close}>
+                    <SafeAreaProvider>
+                        <GuidePieceModal
+                            row={current}
+                            cutout={cutouts?.[current.pieceId]}
+                            onFrame={onFrame}
+                            onClose={close}
+                        />
+                    </SafeAreaProvider>
+                </Modal>
             )}
-            <View style={styles.grid}>
-                {rows.map((row) => (
-                    <Pressable
-                        key={row.pieceId}
-                        testID={`piece-tile-${row.pieceId}`}
-                        accessibilityRole="button"
-                        accessibilityLabel={`View ${row.name}`}
-                        accessibilityState={{ selected: current.pieceId === row.pieceId }}
-                        onPress={(): void => setSelected(row.pieceId)}
-                        style={[
-                            styles.tile,
-                            {
-                                backgroundColor: colors.surface,
-                                borderColor: current.pieceId === row.pieceId ? colors.accent : colors.border,
-                            },
-                        ]}
-                    >
-                        <View style={[styles.swatch, { backgroundColor: row.spec?.color ?? colors.border }]} />
-                        <Body>{row.name}</Body>
-                        {row.quantity === null ? null : (
-                            <View testID={`piece-quantity-${row.pieceId}`}>
-                                <Caption>{`×${row.quantity}`}</Caption>
-                            </View>
-                        )}
-                    </Pressable>
-                ))}
-            </View>
+        </View>
+    )
+}
+
+function GuidePieceModal({
+    row,
+    cutout,
+    onFrame,
+    onClose,
+}: {
+    row: GridRow
+    cutout: string | undefined
+    onFrame: ((timestampMs: number) => void) | undefined
+    onClose: () => void
+}): ReactElement {
+    const { colors } = useTheme()
+    const insets = useSafeAreaInsets()
+    return (
+        <View
+            testID="piece-viewer-fullscreen"
+            style={[
+                styles.fullscreen,
+                {
+                    backgroundColor: colors.canvas,
+                    paddingTop: insets.top + space.lg,
+                    paddingBottom: insets.bottom + space.lg,
+                    paddingLeft: insets.left + space.lg,
+                    paddingRight: insets.right + space.lg,
+                },
+            ]}
+        >
+            <ViewerButton
+                label="Close"
+                accessibilityLabel="Close 3D view"
+                testID="piece-viewer-close"
+                onPress={onClose}
+            />
+            <GuidePieceCard
+                row={row}
+                cutout={cutout}
+                onFrame={onFrame}
+                fullscreen
+                wait={{ running: true, announce: true }}
+            />
         </View>
     )
 }
 
 const styles = StyleSheet.create({
-    viewer: { gap: space.sm },
+    fill: { flex: 1, minHeight: 0 },
+    viewer: { gap: space.lg },
     fullscreen: { flex: 1, padding: space.md, gap: space.sm },
     viewerButton: {
         alignSelf: 'flex-start',
@@ -839,7 +931,7 @@ const styles = StyleSheet.create({
         borderRadius: radius.md,
         borderWidth: StyleSheet.hairlineWidth,
     },
-    guideCard: { gap: space.xs },
+    guideCard: { gap: space.lg },
     guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
     viewport: { borderRadius: radius.lg, overflow: 'hidden' },
     gl: { flex: 1 },
@@ -852,16 +944,6 @@ const styles = StyleSheet.create({
     },
     fallbackImage: { width: 160, height: 140 },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
-    tile: {
-        flexBasis: 140,
-        flexGrow: 1,
-        minHeight: 104,
-        borderRadius: radius.md,
-        padding: space.sm,
-        gap: space.xs,
-        borderWidth: 2,
-    },
-    swatch: { width: 40, height: 24, borderRadius: radius.sm },
     // Test-visible readiness witness only: it takes no layout space and draws nothing.
     marker: { position: 'absolute', width: 0, height: 0 },
 })

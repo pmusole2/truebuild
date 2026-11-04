@@ -1,10 +1,11 @@
 import type { ReactElement, ReactNode } from 'react'
-import { ScrollView, StyleSheet, View } from 'react-native'
+import { ScrollView, StyleSheet, View, type ViewStyle } from 'react-native'
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context'
 import { elevationStyle, type ElevationLevel } from '../theme/elevation'
 import { useTheme } from '../theme/theme'
+import type { Colors, ColorScheme } from '../theme/tokens'
 import { useOriginNativeId } from './render-origin'
-import { radius, space } from '../theme/tokens'
+import { layout, radius, space } from '../theme/tokens'
 
 // With the native header shown, the header already clears the top inset. With it hidden (full-bleed camera), the shell
 // must clear the top inset itself.
@@ -65,9 +66,32 @@ export function Stack({
     )
 }
 
-// Cards are filled shapes with no outline: `result` is lifted and `raised` sits one step above the canvas, so a verdict
-// reads before the facts around it without borders or accent bars.
+// Cards are filled shapes. Dark cards lift onto the raised fill; light cards draw a hairline outline on the surface.
+// `result` is the hero verdict: raised and elevated with the same scheme-specific card outline. `selected` marks the chosen card with the focus ring.
 export type CardTone = 'surface' | 'raised' | 'result'
+
+/** The one card chrome: every card in the kit (plain, hero, thumbnail, manual) shares this fill and outline. */
+export function cardSurface({
+    colors,
+    scheme,
+    tone = 'surface',
+    selected = false,
+}: {
+    readonly colors: Colors
+    readonly scheme: ColorScheme
+    readonly tone?: CardTone
+    readonly selected?: boolean
+}): ViewStyle {
+    const raised = tone !== 'surface' || scheme === 'dark'
+    const backgroundColor = raised ? colors.surfaceRaised : colors.surface
+    if (selected) {
+        return { backgroundColor, borderWidth: 2, borderColor: colors.focus }
+    }
+    if (scheme === 'light') {
+        return { backgroundColor, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }
+    }
+    return { backgroundColor }
+}
 
 export function Card({
     children,
@@ -84,18 +108,12 @@ export function Card({
 }): ReactElement {
     const inheritedId = useOriginNativeId(nativeID)
     const { colors, scheme } = useTheme()
-    // In the dark scheme the plain surface sits too close to the canvas, so every card uses the raised surface.
-    const raised = tone !== 'surface' || scheme === 'dark'
     const lift: ElevationLevel = tone === 'result' ? (Math.max(elevation, 1) as ElevationLevel) : elevation
     return (
         <View
             testID={testID}
             nativeID={inheritedId}
-            style={[
-                styles.card,
-                { backgroundColor: raised ? colors.surfaceRaised : colors.surface },
-                elevationStyle(lift),
-            ]}
+            style={[styles.card, cardSurface({ colors, scheme, tone }), elevationStyle(lift)]}
         >
             {children}
         </View>
@@ -146,7 +164,7 @@ const styles = StyleSheet.create({
     content: {
         gap: space.md,
     },
-    padding: { padding: space.md },
+    padding: { padding: layout.gutter },
     actions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
     dock: {
         paddingHorizontal: space.md,

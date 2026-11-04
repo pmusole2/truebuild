@@ -12,20 +12,21 @@ import {
     type ReactElement,
     type ReactNode,
 } from 'react'
-import { AppState, Pressable, StyleSheet, View } from 'react-native'
+import { AppState, StyleSheet, View } from 'react-native'
 import { stepMotionCopy, stepMotionSceneSchema, type StepMotionScene } from '@truebuild/contracts'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import { BlueprintLoader } from '../../ui/blueprint-loader'
 import { useFeedback } from '../../ui/feedback'
-import { Caption } from '../../ui/text'
-import { radius, space, touchTarget } from '../../theme/tokens'
+import { Body, Caption } from '../../ui/text'
+import { IconButton } from '../../ui/button'
+import { radius, space } from '../../theme/tokens'
 import { useTheme } from '../../theme/theme'
 import { isGLAvailable, loadPieceGL, loadStepMotionScene } from '../pieces/piece-gl'
 import type { StepMotionClock, StepMotionGLScene } from './step-motion-scene'
 
 // The GL surface and its Three scene load lazily, so a document without a motion hint never pays for either.
 const LazyGLView = lazy(loadPieceGL)
-const VIEWPORT_HEIGHT = 200
+const VIEWPORT_ASPECT = 16 / 10
 // At most 30 frames a second. rAF usually fires on a 16.7ms cadence, so the 1ms allowance keeps every other tick.
 const MIN_FRAME_MS = 1000 / 30 - 1
 // The piece viewer's startup window: a surface that never delivers a context resolves to nothing instead of a blank box.
@@ -51,11 +52,16 @@ function resumePlayback(ref: RefObject<Playback>): void {
     if (ref.current.since === null) ref.current = { elapsed: ref.current.elapsed, since: performance.now() }
 }
 
+export type StepMotionAvailability = 'motion' | 'loading' | 'fallback'
+
 export type StepMotionHintProps = {
     readonly scene: unknown
     readonly loading?: boolean
     readonly active?: boolean
     readonly readingLanguage?: string
+    readonly fallback?: ReactNode
+    readonly stepLabel?: string
+    readonly onAvailabilityChange?: (status: StepMotionAvailability) => void
     readonly onActionIndex?: (actionIndex: number | null) => void
 }
 
@@ -103,8 +109,8 @@ class GLBoundary extends Component<
 }
 
 /**
- * A quiet, non-interactive motion hint. It returns nothing for a null, invalid or failed scene, and for a device without
- * GL or a surface that never starts. The GL surface exists only while the hint is active, foregrounded and valid.
+ * A quiet motion hero. Its optional manual reference fills the same frame for absent or unavailable motion.
+ * The GL surface exists only while the hint is active, foregrounded and valid.
  */
 export function StepMotionHint({
     scene,
@@ -112,6 +118,9 @@ export function StepMotionHint({
     active = true,
     readingLanguage = 'en',
     onActionIndex,
+    fallback,
+    stepLabel,
+    onAvailabilityChange,
 }: StepMotionHintProps): ReactElement | null {
     const { colors } = useTheme()
     const copy = stepMotionCopy(readingLanguage)
@@ -120,10 +129,12 @@ export function StepMotionHint({
     const parsed = useMemo(() => parseScene(scene), [scene])
     const glAvailable = useMemo(() => parsed === null || isGLAvailable(), [parsed])
     const generation = useMemo(() => (sceneGeneration += 1), [parsed])
+    const [viewportHeight, setViewportHeight] = useState(200)
     const [failed, setFailed] = useState(false)
     const [finished, setFinished] = useState(false)
     const [replays, setReplays] = useState(0)
     const [sceneVersion, setSceneVersion] = useState(0)
+    const [readySurface, setReadySurface] = useState<object | null>(null)
     const sceneRef = useRef<StepMotionGLScene | null>(null)
     // One object per live stretch of the GL surface. A context callback may run only while its own surface is still the
     // current one, so a callback queued across deactivation or unmount never loads a builder or allocates GPU objects.
@@ -174,18 +185,22 @@ export function StepMotionHint({
             try {
                 const { createStepMotionScene } = await loadStepMotionScene()
                 if (surfaceRef.current !== surface) return
-                const created = createStepMotionScene(gl, parsed, colors.surfaceSunken)
+                const created = createStepMotionScene(gl, parsed, {
+                    background: colors.surfaceSunken,
+                    ground: colors.surfaceRaised,
+                })
                 if (surfaceRef.current !== surface) {
                     created.dispose()
                     return
                 }
                 sceneRef.current = created
+                setReadySurface(surface)
                 setSceneVersion((version) => version + 1)
             } catch {
                 if (surfaceRef.current === surface) setFailed(true)
             }
         },
-        [parsed, surface, colors.surfaceSunken, releaseScene],
+        [parsed, surface, colors.surfaceSunken, colors.surfaceRaised, releaseScene],
     )
 
     const redraw = useCallback((): void => {
@@ -264,56 +279,108 @@ export function StepMotionHint({
         setReplays((count) => count + 1)
     }, [])
 
-    if (!glAvailable || failed) return null
-    if (parsed === null) {
-        // Honest waiting state: the fetch is still running, so the label says what the drawing is doing.
-        if (!loading) return null
-        return (
-            <View testID="step-motion-hint" style={styles.root}>
-                <BlueprintLoader phase="piece" label={copy.loading} compact height={VIEWPORT_HEIGHT} />
-            </View>
-        )
-    }
+    const availability: StepMotionAvailability =
+        !glAvailable || failed ? 'fallback' : parsed !== null ? 'motion' : loading ? 'loading' : 'fallback'
+    useEffect(() => {
+        onAvailabilityChange?.(availability)
+    }, [availability, onAvailabilityChange])
+
+    if (availability === 'fallback' && fallback === undefined) return null
+    // Scene availability owns the surrounding Guide layout; transient GL readiness only owns this frame's overlay.
+    const waitingForSurface = availability === 'motion' && (!live || readySurface !== surface)
+    const showFallback = availability === 'fallback' || (availability === 'motion' && !live && fallback !== undefined)
     const replayable = live && finished && !reduceMotion
+    const loader = <BlueprintLoader phase="piece" label={copy.loading} compact height={viewportHeight} />
     return (
         <View testID="step-motion-hint" style={styles.root}>
-            <View
-                pointerEvents="none"
-                testID="step-motion-viewport"
-                style={[styles.viewport, { backgroundColor: colors.surfaceSunken }]}
-            >
-                {live ? (
-                    <GLBoundary key={generation} onFail={fail}>
-                        <Suspense
-                            fallback={
-                                <BlueprintLoader phase="piece" label={copy.loading} compact height={VIEWPORT_HEIGHT} />
-                            }
+            <View pointerEvents="box-none" style={styles.frame}>
+                <View
+                    testID="step-motion-viewport"
+                    pointerEvents="none"
+                    style={[styles.viewport, { backgroundColor: colors.surfaceSunken }]}
+                    onLayout={(event): void => {
+                        const height = event.nativeEvent.layout.height
+                        if (height > 0) setViewportHeight(height)
+                    }}
+                >
+                    <View pointerEvents="none" style={styles.content}>
+                        {!showFallback && parsed !== null && live ? (
+                            <GLBoundary key={generation} onFail={fail}>
+                                <Suspense fallback={null}>
+                                    <LazyGLView
+                                        pointerEvents="none"
+                                        style={styles.gl}
+                                        onContextCreate={create}
+                                        onLayout={redraw}
+                                    />
+                                </Suspense>
+                            </GLBoundary>
+                        ) : null}
+                        {availability === 'loading' || (waitingForSurface && !showFallback) ? (
+                            <View pointerEvents="none" style={styles.content}>
+                                {loader}
+                            </View>
+                        ) : null}
+                    </View>
+                    {availability !== 'motion' || stepLabel === undefined ? null : (
+                        <View
+                            testID="step-motion-label"
+                            style={[styles.stepLabel, { backgroundColor: colors.surfaceRaised }]}
                         >
-                            <LazyGLView style={styles.gl} onContextCreate={create} onLayout={redraw} />
-                        </Suspense>
-                    </GLBoundary>
+                            <Caption>{stepLabel}</Caption>
+                        </View>
+                    )}
+                </View>
+                {showFallback ? (
+                    <View pointerEvents="box-none" style={styles.content}>
+                        {fallback}
+                    </View>
+                ) : null}
+                {replayable && availability === 'motion' ? (
+                    <View pointerEvents="box-none" style={styles.replay}>
+                        <IconButton
+                            testID="step-motion-replay"
+                            label="Replay motion"
+                            variant="accent"
+                            icon="refresh"
+                            onPress={replay}
+                        />
+                    </View>
                 ) : null}
             </View>
-            <Caption>{parsed.caption}</Caption>
-            <Caption>{copy.approximate}</Caption>
-            {replayable ? (
-                <Pressable
-                    testID="step-motion-replay"
-                    accessibilityRole="button"
-                    accessibilityLabel="Replay motion"
-                    onPress={replay}
-                    style={styles.replay}
-                >
-                    <Caption>Replay</Caption>
-                </Pressable>
+            {availability === 'motion' && parsed !== null ? (
+                <>
+                    <Body>{parsed.caption}</Body>
+                    <View style={[styles.approximate, { backgroundColor: colors.surfaceSunken }]}>
+                        <Caption>
+                            {copy.approximate === 'Approximate' ? 'Approximate motion' : copy.approximate}
+                        </Caption>
+                    </View>
+                </>
             ) : null}
         </View>
     )
 }
 
 const styles = StyleSheet.create({
-    root: { gap: space.xxs },
-    viewport: { height: VIEWPORT_HEIGHT, width: '100%', overflow: 'hidden', borderRadius: radius.md },
+    root: { gap: space.xs },
+    frame: { borderRadius: radius.hero, overflow: 'hidden' },
+    viewport: { aspectRatio: VIEWPORT_ASPECT, width: '100%', overflow: 'hidden', borderRadius: radius.hero },
+    content: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
     gl: { flex: 1 },
-    replay: { alignSelf: 'flex-start', minHeight: touchTarget, justifyContent: 'center', paddingHorizontal: space.xs },
+    stepLabel: {
+        position: 'absolute',
+        top: space.sm,
+        left: space.sm,
+        borderRadius: radius.sm,
+        paddingHorizontal: space.xs,
+        paddingVertical: space.xxs,
+    },
+    replay: { position: 'absolute', bottom: space.sm, right: space.sm },
+    approximate: {
+        alignSelf: 'flex-start',
+        borderRadius: radius.sm,
+        paddingHorizontal: space.xs,
+        paddingVertical: space.xxs,
+    },
 })

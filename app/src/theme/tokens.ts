@@ -65,7 +65,7 @@ export const darkColors: Colors = {
     focus: '#7AB8FF',
     fillStrong: '#F2F4F6',
     fillStrongInk: '#171A1D',
-    accent: '#8AB6FF',
+    accent: '#3D8BFF',
     accentInk: '#A9C9FF',
     accentFillInk: '#071426',
     pass: '#97D3A4',
@@ -87,15 +87,24 @@ export const space = {
     md: 16,
     lg: 24,
     xl: 32,
+    xxl: 40,
 } as const
 
-// Filled surfaces use 16-20 point continuous corners; sm stays small for outlines drawn on a photo.
+// Named roles over the space scale, so screens stay on one rhythm: gutter at the screen edge, gap between cards, and
+// the gap that separates sections.
+export const layout = {
+    gutter: space.md,
+    cardGap: space.sm,
+    sectionGap: space.xl,
+} as const
+
+// Chips use 8 point corners; cards, buttons, media and sheets share 16 point continuous corners.
 export const radius = {
-    sm: 4,
+    sm: 8,
     md: 16,
     lg: 16,
-    sheet: 20,
-    hero: 20,
+    sheet: 16,
+    hero: 16,
     pill: 999,
 } as const
 
@@ -104,6 +113,9 @@ export const touchTarget = 44
 
 // The one primary action of a screen is taller than the floor so it is the obvious thing to press.
 export const primaryHeight = 56
+
+// Tonal secondary buttons and round icon buttons sit above the 44 point floor, so they read as controls at a glance.
+export const controlHeight = 48
 
 // Camera shutter diameter.
 export const shutterSize = 76

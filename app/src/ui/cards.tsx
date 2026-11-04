@@ -5,6 +5,7 @@ import { radius, space, touchTarget } from '../theme/tokens'
 import { focusRingStyle, useFocusRing } from './focus'
 import { Icon } from './icons'
 import { Body, Caption, Heading } from './text'
+import { cardSurface } from './surface'
 
 // Thumbnail of a manual page or assembly photo. With no image it shows a neutral placeholder rather than a blank tile.
 export function ThumbnailCard({
@@ -24,7 +25,7 @@ export function ThumbnailCard({
     readonly onPress: () => void
     readonly testID?: string
 }): ReactElement {
-    const { colors } = useTheme()
+    const { colors, scheme } = useTheme()
     const focus = useFocusRing()
     return (
         <Pressable
@@ -37,7 +38,7 @@ export function ThumbnailCard({
             style={({ pressed }) => [
                 focusRingStyle(focus.focused, colors),
                 styles.card,
-                { backgroundColor: colors.surface, borderColor: selected ? colors.focus : colors.border },
+                cardSurface({ colors, scheme, selected }),
                 pressed && styles.pressed,
             ]}
         >
@@ -76,7 +77,7 @@ export function ManualCard({
     readonly selected?: boolean
     readonly onPress: () => void
 }): ReactElement {
-    const { colors } = useTheme()
+    const { colors, scheme } = useTheme()
     const focus = useFocusRing()
     return (
         <Pressable
@@ -88,7 +89,7 @@ export function ManualCard({
             style={({ pressed }) => [
                 focusRingStyle(focus.focused, colors),
                 styles.manual,
-                { backgroundColor: colors.surface, borderColor: selected ? colors.focus : colors.border },
+                cardSurface({ colors, scheme, selected }),
                 pressed && styles.pressed,
             ]}
         >
@@ -106,10 +107,10 @@ const styles = StyleSheet.create({
     card: {
         flexDirection: 'row',
         minHeight: touchTarget,
-        borderWidth: 1,
         borderRadius: radius.lg,
-        padding: space.sm,
-        gap: space.md,
+        borderCurve: 'continuous',
+        padding: space.md,
+        gap: space.sm,
         alignItems: 'center',
     },
     thumb: {
@@ -131,10 +132,10 @@ const styles = StyleSheet.create({
     },
     manual: {
         minHeight: touchTarget,
-        borderWidth: 1,
         borderRadius: radius.lg,
+        borderCurve: 'continuous',
         padding: space.md,
-        gap: space.xs,
+        gap: space.sm,
     },
     manualHeader: {
         flexDirection: 'row',

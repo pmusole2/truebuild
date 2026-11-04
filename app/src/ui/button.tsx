@@ -2,23 +2,24 @@ import type { ReactElement } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
-import { primaryHeight, radius, space, touchTarget, type ColorToken } from '../theme/tokens'
+import { controlHeight, primaryHeight, radius, space, touchTarget, type ColorToken } from '../theme/tokens'
 import { Icon, type IconName } from './icons'
 import { useFeedback } from './feedback'
 import { focusRingStyle, useFocusRing } from './focus'
 import { MotionPressable, usePressMotion } from './press-motion'
 import { useOriginNativeId } from './render-origin'
 
-// `accent` marks the single primary task on a screen. Quiet actions use text without competing filled containers.
+// `accent` is the solid, saturated fill of the single primary task on a screen. `secondary` is a tonal sunken fill for
+// other actions, and `quiet` is text with no container. Quiet actions never compete with a filled container.
 // A control that cannot act keeps its place, dimmed. The press motion carries this opacity as its resting value.
 const INACTIVE_OPACITY = 0.38
 
 export type ButtonVariant = 'primary' | 'accent' | 'secondary' | 'quiet' | 'danger'
 
 const VARIANT_TOKENS: Readonly<Record<ButtonVariant, { container: ColorToken; text: ColorToken }>> = {
-    primary: { container: 'fillStrong', text: 'fillStrongInk' },
+    primary: { container: 'accent', text: 'accentFillInk' },
     accent: { container: 'accent', text: 'accentFillInk' },
-    secondary: { container: 'surfaceRaised', text: 'ink' },
+    secondary: { container: 'surfaceSunken', text: 'ink' },
     quiet: { container: 'surfaceSunken', text: 'ink' },
     danger: { container: 'refuseSurface', text: 'refuse' },
 }
@@ -35,7 +36,8 @@ export type AppButtonProps = {
     readonly accessibilityLabel?: string
     readonly testID?: string
     readonly icon?: IconName
-    // `primary` is the one 56 point action pinned above the safe area; every other button keeps the 44 point floor.
+    // `primary` is the one 56 point action pinned above the safe area; tonal secondary buttons are 48 points and
+    // every other button keeps the 44 point floor.
     readonly size?: 'regular' | 'primary'
     // Less horizontal inset for side-by-side coach actions at accessibility sizes; type and target floors stay intact.
     readonly compact?: boolean
@@ -84,7 +86,8 @@ export function AppButton({
             style={[
                 styles.base,
                 compact && styles.compact,
-                size === 'primary' && styles.primarySize,
+                variant === 'secondary' && styles.tonal,
+                (size === 'primary' || variant === 'primary') && styles.primarySize,
                 { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quietText,
                 focusRingStyle(focus.focused, colors),
@@ -110,7 +113,8 @@ export type IconButtonProps = {
     readonly label: string
     readonly icon: IconName
     readonly onPress: () => void
-    readonly variant?: Exclude<ButtonVariant, 'accent' | 'primary'>
+    // Round and tonal by default; `quiet` drops the fill for a header control that should stay calm.
+    readonly variant?: Exclude<ButtonVariant, 'primary'>
     readonly disabled?: boolean
     readonly testID?: string
     readonly nativeID?: string
@@ -120,7 +124,7 @@ export function IconButton({
     label,
     icon,
     onPress,
-    variant = 'quiet',
+    variant = 'secondary',
     disabled = false,
     testID,
     nativeID,
@@ -149,7 +153,7 @@ export function IconButton({
             nativeID={inheritedId}
             style={[
                 styles.base,
-                styles.square,
+                styles.round,
                 { backgroundColor: colors[tokens.container] },
                 variant === 'quiet' && styles.quiet,
                 focusRingStyle(focus.focused, colors),
@@ -174,12 +178,18 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     primarySize: { minHeight: primaryHeight },
+    tonal: { minHeight: controlHeight },
     compact: { paddingHorizontal: space.xs },
     // A quiet text button has no fill and no outline: it reads as text with a 44 point target.
     quietText: { backgroundColor: 'transparent' },
     quiet: { backgroundColor: 'transparent' },
-    square: {
-        width: touchTarget,
+    // A round control at 48 points: the circle keeps the fill tonal and the target clear of its neighbours.
+    round: {
+        width: controlHeight,
+        minWidth: controlHeight,
+        height: controlHeight,
+        minHeight: controlHeight,
+        borderRadius: radius.pill,
         paddingHorizontal: 0,
         paddingVertical: 0,
     },

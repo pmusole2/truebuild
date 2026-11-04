@@ -162,7 +162,7 @@ describe('Home composed by the document', () => {
         expect(waitCopyV2('home').detail).toBe('')
         expect(waitCopyV2('home').heading).toBe('Opening your manuals')
         await act(async () => gate.resolve())
-        expect(await screen.findByText('Add a manual to start building.')).toBeTruthy()
+        expect(await screen.findByText('Add your first manual')).toBeTruthy()
         expect(screen.queryByText(waitCopyV2('home').heading)).toBeNull()
         const add = screen.getByTestId('home-add')
         expect(add).toBeTruthy()
@@ -183,7 +183,7 @@ describe('Home composed by the document', () => {
     it('keeps the native Home when the document cannot be composed', async () => {
         const { server } = await mount([], { screens: { failing: ['home'] }, recordings: 'off' })
         expect(await screen.findByRole('button', { name: 'Add a manual' })).toBeTruthy()
-        expect(screen.getByText('Add a manual to start building.')).toBeTruthy()
+        expect(screen.getByText('Add your first manual')).toBeTruthy()
         expect(screen.queryByTestId('generated-body')).toBeNull()
         expect(generateCalls(server)).toContain('home')
     })
@@ -663,7 +663,8 @@ describe('J1: show how Meta AI built this', () => {
     it('names a block and where it came from when it is tapped, while the layer is on', async () => {
         await atGuideWithJudge()
         await showDetails()
-        await fireEvent.press(guide().getByRole('button', { name: 'Check your work' }))
+        expect(guide().getByRole('header', { name: 'Check your work' })).toBeTruthy()
+        expect(guide().queryByRole('button', { name: 'Check your work' })).toBeNull()
         const fact = guide().getByText('Groove faces inward toward the divider.')
         await fireEvent(fact, 'touchEnd', { stopPropagation: jest.fn() })
         expect(await guide().findByText('Text · generated')).toBeTruthy()
@@ -1258,6 +1259,15 @@ describe('mandatory manual facts stay visible whatever happened to the document'
 
     it('keeps saved instructions visible and unclassified checks available in their own section without a document', async () => {
         const value = unclassified()
+        const step = value.session.reviewedSteps[0]!
+        step.visibleChecks = Array.from({ length: 5 }, (_, index) => ({
+            checkId: `long-check-${index}`,
+            description: {
+                state: 'known' as const,
+                value: `Cited visible check ${index + 1}.`,
+                sourceRefs: step.sourceRefs,
+            },
+        }))
         const { view } = await mount([value], { screens: { failing: ['guide'] } })
         await press('Continue building')
         await waitFor(() => expect(view.getPathname()).toBe('/guide/flow-manual'))

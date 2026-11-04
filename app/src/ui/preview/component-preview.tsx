@@ -33,7 +33,7 @@ import {
 
 const PART_GUIDANCE = partGuidance(PART_GUIDANCE_EXAMPLE, PART_GUIDANCE_NAMES)
 
-const BUTTON_VARIANTS: readonly ButtonVariant[] = ['primary', 'accent', 'secondary', 'quiet', 'danger']
+const BUTTON_VARIANTS: readonly ButtonVariant[] = ['accent', 'secondary', 'quiet', 'danger']
 const ICON_NAMES: readonly IconName[] = [
     'alert',
     'camera',

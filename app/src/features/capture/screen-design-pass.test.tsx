@@ -137,12 +137,15 @@ describe('home', () => {
         expect(content.justifyContent).toBeUndefined()
     })
 
-    it('shows saved manuals as filled cards with no outline, one continuation for a sole manual', async () => {
+    it('shows saved manuals as consistent hairline cards with one continuation for a sole manual', async () => {
         const one = workflowPreviewFixture('home-populated')
+        // This case deliberately starts with one manual before verifying the multiple-manual layout.
+        one.state.entries = [one.entry]
         const { rerender } = await render(<LibraryScreen state={one.state} controller={INERT_WORKFLOW_CONTROLLER} />)
-        expect(flat(screen.getByTestId('manual-card')).borderWidth).toBeUndefined()
+        expect(flat(screen.getByTestId('manual-card')).borderWidth).toBe(StyleSheet.hairlineWidth)
         expect(flat(screen.getByTestId('manual-card')).backgroundColor).toBe(lightColors.surfaceRaised)
-        expect(screen.getByText('Pick up where you left off.')).toBeTruthy()
+        expect(screen.queryByText('Pick up where you left off.')).toBeNull()
+        expect(screen.getByText("What's next")).toBeTruthy()
         const second = { ...one.state.entries[0]!, session: { ...one.state.entries[0]!.session, manualId: 'second' } }
         await rerender(
             <LibraryScreen

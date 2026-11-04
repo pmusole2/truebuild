@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { contrastRatio } from './contrast'
-import { colorsFor, darkColors, lightColors, motion, radius, space, touchTarget, type Colors } from './tokens'
+import {
+    colorsFor,
+    controlHeight,
+    darkColors,
+    layout,
+    lightColors,
+    motion,
+    radius,
+    space,
+    touchTarget,
+    type Colors,
+} from './tokens'
 
 // Text pairs must meet WCAG AA body contrast (4.5:1). Non-text pairs (borders of controls, focus rings) meet 3:1.
 const TEXT_PAIRS: readonly (readonly [string, keyof Colors, keyof Colors])[] = [
@@ -61,6 +72,20 @@ describe('layout and motion scales', () => {
         expect(spacing).toEqual([...spacing].sort((a, b) => a - b))
         expect(new Set(spacing).size).toBe(spacing.length)
         expect(corners).toEqual([...corners].sort((a, b) => a - b))
+    })
+
+    it('keeps the approved space steps and names the gutter, card gap and section gap roles', () => {
+        expect(space).toEqual({ xxs: 4, xs: 8, sm: 12, md: 16, lg: 24, xl: 32, xxl: 40 })
+        expect(layout).toEqual({ gutter: 16, cardGap: 12, sectionGap: 32 })
+    })
+
+    it('uses 8 point chips and 16 point cards, media and sheets', () => {
+        expect(radius).toEqual({ sm: 8, md: 16, lg: 16, sheet: 16, hero: 16, pill: 999 })
+    })
+
+    it('sizes tonal controls at 48 points, above the 44 point floor', () => {
+        expect(controlHeight).toBe(48)
+        expect(controlHeight).toBeGreaterThan(touchTarget)
     })
 
     it('never sizes an interactive target below 44 points', () => {

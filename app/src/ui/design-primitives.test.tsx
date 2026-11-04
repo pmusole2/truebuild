@@ -13,6 +13,10 @@ import { BottomSheet } from './sheet'
 import { ErrorState, LoadingState } from './states'
 import { Notice, StatusTag } from './status'
 import { ActionDock, Card } from './surface'
+import { ManualCard, ThumbnailCard } from './cards'
+import { PageHeader, SectionHeader } from './headers'
+import { PartChip } from './part-chip'
+import { ProgressRing } from './progress'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
 jest.mock(
@@ -30,7 +34,7 @@ const inScheme = (scheme: ColorScheme, element: React.ReactElement): React.React
 
 describe('hero result card', () => {
     it.each(['light', 'dark'] as const)(
-        '%s: the result tone is raised and elevated, with no outline',
+        '%s: the result tone is raised and elevated with the shared scheme outline',
         async (scheme) => {
             await render(
                 inScheme(
@@ -43,13 +47,13 @@ describe('hero result card', () => {
             // The only View with the card chrome is the card itself.
             const card = screen.getByTestId('card')
             const flat = style(card)
-            expect(flat.borderWidth).toBeUndefined()
+            expect(flat.borderWidth).toBe(scheme === 'light' ? StyleSheet.hairlineWidth : undefined)
             expect(flat.backgroundColor).toBe(palette[scheme].surfaceRaised)
             expect(flat.shadowOpacity ?? flat.boxShadow).toBeTruthy()
         },
     )
 
-    it('keeps a plain card flat and light, and lifts a plain card off the canvas in the dark scheme', async () => {
+    it('outlines a plain light card with a hairline and lifts a plain dark card onto the raised fill', async () => {
         const plain = (scheme: ColorScheme): React.ReactElement =>
             inScheme(
                 scheme,
@@ -60,7 +64,8 @@ describe('hero result card', () => {
         const { unmount } = await render(plain('light'))
         const light = style(screen.getByTestId('card'))
         expect(light.backgroundColor).toBe(lightColors.surface)
-        expect(light.borderWidth).toBeUndefined()
+        expect(light.borderWidth).toBe(StyleSheet.hairlineWidth)
+        expect(light.borderColor).toBe(lightColors.border)
         expect(light.shadowOpacity).toBeUndefined()
         await unmount()
         await render(plain('dark'))
@@ -106,7 +111,7 @@ describe('buttons', () => {
     })
 
     it('an icon-only quiet button stays borderless so headers stay calm', async () => {
-        await render(<IconButton label="Back" icon="chevronLeft" onPress={(): void => undefined} />)
+        await render(<IconButton label="Back" icon="chevronLeft" variant="quiet" onPress={(): void => undefined} />)
         expect(style(screen.getByRole('button', { name: 'Back' })).borderWidth).toBeUndefined()
     })
 
@@ -303,5 +308,157 @@ describe('sheet and camera chrome', () => {
     it('doubles each viewfinder corner with a halo so it reads on a bright scene', async () => {
         await render(<ViewfinderCorners />)
         expect(screen.getAllByTestId('viewfinder-halo', hidden)).toHaveLength(4)
+    })
+})
+
+describe('shared card chrome', () => {
+    it.each(['light', 'dark'] as const)(
+        '%s: thumbnail and manual cards wear the same fill and outline as a plain card',
+        async (scheme) => {
+            await render(
+                inScheme(
+                    scheme,
+                    <>
+                        <Card testID="plain">
+                            <></>
+                        </Card>
+                        <ThumbnailCard testID="thumb" title="Side panel photo" onPress={(): void => undefined} />
+                        <ManualCard title="Side divider" summary="6 pages" onPress={(): void => undefined} />
+                    </>,
+                ),
+            )
+            const plain = style(screen.getByTestId('plain'))
+            for (const card of [
+                style(screen.getByTestId('thumb')),
+                style(screen.getByRole('button', { name: 'Side divider, 6 pages' })),
+            ]) {
+                expect(card.backgroundColor).toBe(plain.backgroundColor)
+                expect(card.borderWidth).toBe(plain.borderWidth)
+                expect(card.borderColor).toBe(plain.borderColor)
+                expect(card.borderRadius).toBe(16)
+                expect(card.padding).toBe(16)
+            }
+        },
+    )
+
+    it('a selected thumbnail takes the focus ring instead of the plain outline', async () => {
+        await render(<ThumbnailCard title="Side panel photo" selected={true} onPress={(): void => undefined} />)
+        expect(style(screen.getByRole('button', { name: 'Side panel photo' }))).toMatchObject({
+            borderColor: lightColors.focus,
+        })
+    })
+})
+
+describe('page and section headers', () => {
+    it('a page title is a header at 22 points and its subtitle is one muted line', async () => {
+        await render(<PageHeader title="Your manuals" subtitle="Two saved" />)
+        const title = screen.getByRole('header', { name: 'Your manuals' })
+        expect(style(title)).toMatchObject({ fontSize: 22, fontWeight: '600' })
+        expect(screen.getByText('Two saved')).toHaveProp('numberOfLines', 1)
+        expect(style(screen.getByText('Two saved')).color).toBe(lightColors.inkMuted)
+    })
+
+    it('the display variant sets the title at 28 points', async () => {
+        await render(<PageHeader title="Build a part" display={true} />)
+        expect(style(screen.getByRole('header', { name: 'Build a part' }))).toMatchObject({ fontSize: 28 })
+    })
+
+    it('a section header is a muted 13 point heading with 32 above and 12 below, and keeps its trailing control', async () => {
+        await render(
+            <SectionHeader
+                title="Parts on this step"
+                trailing={<ThumbnailCard title="Add" onPress={(): void => undefined} />}
+            />,
+        )
+        const heading = screen.getByRole('header', { name: 'Parts on this step' })
+        expect(style(heading)).toMatchObject({ fontSize: 13, fontWeight: '600', color: lightColors.inkMuted })
+        const row = heading.parent!
+        expect(style(row)).toMatchObject({ marginTop: 32, marginBottom: 12 })
+        expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy()
+    })
+})
+
+describe('part chip', () => {
+    it('shows the sentence-case name and a count pill, while the accessible name keeps the part name', async () => {
+        const onPress = jest.fn()
+        await render(<PartChip name="SIDE PANEL" count={2} quantityTestID="qty" onPress={onPress} />)
+        expect(screen.getByText('Side panel')).toBeTruthy()
+        expect(screen.queryByText('SIDE PANEL')).toBeNull()
+        expect(screen.getByTestId('qty')).toHaveTextContent('×2')
+        const chip = screen.getByRole('button', { name: 'SIDE PANEL, 2' })
+        expect(style(chip).minHeight).toBeGreaterThanOrEqual(44)
+        await fireEvent.press(chip)
+        expect(onPress).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['USB cable', 'PVC', 'IKEA bracket', 'eBay', 'iPhone case'])(
+        'keeps acronym casing from %s in the displayed name',
+        async (name) => {
+            await render(<PartChip name={name} count={1} onPress={(): void => undefined} />)
+            expect(screen.getByText(name)).toBeTruthy()
+            expect(screen.getByRole('button', { name: `${name}, 1` }).props.accessibilityValue).toEqual({ text: '×1' })
+        },
+    )
+
+    it('draws its 2D image first, then its colour, then the part glyph', async () => {
+        const image = await render(
+            <PartChip
+                name="Divider"
+                count={1}
+                imageUri="file:///photo.jpg"
+                color="#C84A31"
+                onPress={(): void => undefined}
+            />,
+        )
+        const shownImage = JSON.stringify(image.toJSON())
+        expect(shownImage).toContain('file:///photo.jpg')
+        expect(shownImage).not.toContain('#C84A31')
+        await image.unmount()
+
+        const coloured = await render(
+            <PartChip name="Divider" count={1} color="#C84A31" onPress={(): void => undefined} />,
+        )
+        const shownColour = JSON.stringify(coloured.toJSON())
+        expect(shownColour).toContain('#C84A31')
+        expect(shownColour).not.toContain('file:///')
+        await coloured.unmount()
+
+        const plain = await render(<PartChip name="Divider" count={1} onPress={(): void => undefined} />)
+        const shownGlyph = JSON.stringify(plain.toJSON())
+        expect(shownGlyph).not.toContain('file:///')
+        expect(shownGlyph).not.toContain('#C84A31')
+        expect(shownGlyph).toContain('RNSVG')
+    })
+
+    it('omits the count pill when the count is unknown, and never invents a number', async () => {
+        await render(<PartChip name="Divider" count={null} quantityTestID="qty" onPress={(): void => undefined} />)
+        expect(screen.queryByTestId('qty')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Divider' })).toBeTruthy()
+    })
+
+    it('can render statically without an action', async () => {
+        await render(<PartChip name="Divider" count={1} />)
+        expect(screen.queryByRole('button', { name: 'Divider, 1' })).toBeNull()
+        expect(screen.getByLabelText('Divider, 1')).toBeTruthy()
+    })
+})
+
+describe('progress ring', () => {
+    it('reports the whole-step value and label to assistive tech', async () => {
+        await render(<ProgressRing label="Steps done" value={2} total={5} />)
+        expect(screen.getByRole('progressbar', { name: 'Steps done' }).props.accessibilityValue).toEqual({
+            min: 0,
+            max: 5,
+            now: 2,
+            text: '2 of 5',
+        })
+    })
+
+    it('stays between 36 and 44 points whatever size it is asked for', async () => {
+        const { unmount } = await render(<ProgressRing label="Small" value={1} total={2} size={20} />)
+        expect(style(screen.getByRole('progressbar', { name: 'Small' }))).toMatchObject({ width: 36, height: 36 })
+        await unmount()
+        await render(<ProgressRing label="Large" value={1} total={2} size={90} />)
+        expect(style(screen.getByRole('progressbar', { name: 'Large' }))).toMatchObject({ width: 44, height: 44 })
     })
 })

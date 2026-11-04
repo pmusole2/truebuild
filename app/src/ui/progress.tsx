@@ -1,6 +1,7 @@
 import { useEffect, type ReactElement } from 'react'
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated'
+import Svg, { Circle } from 'react-native-svg'
 import { useTheme } from '../theme/theme'
 import { typeProps } from '../theme/typography'
 import { motion, radius, space, touchTarget } from '../theme/tokens'
@@ -9,6 +10,13 @@ import { useFeedback } from './feedback'
 import { timing } from './motion'
 import { Icon, type IconName } from './icons'
 import { useOriginNativeId } from './render-origin'
+
+// Whole steps only, clamped to the range. Every progress control reports this pair, never a raw or fractional value.
+function progressValues(value: number, total: number): { safeValue: number; safeTotal: number; fraction: number } {
+    const safeTotal = Number.isFinite(total) && total > 0 ? Math.floor(total) : 1
+    const safeValue = Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), 0), safeTotal) : 0
+    return { safeValue, safeTotal, fraction: safeValue / safeTotal }
+}
 
 /**
  * The fill is the only part that moves: it eases to a new value on the UI thread and starts at its true value on
@@ -20,6 +28,7 @@ export function ProgressBar({
     value,
     total,
     slim = false,
+    height,
     animate = true,
     nativeID,
 }: {
@@ -27,6 +36,7 @@ export function ProgressBar({
     readonly value: number
     readonly total: number
     readonly slim?: boolean
+    readonly height?: number
     readonly animate?: boolean
     readonly nativeID?: string
 }): ReactElement {
@@ -36,9 +46,7 @@ export function ProgressBar({
     const scope = useCoachScope()
     const attention = useCoachAttention()
     const mayAnimate = animate && scope.active && !attention
-    const safeTotal = Number.isFinite(total) && total > 0 ? Math.floor(total) : 1
-    const safeValue = Number.isFinite(value) ? Math.min(Math.max(Math.floor(value), 0), safeTotal) : 0
-    const fraction = safeValue / safeTotal
+    const { safeValue, safeTotal, fraction } = progressValues(value, total)
     const fill = useSharedValue(fraction)
     useEffect(() => {
         if (fill.value === fraction) {
@@ -68,6 +76,7 @@ export function ProgressBar({
             style={[
                 styles.track,
                 slim && styles.slim,
+                height === undefined ? undefined : { height },
                 {
                     backgroundColor: colors.surfaceSunken,
                     borderColor: safeValue === 0 ? colors.borderStrong : colors.border,
@@ -78,6 +87,65 @@ export function ProgressBar({
                 testID="progress-fill"
                 style={[styles.fill, { backgroundColor: colors.accent }, fillStyle]}
             />
+        </View>
+    )
+}
+
+const RING_STROKE = 4
+const RING_MIN = 36
+const RING_MAX = 44
+
+/**
+ * A compact ring for a count of finished steps beside a title. The accessible value is the whole-step count, and the
+ * ring is sized between 36 and 44 points so it always stays a readable target-sized mark.
+ */
+export function ProgressRing({
+    label,
+    value,
+    total,
+    size = 40,
+}: {
+    readonly label: string
+    readonly value: number
+    readonly total: number
+    readonly size?: number
+}): ReactElement {
+    const { colors } = useTheme()
+    const { safeValue, safeTotal, fraction } = progressValues(value, total)
+    const diameter = Math.min(Math.max(Math.round(Number.isFinite(size) ? size : RING_MAX), RING_MIN), RING_MAX)
+    const radius = (diameter - RING_STROKE) / 2
+    const circumference = 2 * Math.PI * radius
+    const center = diameter / 2
+    return (
+        <View
+            accessible={true}
+            accessibilityRole="progressbar"
+            accessibilityLabel={label}
+            accessibilityValue={{ min: 0, max: safeTotal, now: safeValue, text: `${safeValue} of ${safeTotal}` }}
+            style={{ width: diameter, height: diameter }}
+        >
+            <Svg width={diameter} height={diameter} viewBox={`0 0 ${diameter} ${diameter}`}>
+                <Circle
+                    cx={center}
+                    cy={center}
+                    r={radius}
+                    stroke={colors.surfaceSunken}
+                    strokeWidth={RING_STROKE}
+                    fill="none"
+                />
+                <Circle
+                    cx={center}
+                    cy={center}
+                    r={radius}
+                    stroke={colors.accent}
+                    strokeWidth={RING_STROKE}
+                    strokeLinecap="round"
+                    strokeDasharray={`${circumference} ${circumference}`}
+                    strokeDashoffset={circumference * (1 - fraction)}
+                    fill="none"
+                    transform={`rotate(-90 ${center} ${center})`}
+                />
+            </Svg>
         </View>
     )
 }

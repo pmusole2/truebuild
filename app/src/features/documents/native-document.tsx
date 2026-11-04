@@ -1,4 +1,6 @@
 import {
+    isValidElement,
+    useCallback,
     useEffect,
     useLayoutEffect,
     useMemo,
@@ -19,6 +21,7 @@ import {
     View,
     type ScrollViewInstance,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import {
     waitCopyV2,
@@ -33,6 +36,7 @@ import {
     visitVariantNodesV2,
     type CheckResult,
     type QuestionResult,
+    type StepMotionScene,
     type ScreenDocumentV2,
     type ScreenNodeV2,
     type ScreenVariantV2,
@@ -47,13 +51,18 @@ import { SettingRow, TextField } from '../../ui/fields'
 import { ReadingLanguagePicker } from '../../ui/reading-language-picker'
 import { Icon } from '../../ui/icons'
 import { ProgressBar } from '../../ui/progress'
-import { Card } from '../../ui/surface'
+import { Card, cardSurface } from '../../ui/surface'
+import { PageHeader, SectionHeader } from '../../ui/headers'
+import { PartChip } from '../../ui/part-chip'
+import { MoreSheet } from '../../ui/sheet'
+import { HomeEmptyState } from '../capture/library-screen'
 import { StatusTag, VerdictTag } from '../../ui/status'
 import { Body, Caption, Heading, Instruction, Label, LargeTitle, Title, type TextTone } from '../../ui/text'
 import { useTheme } from '../../theme/theme'
 import { lightColors, radius, space, touchTarget } from '../../theme/tokens'
 import { bytesToDataUri } from '../../media/image-source'
 import { ScreenBody } from '../capture/screen-layout'
+import { EssentialDocumentControls } from '../capture/essential-controls'
 import { StepPicture } from '../capture/step-picture'
 import { SourceDiagrams } from '../capture/step-facts'
 import { GroundedRegionOutline, SegmentMasks } from '../assembly/grounded-overlays'
@@ -76,6 +85,9 @@ import { plainPending } from '../capture/plain-copy'
 import { ReviewCounts } from '../capture/review-counts'
 import type { FrameBindings } from './types'
 import { GuideStepMotion } from '../step-motion/guide-step-motion'
+import { StepMotionHint } from '../step-motion/step-motion-hint'
+import { DEMO_MODE, GENERATIVE_UI } from '../../config'
+import { motionRequestForStep } from '../step-motion/step-motion-registry'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
 import Animated from 'react-native-reanimated'
@@ -199,10 +211,7 @@ type Environment = {
     sectionChanged: (path: string, open: boolean) => void
     leading: ReactNode
     trailing: ReactNode
-    /** The Guide's motion hint, rendered once under its directions Section or final flat instruction. */
-    motion: ReactNode
-    /** The innermost directions Section, or the last instruction Text when the body has no Section. */
-    motionPath: string | null
+    sourceOverlay?: boolean
     /** Guide pills already shown by resolved text, so a repeated quantity or status reads once. */
     guidePillPaths: ReadonlySet<string>
     /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
@@ -273,6 +282,23 @@ function heldResultForDocument(
         : null
 }
 
+function shortGuideChecks(node: ScreenNodeV2, document: ScreenDocumentV2, bindings: FrameBindings): boolean {
+    if (
+        document.kind !== 'guide' ||
+        document.metadata.stepActions !== 1 ||
+        node.type !== 'Section' ||
+        documentText(document, bindings, node.title) !== 'Check your work'
+    )
+        return false
+    const ids = new Set<string>()
+    const collect = (item: ScreenNodeV2): void => {
+        if (item.type === 'Text' && item.content.kind === 'fact') ids.add(item.content.factId)
+        if ('children' in item) item.children.forEach(collect)
+    }
+    collect(node)
+    return ids.size <= 4
+}
+
 /** Plan the result capability's real source opener alongside document Citation nodes; never alter the document. */
 function citationVariant(
     document: ScreenDocumentV2,
@@ -315,7 +341,13 @@ function citationVariant(
         }
         const visibleNode =
             node.type === 'Section'
-                ? { ...node, initiallyOpen: containsSafety(node, document) || (sections[path] ?? node.initiallyOpen) }
+                ? {
+                      ...node,
+                      initiallyOpen:
+                          containsSafety(node, document) ||
+                          shortGuideChecks(node, document, bindings) ||
+                          (sections[path] ?? node.initiallyOpen),
+                  }
                 : node
         return 'children' in visibleNode
             ? {
@@ -454,21 +486,22 @@ function duplicateFactPaths(
 /**
  * The Guide's Directions, numbered 1, 2, 3 in document order. The numbered facts are exactly the shared Directions group
  * of the document's facts, so the renderer never infers which fact is a direction. A repeat already omitted takes no
- * number. Only the number is added; the instruction's own words are shown unchanged. A compatibility document (no
- * `stepActions` echo) keeps its own layout and is never numbered here.
+ * number. Only the number is added; the instruction's own words are shown unchanged, including compatibility documents.
  */
-function actionNumbers(
-    document: ScreenDocumentV2,
-    variant: ScreenVariantV2,
-    prefix: string,
-    omitted: ReadonlySet<string>,
-): Record<string, number> {
+function actionNumbers(environment: Environment, variant: ScreenVariantV2, prefix: string): Record<string, number> {
+    const { document } = environment
     const numbers: Record<string, number> = {}
-    if (document.kind !== 'guide' || document.metadata.stepActions !== 1) return numbers
+    if (document.kind !== 'guide') return numbers
     const directions = new Set(manualDirectionGroups(document.facts).directions.map((fact) => fact.factId))
     let next = 0
     visitVariantNodesV2(variant, prefix, ({ node, path, hidden }) => {
-        if (hidden || !path.startsWith(`${prefix}body`) || omitted.has(path) || node.type !== 'Text') return
+        if (
+            hidden ||
+            !path.startsWith(`${prefix}body`) ||
+            node.type !== 'Text' ||
+            !hasVisibleContent(node, path, environment)
+        )
+            return
         if (node.content.kind !== 'fact') return
         if (directions.has(node.content.factId)) numbers[path] = ++next
     })
@@ -487,7 +520,6 @@ function relocatedOpeners(
     variant: ScreenVariantV2,
     prefix: string,
     citations: Readonly<Record<string, CitationPlanEntryV2>>,
-    numbers: Readonly<Record<string, number>>,
     omitted: ReadonlySet<string>,
 ): { relocated: Record<string, RelocatedOpener[]>; moved: ReadonlySet<string> } {
     const relocated: Record<string, RelocatedOpener[]> = {}
@@ -504,13 +536,12 @@ function relocatedOpeners(
         )
             openers.push({ path, node })
     })
-    const numbered = Object.keys(numbers)
     for (const opener of openers) {
         const scope = sections.reduce(
             (best, section) => (opener.path.startsWith(`${section}.`) && section.length > best.length ? section : best),
             '',
         )
-        if (scope === '' || !numbered.some((path) => path.startsWith(`${scope}.`))) continue
+        if (scope === '') continue
         relocated[scope] = [...(relocated[scope] ?? []), opener]
         moved.add(opener.path)
     }
@@ -617,27 +648,135 @@ function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean
     return 'children' in node && node.children.some((child) => containsSafety(child, document))
 }
 
-/** A step's own direction: a manual fact of a direction basis. Matched by fact basis, never by the words of a title. */
-function containsDirection(node: ScreenNodeV2, document: ScreenDocumentV2): boolean {
-    if (node.type === 'Text' && node.content.kind === 'bound' && node.content.key === 'step-title') return true
-    if (node.type === 'Text' && node.content.kind === 'fact') {
-        const id = node.content.factId
-        if (
-            document.facts.some(
-                (fact) => fact.factId === id && (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+/** Presentation equality only: the saved title still owns its source and original words. */
+const normalizedGuideTitle = (value: string): string =>
+    value
+        .trim()
+        .replace(/\s+/gu, ' ')
+        .replace(/[\p{P}\s]+$/u, '')
+        .toLocaleLowerCase()
+
+function hasVisibleContent(node: ScreenNodeV2, path: string, environment: Environment): boolean {
+    if (
+        environment.omittedDuplicates.has(path) ||
+        environment.movedOpeners.has(path) ||
+        environment.headerDuplicatePaths.has(path)
+    )
+        return false
+    if (node.type === 'Badge' && environment.document.kind === 'guide') return environment.guidePillPaths.has(path)
+    if (node.type === 'CoachMark') return false
+    if (node.type === 'Text')
+        return documentText(environment.document, environment.bindings, node.content).trim() !== ''
+    if (node.type === 'Citation' || node.type === 'ManualPage')
+        return (
+            environment.bindings.session !== undefined &&
+            (environment.citations[path]?.show ?? node.sources).some(
+                (index) => environment.planSources[index] !== undefined,
             )
         )
-            return true
+    if ('children' in node) {
+        if (node.children.some((child, index) => hasVisibleContent(child, `${path}.${index}`, environment))) return true
+        return (
+            node.type === 'Section' &&
+            (environment.relocated[path] ?? []).some((opener) =>
+                hasVisibleContent(opener.node, opener.path, { ...environment, movedOpeners: NO_MOVED_OPENERS }),
+            )
+        )
     }
-    return 'children' in node && node.children.some((child) => containsDirection(child, document))
+    return true
 }
 
-/**
- * The motion hint follows its last numbered direction, so checks and source openers keep their own place after it.
- * A Guide without numbered directions uses its last direction instruction.
- */
-export function guideMotionInsertionPath(numbered: readonly string[], directions: readonly string[]): string | null {
-    return numbered.at(-1) ?? directions.at(-1) ?? null
+/** A directions heading needs visible instruction text; auxiliary media and source openers still remain reachable. */
+function hasVisibleText(node: ScreenNodeV2, path: string, environment: Environment): boolean {
+    if (!hasVisibleContent(node, path, environment)) return false
+    return (
+        node.type === 'Text' ||
+        ('children' in node &&
+            node.children.some((child, index) => hasVisibleText(child, `${path}.${index}`, environment)))
+    )
+}
+
+/** Exact manual references are compact until opened; no second cropped page competes with the motion. */
+function GuideManualStrip({
+    images,
+    environment,
+}: {
+    images: readonly { node: Extract<ScreenNodeV2, { type: 'Image' }>; path: string }[]
+    environment: Environment
+}): ReactElement | null {
+    const [selected, setSelected] = useState<DocumentSourceV2 | null>(null)
+    const session = environment.bindings.session
+    const sources = images
+        .flatMap(({ node }) => {
+            const source = manualImageSource(node, environment)
+            return source === undefined ? [] : [source]
+        })
+        .filter((source, index, all) => all.findIndex((item) => sourceKeyV2(item) === sourceKeyV2(source)) === index)
+    if (session === undefined || sources.length === 0) return null
+    return (
+        <>
+            <SectionHeader title="From the manual" />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+                {sources.map((source, index) => (
+                    <Pressable
+                        key={sourceKeyV2(source)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`View page ${session.pages.findIndex((page) => page.pageId === source.pageId) + 1}`}
+                        onPress={(): void => setSelected(source)}
+                        style={{ width: 72, minHeight: 72 }}
+                    >
+                        {images.some(({ node }) => {
+                            const reference = manualImageSource(node, environment)
+                            return (
+                                reference !== undefined &&
+                                sourceKeyV2(reference) === sourceKeyV2(source) &&
+                                unavailableManualImage(node, environment)
+                            )
+                        }) ? (
+                            <View testID={`guide-manual-thumb-${index}`} style={{ minHeight: 72 }}>
+                                <Caption>This manual picture is unavailable.</Caption>
+                            </View>
+                        ) : (
+                            <StepPicture
+                                reference={{ ...source, region: null }}
+                                session={session}
+                                pageUris={environment.bindings.pageUris}
+                                height={72}
+                                testID={`guide-manual-thumb-${index}`}
+                            />
+                        )}
+                    </Pressable>
+                ))}
+            </View>
+            <MoreSheet visible={selected !== null} title="From the manual" onClose={(): void => setSelected(null)}>
+                {selected === null ? null : (
+                    <>
+                        <SourceDiagrams
+                            refs={[selected]}
+                            session={session}
+                            pageUris={environment.bindings.pageUris}
+                            fit="page"
+                        />
+                        {[
+                            ...new Set(
+                                images
+                                    .filter(({ node }) => {
+                                        const source = manualImageSource(node, environment)
+                                        return source !== undefined && sourceKeyV2(source) === sourceKeyV2(selected)
+                                    })
+                                    .map(({ node }) =>
+                                        documentText(environment.document, environment.bindings, node.caption),
+                                    )
+                                    .filter((caption) => caption !== ''),
+                            ),
+                        ].map((caption) => (
+                            <Caption key={caption}>{caption}</Caption>
+                        ))}
+                    </>
+                )}
+            </MoreSheet>
+        </>
+    )
 }
 
 /** Show known page count and the observed parse phase, with no per-page or percentage claim. */
@@ -852,10 +991,12 @@ function ReferenceImage({
     node,
     environment,
     path,
+    hero = false,
 }: {
     node: Extract<ScreenNodeV2, { type: 'Image' }>
     environment: Environment
     path: string
+    hero?: boolean
 }): ReactElement | null {
     const { bindings, document } = environment
     const { width } = useWindowDimensions()
@@ -904,7 +1045,7 @@ function ReferenceImage({
     if (source === undefined || bindings.session === undefined) return null
     if (unavailableManualImage(node, environment))
         return (
-            <View nativeID={originId('fallback')}>
+            <View nativeID={originId('fallback')} style={hero ? styles.manualFallback : undefined}>
                 <Caption>This manual picture is unavailable.</Caption>
             </View>
         )
@@ -919,14 +1060,24 @@ function ReferenceImage({
                 reference={source}
                 session={bindings.session}
                 pageUris={bindings.pageUris}
-                height={node.ratio === 'hero' ? 340 : node.ratio === 'tall' ? 360 : node.ratio === 'square' ? 280 : 200}
+                height={
+                    hero
+                        ? Math.max(0, (Math.min(width, 720) - space.md * 2) / 1.6)
+                        : node.ratio === 'hero'
+                          ? 340
+                          : node.ratio === 'tall'
+                            ? 360
+                            : node.ratio === 'square'
+                              ? 280
+                              : 200
+                }
                 cover={node.fit === 'cover'}
                 testID="guide-hero-picture"
             />
-            {node.caption === null ? null : <Caption>{documentText(document, bindings, node.caption)}</Caption>}
+            {hero || node.caption === null ? null : <Caption>{documentText(document, bindings, node.caption)}</Caption>}
         </View>
     )
-    return node.ratio === 'hero' ? (
+    return node.ratio === 'hero' && !hero ? (
         <CoachTarget id="guide-hero" label="Manual picture">
             <CoachTarget id="guide-hero-frame" label="Manual picture">
                 {content}
@@ -944,6 +1095,7 @@ function Disclosure({
     onOpenChange,
     forced,
     opener,
+    trailing,
     children,
     mark,
 }: {
@@ -954,43 +1106,43 @@ function Disclosure({
     forced?: boolean
     /** A source opener is a small caption-sized link, never a heading of the document. */
     opener?: boolean
+    trailing?: ReactNode
     children: ReactNode
     mark: string
 }): ReactElement {
     const [localOpen, setOpen] = useState(initiallyOpen)
     const large = useLargeText()
-    const { colors } = useTheme()
     const open = controlledOpen ?? localOpen
     const shown = large && title === MANUAL_OPENER ? MANUAL_OPENER_SHORT : title
+    const toggle = (): void => {
+        if (forced === true) return
+        setOpen(!open)
+        onOpenChange?.(!open)
+    }
     return (
         <View nativeID={mark} style={styles.stack}>
-            <Pressable
-                testID="fact-source"
-                accessibilityRole={opener === true ? 'link' : 'button'}
-                accessibilityLabel={title}
-                // A safety section is always open and cannot be collapsed; its state says so.
-                accessibilityState={{ expanded: open || forced === true, disabled: forced === true }}
-                aria-expanded={open || forced === true}
-                disabled={forced}
-                onPress={(): void => {
-                    setOpen(!open)
-                    onOpenChange?.(!open)
-                }}
-                style={styles.touch}
-            >
-                {opener === true ? (
+            {opener === true ? (
+                <Pressable
+                    testID="fact-source"
+                    accessibilityRole="link"
+                    accessibilityLabel={title}
+                    accessibilityState={{ expanded: open || forced === true, disabled: forced === true }}
+                    aria-expanded={open || forced === true}
+                    disabled={forced}
+                    onPress={toggle}
+                    style={styles.touch}
+                >
                     <SourceLinkText>{shown}</SourceLinkText>
-                ) : (
-                    <View style={styles.sectionTitle}>
-                        <Heading>{shown}</Heading>
-                        {forced === true ? null : (
-                            <View style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}>
-                                <Icon name="chevronRight" size="sm" color={colors.inkMuted} />
-                            </View>
-                        )}
-                    </View>
-                )}
-            </Pressable>
+                </Pressable>
+            ) : (
+                <SectionHeader
+                    title={shown}
+                    trailing={trailing}
+                    onPress={toggle}
+                    expanded={open || forced === true}
+                    disabled={forced === true}
+                />
+            )}
             {open || forced === true ? children : null}
         </View>
     )
@@ -1197,6 +1349,8 @@ function Sources({
     environment: Environment
     path: string
 }): ReactElement | null {
+    const [overlayOpen, setOverlayOpen] = useState(node.type === 'ManualPage' && node.initiallyOpen)
+    const large = useLargeText()
     const session = environment.bindings.session
     if (session === undefined) return null
     const planned = environment.citations[path]
@@ -1232,9 +1386,29 @@ function Sources({
                 {pictures('page')}
             </View>
         )
+    const label = documentText(environment.document, environment.bindings, node.label) || MANUAL_OPENER
+    if (environment.sourceOverlay === true)
+        return (
+            <View nativeID={marked(environment, path)}>
+                <Pressable
+                    testID="fact-source"
+                    accessibilityRole="link"
+                    accessibilityLabel={label}
+                    accessibilityState={{ expanded: overlayOpen }}
+                    aria-expanded={overlayOpen}
+                    onPress={(): void => setOverlayOpen(true)}
+                    style={styles.touch}
+                >
+                    <SourceLinkText>{large && label === MANUAL_OPENER ? MANUAL_OPENER_SHORT : label}</SourceLinkText>
+                </Pressable>
+                <MoreSheet visible={overlayOpen} title={label} onClose={(): void => setOverlayOpen(false)}>
+                    {pictures(node.type === 'ManualPage' && node.fit === 'cover' ? 'frame' : 'page')}
+                </MoreSheet>
+            </View>
+        )
     return (
         <Disclosure
-            title={documentText(environment.document, environment.bindings, node.label) || MANUAL_OPENER}
+            title={label}
             initiallyOpen={node.type === 'ManualPage' && node.initiallyOpen}
             opener
             mark={marked(environment, path)}
@@ -1519,45 +1693,6 @@ function Coverage(): ReactElement {
     )
 }
 
-/** Current-step inventory detail stays readable beside the directions without changing the document wire facts. */
-function GuidePartDirections({
-    document,
-    bindings,
-}: {
-    document: ScreenDocumentV2
-    bindings: FrameBindings
-}): ReactElement | null {
-    const session = bindings.session
-    if (
-        document.kind !== 'guide' ||
-        document.metadata.stepActions !== 1 ||
-        session === undefined ||
-        session.manualId !== document.bound.manualId ||
-        session.revision !== document.bound.revision
-    )
-        return null
-    const facts = screenFacts(session)
-    const step = facts?.steps.find((item) => item.stepId === document.bound.stepId)
-    const parts = new Map(facts?.parts.map((part) => [part.partId, part]))
-    const details = (step?.parts ?? []).flatMap((required) => {
-        const part = parts.get(required.partId)
-        if (part?.name.state !== 'known') return []
-        const size = part.dimensions
-        const count = required.quantity.state === 'known' ? `×${required.quantity.value}` : null
-        return [{ partId: required.partId, text: [part.name.value, size, count].filter(Boolean).join(' · ') }]
-    })
-    if (details.length === 0) return null
-    return (
-        <RenderOriginProvider origin="shell">
-            <View nativeID={originId('shell')} style={styles.stack}>
-                {details.map((part) => (
-                    <Body key={part.partId}>{part.text}</Body>
-                ))}
-            </View>
-        </RenderOriginProvider>
-    )
-}
-
 /** Guide cards own the visible name/count; parsed part ids and registry ids are different namespaces. */
 function guideCardIncludesPart(document: ScreenDocumentV2, bindings: FrameBindings, partId: string): boolean {
     if (document.kind !== 'guide' || bindings.session === undefined) return false
@@ -1591,11 +1726,11 @@ function PieceTile({
     if (part === undefined) return null
     const session = bindings.session
     const grounded = partDrawingReference(environment, node.partId)
-    const cardOwnsLabel = guideCardIncludesPart(document, bindings, part.partId)
+    const cardOwnsLabel = document.kind === 'guide' || guideCardIncludesPart(document, bindings, part.partId)
     const label = part.name.state === 'known' ? part.name.value : 'Part'
     return (
         <View nativeID={marked(environment, path)} testID={`part-tile-${node.partId}`} style={styles.stack}>
-            {grounded === undefined || session === undefined ? null : (
+            {document.kind === 'guide' || grounded === undefined || session === undefined ? null : (
                 <StepPicture
                     reference={grounded}
                     session={session}
@@ -1648,7 +1783,7 @@ function Node(props: NodeProps): ReactElement {
 
 function PageNode(props: NodeProps): ReactElement {
     const [showSource, setShowSource] = useState(false)
-    if (props.environment.omittedDuplicates.has(props.path)) return <></>
+    if (props.node.type !== 'Scroll' && !hasVisibleContent(props.node, props.path, props.environment)) return <></>
     // Photo/camera ancestors and their siblings retain their React ancestry across the wait handoff.
     const content = <NodeContent {...props} />
     if (!props.environment.bindings.inspect)
@@ -1694,13 +1829,27 @@ function NodeContent({
     environment: Environment
     path: string
 }): ReactElement | null {
-    const { colors } = useTheme()
+    const { colors, scheme } = useTheme()
     const { width } = useWindowDimensions()
     const large = useLargeText()
     const { document, bindings } = environment
     const mark = marked(environment, path)
     const text = (ref: TextRefV2 | null): string => documentText(document, bindings, ref)
     if (environment.headerDuplicatePaths.has(path)) return null
+    if (
+        document.kind === 'home' &&
+        node.type === 'Text' &&
+        node.content.kind === 'literal' &&
+        node.content.text === 'Add a manual to start building.'
+    )
+        return <HomeEmptyState nativeID={mark} />
+    if (
+        document.kind === 'home' &&
+        node.type === 'Text' &&
+        node.content.kind === 'literal' &&
+        node.content.text.trim() === 'Pick up where you left off.'
+    )
+        return null
     const children =
         'children' in node
             ? node.children.map((child, index) => (
@@ -1735,41 +1884,53 @@ function NodeContent({
                               }
                     }
                 >
-                    {node.children.map((child, index) => (
-                        <View
-                            key={index}
-                            nativeID={mark}
-                            style={
-                                large
-                                    ? { minWidth: 0 }
-                                    : {
-                                          minWidth: 0,
-                                          flexShrink: 1,
-                                          ...(['Image', 'ManualPage', 'Card', 'PageList', 'CompareColumns'].includes(
-                                              child.type,
-                                          )
-                                              ? { flex: 1 }
-                                              : {}),
+                    {node.children.flatMap((child, index) =>
+                        !hasVisibleContent(child, `${path}.${index}`, environment)
+                            ? []
+                            : [
+                                  <View
+                                      key={index}
+                                      nativeID={mark}
+                                      style={
+                                          large
+                                              ? { minWidth: 0 }
+                                              : {
+                                                    minWidth: 0,
+                                                    flexShrink: 1,
+                                                    ...([
+                                                        'Image',
+                                                        'ManualPage',
+                                                        'Card',
+                                                        'PageList',
+                                                        'CompareColumns',
+                                                    ].includes(child.type)
+                                                        ? { flex: 1 }
+                                                        : {}),
+                                                }
                                       }
-                            }
-                        >
-                            <Node node={child} environment={environment} path={`${path}.${index}`} />
-                        </View>
-                    ))}
+                                  >
+                                      <Node node={child} environment={environment} path={`${path}.${index}`} />
+                                  </View>,
+                              ],
+                    )}
                 </View>
             )
         case 'Grid':
             return (
                 <View nativeID={mark} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: gap(node.gap) }}>
-                    {node.children.map((child, index) => (
-                        <View
-                            key={index}
-                            nativeID={mark}
-                            style={{ flexBasis: large ? '100%' : `${100 / node.columns - 3}%`, flexGrow: 1 }}
-                        >
-                            <Node node={child} environment={environment} path={`${path}.${index}`} />
-                        </View>
-                    ))}
+                    {node.children.flatMap((child, index) =>
+                        !hasVisibleContent(child, `${path}.${index}`, environment)
+                            ? []
+                            : [
+                                  <View
+                                      key={index}
+                                      nativeID={mark}
+                                      style={{ flexBasis: large ? '100%' : `${100 / node.columns - 3}%`, flexGrow: 1 }}
+                                  >
+                                      <Node node={child} environment={environment} path={`${path}.${index}`} />
+                                  </View>,
+                              ],
+                    )}
                 </View>
             )
         case 'Card':
@@ -1777,8 +1938,9 @@ function NodeContent({
                 <View
                     nativeID={mark}
                     style={{
+                        ...cardSurface({ colors, scheme }),
                         gap: space.sm,
-                        padding: gap(node.padding),
+                        padding: space.md,
                         borderRadius: radius.lg,
                         backgroundColor:
                             node.surface === 'raised'
@@ -1791,43 +1953,72 @@ function NodeContent({
                                         : node.tone === 'success'
                                           ? colors.passSurface
                                           : colors.surfaceSunken
-                                  : colors.canvas,
+                                  : scheme === 'dark'
+                                    ? colors.surfaceRaised
+                                    : colors.surface,
                     }}
                 >
                     {children}
                 </View>
             )
         case 'Section': {
-            const directions =
-                document.kind === 'guide' && document.metadata.stepActions === 1 && text(node.title) === 'Directions'
-            const partDirections = directions ? <GuidePartDirections document={document} bindings={bindings} /> : null
+            const directions = document.kind === 'guide' && text(node.title) === 'Directions'
+            const title = directions ? 'Do this' : text(node.title)
+            const collapsible = node.collapsible && !shortGuideChecks(node, document, bindings)
             const tail = (environment.relocated[path] ?? []).map((opener) => (
                 <Node
                     key={opener.path}
                     node={opener.node}
-                    environment={{ ...environment, movedOpeners: NO_MOVED_OPENERS }}
+                    environment={{ ...environment, movedOpeners: NO_MOVED_OPENERS, sourceOverlay: true }}
                     path={opener.path}
                 />
             ))
-            return node.collapsible ? (
-                <Disclosure
-                    title={text(node.title)}
-                    initiallyOpen={node.initiallyOpen}
-                    controlledOpen={environment.sections[path] ?? node.initiallyOpen}
-                    onOpenChange={(open): void => environment.sectionChanged(path, open)}
-                    forced={containsSafety(node, document)}
-                    mark={mark}
+            const content = (
+                <>
+                    {node.title === null && !collapsible && tail.length > 0 ? (
+                        <View style={{ alignSelf: 'flex-end' }}>{tail}</View>
+                    ) : null}
+                    {children}
+                </>
+            )
+            if (
+                directions &&
+                !node.children.some((child, index) => hasVisibleText(child, `${path}.${index}`, environment))
+            )
+                return (
+                    <>
+                        {children}
+                        {tail.length === 0 ? null : <View style={{ alignSelf: 'flex-end' }}>{tail}</View>}
+                    </>
+                )
+            const sectionContent =
+                document.kind === 'guide' && title === 'Check your work' ? <Card>{content}</Card> : content
+            return (
+                <View
+                    nativeID={mark}
+                    testID={directions ? 'guide-directions' : title === 'Check your work' ? 'guide-checks' : undefined}
                 >
-                    {children}
-                    {partDirections}
-                    {tail}
-                </Disclosure>
-            ) : (
-                <View nativeID={mark} style={styles.stack} testID={directions ? 'guide-directions' : undefined}>
-                    {node.title === null ? null : <Heading>{text(node.title)}</Heading>}
-                    {children}
-                    {partDirections}
-                    {tail}
+                    {node.title === null || collapsible ? null : (
+                        <SectionHeader
+                            title={title}
+                            trailing={tail.length === 0 ? undefined : <View style={{ flexShrink: 1 }}>{tail}</View>}
+                        />
+                    )}
+                    {collapsible ? (
+                        <Disclosure
+                            title={title}
+                            initiallyOpen={node.initiallyOpen}
+                            controlledOpen={environment.sections[path] ?? node.initiallyOpen}
+                            onOpenChange={(open): void => environment.sectionChanged(path, open)}
+                            forced={containsSafety(node, document)}
+                            trailing={tail.length === 0 ? undefined : tail}
+                            mark={mark}
+                        >
+                            {sectionContent}
+                        </Disclosure>
+                    ) : (
+                        <View style={styles.stack}>{sectionContent}</View>
+                    )}
                 </View>
             )
         }
@@ -1876,14 +2067,22 @@ function NodeContent({
         case 'Spacer':
             return <View nativeID={mark} style={{ height: gap(node.size) }} />
         case 'Text': {
-            const Typography = {
-                display: LargeTitle,
-                title: Title,
-                heading: Heading,
-                body: node.emphasis === 'strong' ? Instruction : Body,
-                label: Label,
-                caption: Caption,
-            }[node.role]
+            const check =
+                document.kind === 'guide' &&
+                node.content.kind === 'fact' &&
+                manualDirectionGroups(document.facts).checks.some(
+                    (fact) => fact.factId === (node.content.kind === 'fact' ? node.content.factId : ''),
+                )
+            const Typography = check
+                ? Body
+                : {
+                      display: LargeTitle,
+                      title: Title,
+                      heading: Heading,
+                      body: node.emphasis === 'strong' ? Instruction : Body,
+                      label: Label,
+                      caption: Caption,
+                  }[node.role]
             const line = (
                 <Typography
                     tone={
@@ -1898,23 +2097,50 @@ function NodeContent({
             )
             const number = environment.actionNumbers[path]
             return (
-                <View nativeID={mark} style={{ alignItems: node.align === 'start' ? 'stretch' : align[node.align] }}>
+                <View
+                    nativeID={mark}
+                    style={{
+                        alignItems: node.align === 'start' ? 'stretch' : align[node.align],
+                        ...(check
+                            ? {
+                                  paddingVertical: space.sm,
+                                  borderBottomWidth: StyleSheet.hairlineWidth,
+                                  borderBottomColor: colors.border,
+                              }
+                            : {}),
+                    }}
+                >
                     {number === undefined ? (
                         line
                     ) : (
                         // Grouped so a screen reader speaks one item; the visible number and words are unchanged.
                         <View
-                            style={styles.numbered}
+                            style={[
+                                styles.numbered,
+                                {
+                                    paddingVertical: space.sm,
+                                    borderBottomWidth: StyleSheet.hairlineWidth,
+                                    borderBottomColor: colors.border,
+                                },
+                            ]}
                             accessible
                             accessibilityLabel={`Step ${number}, ${text(node.content)}`}
                         >
-                            <Typography tone="muted" style={{ textAlign: 'left' }}>
-                                {`${number}.`}
-                            </Typography>
+                            <View
+                                style={{
+                                    minWidth: 24,
+                                    minHeight: 24,
+                                    borderRadius: radius.pill,
+                                    backgroundColor: colors.surfaceSunken,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                }}
+                            >
+                                <Caption tone="accent" style={{ fontWeight: '600' }}>{`${number}.`}</Caption>
+                            </View>
                             <View style={styles.numberedText}>{line}</View>
                         </View>
                     )}
-                    {path === environment.motionPath ? environment.motion : null}
                 </View>
             )
         }
@@ -2019,6 +2245,7 @@ function NodeContent({
                 <ProgressBar
                     nativeID={mark}
                     label={text(node.label) || `${completed} of ${total}`}
+                    height={document.kind === 'guide' && node.binding === 'step' ? 4 : undefined}
                     value={completed}
                     total={total}
                 />
@@ -2159,23 +2386,7 @@ function NodeContent({
             return (
                 <ManualLibraryBlock
                     node={{ ...node, type: 'ManualLibrary', emptyText: null }}
-                    context={
-                        context.live === null
-                            ? context
-                            : {
-                                  ...context,
-                                  live: {
-                                      ...context.live,
-                                      state: {
-                                          ...context.live.state,
-                                          entries: context.live.state.entries.map((entry) => ({
-                                              ...entry,
-                                              session: { ...entry.session, title: manualDisplayTitle(entry.session) },
-                                          })),
-                                      },
-                                  },
-                              }
-                    }
+                    context={context}
                     path={path}
                 />
             )
@@ -2255,6 +2466,7 @@ export function NativeDocumentRenderer({
     chrome = 'full',
     testID = 'document-screen',
     essentialControls,
+    guideMotionPreview,
 }: {
     document: ScreenDocumentV2
     bindings: FrameBindings
@@ -2262,11 +2474,57 @@ export function NativeDocumentRenderer({
     chrome?: 'full' | 'body-only'
     testID?: string
     essentialControls?: ReactNode
+    /** Inert gallery scene only; never read in a release bundle or the model-provider runtime. */
+    guideMotionPreview?: StepMotionScene
 }): ReactElement {
     const { width } = useWindowDimensions()
+    const insets = useSafeAreaInsets()
     const [barHeight, setBarHeight] = useState(0)
+    const [motionState, setMotionState] = useState<{ step: string | null; status: 'loading' | 'motion' | 'fallback' }>({
+        step: null,
+        status: 'loading',
+    })
+    const motionIdentity = `${document.bound.manualId}:${document.bound.revision}:${document.bound.stepId}`
+    const motionManualMatches = bindings.session?.manualId === document.bound.manualId
+    const motionChanged = useCallback(
+        (status: 'motion' | 'loading' | 'fallback'): void => {
+            setMotionState((current) =>
+                current.step === motionIdentity && current.status === status
+                    ? current
+                    : { step: motionIdentity, status },
+            )
+        },
+        [motionIdentity],
+    )
     const scope = useCoachScope()
     const attention = useCoachAttention()
+    const motionCandidate = useMemo(
+        () =>
+            motionManualMatches && bindings.session !== undefined && document.bound.stepId !== null
+                ? motionRequestForStep(bindings.session, document.bound.stepId, 'presentation')
+                : null,
+        [motionManualMatches, bindings.session, document.bound.stepId],
+    )
+    const motionAssetMissing =
+        motionCandidate !== null &&
+        bindings.pageUris[motionCandidate.page.pageId] === undefined &&
+        (bindings.pageImageStatus === 'ready' || bindings.pageImageStatus === 'unavailable')
+    const motionPossible =
+        motionManualMatches &&
+        ((__DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined) ||
+            (scope.active &&
+                !attention &&
+                bindings.readOnly !== true &&
+                DEMO_MODE === 'model' &&
+                GENERATIVE_UI !== 'off' &&
+                motionCandidate !== null &&
+                !motionAssetMissing))
+    const motionStatus = !motionPossible
+        ? 'fallback'
+        : motionState.step === motionIdentity
+          ? motionState.status
+          : 'loading'
+    const motionHero = motionStatus !== 'fallback'
     const mayMove = bindings.workInProgress !== true && scope.active && !attention
     const previousStep = useRef(bindings.live?.entry?.stepIndex ?? 0)
     const stepIndex = bindings.live?.entry?.stepIndex ?? 0
@@ -2422,7 +2680,6 @@ export function NativeDocumentRenderer({
             )
                 headerDuplicatePaths.add(path)
         })
-    const numbers = actionNumbers(document, selected.variant, selected.prefix, omitted)
     const citations = oneOpenerPerSection(
         plannedVariant,
         selected.prefix,
@@ -2432,14 +2689,7 @@ export function NativeDocumentRenderer({
         }),
         planSources,
     )
-    const { relocated, moved } = relocatedOpeners(
-        document,
-        selected.variant,
-        selected.prefix,
-        citations,
-        numbers,
-        omitted,
-    )
+    const { relocated, moved } = relocatedOpeners(document, selected.variant, selected.prefix, citations, omitted)
     const environment: Environment = {
         document,
         bindings,
@@ -2448,7 +2698,7 @@ export function NativeDocumentRenderer({
         showRegions: false,
         loaded: (): void => setLoadedCapture(expectedPhoto),
         omittedDuplicates: omitted,
-        actionNumbers: numbers,
+        actionNumbers: {},
         relocated,
         movedOpeners: moved,
         planSources,
@@ -2462,8 +2712,6 @@ export function NativeDocumentRenderer({
         citations,
         leading: null,
         trailing: null,
-        motion: null,
-        motionPath: null,
         guidePillPaths: new Set<string>(),
         rootScroll,
         scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
@@ -2496,27 +2744,138 @@ export function NativeDocumentRenderer({
         })
         environment.guidePillPaths = paths
     }
-    environment.motion =
-        document.kind === 'guide' && bindings.session?.manualId === document.bound.manualId ? (
+    const guideReady = document.kind === 'guide' && selected.name === 'ready'
+    const guideImages: { node: Extract<ScreenNodeV2, { type: 'Image' }>; path: string }[] = []
+    const safetySlots: { node: ScreenNodeV2; path: string }[] = []
+    const checkSlots: { node: ScreenNodeV2; path: string }[] = []
+    const partSlots: { node: ScreenNodeV2; path: string }[] = []
+    const guideProgressSlots: { node: ScreenNodeV2; path: string }[] = []
+    if (guideReady) {
+        const step = screenFacts(bindings.session ?? null)?.steps.find((item) => item.stepId === document.bound.stepId)
+        const normalizedTitle = normalizedGuideTitle(step?.title ?? '')
+        visitVariantNodesV2(selected.variant, selected.prefix, ({ node, path, hidden }) => {
+            if (hidden || !path.startsWith(`${selected.prefix}body`)) return
+            if (node.type === 'Image' && node.source.kind !== 'capture') {
+                guideImages.push({ node, path })
+                omitted.add(path)
+            }
+            if (node.type === 'Progress' && node.binding === 'step') {
+                guideProgressSlots.push({ node, path })
+                omitted.add(path)
+            }
+            if (
+                node.type === 'Section' &&
+                containsSafety(node, document) &&
+                !safetySlots.some((slot) => path.startsWith(`${slot.path}.`))
+            ) {
+                safetySlots.push({ node, path })
+                omitted.add(path)
+            }
+            if (
+                node.type === 'Section' &&
+                documentText(document, bindings, node.title) === 'Check your work' &&
+                !safetySlots.some((slot) => path === slot.path || path.startsWith(`${slot.path}.`)) &&
+                !checkSlots.some((slot) => path.startsWith(`${slot.path}.`))
+            ) {
+                checkSlots.push({ node, path })
+                omitted.add(path)
+            }
+            if (node.type === 'PieceTile') {
+                partSlots.push({ node, path })
+                omitted.add(path)
+            }
+            if (node.type === 'Text' && normalizedTitle !== '') {
+                const titleFact =
+                    node.content.kind === 'fact'
+                        ? document.facts.find(
+                              (fact) => fact.factId === (node.content.kind === 'fact' ? node.content.factId : ''),
+                          )
+                        : undefined
+                if (
+                    titleFact?.kind !== 'safety' &&
+                    titleFact?.basis !== 'safety-note' &&
+                    normalizedGuideTitle(documentText(document, bindings, node.content)) === normalizedTitle
+                ) {
+                    omitted.add(path)
+                }
+            }
+            if (
+                node.type === 'Text' &&
+                document.metadata.stepActions === 1 &&
+                node.content.kind === 'literal' &&
+                /^[·\s]+$/u.test(node.content.text)
+            )
+                omitted.add(path)
+        })
+        environment.actionNumbers = actionNumbers(environment, selected.variant, selected.prefix)
+        const reference = guideImages[0]
+        const fallback =
+            reference === undefined ? (
+                <View style={styles.manualFallback}>
+                    <Caption>There is no picture for this step.</Caption>
+                </View>
+            ) : (
+                <ReferenceImage node={reference.node} environment={environment} path={reference.path} hero />
+            )
+        const motion = !motionManualMatches ? (
+            <StepMotionHint scene={null} fallback={fallback} />
+        ) : __DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined ? (
+            <StepMotionHint
+                scene={guideMotionPreview}
+                fallback={fallback}
+                active={scope.active && !attention}
+                stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
+                onAvailabilityChange={motionChanged}
+            />
+        ) : (
             <GuideStepMotion
                 session={bindings.session}
                 stepId={document.bound.stepId}
                 pageUris={bindings.pageUris}
-                active={scope.active && !attention && selected.name === 'ready'}
+                pageImageStatus={bindings.pageImageStatus}
+                active={scope.active && !attention}
                 readOnly={bindings.readOnly === true}
+                fallback={fallback}
+                stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
+                onAvailabilityChange={motionChanged}
             />
-        ) : null
-    if (environment.motion !== null) {
-        const directions: string[] = []
-        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
-            if (hidden || !path.startsWith(`${selected.prefix}body`) || omitted.has(path)) return
-            if (node.type === 'Text' && containsDirection(node, document)) directions.push(path)
-        })
-        environment.motionPath = guideMotionInsertionPath(Object.keys(environment.actionNumbers), directions)
+        )
+        const slot = (item: { node: ScreenNodeV2; path: string }): ReactElement => (
+            <Node
+                key={item.path}
+                {...item}
+                environment={{
+                    ...environment,
+                    omittedDuplicates: new Set([...omitted].filter((at) => at !== item.path)),
+                }}
+            />
+        )
+        environment.leading = (
+            <>
+                <SectionHeader title={motionHero ? 'Watch it' : 'From the manual'} />
+                <CoachTarget id="guide-hero" label="Manual picture">
+                    <CoachTarget id="guide-hero-frame" label="Manual picture">
+                        <View testID="guide-motion-hero" style={{ marginBottom: space.lg }}>
+                            {motion}
+                        </View>
+                    </CoachTarget>
+                </CoachTarget>
+                {safetySlots.map(slot)}
+                <GuideManualStrip images={guideImages} environment={environment} />
+            </>
+        )
+        // Section source planning preceded title omissions, so their sources remain reachable.
+        environment.trailing = (
+            <>
+                <GuidePieces environment={environment} />
+                {partSlots.length === 0 ? null : <View style={{ gap: space.sm }}>{partSlots.map(slot)}</View>}
+                {checkSlots.map(slot)}
+            </>
+        )
     }
     environment.trailing = (
         <>
-            {document.kind === 'guide' ? <GuidePieces environment={environment} /> : null}
+            {guideReady ? environment.trailing : null}
             {document.kind === 'more' &&
             bindings.live?.state.route === 'overview' &&
             bindings.session !== undefined &&
@@ -2552,6 +2911,14 @@ export function NativeDocumentRenderer({
         return {
             label: node.label,
             accessibilityLabel: node.label,
+            compactLabel:
+                document.kind === 'guide'
+                    ? node.label === 'Take photo'
+                        ? 'Photo'
+                        : node.label === 'Quick check'
+                          ? 'Check'
+                          : undefined
+                    : undefined,
             icon: node.icon ?? undefined,
             onPress:
                 bindings.readOnly === true || preparingAction(bindings, node.intent)
@@ -2577,6 +2944,20 @@ export function NativeDocumentRenderer({
                       : barTestId(document.kind as never, role, node.intent),
         }
     }
+    const navigationControls =
+        essentialControls ??
+        (document.kind === 'guide' && bindings.live !== null ? (
+            <EssentialDocumentControls
+                kind="guide"
+                variant={selected.variant}
+                state={bindings.live.state}
+                entry={bindings.live.entry}
+                busy={selected.name !== 'ready' || bindings.workInProgress === true}
+                resolve={bindings.resolve}
+                controller={bindings.live.controller}
+                nav={bindings.live.nav}
+            />
+        ) : undefined)
     return (
         <RenderOriginProvider origin={originAt(environment, `${selected.prefix}body`)}>
             <ScreenBody
@@ -2585,7 +2966,7 @@ export function NativeDocumentRenderer({
                     `truebuild-document-root:${document.screenId}`,
                     marked(environment, `${selected.prefix}body`),
                 )}
-                insetTop={bindings.insetTop}
+                insetTop={bindings.insetTop ?? insets.top}
             >
                 {chrome === 'full' ? (
                     <View nativeID={marked(environment, `${selected.prefix}header`)} style={styles.header}>
@@ -2602,11 +2983,46 @@ export function NativeDocumentRenderer({
                             nativeID={marked(environment, `${selected.prefix}header`)}
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
-                            <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            {subtitle === null || subtitleText === '' || instructionInBody ? null : (
-                                <Caption>{documentText(document, bindings, subtitle)}</Caption>
-                            )}
+                            {document.kind === 'home' ? (
+                                <Label tone="accent" style={{ fontSize: 15 }}>
+                                    TrueBuild
+                                </Label>
+                            ) : null}
+                            {guideReady ? (
+                                <Label>
+                                    {documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
+                                </Label>
+                            ) : null}
+                            <PageHeader
+                                display={document.kind === 'home'}
+                                title={
+                                    guideReady
+                                        ? documentText(document, bindings, { kind: 'bound', key: 'step-title' }) ||
+                                          headerTitle
+                                        : headerTitle
+                                }
+                                subtitle={
+                                    document.kind === 'home'
+                                        ? 'Pick up a build or add a new manual.'
+                                        : guideReady || instructionInBody
+                                          ? undefined
+                                          : subtitleText || undefined
+                                }
+                            />
                         </View>
+                        {guideReady && selected.variant.bar.secondary?.label === 'Ask about this step' ? (
+                            <IconButton
+                                label="Ask about this step"
+                                icon="help"
+                                testID={
+                                    bindings.testIds?.secondary ??
+                                    barTestId('guide', 'secondary', selected.variant.bar.secondary.intent)
+                                }
+                                nativeID={marked(environment, `${selected.prefix}bar.secondary`)}
+                                disabled={action(selected.variant.bar.secondary, 'secondary').disabled}
+                                onPress={action(selected.variant.bar.secondary, 'secondary').onPress}
+                            />
+                        ) : null}
                         {selected.variant.header.actions.map((item, index) => (
                             <Action
                                 header
@@ -2618,6 +3034,17 @@ export function NativeDocumentRenderer({
                         ))}
                     </View>
                 ) : null}
+                {guideProgressSlots.slice(0, 1).map((progress) => (
+                    <View key={progress.path} style={{ paddingHorizontal: space.md }}>
+                        <Node
+                            {...progress}
+                            environment={{
+                                ...environment,
+                                omittedDuplicates: new Set([...omitted].filter((at) => at !== progress.path)),
+                            }}
+                        />
+                    </View>
+                ))}
                 <Animated.View
                     key={bodyMount}
                     nativeID={marked(environment, `${selected.prefix}body`)}
@@ -2661,19 +3088,39 @@ export function NativeDocumentRenderer({
                         />
                     </View>
                 ) : null}
-                {essentialControls}
+                {document.kind === 'guide' ? null : essentialControls}
                 <FixedBottomBar
                     onHeight={document.kind === 'guide' ? setBarHeight : undefined}
                     nativeID={marked(environment, `${selected.prefix}bar.primary`)}
                     reasonNativeID={marked(environment, `${selected.prefix}bar.primary`)}
-                    primary={action(selected.variant.bar.primary, 'primary')}
+                    primary={{
+                        ...action(selected.variant.bar.primary, 'primary'),
+                        icon:
+                            guideReady && selected.variant.bar.primary.label === 'Take photo'
+                                ? 'camera'
+                                : (selected.variant.bar.primary.icon ?? undefined),
+                    }}
+                    navigation={
+                        document.kind === 'guide' && isValidElement<{ primary?: ReactNode }>(navigationControls)
+                            ? navigationControls
+                            : undefined
+                    }
                     secondary={
-                        selected.variant.bar.secondary === null
+                        selected.variant.bar.secondary === null ||
+                        (guideReady && selected.variant.bar.secondary.label === 'Ask about this step')
                             ? undefined
                             : action(selected.variant.bar.secondary, 'secondary')
                     }
                     reason={
-                        document.kind === 'camera' ? null : bindings.resolve(selected.variant.bar.primary.intent).reason
+                        document.kind === 'camera'
+                            ? null
+                            : ((environment.waiting &&
+                              [environment.waitHeading, selected.variant.bar.primary.label].includes(
+                                  bindings.resolve(selected.variant.bar.primary.intent).reason ?? '',
+                              )
+                                  ? null
+                                  : bindings.resolve(selected.variant.bar.primary.intent).reason) ??
+                              (guideReady ? 'Check your work with a photo' : null))
                     }
                 />
             </ScreenBody>
@@ -2683,27 +3130,64 @@ export function NativeDocumentRenderer({
 
 /** App-owned catalog/quantities stay live while the immutable document is shown. */
 function GuidePieces({ environment }: { environment: Environment }): ReactElement | null {
-    const items = environment.bindings.stepPieces ?? []
-    if (items.length === 0) return null
+    const { bindings, document } = environment
+    const items = bindings.stepPieces ?? []
+    const facts = screenFacts(bindings.session ?? null)
+    const step = facts?.steps.find((candidate) => candidate.stepId === document.bound.stepId)
+    const parts = (step?.parts ?? []).flatMap((required) => {
+        const part = facts?.parts.find((candidate) => candidate.partId === required.partId)
+        return part === undefined
+            ? []
+            : [
+                  {
+                      part,
+                      name: part.name.state === 'known' ? part.name.value : 'Part',
+                      count: required.quantity.state === 'known' ? required.quantity.value : null,
+                  },
+              ]
+    })
+    if (items.length === 0 && parts.length === 0) return null
     return (
         <RenderOriginProvider origin="shell">
-            <View
-                testID={`guide-pieces-${environment.document.bound.stepId ?? 'none'}`}
-                nativeID={originId('shell')}
-                style={styles.stack}
-            >
-                <PiecesGrid
-                    pieces={environment.bindings.pieces ?? []}
-                    items={items}
-                    pieceIds={items.map((item) => item.pieceId)}
-                    cutouts={environment.bindings.pieceCutouts}
-                />
+            <View testID={`guide-pieces-${document.bound.stepId ?? 'none'}`} nativeID={originId('shell')}>
+                <SectionHeader title="Parts you need" trailing={<Caption>{items.length || parts.length}</Caption>} />
+                {items.length > 0 ? (
+                    <PiecesGrid
+                        presentation="chips"
+                        pieces={bindings.pieces ?? []}
+                        items={items}
+                        pieceIds={items.map((item) => item.pieceId)}
+                        cutouts={bindings.pieceCutouts}
+                    />
+                ) : (
+                    <View testID="pieces-grid" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+                        {parts.map(({ part, name, count }) => (
+                            <View key={part.partId} style={{ gap: space.xxs }}>
+                                <PartChip
+                                    name={name}
+                                    count={count}
+                                    testID={`piece-tile-${part.partId}`}
+                                    quantityTestID={`piece-quantity-${part.partId}`}
+                                />
+                                {part.dimensions === null ? null : <Caption>{part.dimensions}</Caption>}
+                                {part.name.state === 'known' ? null : <Caption>{part.name.reason}</Caption>}
+                            </View>
+                        ))}
+                    </View>
+                )}
             </View>
         </RenderOriginProvider>
     )
 }
 
 const styles = StyleSheet.create({
+    manualFallback: {
+        width: '100%',
+        aspectRatio: 1.6,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: space.md,
+    },
     stack: { gap: space.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     numbered: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },

@@ -2,6 +2,7 @@ import {
     Box3,
     DirectionalLight,
     Group,
+    Fog,
     HemisphereLight,
     Matrix4,
     Mesh,
@@ -15,6 +16,7 @@ import {
 } from 'three'
 import type { ExpoWebGLRenderingContext } from 'expo-gl'
 import type { StepMotionScene } from '@truebuild/contracts'
+import { lightColors } from '../../theme/tokens'
 import { canvasFor, createShapeGroup, disposePieceObject } from '../pieces/piece-scene'
 
 /** Movers run one after another, each `moveMs` of eased motion; one `holdMs` rest follows the whole sequence, then the loop repeats. */
@@ -51,7 +53,6 @@ export type StepMotionGLScene = {
 
 const STILL_COLOR = '#7D8A9E'
 const MOVER_COLOR = '#D9893B'
-const GROUND_COLOR = '#DDE2EA'
 const SWEEP_SAMPLES = 16
 const FRAME_MARGIN = 1.15
 const CAMERA_FOV = 35
@@ -128,7 +129,10 @@ export function stepMotionMatrix(motion: Motion, center: Vector3, progress: numb
  * Builds every shape in the scene's shared world frame, with no per-group centring, and computes the fixed camera frame
  * from sampled poses. No GL context is needed; a failed build disposes what it allocated.
  */
-export function createStepMotionObject(scene: StepMotionScene): StepMotionObject {
+export function createStepMotionObject(
+    scene: StepMotionScene,
+    groundColor = lightColors.surfaceSunken,
+): StepMotionObject {
     const root = new Group()
     try {
         root.add(createShapeGroup(scene.still, STILL_COLOR))
@@ -151,9 +155,17 @@ export function createStepMotionObject(scene: StepMotionScene): StepMotionObject
         for (const mover of movers) mover.group.matrix.identity()
         const center = bounds.getCenter(new Vector3())
         const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 0.001)
+        // The studio fade belongs to the floor. Keep still pieces and the entire moving sweep crisp.
+        root.traverse((child) => {
+            if (!(child instanceof Mesh)) return
+            const materials = Array.isArray(child.material) ? child.material : [child.material]
+            for (const material of materials) {
+                if (material instanceof MeshStandardMaterial) material.fog = false
+            }
+        })
         const ground = new Mesh(
             new PlaneGeometry(radius * 5, radius * 5),
-            new MeshStandardMaterial({ color: GROUND_COLOR, roughness: 1, metalness: 0 }),
+            new MeshStandardMaterial({ color: groundColor, roughness: 1, metalness: 0 }),
         )
         ground.rotation.x = -Math.PI / 2
         ground.position.set(center.x, bounds.min.y - radius * 0.02, center.z)
@@ -203,16 +215,20 @@ function frameStepMotionCamera(
 export function createStepMotionScene(
     gl: ExpoWebGLRenderingContext,
     scene: StepMotionScene,
-    background: string,
+    backdrop: string | { readonly background: string; readonly ground: string },
 ): StepMotionGLScene {
     const renderer = new WebGLRenderer({ canvas: canvasFor(gl), context: gl, antialias: true, alpha: false })
     let object: StepMotionObject | null = null
     try {
         renderer.outputColorSpace = SRGBColorSpace
+        const background = typeof backdrop === 'string' ? backdrop : backdrop.background
+        const ground = typeof backdrop === 'string' ? backdrop : backdrop.ground
         renderer.setClearColor(background, 1)
-        const built = createStepMotionObject(scene)
+        const built = createStepMotionObject(scene, ground)
         object = built
         const threeScene = new Scene()
+        // A themed horizon fades the lit floor into the clear color in both appearances.
+        threeScene.fog = new Fog(background, built.frame.radius * 2, built.frame.radius * 6)
         const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.001, 10000)
         const key = new DirectionalLight(0xffffff, 2.6)
         key.position.set(3, 5, 4)

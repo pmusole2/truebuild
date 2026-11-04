@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals'
 import { Platform, StyleSheet } from 'react-native'
 import { fireEvent, render, screen } from '@testing-library/react-native'
-import { lightColors, touchTarget } from '../theme/tokens'
+import { controlHeight, lightColors, primaryHeight, touchTarget } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
 import { FeedbackProvider } from './feedback'
 import { SPRING_GENTLE } from './motion'
@@ -43,8 +43,25 @@ describe('AppButton', () => {
     })
 
     it('keeps the interactive target at least 44 points tall', async () => {
-        await render(<AppButton label="Use sample manual" onPress={(): void => undefined} />)
+        await render(<AppButton label="Use sample manual" variant="quiet" onPress={(): void => undefined} />)
         expect(screen.getByRole('button', { name: 'Use sample manual' })).toHaveStyle({ minHeight: touchTarget })
+    })
+
+    it('a tonal secondary button sits on the sunken fill at 48 points', async () => {
+        await render(<AppButton label="Use sample manual" onPress={(): void => undefined} />)
+        expect(screen.getByRole('button', { name: 'Use sample manual' })).toHaveStyle({
+            backgroundColor: lightColors.surfaceSunken,
+            minHeight: controlHeight,
+        })
+    })
+
+    it('the primary action is a solid saturated accent, 56 points tall, with 16 point corners', async () => {
+        await render(<AppButton label="Take photo" variant="accent" size="primary" onPress={(): void => undefined} />)
+        expect(screen.getByRole('button', { name: 'Take photo' })).toHaveStyle({
+            backgroundColor: lightColors.accent,
+            minHeight: primaryHeight,
+            borderRadius: 16,
+        })
     })
 
     it('the accent variant carries the primary action colour and danger carries the refusal tone', async () => {
@@ -95,11 +112,16 @@ describe('IconButton', () => {
         expect(onPress).toHaveBeenCalledTimes(1)
     })
 
-    it('is a 44 by 44 point square and does not fire while disabled', async () => {
+    it('is a round tonal 48 point control and does not fire while disabled', async () => {
         const onPress = jest.fn()
         await render(<IconButton label="Previous step" icon="chevronLeft" disabled onPress={onPress} />)
         const button = screen.getByRole('button', { name: 'Previous step' })
-        expect(button).toHaveStyle({ width: touchTarget, minHeight: touchTarget })
+        expect(button).toHaveStyle({
+            width: controlHeight,
+            height: controlHeight,
+            borderRadius: 999,
+            backgroundColor: lightColors.surfaceSunken,
+        })
         await fireEvent.press(button)
         expect(onPress).not.toHaveBeenCalled()
     })
@@ -148,4 +170,9 @@ describe('press motion', () => {
         await fireEvent(screen.getByRole('button', { name: 'Take photo' }), 'pressOut')
         expect(spies.withSpring).not.toHaveBeenCalled()
     })
+})
+
+it('keeps a primary-size button at 56 points when the default tonal variant is used', async () => {
+    await render(<AppButton label="Continue" size="primary" onPress={(): void => undefined} />)
+    expect(StyleSheet.flatten(screen.getByRole('button', { name: 'Continue' }).props.style).minHeight).toBe(56)
 })

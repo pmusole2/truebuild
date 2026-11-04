@@ -5,7 +5,6 @@ import { cleanup, screen, waitFor } from '@testing-library/react-native'
 import { createController, createDocuments, createScreens } from './controller-factory'
 import { flush, mount, press, type Mounted } from '../screens/test-support/flow'
 import { entry } from '../screens/test-support/route-harness'
-import { guideMotionInsertionPath } from '../documents/native-document'
 
 jest.mock('expo-router/build/testing-library/mocks', () => ({}))
 jest.mock('react', () => {
@@ -80,7 +79,7 @@ afterEach(async () => {
     jest.restoreAllMocks()
 })
 
-it('places the motion hint directly after the directions, before the guide pieces', async () => {
+it('places the motion hero before directions and parts without changing the contract body', async () => {
     const manual = entry()
     mounted = await mount([manual], { screens: { generated: ['guide'] }, recordings: 'off' })
     await press('Continue building')
@@ -100,21 +99,10 @@ it('places the motion hint directly after the directions, before the guide piece
     walk(mounted.view.toJSON())
     const probe = tokens.indexOf('#motion-probe')
     expect(tokens.filter((token) => token === '#motion-probe')).toHaveLength(1)
-    expect(tokens.indexOf('"Directions"')).toBeGreaterThan(-1)
-    // It follows the last numbered direction, ahead of the source opener and the checks; the pieces follow it.
-    expect(tokens[probe - 1]).toBe('"Keep the panel free before seating the divider."')
+    expect(tokens.indexOf('"Do this"')).toBeGreaterThan(-1)
+    // Motion is extra context in the hero, before the authored numbered directions.
+    expect(probe).toBeLessThan(tokens.indexOf('"Do this"'))
+    expect(tokens.indexOf('"Watch it"')).toBeLessThan(probe)
     expect(probe).toBeLessThan(tokens.indexOf('"Check your work"'))
     expect(probe).toBeLessThan(tokens.indexOf('#guide-pieces-step-1'))
-})
-
-it.each([
-    {
-        numbered: ['body.0.1.0', 'body.0.1.2'],
-        directions: ['body.0.0', 'body.0.1.0', 'body.0.1.2'],
-        expected: 'body.0.1.2',
-    },
-    { numbered: [], directions: ['body.0', 'body.1'], expected: 'body.1' },
-    { numbered: [], directions: [], expected: null },
-])('selects the last numbered direction, else the final flat instruction', ({ numbered, directions, expected }) => {
-    expect(guideMotionInsertionPath(numbered, directions)).toBe(expected)
 })

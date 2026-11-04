@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native'
 import type { AppIntent, ScreenNode } from '@truebuild/contracts'
 import { stepPartChoices } from '../assembly/question-state'
 import { FixEditor } from '../capture/fix-editor'
-import { ContinueCard, ManualRow } from '../capture/library-screen'
+import { HomeEmptyState, ManualRow, WhatsNextPreview } from '../capture/library-screen'
 import type { LibraryEntry } from '../capture/library'
 import { PageRow } from '../capture/pages-screen'
 import { ManualImage } from '../capture/page-media'
@@ -52,18 +52,7 @@ export function ManualLibraryBlock({
     if (state.loading) return null
     const shown = libraryEntries(node, state.entries)
     if (shown.length === 0) {
-        return node.emptyText === null ? null : <Instruction nativeID={mark}>{node.emptyText}</Instruction>
-    }
-    if (shown.length === 1 && node.layout === 'cards') {
-        return (
-            <ContinueCard
-                nativeID={mark}
-                entry={shown[0]!}
-                pageUris={state.pageUris}
-                resumable={context.readOnly !== true && !state.storageReadOnly}
-                showProgress={node.showProgress}
-            />
-        )
+        return node.emptyText === null ? null : <HomeEmptyState nativeID={mark} subtitle={node.emptyText} />
     }
     return (
         <View nativeID={mark} style={styles.stack}>
@@ -72,13 +61,14 @@ export function ManualLibraryBlock({
                     key={entry.session.manualId}
                     entry={entry}
                     pageUris={state.pageUris}
-                    showProgress={node.showProgress && node.layout === 'cards'}
-                    disabled={context.readOnly === true || state.pending !== null}
+                    showProgress={node.showProgress}
+                    disabled={context.readOnly === true || state.pending !== null || state.storageReadOnly}
                     onOpen={(): void => {
                         if (context.readOnly !== true) live.nav.openStop(entry)
                     }}
                 />
             ))}
+            {shown.length === 1 && !state.storageReadOnly ? <WhatsNextPreview entry={shown[0]!} /> : null}
         </View>
     )
 }

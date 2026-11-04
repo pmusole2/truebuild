@@ -152,24 +152,28 @@ it('claims a single-finger touch that starts on the view in any direction, and a
     }
 })
 
-it('shows the piece scene only while its 3D view is pending; an unavailable view stays static', async () => {
+it('opens pending and unavailable pieces from chips and keeps an unavailable view static', async () => {
     const items = [
         { pieceId: 'arm', name: 'Arm', quantity: 1, state: 'pending' as const },
         { pieceId: 'hub', name: 'Hub', quantity: null, state: 'unavailable' as const },
     ]
     await render(
         <ThemeProvider>
-            <PiecesGrid pieces={[]} items={items} />
+            <PiecesGrid presentation="chips" pieces={[]} items={items} />
         </ThemeProvider>,
     )
+    expect(screen.queryByTestId('piece-placeholder-arm')).toBeNull()
+    await fireEvent.press(screen.getByTestId('piece-tile-arm'))
     expect(within(screen.getByTestId('piece-placeholder-arm')).getByTestId('blueprint-loader-piece')).toBeTruthy()
     expect(screen.getByText('Shaping the part')).toBeTruthy()
+    await fireEvent.press(screen.getByTestId('piece-viewer-close'))
+    await fireEvent.press(screen.getByTestId('piece-tile-hub'))
     const hub = screen.getByTestId('piece-placeholder-hub')
     expect(within(hub).getByText('3D view unavailable')).toBeTruthy()
     expect(within(hub).queryByTestId('blueprint-loader-piece')).toBeNull()
 })
 
-it('gives every valid step-registry piece its own 3D view in guide mode, not the 2D fallback', async () => {
+it('shows one wrapping chip row and opens only the selected part in a rotatable modal', async () => {
     const os = jest.replaceProperty(Platform, 'OS', 'ios')
     mockOptionalNativeModule.mockReset()
     mockOptionalNativeModule.mockReturnValue({})
@@ -192,17 +196,38 @@ it('gives every valid step-registry piece its own 3D view in guide mode, not the
     try {
         view = await render(
             <ThemeProvider>
-                <PiecesGrid pieces={pieces} items={items} pieceIds={items.map((item) => item.pieceId)} />
+                <PiecesGrid
+                    presentation="chips"
+                    pieces={pieces}
+                    items={items}
+                    pieceIds={items.map((item) => item.pieceId)}
+                />
             </ThemeProvider>,
         )
         await act(async () => {
             await Promise.resolve()
         })
-        // Every linked piece with a valid spec mounts its viewer; the pending catalog entry stays a named placeholder.
-        expect(screen.getAllByTestId('stalled-gl-surface')).toHaveLength(2)
-        expect(screen.queryByTestId('piece-viewer-fallback')).toBeNull()
-        expect(screen.getByText('×2')).toBeTruthy()
+        expect(screen.queryByTestId('stalled-gl-surface')).toBeNull()
+        expect(screen.queryByText('Drag to rotate. Pinch to zoom. Double-tap to reset.')).toBeNull()
+        expect(screen.getByTestId('piece-quantity-screw')).toBeTruthy()
+        expect(screen.getByLabelText('Expand M4 * 15 screw 3D view')).toBeTruthy()
+        await fireEvent.press(screen.getByTestId('piece-tile-screw'))
+        expect(screen.getAllByTestId('stalled-gl-surface')).toHaveLength(1)
+        expect(screen.getByLabelText('M4 * 15 screw, interactive 3D view')).toBeTruthy()
+        expect(screen.getByText('Drag to rotate. Pinch to zoom. Double-tap to reset.')).toBeTruthy()
+        expect(screen.getByTestId('piece-viewer-gesture-surface')).toHaveStyle({ flex: 1 })
+        expect(
+            StyleSheet.flatten(screen.getByTestId('piece-viewer-gesture-surface').props.style).height,
+        ).toBeUndefined()
+        expect(screen.getByTestId('piece-card-screw')).toHaveStyle({ flex: 1 })
+        expect(screen.getByTestId('piece-viewer')).toHaveStyle({ flex: 1 })
+        expect(screen.queryByTestId('piece-viewer-expand')).toBeNull()
+        await fireEvent.press(screen.getByTestId('piece-viewer-close'))
+        expect(screen.queryByTestId('stalled-gl-surface')).toBeNull()
+        await fireEvent.press(screen.getByTestId('piece-tile-phone-support'))
         expect(screen.getByTestId('piece-placeholder-phone-support')).toBeTruthy()
+        await fireEvent(screen.getByTestId('piece-viewer-fullscreen-modal'), 'requestClose')
+        expect(screen.queryByTestId('piece-placeholder-phone-support')).toBeNull()
     } finally {
         await view?.unmount()
         os.restore()
@@ -232,11 +257,12 @@ it('keeps the outgoing piece drawing for 200ms when its first spec arrives', asy
     }
     const tree = (pieces: PieceSpec[]): React.JSX.Element => (
         <ThemeProvider>
-            <PiecesGrid pieces={pieces} items={items} />
+            <PiecesGrid presentation="chips" pieces={pieces} items={items} />
         </ThemeProvider>
     )
     const view = await render(tree([]))
     try {
+        await fireEvent.press(screen.getByTestId('piece-tile-arm'))
         await view.rerender(tree([piece]))
         expect(screen.getByTestId('piece-placeholder-arm', { hidden: true })).toBeTruthy()
         await act(() => jest.advanceTimersByTime(199))
@@ -258,9 +284,10 @@ it('lets accessibility text grow beyond the guide viewer footprint while waiting
     try {
         view = await render(
             <ThemeProvider>
-                <PiecesGrid pieces={[]} items={[pendingItem('arm', 'Arm')]} />
+                <PiecesGrid presentation="chips" pieces={[]} items={[pendingItem('arm', 'Arm')]} />
             </ThemeProvider>,
         )
+        await fireEvent.press(screen.getByTestId('piece-tile-arm'))
         expect(screen.getByTestId('piece-placeholder-arm')).not.toHaveStyle({ height: 240 })
         expect(screen.getByTestId('piece-placeholder-arm')).toHaveStyle({ minHeight: 240 })
         expect(screen.getByTestId('blueprint-loader-piece')).not.toHaveStyle({ height: 240 })
@@ -270,7 +297,7 @@ it('lets accessibility text grow beyond the guide viewer footprint while waiting
     }
 })
 
-it.each([2, 3])('shares one announced, animated wait across %i pending pieces of a guide screen', async (count) => {
+it.each([2, 3])('mounts one announced, animated modal wait from %i pending part chips', async (count) => {
     const dimensions = jest.requireActual<typeof ReactNativeModule>('react-native')
     const standardText = jest.spyOn(dimensions, 'useWindowDimensions').mockReturnValue({
         width: 390,
@@ -286,16 +313,19 @@ it.each([2, 3])('shares one announced, animated wait across %i pending pieces of
     try {
         view = await render(
             <ThemeProvider>
-                <PiecesGrid pieces={[]} items={items} />
+                <PiecesGrid presentation="chips" pieces={[]} items={items} />
             </ThemeProvider>,
         )
-        expect(screen.getAllByTestId('blueprint-loader-piece')).toHaveLength(count)
+        expect(screen.queryByTestId('blueprint-loader-piece')).toBeNull()
+        await fireEvent.press(screen.getByTestId('piece-tile-arm'))
+        expect(screen.getAllByTestId('blueprint-loader-piece')).toHaveLength(1)
         expect(announce.mock.calls.filter(([text]) => text === 'Shaping the part')).toHaveLength(1)
-        // Only the primary pending piece runs its loop; the other cards hold the same scene at its final frame.
+        // The selected pending part owns the only viewer and its wait loop.
         expect(spies.withRepeat).toHaveBeenCalledTimes(1)
         expect(screen.getByTestId('piece-placeholder-arm')).toHaveStyle({ height: 240, padding: 0 })
         expect(within(screen.getByTestId('piece-placeholder-arm')).getByTestId('blueprint-loader-piece')).toHaveStyle({
-            height: 240,
+            height: 192,
+            margin: 24,
         })
     } finally {
         await view?.unmount()
@@ -304,7 +334,7 @@ it.each([2, 3])('shares one announced, animated wait across %i pending pieces of
     }
 })
 
-it('does not announce again when the primary pending piece is unavailable and another takes its wait', async () => {
+it('does not announce again when the selected pending piece becomes unavailable', async () => {
     const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => undefined)
     announce.mockClear()
     const items = [pendingItem('arm', 'Arm'), pendingItem('hub', 'Hub'), pendingItem('leg', 'Leg')]
@@ -312,13 +342,15 @@ it('does not announce again when the primary pending piece is unavailable and an
     try {
         view = await render(
             <ThemeProvider>
-                <PiecesGrid pieces={[]} items={items} />
+                <PiecesGrid presentation="chips" pieces={[]} items={items} />
             </ThemeProvider>,
         )
+        await fireEvent.press(screen.getByTestId('piece-tile-arm'))
         expect(announce.mock.calls.filter(([text]) => text === 'Shaping the part')).toHaveLength(1)
         await view.rerender(
             <ThemeProvider>
                 <PiecesGrid
+                    presentation="chips"
                     pieces={[]}
                     items={[
                         { pieceId: 'arm', name: 'Arm', quantity: 1, state: 'unavailable' as const },
@@ -358,16 +390,17 @@ it('clears a guide piece ready marker when its spec is refined, until the refine
     try {
         view = await render(
             <ThemeProvider>
-                <PiecesGrid pieces={[spec('#5A7CA5')]} items={items} />
+                <PiecesGrid presentation="chips" pieces={[spec('#5A7CA5')]} items={items} />
             </ThemeProvider>,
         )
+        await fireEvent.press(screen.getByTestId('piece-tile-walking'))
         await act(async () => screen.getByTestId('stalled-gl-surface').props.onContextCreate({}))
         await drawFrame()
         expect(screen.getByTestId('piece-viewer-ready-walking')).toBeTruthy()
 
         await view.rerender(
             <ThemeProvider>
-                <PiecesGrid pieces={[spec('#B0B7C3')]} items={items} />
+                <PiecesGrid presentation="chips" pieces={[spec('#B0B7C3')]} items={items} />
             </ThemeProvider>,
         )
         // The refined spec is a new 3D view: the marker waits for its own first frame.
@@ -508,4 +541,24 @@ it('opens the same piece full screen from its own view, and closes from its butt
         insets.mockRestore()
         os.restore()
     }
+})
+
+it('keeps the default non-guide grid inline and opens no modal until Expand is chosen', async () => {
+    mockOptionalNativeModule.mockReturnValue(null)
+    const spec: PieceSpec = {
+        id: 'legacy-part',
+        name: 'Legacy part',
+        color: '#467ABC',
+        parts: [
+            { type: 'box', dimensions: { width: 1, height: 1, depth: 1 }, position: [0, 0, 0], rotation: [0, 0, 0] },
+        ],
+    }
+    await render(
+        <ThemeProvider>
+            <PiecesGrid pieces={[spec]} />
+        </ThemeProvider>,
+    )
+    expect(screen.getByTestId('piece-viewer-fallback')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'View Legacy part' })).toBeTruthy()
+    expect(screen.queryByTestId('piece-viewer-fullscreen-modal')).toBeNull()
 })

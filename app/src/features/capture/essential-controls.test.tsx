@@ -6,12 +6,17 @@ import {
     type ScreenVariantV2,
 } from '@truebuild/contracts'
 import { EssentialDocumentControls } from './essential-controls'
+import { FixedBottomBar } from '../../ui/bottom-bar'
 import { ThemeProvider } from '../../theme/theme'
 import { FeedbackProvider } from '../../ui/feedback'
 import { entry, runtime } from '../screens/test-support/route-harness'
 import { defaultNav } from './screen-nav'
 import { parseOrigin } from '../../ui/render-origin'
 
+jest.mock(
+    'react-native-safe-area-context',
+    () => jest.requireActual<{ default: unknown }>('react-native-safe-area-context/jest/mock').default,
+)
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 
 it('keeps missing import, Resume and step navigation in shell chrome and deduplicates visible model controls by intent', async () => {
@@ -112,5 +117,60 @@ it('keeps missing import, Resume and step navigation in shell chrome and dedupli
         await view.unmount()
         controller.dispose()
         jest.restoreAllMocks()
+    }
+})
+
+it('places the guide primary between the existing previous/next controls and keeps their boundary rules', async () => {
+    const seeded = entry()
+    const { controller } = await runtime([seeded])
+    await controller.restore()
+    const state = controller.getSnapshot()
+    const step = jest.spyOn(controller, 'step').mockResolvedValue(undefined)
+    const primary = jest.fn()
+    const variant = buildFallbackProposalV2(
+        documentMaterialV2({
+            kind: 'guide',
+            session: seeded.session,
+            stepId: 'step-1',
+            captureId: null,
+            result: null,
+            failure: null,
+        }),
+    )
+    const view = await render(
+        <ThemeProvider>
+            <FeedbackProvider reduceMotion>
+                <FixedBottomBar
+                    primary={{ label: 'Take photo', testID: 'guide-primary', onPress: primary }}
+                    navigation={
+                        <EssentialDocumentControls
+                            kind="guide"
+                            variant={variant}
+                            state={state}
+                            entry={seeded}
+                            busy={false}
+                            resolve={() => ({ enabled: true, reason: null, run: (): void => undefined })}
+                            controller={controller}
+                            nav={defaultNav(controller)}
+                        />
+                    }
+                />
+            </FeedbackProvider>
+        </ThemeProvider>,
+    )
+    try {
+        const row = screen.getByTestId('guide-action-row')
+        expect(row.props.style).toMatchObject({ flexDirection: 'row' })
+        expect(screen.getAllByRole('button')).toHaveLength(3)
+        expect(screen.getByTestId('shell-previous-step')).toBeDisabled()
+        expect(screen.getByTestId('shell-next-step')).toBeEnabled()
+        await fireEvent.press(screen.getByRole('button', { name: 'Take photo' }))
+        await fireEvent.press(screen.getByRole('button', { name: 'Next step' }))
+        expect(primary).toHaveBeenCalledTimes(1)
+        expect(step).toHaveBeenCalledWith(1)
+    } finally {
+        await view.unmount()
+        controller.dispose()
+        step.mockRestore()
     }
 })

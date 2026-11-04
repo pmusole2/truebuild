@@ -88,7 +88,7 @@ describe('haptic feedback', () => {
         const onPress = jest.fn()
         await render(
             <FeedbackProvider haptics={haptics}>
-                <AppButton label="Confirm facts" onPress={onPress} variant="primary" />
+                <AppButton label="Confirm facts" onPress={onPress} variant="accent" />
             </FeedbackProvider>,
         )
         await fireEvent.press(screen.getByRole('button', { name: 'Confirm facts' }))
