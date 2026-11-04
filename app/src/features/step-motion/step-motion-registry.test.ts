@@ -98,6 +98,13 @@ describe('step motion device registry', () => {
         expect(request.figureBox).toBeNull()
     })
 
+    it('skips a step whose cited page is not among the known pages, rather than sending a whole page it cannot verify', () => {
+        const session = createDemoManual()
+        const cited = session.rawExtraction!.steps[0]!.sourceRefs[0]!.pageId
+        session.pages = session.pages.filter((page) => page.pageId !== cited)
+        expect(motionRequestForStep(session, 'step-1', 'request-1')).toBeNull()
+    })
+
     it('copies the manual page raw hash into the request, so the cache identity names the bytes it claims', () => {
         const session = createDemoManual()
         const request = motionRequestForStep(session, 'step-1', 'request-1')!

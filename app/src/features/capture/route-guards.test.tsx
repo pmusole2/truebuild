@@ -172,6 +172,7 @@ it.each([
             .mockResolvedValue({ canceled: true, assets: null })
         await fireEvent.press(screen.getByRole('button', { name: 'Try again' }))
         await waitFor(() => expect(picker).toHaveBeenCalledTimes(1))
+        expect(picker).toHaveBeenCalledWith(expect.objectContaining({ selectionLimit: hasPages ? 11 : 12 }))
         expect(view.getPathname()).toBe('/add')
     },
 )

@@ -1,10 +1,10 @@
 import { z } from 'zod'
 import { canonicalJson, sourceRefSchema } from './index'
 import { pieceDrawingBoxSchema } from './piece-generation'
-import { PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
+import { extrudeBevelLimit, PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
 
-export const STEP_MOTION_PROMPT_VERSION = 2
+export const STEP_MOTION_PROMPT_VERSION = 3
 /** Ten percent on each side, clamped to the cited page, keeps nearby movement marks in the crop. */
 export function paddedStepFigureBox(box: readonly [number, number, number, number]): [number, number, number, number] {
     const [x, y, width, height] = box
@@ -66,6 +66,42 @@ export const stepMotionSceneSchema = scene.nullable()
 export type StepMotionScene = z.infer<typeof scene>
 export const stepMotionResultSchema = z.strictObject({ scene: stepMotionSceneSchema })
 export type StepMotionResult = z.infer<typeof stepMotionResultSchema>
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+const isFinitePoint = (value: unknown): value is [number, number] =>
+    Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === 'number' && Number.isFinite(part))
+
+function clampShapeBevel(shape: unknown): unknown {
+    if (!isRecord(shape) || shape.type !== 'extrude' || typeof shape.bevel !== 'number' || !Number.isFinite(shape.bevel))
+        return shape
+    const { depth, outline } = shape
+    if (typeof depth !== 'number' || !Array.isArray(outline) || outline.length < 3) return shape
+    if (outline.length > PIECE_SPEC_LIMITS.outlinePoints || !outline.every(isFinitePoint)) return shape
+    const limit = extrudeBevelLimit(depth, outline)
+    return { ...shape, bevel: Math.min(Math.max(shape.bevel, 0), limit) }
+}
+
+/**
+ * Clamps each extrude bevel in a generated result to its limit, so one oversized bevel does not refuse the whole scene.
+ * Only bevels are touched; every other field still decides acceptance. Anything unrecognised passes through unchanged.
+ */
+export function clampStepMotionBevels(value: unknown): unknown {
+    if (!isRecord(value)) return value
+    const scene = value.scene
+    if (!isRecord(scene)) return value
+    const shapes = (list: unknown): unknown => (Array.isArray(list) ? list.map(clampShapeBevel) : list)
+    return {
+        ...value,
+        scene: {
+            ...scene,
+            still: shapes(scene.still),
+            movers: Array.isArray(scene.movers)
+                ? scene.movers.map((mover: unknown) => (isRecord(mover) ? { ...mover, shapes: shapes(mover.shapes) } : mover))
+                : scene.movers,
+        },
+    }
+}
 
 /** Verbatim source text is data: it is bounded without trimming, translation or rewriting. */
 export const stepMotionRequestSchema = z

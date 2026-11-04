@@ -8,7 +8,7 @@ import { createMetaProvider, type ParseManualInput } from './meta-provider'
 
 // MOCKED: every parse reply is a hand-written synthetic extraction served by a local fetch stub. No Meta request,
 // recorded output or key is involved; this proves prompt text and validation flow only, not real model behaviour.
-const UNKNOWN = { state: 'unknown' as const, reason: 'The diagram does not state a count.' }
+const UNKNOWN = { state: 'unknown' as const, reason: 'The printed count in the diagram is unreadable.' }
 
 interface ReusedCase {
     fixture: StepFixture
@@ -123,7 +123,7 @@ describe.each(CASES)(
 
         it('resolves a reused part to a carried_over quantity after the repair, with no unresolved facts', async (): Promise<void> => {
             const clean = extraction(fixture)
-            // First reply: the later diagram omits the count, so the model leaves the reused quantity unknown.
+            // First reply: the printed count is unreadable, so the model leaves the reused quantity unresolved.
             const omitted = change(clean, 1, reused, { quantity: UNKNOWN, quantityBasis: null })
             const carried = change(clean, 1, reused, {
                 quantityBasis: {

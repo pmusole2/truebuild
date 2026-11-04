@@ -1,4 +1,5 @@
 import { manualOpeningTitleV2, type ScreenKindV2 } from '@truebuild/contracts'
+import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import * as ImagePicker from 'expo-image-picker'
 import { Redirect, Stack, useIsFocused, useLocalSearchParams, usePreventRemove } from 'expo-router'
@@ -143,7 +144,7 @@ export function HomeRoute(): ReactElement {
     )
 }
 
-/** Picker for photos already on the phone. Same permission and limits as before; the controller validates the result. */
+/** Picker for photos already on the phone, bounded by the shared parse limit; the controller validates the result. */
 function useChoosePages(entry: LibraryEntry | undefined): (replaceIndex?: number) => void {
     const { controller: raw } = useWorkflow()
     return (replaceIndex?: number): void => {
@@ -155,7 +156,8 @@ function useChoosePages(entry: LibraryEntry | undefined): (replaceIndex?: number
             const result = await ImagePicker.launchImageLibraryAsync({
                 mediaTypes: ['images'],
                 allowsMultipleSelection: replaceIndex === undefined,
-                selectionLimit: replaceIndex === undefined ? Math.max(1, 20 - (entry?.session.pages.length ?? 0)) : 1,
+                selectionLimit:
+                    replaceIndex === undefined ? Math.max(1, MAX_PARSE_PAGES - (entry?.session.pages.length ?? 0)) : 1,
                 orderedSelection: true,
                 exif: false,
                 quality: 1,

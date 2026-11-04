@@ -762,6 +762,7 @@ export function createModelHandlers(options: {
         createDocumentService({
             guideRepair,
             legacyDirections,
+            deterministicGuide: !legacyDirections,
             waitCopy,
             provider: provider?.generateDocument ? provider : null,
             fixtureGenerator: options.runtimeMode === 'fixture' ? (options.documentFixtures ?? null) : null,

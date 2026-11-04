@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import {
     canonicalJson,
+    clampStepMotionBevels,
     LIMITS,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
@@ -157,16 +158,31 @@ export function figureWindow(
     }
 }
 
+/** The shorter side of every frame sent to the model is at least this long. */
+const MIN_MODEL_SHORT_EDGE = 512
+
+/**
+ * The size of a frame sent to the model, aspect kept. The shorter side is always at least 512 px, so the scale is the
+ * larger of the shorter-side floor and the policy edge budget: a normal large page is downsampled to the edge, and a
+ * narrow crop is enlarged. Null when that frame would exceed the pixel budget, so the image is refused, never narrowed.
+ */
+export function modelFrameSize(width: number, height: number): { width: number; height: number } | null {
+    const budget = Math.min(1, STEP_MOTION_POLICY.maxImageEdge / Math.max(width, height))
+    const floor = MIN_MODEL_SHORT_EDGE / Math.min(width, height)
+    const scale = Math.max(budget, floor)
+    const frame = { width: Math.round(width * scale), height: Math.round(height * scale) }
+    return frame.width * frame.height <= LIMITS.imagePixels ? frame : null
+}
+
 async function figure(request: StepMotionRequest, image: ObservationImage): Promise<ObservationImage> {
+    const window = figureWindow(request.figureBox, image)
     let pipeline = sharp(image.bytes, { limitInputPixels: LIMITS.imagePixels })
-    if (request.figureBox !== null) pipeline = pipeline.extract(figureWindow(request.figureBox, image))
+    if (request.figureBox !== null) pipeline = pipeline.extract(window)
+    const frame = modelFrameSize(window.width, window.height)
+    // Too large to keep the shorter side at 512 px within the budget: refused before any dispatch, never sent narrower.
+    if (frame === null) throw new ModelBodyError(413)
     const { data, info } = await pipeline
-        .resize({
-            width: STEP_MOTION_POLICY.maxImageEdge,
-            height: STEP_MOTION_POLICY.maxImageEdge,
-            fit: 'inside',
-            withoutEnlargement: true,
-        })
+        .resize({ width: frame.width, height: frame.height, fit: 'fill' })
         .jpeg({ quality: 85 })
         .toBuffer({ resolveWithObject: true })
     return { bytes: data, width: info.width, height: info.height, mimeType: 'image/jpeg' }
@@ -187,6 +203,25 @@ async function verifiedFigure(
     } catch (error) {
         throw new BeforeMotionDispatch(error)
     }
+}
+
+type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index'
+
+/** The short code a generated result is refused for, or null when usable. Only codes are logged, never model text. */
+function sceneRejection(
+    parsed: ReturnType<typeof stepMotionResultSchema.safeParse>,
+    telemetry: { model: string | null; effort: string | null },
+    request: StepMotionRequest,
+): SceneRejection | null {
+    if (!parsed.success) return 'schema'
+    if (telemetry.model !== STEP_MOTION_POLICY.model) return 'model'
+    if (telemetry.effort !== STEP_MOTION_POLICY.effort) return 'effort'
+    const scene = parsed.data.scene
+    if (scene === null) return null
+    if (scene.stepId !== request.stepId) return 'step_id'
+    if (scene.movers.some((mover) => mover.actionIndex !== null && mover.actionIndex >= request.actions.length))
+        return 'action_index'
+    return null
 }
 
 export function createStepMotionHandler(options: {
@@ -306,35 +341,34 @@ export function createStepMotionHandler(options: {
                                 )
                             },
                         )
-                        const parsed = stepMotionResultSchema.safeParse(generation.value)
-                        const result = parsed.success ? parsed.data : EMPTY
-                        const accepted =
-                            parsed.success &&
-                            generation.telemetry.model === 'muse-wonder-1.0' &&
-                            generation.telemetry.effort === 'high' &&
-                            (result.scene === null ||
-                                (result.scene.stepId === metadata.stepId &&
-                                    result.scene.movers.every(
-                                        (mover) =>
-                                            mover.actionIndex === null || mover.actionIndex < metadata.actions.length,
-                                    )))
+                        const parsed = stepMotionResultSchema.safeParse(clampStepMotionBevels(generation.value))
+                        const rejection = sceneRejection(parsed, generation.telemetry, metadata)
                         console.info(
                             JSON.stringify({
                                 event: 'step_motion_generation',
                                 promptVersion: STEP_MOTION_PROMPT_VERSION,
-                                accepted,
+                                accepted: rejection === null,
+                                ...(rejection === null ? {} : { reason: rejection }),
                                 model: generation.telemetry.model,
                                 effort: generation.telemetry.effort,
                                 usage: generation.telemetry.usage,
                                 estimatedCostUsd: estimatedStepMotionCostUsd(generation.telemetry.usage),
                             }),
                         )
-                        return accepted ? result : EMPTY
+                        return rejection === null && parsed.success ? parsed.data : EMPTY
                     } catch (error) {
                         if (!dispatched) {
                             throw new BeforeMotionDispatch(error)
                         }
                         // Provider failure or its own deadline is terminal; reader cancellation never enters this branch.
+                        console.info(
+                            JSON.stringify({
+                                event: 'step_motion_generation',
+                                promptVersion: STEP_MOTION_PROMPT_VERSION,
+                                accepted: false,
+                                reason: 'provider_failure',
+                            }),
+                        )
                         return EMPTY
                     } finally {
                         generationDeadline?.dispose()

@@ -225,9 +225,9 @@ describe('carried quantities (synthetic contracts)', () => {
     })
 })
 
-it('admits eight parse pages with a static plain-language split instruction', () => {
-    expect(MAX_PARSE_PAGES).toBe(8)
+it('admits twelve parse pages with a static plain-language split instruction', () => {
+    expect(MAX_PARSE_PAGES).toBe(12)
     expect(PARSE_SPLIT_MESSAGE).toBe(
-        'Read up to 8 pages at a time. Split this manual into sections of 8 pages or fewer.',
+        'Read up to 12 pages at a time. Split this manual into sections of 12 pages or fewer.',
     )
 })

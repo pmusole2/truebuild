@@ -139,6 +139,48 @@ const textsOf = (node: Tree): string[] =>
 const shownTexts = (): string[] => textsOf(screen.toJSON() as Tree)
 
 describe('step directions', () => {
+    it('shows sized and count-only parts in Directions using only this step’s quantities', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const step = session.reviewedSteps[0]!
+        session.parts[0]!.name = { state: 'known', value: 'Screw', sourceRefs: step.sourceRefs }
+        session.parts[0]!.dimensions = '4 × 16 mm'
+        session.parts[0]!.inventoryQuantity = 99
+        step.parts[0]!.quantity = { state: 'known', value: 4, sourceRefs: step.sourceRefs }
+        session.parts[1]!.name = { state: 'known', value: 'Washer', sourceRefs: step.sourceRefs }
+        step.parts.push({
+            partId: session.parts[1]!.partId,
+            quantity: { state: 'known', value: 6, sourceRefs: step.sourceRefs },
+        })
+        session.parts.push({
+            partId: 'other-screw',
+            name: { state: 'known', value: 'Other screw', sourceRefs: step.sourceRefs },
+            dimensions: '6 × 90 mm',
+            inventoryQuantity: 50,
+        })
+        const document = composeGuide(session, undefined, false)
+        expect(verifyDocumentAgainstInputsV2(document, guideInputs(session), sha256Hex)).toEqual([])
+        await renderGuide(session)
+        expect(screen.getByText('Screw · 4 × 16 mm · ×4')).toBeTruthy()
+        const directions = within(screen.getByTestId('guide-directions'))
+        expect(directions.getByText('Screw · 4 × 16 mm · ×4')).toBeTruthy()
+        expect(directions.getByText('Screw · 4 × 16 mm · ×4').props.nativeID).toContain('truebuild-render-origin:shell')
+        expect(directions.getByText('Washer · ×6')).toBeTruthy()
+        expect(directions.queryByText(/Other screw|6 × 90 mm|×99|×50|×1$/u)).toBeNull()
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
+    })
+
+    it('shows a printed size without inventing an unknown count', async () => {
+        const session = sessionWithActions(ACTIONS)
+        session.parts[0]!.dimensions = '12 × 24 cm'
+        session.parts[0]!.inventoryQuantity = 99
+        session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'Count is not printed.' }
+        await renderGuide(session)
+        expect(screen.getByText('Side panel · 12 × 24 cm')).toBeTruthy()
+        const directions = within(screen.getByTestId('guide-directions'))
+        expect(directions.getByText('Side panel · 12 × 24 cm')).toBeTruthy()
+        expect(directions.queryByText(/×99/u)).toBeNull()
+    })
+
     it('numbers each action once, in order, beside its exact instruction', async () => {
         const session = sessionWithActions(ACTIONS)
         const step = session.reviewedSteps[0]!

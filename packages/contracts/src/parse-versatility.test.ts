@@ -33,7 +33,7 @@ describe('manual parse versatility', () => {
             expect(parsed.data.reviewedSteps[0]!.parts[0]!.quantity).toEqual(unknown)
         }
     })
-    it('rejects uncited quantity exemption and still blocks an ungrounded unknown quantity', () => {
+    it('rejects uncited quantity exemption and still blocks an unreadable printed quantity', () => {
         const step = createDemoManual().reviewedSteps[0]!
         expect(
             manualStepSchema.safeParse({
@@ -44,7 +44,7 @@ describe('manual parse versatility', () => {
             }).success,
         ).toBe(false)
         const session = createDemoManual()
-        session.reviewedSteps[0]!.parts[0]!.quantity = unknown
+        session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'The printed count is blurred.' }
         expect(manualSessionSchema.safeParse(session).success).toBe(false)
         expect(unresolvedCriticalFacts(session).some((issue) => issue.includes('quantity'))).toBe(true)
     })
@@ -223,7 +223,7 @@ it('rejects a numeric quantity that contradicts a not-specified manual basis', (
     ).toBe(true)
 })
 
-describe('single-use singular quantities in review', () => {
+describe('unstated quantities in review', () => {
     function singleUse(name: string): ManualSession {
         const session = createDemoManual()
         session.rawExtraction = null
@@ -254,17 +254,17 @@ describe('single-use singular quantities in review', () => {
         'Panels for frame',
         'Feet for base',
         'Few brackets',
-    ])('blocks ambiguous or plural name %s', (name) => {
+    ])('allows unstated counts regardless of the part label %s', (name) => {
         const session = singleUse(name)
-        expect(unresolvedCriticalFacts(session).some((issue) => issue.includes('quantity'))).toBe(true)
-        expect(manualSessionSchema.safeParse(session).success).toBe(false)
+        expect(unresolvedCriticalFacts(session)).toEqual([])
+        expect(manualSessionSchema.safeParse(session).success).toBe(true)
     })
 
-    it('blocks even a singular part when it is used by more than one step', () => {
+    it('allows an unstated count when the part is used by more than one step', () => {
         const session = singleUse('Side panel')
         session.reviewedSteps.push({ ...structuredClone(session.reviewedSteps[0]!), stepId: 'second', order: 2 })
-        expect(unresolvedCriticalFacts(session).filter((issue) => issue.includes('quantity'))).toHaveLength(2)
-        expect(manualSessionSchema.safeParse(session).success).toBe(false)
+        expect(unresolvedCriticalFacts(session)).toEqual([])
+        expect(manualSessionSchema.safeParse(session).success).toBe(true)
     })
 
     it.each(['Manual shows 1 or 2.', 'The count is blurred.', 'The manual does not specify whether one or two.'])(
@@ -276,4 +276,55 @@ describe('single-use singular quantities in review', () => {
             expect(manualSessionSchema.safeParse(session).success).toBe(false)
         },
     )
+})
+
+it.each([
+    [
+        'Bolts',
+        'Step 1 text lists Bolts without installed count; diagram shows two stacks plus repeated zoom view and four mounting holes, cannot establish required count without double-counting.',
+    ],
+    [
+        'Washers',
+        'Step 1 text lists Washers without installed count; diagram shows two stacks plus repeated zoom view, cannot establish required count.',
+    ],
+    ['Batteries', 'Manual says batteries plural without count and diagram shows no clear distinct count.'],
+    ['Batteries', 'Earlier quantity unknown and manual gives no count; diagram shows no clear distinct count.'],
+    ['Bolts', 'Installed count not printed; diagram shows two stacks.'],
+    ['Bolts', 'Installed count not printed; two stacks visible.'],
+])('allows %s with no printed count, without entering a number', (name, reason) => {
+    const session = createDemoManual()
+    session.rawExtraction = null
+    session.reviewedSteps = [session.reviewedSteps[0]!]
+    session.parts[0]!.name = { state: 'known', value: name, sourceRefs: cited }
+    session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason }
+    expect(unresolvedCriticalFacts(session)).toEqual([])
+    expect(manualSessionSchema.safeParse(session).success).toBe(true)
+    expect(session.reviewedSteps[0]!.parts[0]!.quantity.state).toBe('unknown')
+})
+
+it.each([
+    'The manual prints 4; this count is not confirmed.',
+    'The count is not printed clearly; it reads 3 or 5.',
+    'Count is missing; the figure shows either 2 or 4 screws.',
+    'The count is not stated; the figure shows 4 screws.',
+    'The count is not stated; it could be one or two.',
+    'The count is not stated; it may vary.',
+    'The count is not stated; possibly 3.',
+    'The count is not stated; the figure shows four screws.',
+    'The count is not stated; 4 bolts visible in diagram.',
+    'Count not stated; screws shown as 4 in diagram.',
+    'Count not stated; printing is unclear.',
+    'The count is not stated; the number is printed as 4 but it is hard to read.',
+    'Manual does not state a count for the bolts; a total of 6 appears in the table.',
+    'Installed count not printed; manual states four bolts.',
+    'Installed count not printed; the count reads four.',
+    'Installed count not printed; the printed count is four.',
+])('keeps a printed but unconfirmed count blocked: %s', (reason) => {
+    const session = createDemoManual()
+    session.reviewedSteps[0]!.parts[0]!.quantity = {
+        state: 'unknown',
+        reason,
+    }
+    expect(unresolvedCriticalFacts(session).some((issue) => issue.includes('quantity'))).toBe(true)
+    expect(manualSessionSchema.safeParse(session).success).toBe(false)
 })

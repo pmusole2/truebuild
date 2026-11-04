@@ -178,7 +178,6 @@ const NOTICE_RULES: readonly (readonly [RegExp, string])[] = [
         /^Step facts are invalid|^Choose an existing part/u,
         'That does not fit this step. Check the part and keep it under 500 letters.',
     ],
-    [/^Read up to \d+ pages/u, 'We can read 8 pages at a time. Remove a few pages and try again.'],
 ]
 
 const PHOTO_RECOVERY: ReadonlyMap<string, string> = new Map([
@@ -194,6 +193,10 @@ const GENERIC_NOTICE = 'Something went wrong. Please try again.'
 
 /** A controller notice in plain words. Unknown notices fall back to a calm generic line rather than internal text. */
 export function plainNotice(notice: string): string {
+    const parseLimit = /^Read up to ([1-9]\d*) pages/u.exec(notice)?.[1]
+    if (parseLimit !== undefined) {
+        return `We can read ${parseLimit} pages at a time. Remove a few pages and try again.`
+    }
     const photoRecovery = PHOTO_RECOVERY.get(notice)
     if (photoRecovery !== undefined) {
         return photoRecovery

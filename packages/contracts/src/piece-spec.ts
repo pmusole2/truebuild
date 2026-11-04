@@ -160,6 +160,14 @@ const lathePartSchema = z
         },
     )
 
+/** Largest bevel of an extrude: a fraction of its smallest extent, which is its depth or either outline span. */
+export function extrudeBevelLimit(depth: number, outline: readonly Point[]): number {
+    const xs = outline.map(([x]) => x)
+    const ys = outline.map(([, y]) => y)
+    const smallest = Math.min(depth, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+    return smallest * PIECE_SPEC_LIMITS.bevelRatio
+}
+
 const extrudePartSchema = z
     .strictObject({
         type: z.literal('extrude'),
@@ -186,10 +194,7 @@ const extrudePartSchema = z
         (part) => {
             if (part.bevel === undefined) return true
             if (part.outline.length < 3 || part.outline.length > PIECE_SPEC_LIMITS.outlinePoints) return false
-            const xs = part.outline.map(([x]) => x)
-            const ys = part.outline.map(([, y]) => y)
-            const smallest = Math.min(part.depth, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
-            return part.bevel <= smallest * PIECE_SPEC_LIMITS.bevelRatio
+            return part.bevel <= extrudeBevelLimit(part.depth, part.outline)
         },
         {
             message: 'A bevel is at most a fraction of the smallest extrude extent',

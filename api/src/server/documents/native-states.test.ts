@@ -352,7 +352,13 @@ describe('the real client verifies the documents of a real native journey', () =
                     })
                 }
             }
-            expect(outcomes.filter((outcome) => outcome.source !== 'generated' || outcome.reason !== null)).toEqual([])
+            expect(
+                outcomes.filter((outcome) =>
+                    outcome.label.startsWith('guide#')
+                        ? outcome.source !== 'fallback' || outcome.reason !== 'disabled'
+                        : outcome.source !== 'generated' || outcome.reason !== null,
+                ),
+            ).toEqual([])
             expect(outcomes.length).toBe(session.reviewedSteps.length * 6)
         },
         60_000,

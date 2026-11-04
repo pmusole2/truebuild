@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native'
 import { spies } from '../../ui/test-support/reanimated-mock'
 import { StrictMode, useEffect, type ReactElement } from 'react'
 import type * as ReactModule from 'react'
@@ -2026,4 +2026,33 @@ it('shows a fallback Guide piece once, and a drag on its 3D view holds the page 
         controller.dispose()
         create.mockRestore()
     }
+})
+
+it('production More edits an optional unstated count during review and respects read-only rendering', async () => {
+    const { bindings, inputs, controller } = await setup()
+    const session = structuredClone(inputs.session!)
+    session.reviewStatus = 'unreviewed'
+    session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'The manual gives no count.' }
+    const accept = jest.spyOn(controller, 'acceptStepFacts').mockResolvedValue(true)
+    const moreInputs: ScreenContextInputsV2 = { ...inputs, kind: 'more', session }
+    const document = compose(moreInputs)
+    const reviewBindings: FrameBindings = {
+        ...bindings,
+        session,
+        live: { ...bindings.live!, state: { ...bindings.live!.state, route: 'overview' } },
+    }
+    const { rerender } = await render(wrap(<DocumentRenderer document={document} bindings={reviewBindings} />))
+    expect(screen.getByText('Side panel: count not stated in the manual.')).toBeTruthy()
+    await fireEvent.changeText(screen.getByLabelText('Count for Side panel (optional)'), '3')
+    await fireEvent.press(screen.getByRole('button', { name: 'Save count for Side panel' }))
+    await waitFor(() =>
+        expect(accept).toHaveBeenCalledWith(
+            { kind: 'manual', manualId: session.manualId, revision: session.revision },
+            session.reviewedSteps[0]!.stepId,
+            { quantity: { partId: 'side-panel', value: 3 } },
+        ),
+    )
+    await rerender(wrap(<DocumentRenderer document={document} bindings={{ ...reviewBindings, readOnly: true }} />))
+    expect(screen.queryByLabelText('Count for Side panel (optional)')).toBeNull()
+    controller.dispose()
 })

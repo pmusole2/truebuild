@@ -62,8 +62,9 @@ export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 export const PIECES_DEADLINE_MS = 90_000
 /**
  * One motion scene has its own output ceiling, independent of the larger piece/page stage. Context and complete
- * text/schema bytes are rejected above these limits; the image is reduced to one 1024px frame. The 8192 image-token
- * allowance is conservative planning headroom, not a provider billing guarantee (exact vision counts need its helper).
+ * text/schema bytes are rejected above these limits. Frames prefer a 1024px long edge, with a 512px short-side floor
+ * and the upload pixel ceiling. Narrow pages can exceed the preferred edge; the 8192 image-token allowance is planning
+ * headroom for ordinary frames, not a bound or billing guarantee (exact vision counts need its helper).
  */
 export const STEP_MOTION_POLICY = {
     model: 'muse-wonder-1.0',

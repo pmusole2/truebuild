@@ -77,6 +77,8 @@ export interface DocumentServiceOptions {
     guideRepair?: boolean
     /** Preserve the previous facts/requirements for installed clients with strict local verification. */
     legacyDirections?: boolean
+    /** Actions-capable clients use the complete deterministic Guide; older clients retain model composition. */
+    deterministicGuide?: boolean
     precomputeConcurrency?: number
     now?: () => Date
 }
@@ -289,6 +291,7 @@ export function createDocumentService(options: DocumentServiceOptions): Document
                 prompt: DOCUMENT_PROMPT_VERSION,
                 waitCopy: options.waitCopy ?? 2,
                 legacyDirections: options.legacyDirections === true,
+                deterministicGuide: options.deterministicGuide === true,
                 catalog: SCREEN_CATALOG_V2_VERSION,
             }),
         )
@@ -661,6 +664,9 @@ export function createDocumentService(options: DocumentServiceOptions): Document
         const { manualId, revision } = context.bound
         if (manualId !== null && revision !== null && !guard.observe(manualId, revision)) {
             return deterministic(context, 'stale')
+        }
+        if (context.inputs.kind === 'guide' && options.deterministicGuide === true) {
+            return deterministic(context, 'disabled')
         }
         if (
             context.inputs.kind === 'guide' &&

@@ -1725,7 +1725,7 @@ describe('parse page limit and language at the route boundary', (): void => {
         })
     }
 
-    it.each([9, 22])(
+    it.each([13, 22])(
         'rejects %i pages with a bound split message before claiming budget',
         async (count): Promise<void> => {
             const state = await setup()
@@ -1746,8 +1746,8 @@ describe('parse page limit and language at the route boundary', (): void => {
                 requestId: 'parse-paged',
                 binding: { kind: 'manual', manualId: state.metadata.session.manualId, revision: 1 },
             })
-            expect(MAX_PARSE_PAGES).toBe(8)
-            expect(PARSE_SPLIT_MESSAGE).toContain('8 pages')
+            expect(MAX_PARSE_PAGES).toBe(12)
+            expect(PARSE_SPLIT_MESSAGE).toContain('12 pages')
             expect(state.counter.used).toBe(0)
             expect(outbound).not.toHaveBeenCalled()
         },
@@ -1766,7 +1766,7 @@ describe('parse page limit and language at the route boundary', (): void => {
         expect(state.counter.used).toBe(0)
     })
 
-    it('admits exactly eight pages and carries the selected language to the provider', async (): Promise<void> => {
+    it('admits exactly twelve pages and carries the selected language to the provider', async (): Promise<void> => {
         const state = await setup()
         let seen: { pages: number; language?: string } | undefined
         const testProvider = provider(async (): Promise<CheckResult> => checked)
@@ -1775,9 +1775,9 @@ describe('parse page limit and language at the route boundary', (): void => {
             return parsed()
         }
         const handlers = createModelHandlers({ ...state, provider: testProvider, samProvider: null })
-        const response = await handlers.parse(await pagedRequest(state, 8, { language: 'es' }))
+        const response = await handlers.parse(await pagedRequest(state, 12, { language: 'es' }))
         expect(response.status).toBe(200)
-        expect(seen).toEqual({ pages: 8, language: 'es' })
+        expect(seen).toEqual({ pages: 12, language: 'es' })
         expect(state.counter.used).toBe(1)
     })
 

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
     SCREEN_KINDS_V2,
     buildFallbackProposalV2,
+    visitVariantNodesV2,
     verifyDocumentAgainstInputsV2,
     type ScreenContextInputsV2,
     type ScreenKindV2,
@@ -73,7 +74,12 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
             expect(body.value.document).toMatchObject({
                 version: 2,
                 kind,
-                metadata: { source: 'generated', evidence: 'synthetic-fixture', model: null, effort: null },
+                metadata: {
+                    source: kind === 'guide' ? 'fallback' : 'generated',
+                    evidence: 'synthetic-fixture',
+                    model: null,
+                    effort: null,
+                },
             })
             expect(body.value.document!.metadata.timing.totalMs).toBeNull()
         },
@@ -221,7 +227,7 @@ describe('POST /api/screens/v2 (fixture runtime)', () => {
         await vi.waitFor(async () => {
             const capable = await read('?guideRepair=1&waitCopy=2&stepActions=1')
             const legacy = await read('')
-            expect(capable.documents[0]?.metadata).toMatchObject({ source: 'generated', repaired: true })
+            expect(capable.documents[0]?.metadata).toMatchObject({ source: 'fallback', repaired: false })
             expect(legacy.documents[0]?.metadata).toMatchObject({ source: 'fallback', repaired: false })
         })
     })
@@ -307,11 +313,53 @@ describe('POST /api/screens/v2 (live wire)', () => {
         return { app: createApp({ runtime, onDuration: () => {} }), bodies }
     }
 
+    it.each([1, 2])(
+        'serves actions-capable Guides with waitCopy=%s without a provider call and preserves the strict document shape',
+        async (waitCopy) => {
+            const inputs = documentInputs('guide')
+            const step = inputs.session!.reviewedSteps[0]!
+            step.actions = [{ actionId: 'attach', instruction: 'Attach the panel.', sourceRefs: step.sourceRefs }]
+            inputs.session!.parts[0]!.name = { state: 'known', value: 'Screw', sourceRefs: step.sourceRefs }
+            inputs.session!.parts[0]!.dimensions = '4 × 16 mm'
+            inputs.session!.parts[0]!.inventoryQuantity = 99
+            step.parts[0]!.quantity = { state: 'known', value: 4, sourceRefs: step.sourceRefs }
+            inputs.session!.parts[1]!.dimensions = '6 × 90 mm'
+            const { app, bodies } = liveApp(() => ({}))
+            const response = await send(app, generate(inputs), {
+                query: `?waitCopy=${waitCopy}&stepFields=actions,sourceText`,
+            })
+            const result = screensV2ResultSchema.parse(await response.json())
+            if (result.status !== 'ok' || result.value.document === null) throw new Error('expected document')
+            const document = result.value.document
+            expect(bodies).toHaveLength(0)
+            expect(document.metadata).toMatchObject({ source: 'fallback', model: null, effort: null, repaired: false })
+            expect(
+                verifyDocumentAgainstInputsV2(document, inputs, sha256Hex, { legacyWaitCopy: waitCopy === 1 }),
+            ).toEqual([])
+            const directionFacts: string[] = []
+            visitVariantNodesV2(document, '', ({ node, path }) => {
+                if (node.type !== 'Section' || node.title?.kind !== 'literal' || node.title.text !== 'Directions')
+                    return
+                visitVariantNodesV2(
+                    { header: document.header, body: node, bar: document.bar, overlays: [] },
+                    path,
+                    ({ node: child }) => {
+                        if (child.type === 'Text' && child.content.kind === 'fact')
+                            directionFacts.push(child.content.factId)
+                    },
+                )
+            })
+            const directions = document.facts.filter((fact) => directionFacts.includes(fact.factId))
+            expect(directions.map((fact) => fact.text)).toEqual(['Attach the panel.'])
+            expect(JSON.stringify(directions)).not.toMatch(/6 × 90 mm|99/u)
+        },
+    )
+
     it('sends only documented parameters, a text-only prompt and a finite schema, and records what came back', async () => {
         const inputs = documentInputs('guide')
-        const wire = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs).material))
+        const wire = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs, true).material))
         const { app, bodies } = liveApp(() => wire)
-        const response = await send(app, generate(inputs))
+        const response = await send(app, generate(inputs), { query: '?guideRepair=1&waitCopy=2' })
         expect(response.status).toBe(200)
         const body = screensV2ResultSchema.parse(await response.json())
         if (body.status !== 'ok') throw new Error('expected ok')
@@ -355,14 +403,14 @@ describe('POST /api/screens/v2 (live wire)', () => {
 
     it('rejects an answer that omits the safety fact, repairs once with codes only, then publishes the complete fallback', async () => {
         const inputs = documentInputs('guide')
-        const context = buildDocumentContext(inputs)
+        const context = buildDocumentContext(inputs, true)
         const proposal = buildFallbackProposalV2(context.material)
         const omitting = encodeWireProposal({
             ...proposal,
             body: { type: 'Spacer', size: 'md' },
         })
         const { app, bodies } = liveApp(() => omitting)
-        const response = await send(app, generate(inputs))
+        const response = await send(app, generate(inputs), { query: '?guideRepair=1&waitCopy=2' })
         const body = screensV2ResultSchema.parse(await response.json())
         if (body.status !== 'ok') throw new Error('expected ok')
         const metadata = body.value.document!.metadata
@@ -398,13 +446,13 @@ describe('POST /api/screens/v2 (live wire)', () => {
         },
     )
 
-    it('isolates capable in-flight work and its cache from an installed client', async () => {
+    it('isolates deterministic Guides from an older client’s in-flight model work and cache', async () => {
         let release: (() => void) | undefined
         const held = new Promise<void>((resolve) => {
             release = resolve
         })
         const inputs = documentInputs('guide')
-        const complete = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs).material))
+        const complete = encodeWireProposal(buildFallbackProposalV2(buildDocumentContext(inputs, true).material))
         const { app, bodies } = liveApp(async (index) => {
             if (index === 0) {
                 await held
@@ -412,26 +460,31 @@ describe('POST /api/screens/v2 (live wire)', () => {
             }
             return {}
         })
-        const capable = send(app, generate(inputs, 'capable'))
+        const olderQuery = '?guideRepair=1&waitCopy=2'
+        const old = send(app, generate(inputs, 'old'), { query: olderQuery })
         await vi.waitFor(() => expect(bodies).toHaveLength(1))
-        const old = screensV2ResultSchema.parse(await (await send(app, generate(inputs, 'old'), { query: '' })).json())
-        if (old.status !== 'ok') throw new Error('expected ok')
-        expect(old.value.document!.metadata).toMatchObject({ source: 'fallback', repaired: false })
-        expect(bodies).toHaveLength(2)
+        const capable = screensV2ResultSchema.parse(await (await send(app, generate(inputs, 'capable'))).json())
+        if (capable.status !== 'ok') throw new Error('expected ok')
+        expect(capable.value.document!.metadata).toMatchObject({ source: 'fallback', repaired: false })
+        expect(bodies).toHaveLength(1)
         release!()
-        expect((await capable).status).toBe(200)
+        const completed = screensV2ResultSchema.parse(await (await old).json())
+        if (completed.status !== 'ok') throw new Error('expected ok')
+        expect(completed.value.document!.metadata.source).toBe('generated')
         const after = screensV2ResultSchema.parse(
-            await (await send(app, generate(inputs, 'old-again'), { query: '' })).json(),
+            await (await send(app, generate(inputs, 'old-again'), { query: olderQuery })).json(),
         )
         if (after.status !== 'ok') throw new Error('expected ok')
-        expect(after.value.document!.metadata).toMatchObject({ source: 'fallback', cacheHit: false, repaired: false })
-        expect(bodies).toHaveLength(3)
+        expect(after.value.document!.metadata).toMatchObject({ source: 'generated', cacheHit: true, repaired: false })
+        expect(bodies).toHaveLength(1)
     })
 
     it('reports an incomplete response honestly: no repair, no claim, the complete fallback', async () => {
         const inputs = documentInputs('guide')
         const { app, bodies } = liveApp(() => ({}), 'incomplete')
-        const body = screensV2ResultSchema.parse(await (await send(app, generate(inputs))).json())
+        const body = screensV2ResultSchema.parse(
+            await (await send(app, generate(inputs), { query: '?guideRepair=1&waitCopy=2' })).json(),
+        )
         if (body.status !== 'ok') throw new Error('expected ok')
         expect(body.value.document!.metadata).toMatchObject({ source: 'fallback', repaired: false })
         expect(bodies).toHaveLength(1)
@@ -483,7 +536,7 @@ describe('a verdict check that names a version 2 document', () => {
             const generated = screensV2ResultSchema.parse(await (await send(app, generate(inputs))).json())
             if (generated.status !== 'ok') throw new Error('expected ok')
             const document = generated.value.document!
-            expect(document.metadata.source).toBe('generated')
+            expect(document.metadata.source).toBe('fallback')
             const check = (screen: unknown): Promise<Response> => {
                 const body = new FormData()
                 body.set(
