@@ -40,6 +40,8 @@ import type { Digest, LibraryEntry, LibraryStorage } from './library'
 import { reviewedSession } from './reviewed-session'
 
 const QUESTION_CAPTURE_TIMEOUT_MS = 30_000
+// A check beyond this is slow, not failed: the wording changes while the same request keeps running.
+const SLOW_CHECK_NOTICE_MS = 10_000
 const LOCAL_LIBRARY_READ_FAILURE =
     'Local library images could not be read. Original data is retained. Retry reading the local library before making changes.'
 const LOCAL_LIBRARY_SAVE_FAILURE =
@@ -1096,6 +1098,12 @@ export class CaptureController {
                 }
                 guard.checkpoint()
                 const verdictStart = this.now()
+                // The timer lives only as long as this await: a verdict, failure, cancel or retake clears it first.
+                const slow = setTimeout((): void => {
+                    if (this.ownsCaptureOperation(token, operation, context.binding)) {
+                        this.publish({ pending: 'Still checking your photo…' })
+                    }
+                }, SLOW_CHECK_NOTICE_MS)
                 const result = await awaitStopped(
                     this.ports.client.check(
                         context.binding,
@@ -1111,7 +1119,7 @@ export class CaptureController {
                         },
                     ),
                     guard.signal,
-                )
+                ).finally((): void => clearTimeout(slow))
                 guard.checkpoint()
                 if (this.ownsCaptureOperation(token, operation, context.binding)) {
                     this.publish(

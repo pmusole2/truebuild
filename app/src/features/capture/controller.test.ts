@@ -1780,7 +1780,166 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         expect(controller.getSnapshot().answer?.answer).toBe('New answer')
     })
 
-    it('counts normalization inside the fifteen-second check budget and ignores its late completion', async () => {
+    it('shows plain still-checking copy after ten seconds and clears it when the check is cancelled', async () => {
+        let checkSignal: AbortSignal | undefined
+        const { controller } = setup(async (url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: unknown
+                pages?: { pageId: string }[]
+            }
+            if (url.endsWith('/checks')) {
+                checkSignal = init.signal ?? undefined
+                return new Promise<Response>(() => undefined)
+            }
+            return new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    value: parsed(meta.pages![0]!.pageId),
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            )
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        for (let tick = 0; tick < 50 && checkSignal === undefined; tick++) await vi.advanceTimersByTimeAsync(0)
+        expect(checkSignal).toBeDefined()
+        await vi.advanceTimersByTimeAsync(9_999)
+        expect(controller.getSnapshot().pending).toBe('Checking frozen photo…')
+        await vi.advanceTimersByTimeAsync(1)
+        expect(controller.getSnapshot().pending).toBe('Still checking your photo…')
+        controller.cancel()
+        await pending
+        expect(checkSignal?.aborted).toBe(true)
+        expect(controller.getSnapshot().pending).toBeNull()
+        await vi.advanceTimersByTimeAsync(MODEL_CHECK_TIMEOUT_MS)
+        expect(controller.getSnapshot().pending).toBeNull()
+        expect(controller.getSnapshot().check).toBeNull()
+    })
+
+    it('does not let a cancelled slow check overwrite the pending copy of a later check', async () => {
+        const checkSignals: AbortSignal[] = []
+        const { controller } = setup(async (url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: unknown
+                pages?: { pageId: string }[]
+            }
+            if (url.endsWith('/checks')) {
+                checkSignals.push(init.signal!)
+                return new Promise<Response>(() => undefined)
+            }
+            return new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    value: parsed(meta.pages![0]!.pageId),
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            )
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const first = controller.shutter(async () => photo)
+        for (let tick = 0; tick < 50 && checkSignals.length < 1; tick++) await vi.advanceTimersByTimeAsync(0)
+        await vi.advanceTimersByTimeAsync(5_000)
+        controller.cancel()
+        await first
+        controller.camera({ kind: 'check' })
+        const second = controller.shutter(async () => photo)
+        for (let tick = 0; tick < 50 && checkSignals.length < 2; tick++) await vi.advanceTimersByTimeAsync(0)
+        // The first check's ten-second notice falls inside this window; it must not rewrite the second check.
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(checkSignals[0]!.aborted).toBe(true)
+        expect(controller.getSnapshot().pending).toBe('Checking frozen photo…')
+        controller.cancel()
+        await second
+        expect(controller.getSnapshot().pending).toBeNull()
+    })
+
+    it('replaces slow-check copy with the verdict and never reverts pending after the verdict', async () => {
+        let finishCheck: ((response: Response) => void) | undefined
+        let checkMeta: { requestId: string; binding: unknown; sourcePageIds?: string[] } | undefined
+        const { controller } = setup(async (url, init): Promise<Response> => {
+            const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                requestId: string
+                binding: unknown
+                pages?: { pageId: string }[]
+                sourcePageIds?: string[]
+            }
+            if (url.endsWith('/checks')) {
+                checkMeta = meta
+                return new Promise<Response>((resolve) => {
+                    finishCheck = resolve
+                })
+            }
+            return new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: meta.requestId,
+                    binding: meta.binding,
+                    value: parsed(meta.pages![0]!.pageId),
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            )
+        })
+        controllers.push(controller)
+        await controller.restore()
+        await controller.createManual()
+        await controller.importPages(async () => [photo])
+        await controller.parse()
+        await controller.confirm()
+        vi.useFakeTimers()
+        controller.camera({ kind: 'check' })
+        const pending = controller.shutter(async () => photo)
+        for (let tick = 0; tick < 50 && checkMeta === undefined; tick++) await vi.advanceTimersByTimeAsync(0)
+        await vi.advanceTimersByTimeAsync(MODEL_CHECK_TIMEOUT_MS - 1_000)
+        expect(controller.getSnapshot().pending).toBe('Still checking your photo…')
+        finishCheck?.(
+            new Response(
+                JSON.stringify({
+                    status: 'ok',
+                    mode: 'model',
+                    requestId: checkMeta!.requestId,
+                    binding: checkMeta!.binding,
+                    value: {
+                        decision: 'refuse',
+                        reason: 'Panel faces outward.',
+                        sourceRefs: [{ pageId: checkMeta!.sourcePageIds![0]!, region: null }],
+                        observedRegion: null,
+                        missingEvidence: [],
+                    },
+                }),
+                { headers: { 'Content-Type': 'application/json' } },
+            ),
+        )
+        await pending
+        expect(controller.getSnapshot().check?.decision).toBe('refuse')
+        expect(controller.getSnapshot().pending).toBeNull()
+        await vi.advanceTimersByTimeAsync(MODEL_CHECK_TIMEOUT_MS)
+        expect(controller.getSnapshot().pending).toBeNull()
+    })
+
+    it('counts normalization inside the 45-second check budget and ignores its late completion', async () => {
         let count = 0
         let deliver: ((value: typeof image) => void) | undefined
         const { controller, calls } = setup(undefined, async (): Promise<typeof image> => {
@@ -1806,7 +1965,7 @@ describe('real manual workflow with provider-boundary fixture responses', () => 
         await Promise.resolve()
         expect(controller.getSnapshot().capture).toBeNull()
         expect(controller.getSnapshot().check).toBeNull()
-        expect(controller.getSnapshot().notice).toMatch(/15 seconds/)
+        expect(controller.getSnapshot().notice).toMatch(/45 seconds/)
         expect(calls.some((url) => url.endsWith('/api/checks'))).toBe(false)
     })
 

@@ -833,7 +833,7 @@ describe('inactive direct Meta transport', (): void => {
         try {
             await localServer(
                 (response): void => {
-                    monotonic += 12_001
+                    monotonic += 25_001
                     jsonResponder(responseBody(result))(response)
                 },
                 async (transport): Promise<void> => {
@@ -864,7 +864,7 @@ describe('inactive direct Meta transport', (): void => {
                     expect(cancelled).toBe(true)
                 },
                 (response): void => {
-                    monotonic += 12_001
+                    monotonic += 25_001
 
                     if (response.body) {
                         const original = response.body.cancel.bind(response.body)

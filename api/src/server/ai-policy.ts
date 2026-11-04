@@ -56,6 +56,11 @@ export interface AiPolicy {
     documentNormalization: boolean
 }
 
+/** Primary check budgets include one full retry only while it still fits the same route. */
+export const CHECK_ATTEMPT_TIMEOUT_MS = 25_000
+export const CHECK_OVERALL_TIMEOUT_MS = 40_000
+export const CHECK_RETURN_MARGIN_MS = 1_000
+
 /** Longest deadline `createDeadline` accepts. */
 export const MAX_DEADLINE_MS = MODEL_ROUTE_TIMEOUT_MAX_MS
 /** One geometry batch (Muse Wonder high, up to eight pieces) from background slot to response; the route allows queueing and crops on top. */
@@ -162,7 +167,7 @@ export function aiPolicyFromEnvironment(environment: Environment, defaults: Poli
         screens: { effort: 'low', maxOutputTokens: 32_000, deadlineMs: 30_000, model: defaults.verdictModel },
         // t5: Wonder medium guide first attempt 24.6 s, versus max 72.8 s; Guide shares both 45 s slices plus the margin.
         'step-pages': { effort: 'medium', maxOutputTokens: 48_000, deadlineMs: 45_000, model: wonder },
-        // t5: Spark low verdict 7.96 s; keep low and use the runtime's requested 12 s limit.
+        // Verdict effort stays low; runtime resolves the per-attempt check budget.
         verdict: {
             effort: 'low',
             maxOutputTokens: 2_500, // Live replay: 1,434 reasoning tokens exhausted 1,500 at 8.8 s; leave room for verdict JSON.

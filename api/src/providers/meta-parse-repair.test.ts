@@ -9,7 +9,7 @@ import { createMetaProvider, type MetaProviderOptions, type ParseManualInput } f
 import type { ProviderMetrics } from './meta-transport'
 import { observed } from '../test-support/telemetry'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
-import { PARSE_DEFAULT_OVERALL_MS } from '../server/parse-budget'
+import { PARSE_DEFAULT_OVERALL_MS, parseFirstAttemptTimeoutMs } from '../server/parse-budget'
 
 /** `model` is what the response reports; a real response echoes the model it was asked for. */
 function envelope(value: unknown, model = 'muse-spark-1.3'): Record<string, unknown> {
@@ -743,7 +743,7 @@ describe('bounded parse repair', () => {
         const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => {
             return timedMetaResponse(
                 envelope(fetchImpl.mock.calls.length === 1 ? missingConnection(clean) : clean),
-                scope === 'first attempt' ? 120_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
+                scope === 'first attempt' ? 200_001 : fetchImpl.mock.calls.length === 1 ? 40_000 : 35_000,
                 (ms): void => {
                     monotonic += ms
                 },
@@ -763,5 +763,87 @@ describe('bounded parse repair', () => {
         } finally {
             clock.mockRestore()
         }
+    })
+})
+
+describe('silent first-attempt timeout recovery', () => {
+    it.each([1, 4, 8])(
+        'spends the existing repair slot on one low-effort rerun for %i pages with identical parse context',
+        async (pages) => {
+            const { input, clean } = await fixture()
+            input.pages = Array.from({ length: pages }, (_, index) => ({
+                ...input.pages[0]!,
+                page: { ...input.pages[0]!.page, pageId: `demo-page-${index + 1}`, assetId: `parse-page-${index + 1}` },
+            }))
+            let now = 100
+            vi.spyOn(performance, 'now').mockImplementation(() => now)
+            const bodies: Record<string, unknown>[] = []
+            const metrics: ProviderMetrics[] = []
+            const repairInvoked = vi.fn()
+            const runParseRepair = async <T>(work: () => Promise<T>): Promise<T> => {
+                repairInvoked()
+                return work()
+            }
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+                bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+                return bodies.length === 1
+                    ? timedMetaResponse(envelope(clean), parseFirstAttemptTimeoutMs(pages) + 1, (ms) => {
+                          now += ms
+                      })
+                    : asRequestedMetaResponse(Response.json(envelope(missingConnection(clean))), init)
+            })
+            const value = await createMetaProvider({
+                apiKey: 'synthetic',
+                fetchImpl,
+                runParseRepair,
+                onMetrics: (metric) => metrics.push(metric),
+            }).parseManual(input, new AbortController().signal)
+            expect(value.steps[0]!.connection.state).toBe('unknown')
+            expect(fetchImpl).toHaveBeenCalledTimes(2)
+            expect(repairInvoked).toHaveBeenCalledTimes(1)
+            expect(bodies[1]).toEqual({ ...bodies[0], reasoning: { effort: 'low', summary: 'auto' } })
+            expect(metrics).toContainEqual(expect.objectContaining({ operation: 'parse', effort: 'low', attempt: 2 }))
+            expect(now).toBeLessThan(PARSE_DEFAULT_OVERALL_MS)
+        },
+    )
+
+    it('does not use the low-effort rerun after visible output', async () => {
+        const { input } = await fixture()
+        let now = 100
+        vi.spyOn(performance, 'now').mockImplementation(() => now)
+        const encoder = new TextEncoder()
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            let index = 0
+            return new Response(
+                new ReadableStream<Uint8Array>(
+                    {
+                        pull(controller): void {
+                            const events = [
+                                { type: 'response.created' },
+                                { type: 'response.output_text.delta', delta: '{' },
+                                { type: 'response.in_progress' },
+                            ]
+                            if (index === 2) now += 200_001
+                            controller.enqueue(encoder.encode('data: ' + JSON.stringify(events[index++]) + '\n\n'))
+                        },
+                    },
+                    { highWaterMark: 0 },
+                ),
+                { headers: { 'content-type': 'text/event-stream' } },
+            )
+        })
+        const repairInvoked = vi.fn()
+        const runParseRepair = async <T>(work: () => Promise<T>): Promise<T> => {
+            repairInvoked()
+            return work()
+        }
+        await expect(
+            createMetaProvider({ apiKey: 'synthetic', fetchImpl, runParseRepair }).parseManual(
+                input,
+                new AbortController().signal,
+            ),
+        ).rejects.toMatchObject({ code: 'timeout' })
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+        expect(repairInvoked).not.toHaveBeenCalled()
     })
 })

@@ -6,9 +6,12 @@ import { MAX_PARSE_PAGES } from '@truebuild/contracts/model'
  * route allows a small margin on top of it before it answers.
  */
 export const PARSE_DEFAULT_OVERALL_MS = 345_000 // Maximum first attempt plus one 40 s repair and response overhead.
-export const PARSE_FIRST_ATTEMPT_BASE_MS = 120_000 // Created within 15 s; reasoning silence is allowed, then visible-output idle is 30 s.
+export const PARSE_FIRST_ATTEMPT_BASE_MS = 200_000 // Allow long reasoning silence; creation remains 15 s and visible-output idle remains 30 s.
 export const PARSE_FIRST_ATTEMPT_PAGE_MS = 25_000
 export const PARSE_FIRST_ATTEMPT_MAX_MS = 300_000
+/** A silent first-attempt timeout may spend the same one-use repair slot on a lower-effort rerun. */
+export const PARSE_SILENT_RETRY_MS = 140_000
+export const PARSE_MIN_SILENT_RETRY_MS = 90_000
 export const PARSE_REPAIR_MS = 40_000
 export const PARSE_MIN_REPAIR_MS = 20_000 // User-selected repair floor after the user-paid 31–35 s parse baseline.
 export const PARSE_RETURN_MARGIN_MS = 1_000
@@ -16,13 +19,23 @@ export const PARSE_RETURN_MARGIN_MS = 1_000
 export const PARSE_ROUTE_MARGIN_MS = 5_000
 
 /** Explicit overall overrides remain hard ceilings; short overrides may admit repair only after an early reply. */
-export function parseFirstAttemptTimeoutMs(pageCount: number, overallMs = PARSE_DEFAULT_OVERALL_MS): number {
+export function parseFirstAttemptTimeoutMs(
+    pageCount: number,
+    overallMs = PARSE_DEFAULT_OVERALL_MS,
+    elapsedMs = 0,
+): number {
     const pageBudgetMs = Math.min(
         PARSE_FIRST_ATTEMPT_MAX_MS,
         PARSE_FIRST_ATTEMPT_BASE_MS +
             Math.max(0, Math.min(MAX_PARSE_PAGES, pageCount) - 3) * PARSE_FIRST_ATTEMPT_PAGE_MS,
     )
-    return Math.min(pageBudgetMs, Math.max(1_000, overallMs - PARSE_RETURN_MARGIN_MS))
+    // Full budgets reserve at least 90 s for a silent low-effort rerun, plus scheduling and final return margins.
+    // Explicit short overall overrides retain their hard ceiling rather than claiming that this recovery can fit.
+    const reserveMs =
+        overallMs >= PARSE_FIRST_ATTEMPT_BASE_MS + PARSE_MIN_SILENT_RETRY_MS + 2 * PARSE_RETURN_MARGIN_MS
+            ? PARSE_MIN_SILENT_RETRY_MS + PARSE_RETURN_MARGIN_MS
+            : 0
+    return Math.min(pageBudgetMs, Math.max(1_000, overallMs - elapsedMs - PARSE_RETURN_MARGIN_MS - reserveMs))
 }
 
 /** The layered parse budgets actually executed for a configured overall budget. */

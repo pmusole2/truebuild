@@ -11,6 +11,7 @@ import {
 } from '@truebuild/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { CHECK_OVERALL_TIMEOUT_MS } from '../../../api/src/server/ai-policy'
 import { createCallGuard } from './transport'
 import {
     MODEL_CHECK_TIMEOUT_MS,
@@ -410,7 +411,11 @@ describe('ModelApiClient multipart dispatch', () => {
         expect(call?.init.redirect).toBe('error')
     })
 
-    it('uses the 8s check deadline, not the 110s parse deadline', async () => {
+    it('outlasts the server overall check budget by at least a five-second return margin', () => {
+        expect(MODEL_CHECK_TIMEOUT_MS).toBeGreaterThanOrEqual(CHECK_OVERALL_TIMEOUT_MS + 5_000)
+    })
+
+    it('uses the check deadline, not the parse deadline', async () => {
         vi.useFakeTimers()
         try {
             const pending = new Promise<Response>(() => undefined)
@@ -427,7 +432,6 @@ describe('ModelApiClient multipart dispatch', () => {
 
             await vi.advanceTimersByTimeAsync(2)
             expect(await outcome).toMatchObject({ status: 'unavailable', code: 'timeout', retryable: true })
-            expect(MODEL_CHECK_TIMEOUT_MS).toBe(15_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBe(355_000)
             expect(MODEL_PARSE_TIMEOUT_MS).toBeGreaterThan(MODEL_CHECK_TIMEOUT_MS)
             // The streamed parse route allows 350s; the client outlasts it so the server reports its timeout.

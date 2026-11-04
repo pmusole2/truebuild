@@ -27,6 +27,7 @@ describe('the real v2 route document inputs', () => {
         ['Reading manual pages…', 'reading'],
         ['Freezing photo…', 'checking'],
         ['Checking frozen photo…', 'checking'],
+        ['Still checking your photo…', 'checking'],
         ['Taking a closer look…', 'second-opinion'],
         ['Asking about frozen photo…', 'asking'],
         ['Still thinking about your question…', 'question-waiting'],
