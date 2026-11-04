@@ -102,6 +102,10 @@ abuse.
 
 ## Setup
 
+The repository is private until around the hackathon deadline, when it goes public. Until then,
+cloning needs a GitHub account that has been given access, signed in to Git (for example with
+`gh auth login` or a personal access token).
+
 ```sh
 git clone https://github.com/pmusole2/truebuild.git
 cd truebuild
@@ -136,14 +140,19 @@ bundle, so it is a shared demo access key, not a Meta credential or user login.
 This runs the whole app against synthetic answers. No Meta key, no model calls, no cost. It does
 not show real model quality or native camera behaviour.
 
-Terminal 1, the fixture API (it never builds a live provider and only runs on port 3101):
+You need two terminals. Run both commands from the repository root (the `truebuild` folder you
+cloned); terminal 2 moves into `app/` itself.
+
+Terminal 1, the fixture API, from the repository root (it never builds a live provider and only
+runs on port 3101):
 
 ```sh
 PROVIDER_MODE=fixture PORT=3101 GENERATIVE_UI=steps \
   node --import tsx api/scripts/fixture-server.ts
 ```
 
-It prints `Fixture API:127.0.0.1:3101; synthetic inputs and documents; no inference`. Check it:
+It prints `Fixture API:127.0.0.1:3101; synthetic inputs and documents; no inference; provider metrics unknown`.
+Check it from another terminal:
 
 ```sh
 curl http://127.0.0.1:3101/health
@@ -152,7 +161,7 @@ curl -H 'x-truebuild-key: truebuild-fixture-demo' http://127.0.0.1:3101/api/sess
 # {"status":"ok",...,"providerMode":"fixture",...}
 ```
 
-Terminal 2, the web app:
+Terminal 2, the web app, starting from the repository root:
 
 ```sh
 cd app
@@ -165,9 +174,39 @@ EXPO_PUBLIC_AI_EFFORT_PROOF=1 \
 npm run web -- --localhost --port 8091
 ```
 
-Open http://localhost:8091. The home screen says "Your manuals" and "Add your first manual".
-Add any image as a manual page (for example one from [`samples/`](#sample-images)); the fixture
-API answers with a synthetic manual whatever the image shows.
+Wait for Expo to finish bundling, then open http://localhost:8091 (a narrow, phone-sized window
+works best). The walkthrough below is what the fixture flow shows on the web:
+
+1. **Home.** "Your manuals" and "Add your first manual". A first-run tip ("Add a manual") covers
+   the screen; press **Skip** (or **Next** to read the tips). More tips appear on later screens;
+   skip them the same way.
+2. Press **Add a manual**, then **Take photo**. In fixture mode the camera is a built-in synthetic
+   page, so no webcam is needed: "Photograph a page" shows a page headed "Demo data — simulated
+   results". Press **Take photo**.
+3. **Your pages** shows "1 manual page". Press **Read manual**.
+4. **Before you use AI.** Read the data notice and press **Agree and continue** (shown once).
+5. **Quick check** lists two steps, "Stand the side panel upright" and "Seat the divider in the
+   groove". Press **Looks right**.
+6. **Guide.** "Step 1 of 2 — Stand the side panel upright", with the manual picture, the
+   directions and the parts you need (Side panel).
+7. **Check your work.** Press **Take photo**, then **Take photo** again on the camera screen (also
+   synthetic). The result is "Looks right — Groove faces inward toward the divider.", with parts
+   outlined on the photo.
+8. **Ask a question.** Press **Ask about this step**, type a question and press **Ask**. An
+   "Answer" screen appears.
+
+**Use Take photo, not Choose photos, in fixture mode.** The fixture flags only accept the bundled
+synthetic pages. Choosing your own images, including the ones in [`samples/`](#sample-images),
+shows "We could not use that photo. Nothing was sent." and sends nothing. Leaving out
+`EXPO_PUBLIC_AI_EFFORT_PROOF=1` lets the app accept them, but the fixture API then rejects them
+when you press Read manual, because it only recognises its own synthetic pages. To click through
+with the sample images and no key, use the [test mock](#try-the-sample-images-with-no-key) below.
+
+In fixture mode the 3D views are not generated: opening a part tile shows "3D view unavailable",
+and the guide shows the manual picture instead of a 3D step motion. Use live mode (or the
+TestFlight build) to see them.
+
+To stop, press **Ctrl-C** in both terminals.
 
 `truebuild-fixture-demo` is a public test key for fixture mode only. Production builds reject
 fixture flags.
@@ -176,7 +215,41 @@ Other fixture scenarios, set with `TRUEBUILD_FIXTURE_SCENARIO` on the fixture AP
 (default), `all-pass`, `no-overlay`, `no-mask`, `parse-unavailable`, `check-unavailable`,
 `overlay-unavailable`.
 
+### Try the sample images with no key
+
+The Playwright suite's Meta-mode test mock accepts any image, including the files in
+[`samples/`](#sample-images). It makes no model calls and every answer is canned text starting
+"TEST MOCK ONLY", so it shows the flow, not what the images contain.
+
+Terminal 1, from the repository root:
+
+```sh
+MODEL_API_KEY='' PORT=3111 CORS_ORIGINS=http://localhost:8091 GENERATIVE_UI=steps \
+  node --import tsx api/scripts/mock-server.ts --test-only --scenario=correct
+```
+
+Terminal 2, starting from the repository root:
+
+```sh
+cd app
+EXPO_NO_DOTENV=1 \
+EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3111 \
+EXPO_PUBLIC_API_SECRET=truebuild-fixture-demo \
+EXPO_PUBLIC_PROVIDER_MODE=meta \
+EXPO_PUBLIC_DOCUMENT_FIXTURES=1 \
+EXPO_PUBLIC_GENERATIVE_UI=steps \
+npm run web -- --localhost --port 8091
+```
+
+Open http://localhost:8091, skip the tips, press **Add a manual**, then **Choose photos** and pick
+`samples/treadmill/manual-p3.jpg` to `manual-p6.jpg` together. "Your pages" shows "4 manual pages".
+From there the steps match the fixture walkthrough above (Read manual, Agree and continue, Looks
+right, the guide, Take photo for a check, Ask about this step); the check uses your browser camera
+on the web, so allow camera access. Press **Ctrl-C** in both terminals to stop.
+
 ## Run with a Meta API key
+
+Terminal 1, from the repository root:
 
 ```sh
 cp .env.example .env
@@ -185,19 +258,21 @@ npm run doctor      # optional: one GET to https://api.meta.ai/v1/models, no inf
 npm run start:api   # listens on PORT (3001 by default)
 ```
 
-Then start the app against it with the same shared secret:
+Terminal 2, starting from the repository root, runs the app against it with the same shared
+secret (put your own value in the quotes):
 
 ```sh
 cd app
 EXPO_NO_DOTENV=1 \
 EXPO_PUBLIC_API_BASE_URL=http://127.0.0.1:3001 \
-EXPO_PUBLIC_API_SECRET=<your API_SHARED_SECRET> \
+EXPO_PUBLIC_API_SECRET='your-api-shared-secret' \
 EXPO_PUBLIC_PROVIDER_MODE=meta \
 EXPO_PUBLIC_GENERATIVE_UI=steps \
 npm run web -- --localhost --port 8091
 ```
 
-Live mode sends your pages and photos to Meta and uses your key's quota. The per-day call limits
+Press **Ctrl-C** in both terminals to stop. Live mode sends your pages and photos to Meta and
+uses your key's quota. The per-day call limits
 in `.env.example` cap spend on a running server.
 
 ## Sample images
@@ -209,9 +284,13 @@ Small test images Prince used while building TrueBuild, committed so anyone can 
 | `samples/treadmill/manual-p3.jpg` … `manual-p6.jpg` | Photos of a folding walking-pad treadmill manual, pages 3-6. Steps are on pages 5-6: place flat, raise the handrail and fix it with two knobs, fit the phone support with two screws. |
 | `samples/drone/manual-p1.jpg` … `manual-p4.jpg` | Photos of a kids' 3-in-1 mini drone manual, pages 1-4 (fan blades and battery). Resized to 1600 px. |
 
-In fixture mode any image gets a synthetic answer. In live mode these give real model output.
+Fixture mode does not accept these images (see [fixture mode](#run-with-no-key-fixture-mode)). Use
+the [test mock](#try-the-sample-images-with-no-key) to click through with them and no key, or live
+mode for real model output.
 
 ## Checks and tests
+
+Run Checks and tests from the repository root.
 
 ```sh
 npm run typecheck
@@ -234,8 +313,8 @@ everything above, they make **live, billable** calls and need `MODEL_API_KEY`.
   "Can't tell".
 - **3D step motion is best effort.** Scenes that fail the server's quality checks fall back to the
   manual picture, and some steps may show no motion.
-- **Fixture mode is synthetic.** It shows the flow, not model quality, and it ignores what your
-  images show.
+- **Fixture mode is synthetic.** It shows the flow, not model quality. It only accepts its own
+  synthetic pages (use Take photo), and it shows no 3D pieces or 3D step motion.
 - **Web is for development.** The real camera flow is the iOS app (TestFlight). The web build is
   for trying the flow and for tests.
 - **Limits reset on restart.** Rate limits and counters live in server memory (UTC windows).
