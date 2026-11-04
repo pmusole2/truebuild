@@ -31,7 +31,7 @@ import {
 } from './model-multipart'
 import { validateAndNormalizeImages, type ObservationImage } from './media'
 import type { BackgroundWork } from './screens/service'
-import { stepMotionOverlapIssues } from './step-motion-geometry'
+import { stepMotionOverlapIssues, stepMotionRepairDegraded } from './step-motion-geometry'
 
 const EMPTY: StepMotionResult = { scene: null }
 /** Completed entries are bounded; at most two additional entries can be in flight. Restarts/replicas have separate caches. */
@@ -213,6 +213,43 @@ async function verifiedFigure(
 }
 
 type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index' | 'declined' | 'overlap'
+type MotionFailureReason =
+    | SceneRejection
+    | `repair_${SceneRejection}`
+    | 'provider_timeout'
+    | 'provider_failure'
+    | 'repair_timeout'
+    | 'repair_provider_failure'
+    | 'repair_budget'
+    | 'repair_quota'
+    | 'repair_degraded'
+
+class MotionGenerationFailure extends Error {
+    constructor(readonly reason: MotionFailureReason) {
+        super(reason)
+    }
+}
+
+/** A repair always gets its full window or is skipped. Elapsed time includes body, crop, queue and first generation. */
+export function stepMotionRepairBudgetMs(elapsedMs: number): number | null {
+    return Number.isFinite(elapsedMs) &&
+        elapsedMs >= 0 &&
+        elapsedMs + STEP_MOTION_POLICY.repairDeadlineMs <=
+            STEP_MOTION_POLICY.routeDeadlineMs - STEP_MOTION_POLICY.returnMarginMs
+        ? STEP_MOTION_POLICY.repairDeadlineMs
+        : null
+}
+
+function providerFailureReason(error: unknown, repair: boolean): MotionFailureReason {
+    if (repair && error instanceof MetaProviderError && error.detail === 'repair_budget') return 'repair_budget'
+    if (repair && error instanceof BudgetError) return 'repair_quota'
+    if (
+        (error instanceof RequestStoppedError && error.reason === 'timeout') ||
+        (error instanceof MetaProviderError && error.code === 'timeout')
+    )
+        return repair ? 'repair_timeout' : 'provider_timeout'
+    return repair ? 'repair_provider_failure' : 'provider_failure'
+}
 
 /** The short code a generated result is refused for, or null when usable. Only codes are logged, never model text. */
 function sceneRejection(
@@ -270,7 +307,8 @@ export function createStepMotionHandler(options: {
                 { status: 'unavailable', code: 'not_found', notDispatched: true },
                 { status: 404, headers: { 'cache-control': 'no-store' } },
             )
-        const deadline = createDeadline(105_000, request.signal)
+        const startedAt = performance.now()
+        const deadline = createDeadline(STEP_MOTION_POLICY.routeDeadlineMs, request.signal)
         let releaseImageWork: (() => void) | undefined
         try {
             options.auth.authenticate(request)
@@ -330,8 +368,13 @@ export function createStepMotionHandler(options: {
                         releaseWork = await options.work.acquire(deadline.signal)
                         deadline.checkpoint()
                         // Once admitted, work has its own finite lifetime. A disconnected reader cannot erase a paid result.
-                        generationDeadline = createDeadline(STEP_MOTION_POLICY.deadlineMs)
-                        const log = (generation: ScreenGeneration, rejection: SceneRejection | null): void => {
+                        const remaining =
+                            STEP_MOTION_POLICY.routeDeadlineMs -
+                            STEP_MOTION_POLICY.returnMarginMs -
+                            (performance.now() - startedAt)
+                        if (remaining <= 0) throw new RequestStoppedError('timeout')
+                        generationDeadline = createDeadline(remaining)
+                        const log = (generation: ScreenGeneration, rejection: MotionFailureReason | null): void => {
                             console.info(
                                 JSON.stringify({
                                     event: 'step_motion_generation',
@@ -347,7 +390,7 @@ export function createStepMotionHandler(options: {
                         }
                         return await options.work.run(
                             {
-                                deadlineMs: STEP_MOTION_POLICY.deadlineMs,
+                                deadlineMs: remaining,
                                 signal: generationDeadline.signal,
                                 beforeSend: () => {
                                     dailyCap.reserve()
@@ -359,11 +402,23 @@ export function createStepMotionHandler(options: {
                                 const generate = async (repair?: {
                                     repairIssues: string[]
                                     previousScene: NonNullable<StepMotionResult['scene']>
-                                }): Promise<ScreenGeneration> =>
-                                    options.provider!.generateStepMotion!(
-                                        { request: metadata, image: cropped, ...repair },
+                                }): Promise<ScreenGeneration> => {
+                                    const attempt = createDeadline(
+                                        repair ? STEP_MOTION_POLICY.repairDeadlineMs : STEP_MOTION_POLICY.deadlineMs,
                                         generationDeadline!.signal,
                                     )
+                                    try {
+                                        return await withinModelDeadline(
+                                            options.provider!.generateStepMotion!(
+                                                { request: metadata, image: cropped, ...repair },
+                                                attempt.signal,
+                                            ),
+                                            attempt,
+                                        )
+                                    } finally {
+                                        attempt.dispose()
+                                    }
+                                }
                                 const parse = (
                                     generation: ScreenGeneration,
                                 ): ReturnType<typeof stepMotionResultSchema.safeParse> =>
@@ -375,7 +430,8 @@ export function createStepMotionHandler(options: {
                                 const rejection = sceneRejection(parsed, first.telemetry, metadata)
                                 if (rejection !== null || !parsed.success || parsed.data.scene === null) {
                                     log(first, rejection)
-                                    return EMPTY
+                                    if (rejection === 'declined') return EMPTY
+                                    throw new MotionGenerationFailure(rejection ?? 'schema')
                                 }
                                 const repairIssues = stepMotionOverlapIssues(parsed.data.scene)
                                 if (repairIssues.length === 0) {
@@ -383,51 +439,66 @@ export function createStepMotionHandler(options: {
                                     return parsed.data
                                 }
                                 log(first, 'overlap')
-                                try {
-                                    // The existing one-shot runner shares deadline, public count and dispatch-day cap.
-                                    const repaired = await options.work.repair(() =>
-                                        generate({ repairIssues, previousScene: parsed.data.scene! }),
-                                    )
-                                    const result = parse(repaired)
-                                    const refused = sceneRejection(result, repaired.telemetry, metadata)
-                                    const overlap =
-                                        result.success &&
-                                        result.data.scene !== null &&
-                                        stepMotionOverlapIssues(result.data.scene).length > 0
-                                    const reason = refused ?? (overlap ? 'overlap' : null)
-                                    log(repaired, reason)
-                                    return reason === null && result.success ? result.data : EMPTY
-                                } catch (error: unknown) {
-                                    // A blocked/failed repair stays terminal, and never falls back to the overlapping scene.
+                                if (stepMotionRepairBudgetMs(performance.now() - startedAt) === null) {
                                     console.info(
                                         JSON.stringify({
                                             event: 'step_motion_generation',
                                             promptVersion: STEP_MOTION_PROMPT_VERSION,
                                             accepted: false,
-                                            reason: 'overlap',
-                                            ...(error instanceof MetaProviderError && error.detail === 'repair_budget'
-                                                ? { repairReason: 'repair_budget' }
-                                                : {}),
+                                            reason: 'repair_budget',
                                         }),
                                     )
-                                    return EMPTY
+                                    throw new MotionGenerationFailure('repair_budget')
                                 }
+                                let repaired: ScreenGeneration
+                                try {
+                                    // The one-shot runner keeps public/day caps; this attempt gets its own full deadline.
+                                    repaired = await options.work.repair(() =>
+                                        generate({ repairIssues, previousScene: parsed.data.scene! }),
+                                    )
+                                } catch (error: unknown) {
+                                    const reason = providerFailureReason(error, true)
+                                    console.info(
+                                        JSON.stringify({
+                                            event: 'step_motion_generation',
+                                            promptVersion: STEP_MOTION_PROMPT_VERSION,
+                                            accepted: false,
+                                            reason,
+                                        }),
+                                    )
+                                    throw new MotionGenerationFailure(reason)
+                                }
+                                const result = parse(repaired)
+                                const refused = sceneRejection(result, repaired.telemetry, metadata)
+                                const valid = result.success && result.data.scene !== null ? result.data.scene : null
+                                const reason: MotionFailureReason | null = refused
+                                    ? `repair_${refused}`
+                                    : valid && stepMotionRepairDegraded(parsed.data.scene, valid)
+                                      ? 'repair_degraded'
+                                      : valid && stepMotionOverlapIssues(valid).length > 0
+                                        ? 'overlap'
+                                        : null
+                                log(repaired, reason)
+                                if (reason !== null || !result.success)
+                                    throw new MotionGenerationFailure(reason ?? 'repair_schema')
+                                return result.data
                             },
                         )
                     } catch (error) {
+                        if (error instanceof MotionGenerationFailure) throw error
                         if (!dispatched) {
                             throw new BeforeMotionDispatch(error)
                         }
-                        // Provider failure or its own deadline is terminal; reader cancellation never enters this branch.
+                        const reason = providerFailureReason(error, false)
                         console.info(
                             JSON.stringify({
                                 event: 'step_motion_generation',
                                 promptVersion: STEP_MOTION_PROMPT_VERSION,
                                 accepted: false,
-                                reason: 'provider_failure',
+                                reason,
                             }),
                         )
-                        return EMPTY
+                        throw new MotionGenerationFailure(reason)
                     } finally {
                         generationDeadline?.dispose()
                         releaseWork?.()
@@ -474,9 +545,13 @@ export function createStepMotionHandler(options: {
                       ? 'invalid_input'
                       : failure instanceof BudgetError
                         ? 'budget_exhausted'
-                        : failure instanceof RequestStoppedError
-                          ? failure.reason
-                          : 'provider_error'
+                        : failure instanceof MotionGenerationFailure
+                          ? failure.reason.endsWith('_timeout')
+                              ? 'timeout'
+                              : 'provider_error'
+                          : failure instanceof RequestStoppedError
+                            ? failure.reason
+                            : 'provider_error'
             return Response.json(
                 { status: 'unavailable', code, ...(notDispatched ? { notDispatched: true } : {}) },
                 { status },

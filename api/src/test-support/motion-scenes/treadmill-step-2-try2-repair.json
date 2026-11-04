@@ -1,0 +1,291 @@
+{
+  "scene": {
+    "caption": "Lift the handrail upright and secure it to the bottom frame with two knobs.",
+    "movers": [
+      {
+        "actionIndex": 0,
+        "label": "Handrail",
+        "motion": {
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "fromDeg": -90,
+          "kind": "rotate",
+          "pivot": [
+            0,
+            8,
+            28
+          ],
+          "toDeg": 0
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "height": 52,
+              "radius": 1.6
+            },
+            "position": [
+              -17,
+              34,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "cylinder"
+          },
+          {
+            "dimensions": {
+              "height": 52,
+              "radius": 1.6
+            },
+            "position": [
+              17,
+              34,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "cylinder"
+          },
+          {
+            "dimensions": {
+              "height": 34,
+              "radius": 1.6
+            },
+            "position": [
+              0,
+              60,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              1.5707963267948966
+            ],
+            "type": "cylinder"
+          }
+        ]
+      },
+      {
+        "actionIndex": 1,
+        "label": "Left knob",
+        "motion": {
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "screw",
+          "travel": 7,
+          "turns": 2
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "height": 3,
+              "radius": 1
+            },
+            "position": [
+              -20.5,
+              5,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              1.5707963267948966
+            ],
+            "type": "cylinder"
+          },
+          {
+            "dimensions": {
+              "height": 3,
+              "radius": 2.8
+            },
+            "position": [
+              -23.5,
+              5,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              1.5707963267948966
+            ],
+            "type": "cylinder"
+          }
+        ]
+      },
+      {
+        "actionIndex": 1,
+        "label": "Right knob",
+        "motion": {
+          "axis": [
+            -1,
+            0,
+            0
+          ],
+          "kind": "screw",
+          "travel": 7,
+          "turns": 2
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "height": 3,
+              "radius": 1
+            },
+            "position": [
+              20.5,
+              5,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              1.5707963267948966
+            ],
+            "type": "cylinder"
+          },
+          {
+            "dimensions": {
+              "height": 3,
+              "radius": 2.8
+            },
+            "position": [
+              23.5,
+              5,
+              28
+            ],
+            "rotation": [
+              0,
+              0,
+              1.5707963267948966
+            ],
+            "type": "cylinder"
+          }
+        ]
+      }
+    ],
+    "stepId": "step-2",
+    "still": [
+      {
+        "dimensions": {
+          "depth": 72,
+          "height": 4,
+          "width": 38
+        },
+        "position": [
+          0,
+          2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      },
+      {
+        "dimensions": {
+          "depth": 52,
+          "height": 0.8,
+          "width": 26
+        },
+        "position": [
+          0,
+          4.4,
+          -4
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      },
+      {
+        "dimensions": {
+          "depth": 10,
+          "height": 5,
+          "width": 30
+        },
+        "position": [
+          0,
+          3.5,
+          30
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      },
+      {
+        "dimensions": {
+          "depth": 4,
+          "height": 4,
+          "width": 36
+        },
+        "position": [
+          0,
+          3,
+          -34
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      },
+      {
+        "dimensions": {
+          "depth": 6,
+          "height": 8,
+          "width": 4
+        },
+        "position": [
+          -17,
+          4,
+          28
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      },
+      {
+        "dimensions": {
+          "depth": 6,
+          "height": 8,
+          "width": 4
+        },
+        "position": [
+          17,
+          4,
+          28
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "box"
+      }
+    ],
+    "version": 1
+  }
+}

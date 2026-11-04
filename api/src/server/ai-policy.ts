@@ -70,6 +70,10 @@ export const STEP_MOTION_POLICY = {
     model: 'muse-wonder-1.0',
     effort: 'high',
     deadlineMs: 90_000,
+    // Shipped motion clients stop at 120 s. Preserve the 105 s route and reserve 1 s to return its result.
+    routeDeadlineMs: 105_000,
+    returnMarginMs: 1_000,
+    repairDeadlineMs: 45_000,
     maxOutputTokens: 14_000,
     maxContextBytes: 8_192,
     maxTextBytes: 32_768,

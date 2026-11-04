@@ -4,7 +4,7 @@ import { pieceDrawingBoxSchema } from './piece-generation'
 import { extrudeBevelLimit, PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
 
-export const STEP_MOTION_PROMPT_VERSION = 4
+export const STEP_MOTION_PROMPT_VERSION = 5
 /** Ten percent on each side, clamped to the cited page, keeps nearby movement marks in the crop. */
 export function paddedStepFigureBox(box: readonly [number, number, number, number]): [number, number, number, number] {
     const [x, y, width, height] = box
