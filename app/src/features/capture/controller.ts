@@ -5,6 +5,7 @@ import {
     checkResultSchema,
     isQuantityNotStated,
     LIMITS,
+    manualOpeningTitleV2,
     manualSessionSchema,
     matchesBinding,
     parsedManualSchema,
@@ -767,6 +768,11 @@ export class CaptureController {
                 stepIndex: 0,
                 session: {
                     ...entry.session,
+                    // A manual the person has not named takes the product name the read found.
+                    title:
+                        manualOpeningTitleV2(entry.session) === null && parsed.productName
+                            ? parsed.productName
+                            : entry.session.title,
                     revision,
                     updatedAt: new Date(this.now()).toISOString(),
                     parts: working.parts,
