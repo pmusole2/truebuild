@@ -177,14 +177,148 @@ it('keeps a real washer around a shaft clear, and does not exempt a washer whose
     expect(stepMotionOverlapIssues(slidOn(washer(1.2)))).toEqual(['movers.0.shapes.0:deep_static_overlap:still.0'])
 })
 
-it('pins the phase4 treadmill and drone scenes: seated knobs pass, handrail sockets and ring repairs are judged', () => {
+it('pins the phase4 treadmill and drone scenes: seated knobs and handrail sockets pass, ring repairs are judged', () => {
     expect(stepMotionOverlapIssues(loadScene('drone-install-first'))).toEqual([])
     expect(stepMotionOverlapIssues(loadScene('drone-install-repair'))).toEqual([])
     expect(stepMotionOverlapIssues(loadScene('treadmill-step-2-try2-repair'))).toEqual([])
-    expect(stepMotionOverlapIssues(loadScene('treadmill-step-2-try2-first'))).toEqual([
-        'movers.0.shapes.0:deep_static_overlap:still.4',
-        'movers.0.shapes.1:deep_static_overlap:still.5',
+    expect(stepMotionOverlapIssues(loadScene('treadmill-step-2-try2-first'))).toEqual([])
+})
+
+// Scene-only copies of phase5/raw/raw-model response output_text; the raw call IDs retain their provenance.
+it.each([
+    ['phase5-treadmill-s2-a1-first', '1793778491684-0002'],
+    ['phase5-treadmill-s2-a1-repair', '1793778522578-0003'],
+    ['phase5-treadmill-s2-a2-first', '1793778602054-0002'],
+    ['phase5-treadmill-s2-a2-repair', '1793778633360-0004'],
+    ['phase5-treadmill-s2-a3-first', '1793778908427-0002'],
+    ['phase5-treadmill-s3-a1-first', '1793778491669-0001'],
+    ['phase5-treadmill-s3-a2-first', '1793778602047-0001'],
+    ['phase5-noble-s1-a2-repair', '1793778845977-0013'],
+])('accepts seated phase5 geometry in %s (raw %s)', (name) => {
+    expect(stepMotionOverlapIssues(loadScene(name))).toEqual([])
+})
+
+it.each([
+    [
+        'phase5-treadmill-s2-a3-repair',
+        ['movers.1.shapes.1:deep_static_overlap:still.2', 'movers.2.shapes.1:deep_static_overlap:still.1'],
+    ],
+    [
+        'phase5-treadmill-s2-a4-first',
+        [
+            'movers.1.shapes.0:deep_static_overlap:still.2',
+            'movers.1.shapes.1:deep_static_overlap:still.2',
+            'movers.2.shapes.0:deep_static_overlap:still.2',
+            'movers.2.shapes.1:deep_static_overlap:still.2',
+        ],
+    ],
+] as const)('clears the pivot rods in %s but still rejects its partly buried knob heads', (name, issues) => {
+    expect(stepMotionOverlapIssues(loadScene(name))).toEqual(issues)
+})
+
+it('still rejects the complete phase5 noble first answer at its seat, independently of its static bolts', () => {
+    expect(stepMotionOverlapIssues(loadScene('phase5-noble-s1-a2-first'))).toEqual([
+        'movers.0.shapes.0:deep_static_overlap:still.0',
     ])
+})
+
+it.each([false, true])('limits pivot seating to a rod end and a small socket (diagonal: %s)', (diagonal) => {
+    const angle = diagonal ? Math.PI / 4 : 0
+    const rod = cylinder({ radius: 1, height: 40 }, [-20 * Math.sin(angle), 20 * Math.cos(angle), 0], [0, 0, angle])
+    const socket = {
+        ...box(),
+        dimensions: { width: 4, height: 4, depth: 4 },
+        rotation: [0, 0, angle] as [number, number, number],
+    }
+    const hinged = withMotion(scene([socket], [rod]), {
+        kind: 'rotate',
+        pivot: [0, 0, 0],
+        axis: [Math.cos(angle), Math.sin(angle), 0],
+        fromDeg: -90,
+        toDeg: 0,
+    })
+    expect(stepMotionOverlapIssues(hinged)).toEqual([])
+    const issue = ['movers.0.shapes.0:deep_static_overlap:still.0']
+    const middle = { ...socket, position: rod.position }
+    expect(stepMotionOverlapIssues({ ...hinged, still: [middle] })).toEqual(issue)
+    const buried = { ...socket, dimensions: { width: 100, height: 100, depth: 100 } }
+    expect(stepMotionOverlapIssues({ ...hinged, still: [buried] })).toEqual(issue)
+    const remotePivot = withMotion(hinged, {
+        kind: 'rotate',
+        pivot: [0, 12, 0],
+        axis: [1, 0, 0],
+        fromDeg: -90,
+        toDeg: 0,
+    })
+    expect(stepMotionOverlapIssues(remotePivot)).toEqual(issue)
+})
+
+it('uses an aligned compound shaft and exterior head, including a head wider than its length', () => {
+    const shaft = cylinder({ radius: 1, height: 6 }, [0, 2, 0])
+    const head = cylinder({ radius: 4, height: 2 }, [0, 6, 0])
+    const screwed = (shapes: StepMotionScene['still']): StepMotionScene =>
+        withMotion(scene([block()], shapes), { kind: 'screw', axis: [0, -1, 0], travel: 6, turns: 1 })
+    expect(stepMotionOverlapIssues(screwed([shaft, head]))).toEqual([])
+    expect(stepMotionOverlapIssues(screwed([shaft]))).toHaveLength(1)
+    expect(stepMotionOverlapIssues(screwed([{ ...shaft, rotation: [0, 0, Math.PI / 2] }, head]))).toHaveLength(1)
+    expect(
+        stepMotionOverlapIssues(
+            screwed([cylinder({ radius: 0.4, height: 2 }, [0, 4, 0]), cylinder({ radius: 4, height: 4 }, [0, 7, 0])]),
+        ),
+    ).toEqual([])
+    // The head centre is exterior, but its lower face is buried: neither it nor its buried shaft qualifies.
+    expect(
+        stepMotionOverlapIssues(
+            screwed([
+                { ...shaft, position: [0, 1.75, 0] },
+                { ...head, position: [0, 5.75, 0] },
+            ]),
+        ),
+    ).toHaveLength(2)
+    expect(
+        stepMotionOverlapIssues(
+            screwed([cylinder({ radius: 1, height: 6 }, [0, 0, 0]), { ...head, position: [0, 4, 0] }]),
+        ),
+    ).toHaveLength(2)
+})
+
+it.each([
+    { ...block(), dimensions: { width: 100, height: 100, depth: 100 } },
+    cylinder({ radius: 10, height: 100 }, [0, 0, 0]),
+])('rejects an 80-long narrow screw wholly buried inside a $type', (receiving) => {
+    expect(
+        stepMotionOverlapIssues(
+            withMotion(scene([receiving], [cylinder({ radius: 1, height: 80 }, [0, 0, 0])]), {
+                kind: 'screw',
+                axis: [0, 1, 0],
+                travel: 6,
+                turns: 1,
+            }),
+        ),
+    ).toHaveLength(1)
+})
+
+it('does not treat a roundoff-sized exposed tip as seating for a long headless pin', () => {
+    const receiving = { ...block(), dimensions: { width: 100, height: 100, depth: 100 } }
+    const pin = cylinder({ radius: 1, height: 80 }, [0, 10.002, 0])
+    const screwed = withMotion(scene([receiving], [pin]), {
+        kind: 'screw',
+        axis: [0, 1, 0],
+        travel: 6,
+        turns: 1,
+    })
+    expect(stepMotionOverlapIssues(screwed)).toEqual(['movers.0.shapes.0:deep_static_overlap:still.0'])
+})
+
+it('recognizes static bolt shafts through a moving part only with aligned motion and an exterior head', () => {
+    const shaft = cylinder({ radius: 1, height: 14 }, [0, 0, 0])
+    const head = cylinder({ radius: 3, height: 2 }, [0, 8, 0])
+    const slipped = withMotion(scene([shaft, head], [block()]), { kind: 'translate', from: [0, 20, 0], to: [0, 0, 0] })
+    expect(stepMotionOverlapIssues(slipped)).toEqual([])
+    expect(stepMotionOverlapIssues({ ...slipped, still: [shaft] })).toHaveLength(1)
+    expect(
+        stepMotionOverlapIssues(withMotion(slipped, { kind: 'translate', from: [20, 0, 0], to: [0, 0, 0] })),
+    ).toHaveLength(1)
 })
 
 it('detects a repair that replaces solid parts with tiny rings, but not one that only repositions or resizes', () => {

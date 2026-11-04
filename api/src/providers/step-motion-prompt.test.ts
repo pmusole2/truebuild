@@ -14,6 +14,7 @@ it('keeps motion instructions generic, manual-first, finished-pose and fail-clos
     expect(STEP_MOTION_INSTRUCTIONS).toContain('radians in intrinsic XYZ order')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('previousScene')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Fasteners and knobs finish seated')
+    expect(STEP_MOTION_INSTRUCTIONS).toContain('A part that swings into place ends with its end seated in its bracket.')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Do not pull a seated fastener out to avoid overlap')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Preserve the original parts and their scale')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Return {scene:null}')

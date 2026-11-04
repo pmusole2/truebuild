@@ -74,7 +74,7 @@ export const STEP_MOTION_POLICY = {
     routeDeadlineMs: 105_000,
     returnMarginMs: 1_000,
     repairDeadlineMs: 45_000,
-    maxOutputTokens: 14_000,
+    maxOutputTokens: 8_000,
     maxContextBytes: 8_192,
     maxTextBytes: 32_768,
     /** Server-validated previous geometry on the single repair has a separate bounded allowance. */
