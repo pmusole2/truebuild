@@ -154,10 +154,56 @@ function contains(shape: Shape, matrix: Matrix, point: Point, margin: number): b
     }
 }
 
+type Motion = StepMotionScene['movers'][number]['motion']
+
+const ALIGNMENT_COS = Math.cos(Math.PI / 36)
+/** Bounded interior samples; denser than the original grid, but still not exact mesh collision detection. */
+const PROBES = [1, 2, 3, 4, 5, 6, 7].map((step) => step / 8)
+
+function unit(vector: Point): Point {
+    const length = Math.hypot(...vector)
+    return vector.map((value) => value / length) as Point
+}
+
+function parallel(a: Point, b: Point): boolean {
+    const [u, v] = [unit(a), unit(b)]
+    return Math.abs(u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) >= ALIGNMENT_COS
+}
+
+/** A cylinder's own axis in world space: its local Y after the mesh rotation. */
+function ownAxis(shape: Shape): Point {
+    const matrix = rotation(shape.rotation)
+    return [matrix[0][1]!, matrix[1][1]!, matrix[2][1]!]
+}
+
+/**
+ * Narrow axial seating only. A cylinder whose own axis matches its screw or insertion axis within five degrees may sit inside solid
+ * material: a screw or knob with diameter no larger than its length, or a hub sliding along its axis onto a coaxial
+ * shaft at most half its radius. Overlap along that axis cannot exceed the cylinder's own length, and tori, boxes,
+ * extrudes and wide screws never qualify, so no ring or hole geometry is needed to pass.
+ */
+function seatedAlongOwnAxis(shape: Shape, motion: Motion, fixed: Shape): boolean {
+    if (shape.type !== 'cylinder') return false
+    const axis = ownAxis(shape)
+    const { radius, height } = shape.dimensions
+    if (motion.kind === 'screw') return parallel(motion.axis, axis) && 2 * radius <= height
+    if (motion.kind !== 'translate' || fixed.type !== 'cylinder') return false
+    const travel = motion.to.map((value, index) => value - motion.from[index]!) as Point
+    if (!parallel(travel, axis) || !parallel(ownAxis(fixed), axis)) return false
+    if (fixed.dimensions.radius > radius / 2) return false
+    const offset = shape.position.map((value, index) => value - fixed.position[index]!) as Point
+    const along = unit(axis)
+    const dot = offset[0] * along[0] + offset[1] * along[1] + offset[2] * along[2]
+    const sideways = offset.map((value, index) => value - dot * along[index]!)
+    return Math.hypot(...sideways) <= Math.max(PIECE_SPEC_LIMITS.minDimension, radius * 0.05)
+}
+
 /**
  * Conservative cheap rejection, not mesh collision proof: deep AABB penetration must also contain a common strict
- * solid-interior sample. The bounded 27 samples avoid rejecting empty torus holes and concave-outline gaps. Contact,
- * bevel-only intersection, moving/moving and static/static pairs are intentionally outside this rejection.
+ * solid-interior sample. Sampling tests the actual torus solid rather than treating its hole as filled. Narrow axial
+ * screw or insertion seating is exempt (see
+ * seatedAlongOwnAxis). Contact, bevel-only intersection, moving/moving and static/static pairs are intentionally outside
+ * this rejection.
  */
 export function stepMotionOverlapIssues(scene: StepMotionScene): string[] {
     const still = scene.still.map((shape) => ({
@@ -183,11 +229,12 @@ export function stepMotionOverlapIssues(scene: StepMotionScene): string[] {
                     )
                 )
                     continue
+                if (seatedAlongOwnAxis(shape, mover.motion, fixed.shape)) continue
                 const margin = Math.max(PIECE_SPEC_LIMITS.minDimension, Math.min(...smallSpans) * 0.025)
                 let overlap = false
-                for (const tx of [0.25, 0.5, 0.75])
-                    for (const ty of [0.25, 0.5, 0.75])
-                        for (const tz of [0.25, 0.5, 0.75]) {
+                for (const tx of PROBES)
+                    for (const ty of PROBES)
+                        for (const tz of PROBES) {
                             const point = [tx, ty, tz].map(
                                 (t, axis) => min[axis]! + t * (max[axis]! - min[axis]!),
                             ) as Point
@@ -205,4 +252,48 @@ export function stepMotionOverlapIssues(scene: StepMotionScene): string[] {
         }),
     )
     return issues
+}
+
+/** Repairs that shrink the whole bounding volume below this share of the first answer are degraded. */
+const COLLAPSE_RATIO = 0.25
+/** A solid primitive replaced by a torus must keep at least this share of its bounding volume. */
+const RING_REPLACEMENT_RATIO = 0.2
+
+function boundingVolume(shape: Shape): number {
+    const { min, max } = localBounds(shape)
+    return (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2])
+}
+
+function primitiveSlots(scene: StepMotionScene): Map<string, Shape> {
+    const slots = new Map<string, Shape>()
+    scene.still.forEach((shape, index) => slots.set(`still.${index}`, shape))
+    scene.movers.forEach((mover, moverIndex) =>
+        mover.shapes.forEach((shape, shapeIndex) => slots.set(`movers.${moverIndex}.shapes.${shapeIndex}`, shape)),
+    )
+    return slots
+}
+
+/**
+ * Route guard for a repair that is compared with the first answer that it replaces. Degraded means the bounding volume
+ * collapses overall, or a solid primitive in the same slot becomes a torus with far less bounding volume: a hoop standing
+ * in for a post removes the overlap without fixing the assembly. Ordinary repairs keep sizes and only move or rotate parts.
+ */
+export function stepMotionRepairDegraded(before: StepMotionScene, after: StepMotionScene): boolean {
+    const earlier = primitiveSlots(before),
+        later = primitiveSlots(after)
+    const total = (slots: Map<string, Shape>): number =>
+        [...slots.values()].reduce((sum, shape) => sum + boundingVolume(shape), 0)
+    const beforeTotal = total(earlier)
+    if (beforeTotal > 0 && total(later) < beforeTotal * COLLAPSE_RATIO) return true
+    for (const [index, mover] of before.movers.entries()) {
+        const previous = mover.shapes.reduce((sum, shape) => sum + boundingVolume(shape), 0)
+        const next = after.movers[index]?.shapes.reduce((sum, shape) => sum + boundingVolume(shape), 0) ?? 0
+        if (next < previous * COLLAPSE_RATIO) return true
+    }
+    for (const [slot, prior] of earlier) {
+        const next = later.get(slot)
+        if (!next || prior.type === 'torus' || next.type !== 'torus') continue
+        if (boundingVolume(next) < boundingVolume(prior) * RING_REPLACEMENT_RATIO) return true
+    }
+    return false
 }

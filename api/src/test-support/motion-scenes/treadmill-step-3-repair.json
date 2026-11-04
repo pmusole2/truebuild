@@ -1,0 +1,283 @@
+{
+  "scene": {
+    "caption": "Place the phone support on the middle of the armrest pipe and tighten the two M4x15 screws.",
+    "movers": [
+      {
+        "actionIndex": 0,
+        "label": "Phone support",
+        "motion": {
+          "from": [
+            0,
+            7,
+            0
+          ],
+          "kind": "translate",
+          "to": [
+            0,
+            0,
+            0
+          ]
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "radius": 0.35,
+              "tube": 0.1
+            },
+            "position": [
+              0,
+              35.4,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          },
+          {
+            "dimensions": {
+              "radius": 0.35,
+              "tube": 0.1
+            },
+            "position": [
+              -2.9,
+              37,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          },
+          {
+            "dimensions": {
+              "radius": 0.35,
+              "tube": 0.1
+            },
+            "position": [
+              2.9,
+              37,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          }
+        ]
+      },
+      {
+        "actionIndex": 1,
+        "label": "M4x15 screw",
+        "motion": {
+          "axis": [
+            0,
+            -1,
+            0
+          ],
+          "kind": "screw",
+          "travel": 6,
+          "turns": 2
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "radius": 0.35,
+              "tube": 0.1
+            },
+            "position": [
+              -1.5,
+              35.4,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          },
+          {
+            "dimensions": {
+              "radius": 0.7,
+              "tube": 0.1
+            },
+            "position": [
+              -1.5,
+              36.3,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          }
+        ]
+      },
+      {
+        "actionIndex": 1,
+        "label": "M4x15 screw",
+        "motion": {
+          "axis": [
+            0,
+            -1,
+            0
+          ],
+          "kind": "screw",
+          "travel": 6,
+          "turns": 2
+        },
+        "shapes": [
+          {
+            "dimensions": {
+              "radius": 0.35,
+              "tube": 0.1
+            },
+            "position": [
+              1.5,
+              35.4,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          },
+          {
+            "dimensions": {
+              "radius": 0.7,
+              "tube": 0.1
+            },
+            "position": [
+              1.5,
+              36.3,
+              -16
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "type": "torus"
+          }
+        ]
+      }
+    ],
+    "stepId": "step-3",
+    "still": [
+      {
+        "dimensions": {
+          "radius": 0.35,
+          "tube": 0.1
+        },
+        "position": [
+          0,
+          1,
+          2
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "torus"
+      },
+      {
+        "dimensions": {
+          "radius": 0.35,
+          "tube": 0.1
+        },
+        "position": [
+          0,
+          2.25,
+          3
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "torus"
+      },
+      {
+        "dimensions": {
+          "radius": 0.9,
+          "tube": 0.1
+        },
+        "position": [
+          -8,
+          18,
+          -16
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "torus"
+      },
+      {
+        "dimensions": {
+          "radius": 0.9,
+          "tube": 0.1
+        },
+        "position": [
+          8,
+          18,
+          -16
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "torus"
+      },
+      {
+        "dimensions": {
+          "radius": 0.9,
+          "tube": 0.1
+        },
+        "position": [
+          0,
+          34,
+          -16
+        ],
+        "rotation": [
+          0,
+          0,
+          1.5707963267948966
+        ],
+        "type": "torus"
+      },
+      {
+        "dimensions": {
+          "radius": 0.35,
+          "tube": 0.1
+        },
+        "position": [
+          0,
+          1.25,
+          23
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "type": "torus"
+      }
+    ],
+    "version": 1
+  }
+}

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import sharp from 'sharp'
 import { paddedStepFigureBox, STEP_MOTION_PROMPT_VERSION, type StepMotionRequest } from '@truebuild/contracts'
-import { createMetaProvider, stepMotionTextBytes } from '../providers/meta-provider'
+import { createMetaProvider, MetaProviderError, stepMotionTextBytes } from '../providers/meta-provider'
 import { aiPolicyFromEnvironment, STEP_MOTION_POLICY } from './ai-policy'
 import * as media from './media'
 import { MetaTransport } from '../providers/meta-transport'
@@ -16,6 +16,7 @@ import {
     modelFrameSize,
     stepMotionCacheKey,
     stepMotionContentKey,
+    stepMotionRepairBudgetMs,
 } from './step-motion'
 
 const metadata: StepMotionRequest = {
@@ -107,7 +108,7 @@ function response(value: unknown): Response {
 function setup(
     value: unknown,
     limit = 8,
-    transportResponse?: () => Response,
+    transportResponse?: () => Response | Promise<Response>,
     cacheLimit?: number,
     motion: { enabled?: boolean; dailyLimit?: number; clock?: () => number } = {},
 ): {
@@ -176,9 +177,10 @@ it('caches one call per step/language/version and sends verbatim manual text bef
     expect(refused.status).toBe(503)
     expect(await refused.json()).toMatchObject({ code: 'unconfigured', notDispatched: true })
     expect((await unavailable(await request({ cacheOnly: true }))).status).toBe(404)
-    expect(run).toHaveBeenCalledWith(
-        expect.objectContaining({ deadlineMs: 90_000, signal: expect.any(AbortSignal) }),
-        expect.any(Function),
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }), expect.any(Function))
+    expect(run.mock.calls[0]![0].deadlineMs).toBeGreaterThan(STEP_MOTION_POLICY.deadlineMs)
+    expect(run.mock.calls[0]![0].deadlineMs).toBeLessThanOrEqual(
+        STEP_MOTION_POLICY.routeDeadlineMs - STEP_MOTION_POLICY.returnMarginMs,
     )
     const body = bodies[0]!
     const wireTextBytes = (candidate: Record<string, unknown>): number =>
@@ -258,28 +260,115 @@ it('verifies the uploaded original before serving a cached scene for the page it
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 })
 
-it('keeps a post-dispatch failure terminal so revisits and cache reads never pay again', async () => {
-    const { handler, fetchImpl, counter } = setup(null, 8, () =>
-        Response.json({ error: 'unavailable' }, { status: 503 }),
+it.each(['provider_error', 'timeout'] as const)(
+    'does not cache a post-dispatch %s; an explicit retry can recover',
+    async (code) => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+        let attempt = 0
+        const { handler, fetchImpl, counter } = setup(null, 8, () => {
+            if (++attempt === 1) throw new MetaProviderError(code)
+            return response({ scene })
+        })
+        const failed = await handler(await request())
+        expect(failed.status).toBe(503)
+        expect(await failed.json()).toMatchObject({ status: 'unavailable', code })
+        expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
+        expect(await (await handler(await request({ requestId: 'explicit-retry' }))).json()).toEqual({ scene })
+        expect(fetchImpl).toHaveBeenCalledTimes(2)
+        expect(counter.used).toBe(2)
+        expect(
+            info.mock.calls.some(
+                ([line]) =>
+                    JSON.parse(String(line)).reason === (code === 'timeout' ? 'provider_timeout' : 'provider_failure'),
+            ),
+        ).toBe(true)
+    },
+)
+
+it.each([
+    [0, 45_000],
+    [58_000, 45_000],
+    [59_000, 45_000],
+    [59_001, null],
+    [90_000, null],
+])('admits a full repair after %i ms only when it fits the route return margin', (elapsed, budget) => {
+    expect(stepMotionRepairBudgetMs(elapsed)).toBe(budget)
+})
+
+it.each([
+    { firstMs: 58_000, repairMs: 40_000, calls: 2, outcome: 'scene' },
+    { firstMs: 60_000, repairMs: 0, calls: 1, outcome: 'repair_budget' },
+    { firstMs: 58_000, repairMs: 46_000, calls: 2, outcome: 'repair_timeout' },
+])(
+    'gives a full repair its own window after $firstMs ms, with outcome $outcome',
+    async ({ firstMs, repairMs, calls, outcome }) => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+        let now = 0
+        vi.spyOn(performance, 'now').mockImplementation(() => now)
+        const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+        let attempt = 0
+        const { handler, fetchImpl, counter } = setup(null, 8, () => {
+            now += ++attempt === 1 ? firstMs : repairMs
+            return response({ scene: attempt === 1 ? overlapping : scene })
+        })
+        const result = await handler(await request())
+        if (outcome === 'scene') {
+            expect(result.status).toBe(200)
+            expect(await result.json()).toEqual({ scene })
+            expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene })
+        } else {
+            expect(result.status).toBe(503)
+            expect(await result.json()).toMatchObject({
+                code: outcome === 'repair_timeout' ? 'timeout' : 'provider_error',
+            })
+            expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
+            const logs = info.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+            expect(logs.filter((value) => value.event === 'step_motion_generation').at(-1)).toMatchObject({
+                accepted: false,
+                reason: outcome,
+            })
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        expect(counter.used).toBe(calls)
+    },
+)
+
+it('leaves a provider failure uncached while retaining the daily dispatch ceiling', async () => {
+    const { handler, fetchImpl, counter } = setup(
+        null,
+        8,
+        () => Response.json({ error: 'unavailable' }, { status: 503 }),
+        undefined,
+        { dailyLimit: 1 },
     )
-    for (const overrides of [{}, { cacheOnly: true }, { requestId: 'revisit' }]) {
-        const result = await handler(await request(overrides))
-        expect(result.status).toBe(200)
-        expect(await result.json()).toEqual({ scene: null })
-    }
+    expect((await handler(await request())).status).toBe(503)
+    expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
+    expect((await handler(await request({ requestId: 'revisit' }))).status).toBe(429)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     expect(counter.used).toBe(1)
 })
 
 it.each([
-    null,
-    { ...scene, movers: [{ ...scene.movers[0], motion: { kind: 'screw', axis: [0, 0, 2], travel: 0.1, turns: 1 } }] },
-])('caches a null or invalid outcome without repair or retry', async (candidate) => {
+    { candidate: null, genuineDecline: true },
+    {
+        candidate: {
+            ...scene,
+            movers: [{ ...scene.movers[0], motion: { kind: 'screw', axis: [0, 0, 2], travel: 0.1, turns: 1 } }],
+        },
+        genuineDecline: false,
+    },
+])('caches only a genuine model decline: $genuineDecline', async ({ candidate, genuineDecline }) => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const { handler, fetchImpl } = setup({ scene: candidate })
-    for (let index = 0; index < 2; index++)
-        expect(await (await handler(await request())).json()).toEqual({ scene: null })
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    for (let index = 0; index < 2; index++) {
+        const result = await handler(await request())
+        expect(result.status).toBe(genuineDecline ? 200 : 503)
+        expect(await result.json()).toEqual(
+            genuineDecline ? { scene: null } : { status: 'unavailable', code: 'provider_error' },
+        )
+    }
+    expect((await handler(await request({ cacheOnly: true }))).status).toBe(genuineDecline ? 200 : 404)
+    expect(fetchImpl).toHaveBeenCalledTimes(genuineDecline ? 1 : 2)
 })
 
 it('applies authentication, input bounds, cited-crop validation and the shared call ceiling', async () => {
@@ -305,15 +394,17 @@ it('applies authentication, input bounds, cited-crop validation and the shared c
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 })
 
-it('does not retry a rate-limited provider even when Retry-After permits other operations to retry', async () => {
+it('does not automatically retry a rate-limited provider, leaving an explicit retry uncached', async () => {
     const { handler, fetchImpl } = setup(
         null,
         8,
         () => new Response(null, { status: 429, headers: { 'retry-after': '0' } }),
     )
-    expect(await (await handler(await request())).json()).toEqual({ scene: null })
-    expect(await (await handler(await request())).json()).toEqual({ scene: null })
+    expect((await handler(await request())).status).toBe(503)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
+    expect((await handler(await request())).status).toBe(503)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
 })
 
 it('accounts for observed token usage with standard rates and leaves unknown usage unknown', () => {
@@ -663,7 +754,7 @@ it('accepts a scene with an out-of-range extrude bevel by clamping that bevel to
 it('logs a short reason code for a refused scene, never the model text', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const { handler } = setup({ scene: { ...scene, stepId: 'step-9' } })
-    expect(await (await handler(await request())).json()).toEqual({ scene: null })
+    expect((await handler(await request())).status).toBe(503)
     const logged = info.mock.calls
         .map(([line]) => String(line))
         .filter((line) => line.includes('step_motion_generation'))
@@ -758,18 +849,18 @@ it('repairs deep overlap exactly once with the validated previous scene and coun
 
 it.each([
     { limit: 8, dailyLimit: 8, calls: 2, claims: 2, reason: 'overlap' },
-    { limit: 1, dailyLimit: 8, calls: 1, claims: 1, reason: 'overlap' },
-    { limit: 8, dailyLimit: 1, calls: 1, claims: 2, reason: 'overlap' },
+    { limit: 1, dailyLimit: 8, calls: 1, claims: 1, reason: 'repair_quota' },
+    { limit: 8, dailyLimit: 1, calls: 1, claims: 2, reason: 'repair_quota' },
 ])(
-    'keeps overlap terminal with public limit $limit and daily cap $dailyLimit',
+    'leaves failed overlap repair uncached with public limit $limit and daily cap $dailyLimit',
     async ({ limit, dailyLimit, calls, claims, reason }) => {
         const info = vi.spyOn(console, 'info').mockImplementation(() => {})
         const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
         const { handler, fetchImpl, counter } = setup({ scene: overlapping }, limit, undefined, undefined, {
             dailyLimit,
         })
-        expect(await (await handler(await request())).json()).toEqual({ scene: null })
-        expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene: null })
+        expect((await handler(await request())).status).toBe(503)
+        expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
         expect(fetchImpl).toHaveBeenCalledTimes(calls)
         expect(counter.used).toBe(claims)
         expect(
@@ -790,20 +881,40 @@ it('logs an intentional null scene as declined without echoing model text', asyn
 })
 
 it.each([
-    { outcome: 'null', reason: 'declined' },
-    { outcome: 'wrong step', reason: 'step_id' },
-    { outcome: 'transport failure', reason: 'overlap' },
-])('keeps a $outcome repair terminal and logs its refusal', async ({ outcome, reason }) => {
+    { outcome: 'null', reason: 'repair_declined' },
+    { outcome: 'wrong step', reason: 'repair_step_id' },
+    { outcome: 'transport failure', reason: 'repair_provider_failure' },
+    { outcome: 'degraded', reason: 'repair_degraded' },
+])('leaves a $outcome repair uncached and logs its own refusal', async ({ outcome, reason }) => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
     let attempt = 0
     const { handler, fetchImpl, counter } = setup(null, 8, () => {
         if (++attempt === 1) return response({ scene: overlapping })
         if (outcome === 'transport failure') throw new Error('synthetic transport failure')
+        if (outcome === 'degraded')
+            return response({
+                scene: {
+                    ...scene,
+                    movers: [
+                        {
+                            ...scene.movers[0],
+                            shapes: [
+                                {
+                                    type: 'torus',
+                                    dimensions: { radius: 0.1, tube: 0.01 },
+                                    position: [0, 1, 0],
+                                    rotation: [0, 0, 0],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            })
         return response({ scene: outcome === 'null' ? null : { ...scene, stepId: 'step-9' } })
     })
-    expect(await (await handler(await request())).json()).toEqual({ scene: null })
-    expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene: null })
+    expect((await handler(await request())).status).toBe(503)
+    expect((await handler(await request({ cacheOnly: true }))).status).toBe(404)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     expect(counter.used).toBe(2)
     const logged = info.mock.calls
@@ -832,11 +943,21 @@ it.each([
         }
         const bytes = Buffer.byteLength(JSON.stringify(overlapping), 'utf8')
         expect(bytes).toBeGreaterThan(STEP_MOTION_POLICY.maxContextBytes)
+        const repaired = {
+            ...overlapping,
+            movers: [
+                { ...overlapping.movers[0], shapes: Array(moverShapes).fill({ ...detailed, position: [3, 0, 0] }) },
+            ],
+        }
         let attempt = 0
         const { handler, fetchImpl, counter } = setup(null, 8, () =>
-            response({ scene: ++attempt === 1 ? overlapping : scene }),
+            response({ scene: ++attempt === 1 ? overlapping : repaired }),
         )
-        expect(await (await handler(await request())).json()).toEqual({ scene: calls === 2 ? scene : null })
+        const result = await handler(await request())
+        expect(result.status).toBe(calls === 2 ? 200 : 503)
+        expect(await result.json()).toEqual(
+            calls === 2 ? { scene: repaired } : { status: 'unavailable', code: 'provider_error' },
+        )
         expect(fetchImpl).toHaveBeenCalledTimes(calls)
         expect(counter.used).toBe(2)
         if (calls === 1) {
@@ -844,7 +965,7 @@ it.each([
             expect(
                 info.mock.calls.some(([line]) => {
                     const logged = JSON.parse(String(line)) as Record<string, unknown>
-                    return logged.reason === 'overlap' && logged.repairReason === 'repair_budget'
+                    return logged.reason === 'repair_budget'
                 }),
             ).toBe(true)
         }
