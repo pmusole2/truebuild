@@ -96,12 +96,24 @@ export function EssentialDocumentControls({
         kind === 'result' &&
         state.check?.decision === 'cannot_verify' &&
         state.check.secondOpinion?.status === 'available'
+    // A "can't tell" verdict never traps the person: they may record the step as their own completion and move on.
+    // A refuse (a visible mismatch) never gets this, and a pass already has its own Next step.
+    const ownDone =
+        kind === 'result' &&
+        state.check?.decision === 'cannot_verify' &&
+        entry?.session.reviewStatus === 'reviewed' &&
+        entry.session.reviewedSteps[entry.stepIndex] !== undefined
+            ? entry
+            : undefined
+    const ownDoneLast =
+        ownDone !== undefined && ownDone.stepIndex >= ownDone.session.reviewedSteps.length - 1
     if (
         primary === undefined &&
         secondary === undefined &&
         importAction === null &&
         resume === undefined &&
         steps === undefined &&
+        ownDone === undefined &&
         !doubleChecking
     )
         return null
@@ -117,6 +129,19 @@ export function EssentialDocumentControls({
                     <View testID="shell-double-checking" nativeID={originId('shell')} accessibilityLiveRegion="polite">
                         <Caption>Double-checking…</Caption>
                     </View>
+                )}
+                {ownDone === undefined ? null : (
+                    <AppButton
+                        label={ownDoneLast ? "It's done, finish" : "It's done, next step"}
+                        testID="shell-own-done"
+                        variant="quiet"
+                        disabled={disabled}
+                        onPress={(): void => {
+                            if (disabled) return
+                            if (ownDoneLast) void nav.finish()
+                            else void controller.completeStep()
+                        }}
+                    />
                 )}
                 {importAction === null ? null : (
                     <AppButton

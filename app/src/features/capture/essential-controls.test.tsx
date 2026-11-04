@@ -174,3 +174,51 @@ it('places the guide primary between the existing previous/next controls and kee
         step.mockRestore()
     }
 })
+
+it('offers "It\'s done, next step" only on a can\'t-tell result, never on a refuse or a pass', async () => {
+    const base = entry()
+    const seeded = { ...base, session: { ...base.session, reviewStatus: 'reviewed' as const } }
+    const { controller } = await runtime([seeded])
+    await controller.restore()
+    const complete = jest.spyOn(controller, 'completeStep').mockResolvedValue(undefined)
+    const variant = buildFallbackProposalV2(
+        documentMaterialV2({
+            kind: 'result',
+            session: seeded.session,
+            stepId: 'step-1',
+            captureId: null,
+            result: null,
+            failure: null,
+        }),
+    )
+    const snapshot = controller.getSnapshot()
+    const tree = (decision: 'pass' | 'refuse' | 'cannot_verify'): React.JSX.Element => (
+        <ThemeProvider>
+            <FeedbackProvider reduceMotion>
+                <EssentialDocumentControls
+                    kind="result"
+                    variant={{ ...variant, body: { type: 'Stack', gap: 'md', align: 'stretch', children: [] }, overlays: [] }}
+                    state={{ ...snapshot, check: { decision } } as typeof snapshot}
+                    entry={seeded}
+                    busy={false}
+                    resolve={() => ({ enabled: true, reason: null, run: (): void => undefined })}
+                    controller={controller}
+                    nav={defaultNav(controller)}
+                />
+            </FeedbackProvider>
+        </ThemeProvider>
+    )
+    const view = await render(tree('cannot_verify'))
+    try {
+        await fireEvent.press(screen.getByRole('button', { name: "It's done, next step" }))
+        expect(complete).toHaveBeenCalledTimes(1)
+        for (const decision of ['refuse', 'pass'] as const) {
+            await view.rerender(tree(decision))
+            expect(screen.queryByTestId('shell-own-done')).toBeNull()
+        }
+    } finally {
+        await view.unmount()
+        controller.dispose()
+        complete.mockRestore()
+    }
+})
