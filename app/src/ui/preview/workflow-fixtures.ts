@@ -1,8 +1,10 @@
-import type { CheckResult, Layout, QuestionResult } from '@truebuild/contracts'
+import type { CheckResult, Layout, PieceSpec, QuestionResult, StepMotionScene } from '@truebuild/contracts'
 import { HERO_DIAGRAM_PNG_BASE64, HERO_DIAGRAM_SVG } from '@truebuild/contracts/hero'
 import { decodeBase64, sampleManual } from '../../demo/sample-manual'
 import type { WorkflowState } from '../../features/capture/controller'
 import type { LibraryEntry } from '../../features/capture/library'
+import { pieceIdsByPartId } from '../../features/pieces/piece-registry'
+import type { PieceGridItem } from '../../features/pieces/piece-viewer'
 import type { CameraPresentation } from '../../features/capture/camera-stage'
 import { PORTRAIT_DIAGRAM_SVG } from './synthetic-portrait-art'
 import { PORTRAIT_PHOTO_PNG_BASE64 } from './synthetic-portrait-photo-png'
@@ -168,6 +170,14 @@ export function workflowPreviewFixture(
                 portrait ? portraitDiagramUri : stool ? stoolDiagramUri : diagramUri,
             ]),
         ),
+    }
+
+    if (id === 'home-populated') {
+        // The existing stool owns a distinct manual/page namespace. Its cover intentionally stays unloaded.
+        state.entries = [
+            ...state.entries,
+            { session: syntheticStoolManual(), stepIndex: 0, completedStepIds: [], capture: null },
+        ]
     }
 
     if (id === 'home-empty' || id === 'home-loading' || id === 'home-error') {
@@ -354,6 +364,68 @@ export function workflowPreviewFixture(
         state.capture = null
     }
     return { state, entry }
+}
+
+/** Hand-authored local approximation for the synthetic shelf's first step; never a provider or registry result. */
+export function guideInstructionFixture(
+    entry: LibraryEntry,
+    color: string,
+): {
+    pieces: readonly PieceSpec[]
+    stepPieces: readonly PieceGridItem[]
+    motion: StepMotionScene
+} | null {
+    const step = entry.session.reviewedSteps[entry.stepIndex]
+    const required = step?.parts.find((part) => part.partId === 'side-panel')
+    const part = entry.session.parts.find((part) => part.partId === required?.partId)
+    const pieceId = part === undefined ? undefined : pieceIdsByPartId(entry.session).get(part.partId)
+    if (step === undefined || required === undefined || part?.name.state !== 'known' || pieceId === undefined)
+        return null
+    const panel: PieceSpec = {
+        id: pieceId,
+        name: part.name.value,
+        color,
+        parts: [
+            {
+                type: 'box',
+                dimensions: { width: 0.16, height: 2.8, depth: 1.5 },
+                position: [0, 1.4, 0],
+                rotation: [0, 0, 0],
+            },
+        ],
+    }
+    return {
+        pieces: [panel],
+        stepPieces: [
+            {
+                pieceId,
+                name: part.name.value,
+                quantity: required.quantity.state === 'known' ? required.quantity.value : null,
+            },
+        ],
+        motion: {
+            version: 1,
+            stepId: step.stepId,
+            // A reference floor supports the illustration; it is not another claimed manual part.
+            still: [
+                {
+                    type: 'box',
+                    dimensions: { width: 3.6, height: 0.04, depth: 2.4 },
+                    position: [0, -0.04, 0],
+                    rotation: [0, 0, 0],
+                },
+            ],
+            movers: [
+                {
+                    label: part.name.value,
+                    shapes: panel.parts,
+                    motion: { kind: 'rotate', pivot: [0, 0, 0], axis: [0, 0, 1], fromDeg: -90, toDeg: 0 },
+                    actionIndex: 0,
+                },
+            ],
+            caption: 'Synthetic fixture · Stand the panel upright with the groove facing inward.',
+        },
+    }
 }
 
 /** Hardware-free camera branch data. Preview media and shutter are provided by the gallery, never a CameraView. */

@@ -81,7 +81,7 @@ export function AskSheet({
                     <Caption>Ask about a part</Caption>
                     <View accessibilityRole="radiogroup" accessibilityLabel="Ask about a part" style={styles.chips}>
                         {parts.map((part) => (
-                            <PartChip
+                            <PartOption
                                 key={part.id}
                                 label={part.label}
                                 selected={part.id === selectedPartId}
@@ -106,7 +106,7 @@ export function AskSheet({
             <AppButton
                 label={submitLabel}
                 accessibilityLabel={submitLabel}
-                variant="primary"
+                variant="accent"
                 busy={busy}
                 disabled={submitDisabled}
                 onPress={onSubmit}
@@ -117,7 +117,7 @@ export function AskSheet({
     )
 }
 
-function PartChip({
+function PartOption({
     label,
     selected,
     disabled,

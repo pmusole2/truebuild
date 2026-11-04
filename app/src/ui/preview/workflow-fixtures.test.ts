@@ -5,6 +5,8 @@ import {
     checkResultSchema,
     manualSessionSchema,
     partRegionSchema,
+    pieceSpecSchema,
+    stepMotionSceneSchema,
     questionResultSchema,
     stepEvidenceRequirements,
 } from '@truebuild/contracts'
@@ -15,6 +17,7 @@ import {
     WORKFLOW_PREVIEW_CASES,
     WORKFLOW_PREVIEW_CLASSIFICATION,
     workflowPreviewFixture,
+    guideInstructionFixture,
     workflowPreviewManifest,
 } from './workflow-fixtures'
 
@@ -49,6 +52,37 @@ describe('synthetic workflow preview fixtures', () => {
                 expect(state.check).toBeNull()
             }
         }
+    })
+
+    it('shows two genuine saved synthetic manuals, with only the first cover loaded', () => {
+        const { state, entry } = workflowPreviewFixture('home-populated')
+        expect(state.entries).toHaveLength(2)
+        const second = state.entries[1]!
+        expect(state.entries[0]).toBe(entry)
+        expect(second.session.title).toBe(SYNTHETIC_STOOL_LABEL)
+        expect(second.session.manualId).not.toBe(entry.session.manualId)
+        expect(manualSessionSchema.safeParse(second.session).success).toBe(true)
+        const firstPage = entry.session.pages[0]!
+        const secondPage = second.session.pages[0]!
+        expect(secondPage.pageId).not.toBe(firstPage.pageId)
+        expect(state.pageUris[firstPage.pageId]).toMatch(/^data:image\//u)
+        expect(state.pageUris[secondPage.pageId]).toBeUndefined()
+    })
+
+    it('binds one valid, explicitly synthetic panel scene and viewer piece to the actual current step', () => {
+        const { entry } = workflowPreviewFixture('guide-instructions')
+        const step = entry.session.reviewedSteps[entry.stepIndex]!
+        const fixture = guideInstructionFixture(entry, '#FF9900')!
+        expect(stepMotionSceneSchema.safeParse(fixture.motion).success).toBe(true)
+        expect(fixture.motion.stepId).toBe(step.stepId)
+        expect(fixture.motion.caption).toContain('Synthetic fixture')
+        expect(fixture.motion.caption).toContain('Stand the panel upright')
+        expect(fixture.pieces).toHaveLength(1)
+        expect(pieceSpecSchema.safeParse(fixture.pieces[0]).success).toBe(true)
+        expect(fixture.pieces[0]!.name).toBe('Side panel')
+        expect(fixture.stepPieces).toEqual([{ pieceId: fixture.pieces[0]!.id, name: 'Side panel', quantity: 1 }])
+        expect(fixture.motion.movers[0]!.label).toBe('Side panel')
+        expect(guideInstructionFixture(workflowPreviewFixture('guide-stool-guided').entry, '#FF9900')).toBeNull()
     })
 
     it('creates independent synthetic snapshots and keeps unresolved facts unknown', () => {

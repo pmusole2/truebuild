@@ -36,10 +36,18 @@ it('selects actual workflow screens and changes appearance from local controls',
     expect(screen.getByTestId('guide-screen')).toBeTruthy()
 })
 
-it('opens the real More sheet and keeps every controller action inert', async () => {
+it('opens the real part viewer and More sheet while keeping every controller action inert', async () => {
     const fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Preview must never fetch'))
     try {
         await render(<WorkflowPreview initialCase="guide-instructions" />)
+        await fireEvent.press(screen.getByRole('button', { name: 'Expand Side panel 3D view' }))
+        expect(screen.getByTestId('piece-viewer-fullscreen-modal')).toBeTruthy()
+        // The actual PieceViewer uses its native-GL fallback in Jest; GPU output remains device evidence.
+        expect(
+            within(screen.getByTestId('piece-viewer-fullscreen-modal')).getByTestId('piece-viewer-fallback'),
+        ).toBeTruthy()
+        await fireEvent.press(screen.getByRole('button', { name: 'Close 3D view' }))
+        expect(screen.queryByTestId('piece-viewer-fullscreen-modal')).toBeNull()
         await fireEvent.press(screen.getByRole('button', { name: 'More' }))
         expect(screen.getByTestId('preview-more-document')).toBeTruthy()
         await fireEvent.press(within(screen.getByTestId('preview-more-document')).getByTestId('close-sheet'))
@@ -53,6 +61,16 @@ it('opens the real More sheet and keeps every controller action inert', async ()
     } finally {
         fetchSpy.mockRestore()
     }
+})
+
+it('renders two home rows with saved titles and one missing-cover blueprint', async () => {
+    await render(<WorkflowPreview initialCase="home-populated" showControls={false} />)
+    const { state } = workflowPreviewFixture('home-populated')
+    expect(screen.getAllByTestId('manual-card')).toHaveLength(2)
+    for (const entry of state.entries) {
+        expect(screen.getByRole('button', { name: `Open ${entry.session.title}` })).toBeTruthy()
+    }
+    expect(screen.getAllByTestId('manual-blueprint', { includeHiddenElements: true })).toHaveLength(1)
 })
 
 it('renders camera recovery through the actual v2 document without opening hardware or sending a request', async () => {

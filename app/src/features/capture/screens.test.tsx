@@ -153,7 +153,7 @@ it('shows an empty real library and creates a page editor without seeding a demo
     controllers.push(controller)
     await controller.restore()
     await render(<Screens controller={controller} />)
-    expect(screen.getByText('Build furniture with step-by-step help.')).toBeTruthy()
+    expect(screen.getByText('Add your first manual')).toBeTruthy()
     expect(screen.queryByText('Use sample manual')).toBeNull()
     await fireEvent.press(screen.getByRole('button', { name: 'Add manual' }))
     expect(await screen.findByText('Take a photo of each page of your paper manual.')).toBeTruthy()

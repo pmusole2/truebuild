@@ -27,6 +27,7 @@ import {
     WORKFLOW_PREVIEW_BANNER,
     WORKFLOW_PREVIEW_CASES,
     cameraPreviewPresentation,
+    guideInstructionFixture,
     workflowPreviewFixture,
     type WorkflowPreviewCase,
     type WorkflowPreviewGroup,
@@ -260,6 +261,8 @@ function DocumentFixture({
     readonly native?: NativeChrome
 }): ReactElement {
     const { state, entry } = workflowPreviewFixture(selected, { reusableCapture: true })
+    const { colors } = useTheme()
+    const guideFixture = selected === 'guide-instructions' ? guideInstructionFixture(entry, colors.accent) : null
     const ownMore = useMoreState()
     const more = native?.more ?? ownMore
     const progress = useQuickProgress(entry.session)
@@ -352,6 +355,8 @@ function DocumentFixture({
             closeSheet: more.hide,
         },
         session: entry.session,
+        pieces: guideFixture?.pieces,
+        stepPieces: guideFixture?.stepPieces,
         pageUris: state.pageUris,
         pageImageStatus: 'ready',
         capture: state.capture,
@@ -410,7 +415,13 @@ function DocumentFixture({
     const moreInputs = documentInputs('more', { state, entry }, quick, true)
     return (
         <>
-            <DocumentRenderer document={document} bindings={bindings} variant={variant} testID={testID} />
+            <DocumentRenderer
+                document={document}
+                bindings={bindings}
+                variant={variant}
+                testID={testID}
+                guideMotionPreview={guideFixture?.motion}
+            />
             <MoreSheet visible={more.open} title="More about this step" onClose={more.hide} documentFrame>
                 <DocumentRenderer document={compose(moreInputs)} bindings={bindings} testID="preview-more-document" />
             </MoreSheet>

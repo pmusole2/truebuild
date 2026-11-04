@@ -75,6 +75,24 @@ describe('type scale', () => {
         expect(typeScale[role].maxFontSizeMultiplier).toBe(0)
     })
 
+    it('uses exactly five sizes, 28, 22, 17, 15 and 13, in the 400 and 600 weights only', () => {
+        const sizes = new Set(ROLES.map((role) => typeScale[role].fontSize))
+        expect([...sizes].sort((a, b) => b - a)).toEqual([28, 22, 17, 15, 13])
+        for (const role of ROLES) {
+            expect(['400', '600']).toContain(typeScale[role].fontWeight)
+        }
+    })
+
+    it('keeps the named roles on their approved size and weight', () => {
+        expect(typeScale.largeTitle).toMatchObject({ fontSize: 28, fontWeight: '600' })
+        expect(typeScale.display).toMatchObject({ fontSize: 28, fontWeight: '600' })
+        expect(typeScale.title).toMatchObject({ fontSize: 22, fontWeight: '600' })
+        expect(typeScale.instruction).toMatchObject({ fontSize: 17, fontWeight: '600' })
+        expect(typeScale.heading).toMatchObject({ fontSize: 17, fontWeight: '600' })
+        expect(typeScale.callout).toMatchObject({ fontSize: 15, fontWeight: '400' })
+        expect(typeScale.label).toMatchObject({ fontSize: 13, fontWeight: '600' })
+    })
+
     it('uses the platform system sans consistently for every type role', () => {
         expect(typeScale.title.fontFamily).toBe(typeScale.display.fontFamily)
         expect(typeScale.body.fontFamily).toBeUndefined()

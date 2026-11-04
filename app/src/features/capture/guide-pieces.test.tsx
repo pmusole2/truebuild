@@ -4,7 +4,7 @@ import { createPieces } from '../pieces/piece-runtime'
 import { PieceRegistry, type PieceGenerationPort } from '../pieces/piece-registry'
 import type * as ReactModule from 'react'
 import type * as ReactNative from 'react-native'
-import { act, cleanup, screen, waitFor } from '@testing-library/react-native'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react-native'
 import { createController, createDocuments, createScreens } from './controller-factory'
 import { flush, mount, press, type Mounted } from '../screens/test-support/flow'
 import { deferred, entry } from '../screens/test-support/route-harness'
@@ -137,6 +137,8 @@ it('swaps a displayed Guide from its linked placeholders to ready geometry witho
     expect(screen.getByTestId('guide-pieces-step-1')).toBeTruthy()
     expect(screen.getByText('×4')).toBeTruthy()
     const id = requests()[0]!.stepPieces![0]!.pieceId
+    expect(screen.getByTestId(`piece-tile-${id}`)).toBeTruthy()
+    await fireEvent.press(screen.getByTestId(`piece-tile-${id}`))
     expect(screen.getByTestId(`piece-placeholder-${id}`)).toBeTruthy()
     await act(async () => {
         released.resolve()
@@ -146,7 +148,7 @@ it('swaps a displayed Guide from its linked placeholders to ready geometry witho
     await waitFor(() => expect(screen.queryByTestId(`piece-placeholder-${id}`)).toBeNull())
     // This host has no GL. A real valid spec reaches PieceViewer, which uses its named 2D fallback here.
     expect(screen.getByTestId('piece-viewer-fallback')).toBeTruthy()
-    expect(screen.getByText('×4')).toBeTruthy()
+    expect(within(screen.getByTestId('piece-viewer-fullscreen')).getByText('×4')).toBeTruthy()
     await flush()
     expect(requests()).toHaveLength(1)
 })

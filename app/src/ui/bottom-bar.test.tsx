@@ -1,5 +1,7 @@
+import { lightColors } from '../theme/tokens'
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
-import { StyleSheet } from 'react-native'
+import { StyleSheet, View } from 'react-native'
+import type { ReactElement, ReactNode } from 'react'
 import { FixedBottomBar } from './bottom-bar'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('./test-support/reanimated-mock'))
@@ -17,7 +19,7 @@ jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
 beforeEach(() => Object.assign(mockWindow, { width: 390, height: 844, fontScale: 1 }))
 
 describe('FixedBottomBar', () => {
-    it('renders one 56 point accent primary and at most one quiet secondary', async () => {
+    it('renders one 56 point accent primary and at most one tonal secondary', async () => {
         const primary = jest.fn()
         const secondary = jest.fn()
         await render(
@@ -30,7 +32,7 @@ describe('FixedBottomBar', () => {
         expect(buttons).toHaveLength(2)
         expect(StyleSheet.flatten(screen.getByTestId('p').props.style)).toMatchObject({ minHeight: 56 })
         expect(StyleSheet.flatten(screen.getByRole('button', { name: 'Add manual' }).props.style)).toMatchObject({
-            backgroundColor: 'transparent',
+            backgroundColor: lightColors.surfaceSunken,
         })
         await fireEvent.press(screen.getByTestId('p'))
         await fireEvent.press(screen.getByRole('button', { name: 'Add manual' }))
@@ -84,13 +86,13 @@ describe('FixedBottomBar at accessibility text sizes', () => {
         },
     )
 
-    it('moves the quiet secondary into the primary row as a 44 point icon that keeps its name, test ID and action', async () => {
+    it('moves the quiet secondary into the primary row as a 48 point icon that keeps its name, test ID and action', async () => {
         mockWindow.fontScale = 3.12
         await render(<FixedBottomBar {...actions} />)
         const secondary = screen.getByRole('button', { name: 'Skip for now' })
         expect(secondary).toBe(screen.getByTestId('skip'))
         expect(screen.queryByText('Skip for now')).toBeNull()
-        expect(StyleSheet.flatten(secondary.props.style)).toMatchObject({ width: 44, minHeight: 44 })
+        expect(StyleSheet.flatten(secondary.props.style)).toMatchObject({ width: 48, minHeight: 48 })
         const primary = screen.getByTestId('start')
         expect(StyleSheet.flatten(primary.props.style)).toMatchObject({ minHeight: 56 })
         // Same row: both controls sit in one horizontal container.
@@ -145,4 +147,27 @@ describe('FixedBottomBar at accessibility text sizes', () => {
         const region = reason.parent?.parent
         expect(StyleSheet.flatten(region?.props.style)).toMatchObject({ maxHeight: Math.round(844 * 0.2) })
     })
+})
+
+it('keeps a document secondary actionable when step navigation owns the primary row', async () => {
+    const secondary = jest.fn()
+    function Navigation({ primary, secondary: extra }: { primary?: ReactNode; secondary?: ReactNode }): ReactElement {
+        return (
+            <View testID="navigation-row">
+                {primary}
+                {extra}
+            </View>
+        )
+    }
+    await render(
+        <FixedBottomBar
+            primary={{ label: 'Take photo', onPress: (): void => undefined }}
+            secondary={{ label: 'Step details', onPress: secondary }}
+            navigation={<Navigation />}
+        />,
+    )
+    const row = within(screen.getByTestId('navigation-row'))
+    expect(row.getByRole('button', { name: 'Take photo' })).toBeTruthy()
+    await fireEvent.press(row.getByRole('button', { name: 'Step details' }))
+    expect(secondary).toHaveBeenCalledTimes(1)
 })

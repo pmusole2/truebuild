@@ -1,7 +1,7 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { View } from 'react-native'
 import { visitVariantNodesV2, type AppIntent, type ScreenKindV2, type ScreenVariantV2 } from '@truebuild/contracts'
-import { AppButton } from '../../ui/button'
+import { AppButton, IconButton } from '../../ui/button'
 import { RenderOriginProvider, originId } from '../../ui/render-origin'
 import { space } from '../../theme/tokens'
 import { Caption } from '../../ui/text'
@@ -52,7 +52,11 @@ export function EssentialDocumentControls({
     resolve,
     controller,
     nav,
+    primary,
+    secondary,
 }: {
+    readonly primary?: ReactNode
+    readonly secondary?: ReactNode
     readonly kind: ScreenKindV2
     readonly variant: ScreenVariantV2
     readonly state: WorkflowState
@@ -92,14 +96,22 @@ export function EssentialDocumentControls({
         kind === 'result' &&
         state.check?.decision === 'cannot_verify' &&
         state.check.secondOpinion?.status === 'available'
-    if (importAction === null && resume === undefined && steps === undefined && !doubleChecking) return null
+    if (
+        primary === undefined &&
+        secondary === undefined &&
+        importAction === null &&
+        resume === undefined &&
+        steps === undefined &&
+        !doubleChecking
+    )
+        return null
     const disabled = busy || state.storageReadOnly
     return (
         <RenderOriginProvider origin="shell">
             <View
                 nativeID={originId('shell')}
                 testID="essential-controls"
-                style={{ paddingHorizontal: space.md, gap: space.xs }}
+                style={primary === undefined ? { paddingHorizontal: space.md, gap: space.xs } : { gap: space.xs }}
             >
                 {!doubleChecking ? null : (
                     <View testID="shell-double-checking" nativeID={originId('shell')} accessibilityLiveRegion="polite">
@@ -126,31 +138,40 @@ export function EssentialDocumentControls({
                         }}
                     />
                 )}
-                {steps === undefined ? null : (
-                    <View style={{ flexDirection: 'row', gap: space.sm }} nativeID={originId('shell')}>
-                        <View style={{ flex: 1 }} nativeID={originId('shell')}>
-                            <AppButton
-                                label="Previous step"
-                                testID="shell-previous-step"
-                                variant="quiet"
-                                disabled={disabled || steps.stepIndex === 0}
-                                onPress={(): void => {
-                                    if (!disabled && steps.stepIndex > 0) void controller.step(steps.stepIndex - 1)
-                                }}
-                            />
-                        </View>
-                        <View style={{ flex: 1 }} nativeID={originId('shell')}>
-                            <AppButton
-                                label="Next step"
-                                testID="shell-next-step"
-                                variant="quiet"
-                                disabled={disabled || steps.stepIndex >= steps.session.reviewedSteps.length - 1}
-                                onPress={(): void => {
-                                    if (!disabled && steps.stepIndex < steps.session.reviewedSteps.length - 1)
-                                        void controller.step(steps.stepIndex + 1)
-                                }}
-                            />
-                        </View>
+                {steps === undefined ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+                        {primary === undefined ? null : <View style={{ flex: 1 }}>{primary}</View>}
+                        {secondary}
+                    </View>
+                ) : (
+                    <View
+                        testID="guide-action-row"
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}
+                        nativeID={originId('shell')}
+                    >
+                        <IconButton
+                            label="Previous step"
+                            icon="chevronLeft"
+                            testID="shell-previous-step"
+                            variant="secondary"
+                            disabled={disabled || steps.stepIndex === 0}
+                            onPress={(): void => {
+                                if (!disabled && steps.stepIndex > 0) void controller.step(steps.stepIndex - 1)
+                            }}
+                        />
+                        {primary === undefined ? null : <View style={{ flex: 1 }}>{primary}</View>}
+                        {secondary}
+                        <IconButton
+                            label="Next step"
+                            icon="chevronRight"
+                            testID="shell-next-step"
+                            variant="secondary"
+                            disabled={disabled || steps.stepIndex >= steps.session.reviewedSteps.length - 1}
+                            onPress={(): void => {
+                                if (!disabled && steps.stepIndex < steps.session.reviewedSteps.length - 1)
+                                    void controller.step(steps.stepIndex + 1)
+                            }}
+                        />
                     </View>
                 )}
             </View>

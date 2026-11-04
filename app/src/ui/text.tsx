@@ -83,6 +83,7 @@ export function Caption(props: TypeProps): ReactElement {
     return <Typeset role="caption" tone="muted" {...props} />
 }
 
-export function Label(props: TypeProps): ReactElement {
+// A section heading is a label that assistive tech can navigate to: pass `header` for that.
+export function Label(props: TypeProps & { readonly header?: boolean }): ReactElement {
     return <Typeset role="label" tone="muted" {...props} />
 }

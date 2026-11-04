@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native'
-import { AppState, type AppStateStatus } from 'react-native'
+import { AppState, Text, type AppStateStatus } from 'react-native'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
 import type { GLViewProps, ExpoWebGLRenderingContext } from 'expo-gl'
 import type { StepMotionScene } from '@truebuild/contracts'
-import { StepMotionHint } from './step-motion-hint'
+import { StepMotionHint, type StepMotionAvailability } from './step-motion-hint'
 import { FeedbackProvider } from '../../ui/feedback'
 import { ThemeProvider } from '../../theme/theme'
+import { lightColors } from '../../theme/tokens'
 
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 
@@ -73,6 +74,9 @@ function ui(props: {
     active?: boolean
     readingLanguage?: string
     loading?: boolean
+    fallback?: React.ReactNode
+    stepLabel?: string
+    onAvailabilityChange?: (status: StepMotionAvailability) => void
 }): React.JSX.Element {
     return (
         <ThemeProvider>
@@ -82,6 +86,9 @@ function ui(props: {
                     active={props.active ?? true}
                     readingLanguage={props.readingLanguage}
                     loading={props.loading}
+                    fallback={props.fallback}
+                    stepLabel={props.stepLabel}
+                    onAvailabilityChange={props.onAvailabilityChange}
                 />
             </FeedbackProvider>
         </ThemeProvider>
@@ -167,9 +174,9 @@ it('uses the reading-language registry for loading and approximation copy, with 
     await view.rerender(ui({ scene, reduceMotion: true, readingLanguage: 'fr' }))
     await createSurface()
     expect(screen.getByText('Approximatif')).toBeTruthy()
-    expect(screen.queryByText('Approximate')).toBeNull()
+    expect(screen.queryByText('Approximate motion')).toBeNull()
     await view.rerender(ui({ scene, reduceMotion: true, readingLanguage: 'zz' }))
-    expect(screen.getByText('Approximate')).toBeTruthy()
+    expect(screen.getByText('Approximate motion')).toBeTruthy()
 })
 
 it('turning reduced motion off does not offer Replay before the three loops finish', async () => {
@@ -188,7 +195,7 @@ it('shows the finished pose and caption with no motion when reduced', async () =
     expect(mockScene.draw).toHaveBeenCalledTimes(1)
     expect(mockScene.draw).toHaveBeenCalledWith(Number.POSITIVE_INFINITY)
     expect(screen.getByText(scene.caption)).toBeTruthy()
-    expect(screen.getByText('Approximate')).toBeTruthy()
+    expect(screen.getByText('Approximate motion')).toBeTruthy()
     expect(screen.queryByTestId('step-motion-replay')).toBeNull()
     await advance(20_000)
     expect(mockScene.draw).toHaveBeenCalledTimes(1)
@@ -205,7 +212,7 @@ it('plays at most 30 frames a second to the end, then stops until Replay restart
 
     // Frames land every ~32ms, so the last frame before 9 s may fall just short; one more frame finishes the run.
     await advance(8_200)
-    expect(screen.getByTestId('step-motion-replay')).toBeTruthy()
+    expect(screen.getByTestId('step-motion-replay')).toHaveStyle({ backgroundColor: lightColors.accent })
     const drawsAtEnd = mockScene.draw.mock.calls.length
     await advance(5_000)
     expect(mockScene.draw.mock.calls.length).toBe(drawsAtEnd)
@@ -313,4 +320,47 @@ it('ignores a context callback retained past deactivation or unmount: no loader,
     expect(mockLoadScene).not.toHaveBeenCalled()
     expect(mockCreateScene).not.toHaveBeenCalled()
     expect(mockScene.dispose).not.toHaveBeenCalled()
+})
+
+it('reserves one hero frame through loading, motion and manual fallback, with availability updates', async () => {
+    const availability = jest.fn()
+    const fallback = <Text>Manual reference</Text>
+    const props = { fallback, stepLabel: 'Step 2', onAvailabilityChange: availability }
+    const view = await render(ui({ scene: null, loading: true, ...props }))
+    expect(screen.getByTestId('step-motion-viewport')).toHaveStyle({ aspectRatio: 1.6, borderRadius: 16 })
+    expect(screen.getByTestId('blueprint-loader-piece')).toBeTruthy()
+    expect(screen.queryByText('Step 2')).toBeNull()
+    expect(availability).toHaveBeenLastCalledWith('loading')
+    await view.rerender(ui({ scene, ...props }))
+    await createSurface()
+    expect(screen.getByTestId('step-motion-viewport')).toHaveStyle({ aspectRatio: 1.6, borderRadius: 16 })
+    expect(screen.getByText(scene.caption)).toBeTruthy()
+    expect(screen.getByText('Step 2')).toBeTruthy()
+    expect(availability).toHaveBeenLastCalledWith('motion')
+    expect(mockCreateScene).toHaveBeenCalledWith(
+        gl,
+        scene,
+        expect.objectContaining({ background: expect.any(String), ground: expect.any(String) }),
+    )
+    await view.rerender(ui({ scene: null, ...props }))
+    expect(screen.getByText('Manual reference')).toBeTruthy()
+    expect(screen.queryByText('Step 2')).toBeNull()
+    expect(screen.queryByText(scene.caption)).toBeNull()
+    expect(screen.getByTestId('step-motion-viewport')).toHaveStyle({ aspectRatio: 1.6, borderRadius: 16 })
+    expect(availability).toHaveBeenLastCalledWith('fallback')
+})
+
+it('uses the manual reference when GL is unavailable or startup fails', async () => {
+    const fallback = <Text>Manual reference</Text>
+    mockGL.available = false
+    const view = await render(ui({ scene, fallback }))
+    expect(screen.getByText('Manual reference')).toBeTruthy()
+    expect(screen.queryByTestId('step-motion-gl-surface')).toBeNull()
+    await view.unmount()
+    mockGL.available = true
+    await render(ui({ scene, fallback }))
+    await screen.findByTestId('step-motion-gl-surface')
+    await advance(5_100)
+    expect(screen.getByText('Manual reference')).toBeTruthy()
+    expect(screen.queryByTestId('step-motion-gl-surface')).toBeNull()
 })

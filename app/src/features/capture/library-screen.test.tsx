@@ -29,6 +29,8 @@ async function setup(
     patch: Partial<WorkflowState> = {},
 ): Promise<{ createManual: jest.Mock; open: jest.Mock; restore: jest.Mock }> {
     const { state } = workflowPreviewFixture(id)
+    // Component cases exercise a sole manual by default; explicit patches own multi-manual scenarios.
+    if (id === 'home-populated') state.entries = state.entries.slice(0, 1)
     const createManual = jest.fn(async (): Promise<void> => undefined)
     const open = jest.fn(async (): Promise<void> => undefined)
     const restore = jest.fn(async (): Promise<void> => undefined)
@@ -40,8 +42,10 @@ async function setup(
 describe('first run', () => {
     it('says one thing, with Add manual as the only action, and keeps How it works in More', async () => {
         await setup('home-empty')
-        expect(screen.getByText('Build furniture with step-by-step help.')).toBeTruthy()
+        expect(screen.getByText('Add your first manual')).toBeTruthy()
+        expect(screen.getByText('Photograph the pages. Build one step at a time.')).toBeTruthy()
         expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        expect(screen.getAllByTestId('home-add')).toHaveLength(1)
         expect(screen.queryByText('Use sample manual')).toBeNull()
         // The explanation is not on the surface and has no second button beside the primary; it is in More.
         expect(screen.queryByText('Scan. Photograph the pages of your paper manual.')).toBeNull()
@@ -321,7 +325,7 @@ describe('unavailable states', () => {
 })
 
 describe('saved manuals', () => {
-    it('resumes a sole manual from one primary, and reports progress in plain steps, not as verified', async () => {
+    it('opens a sole manual from the same row as multiple manuals and reports its next step', async () => {
         const fixture = workflowPreviewFixture('home-populated')
         const total = fixture.entry.session.reviewedSteps.length
         const entry = {
@@ -331,16 +335,17 @@ describe('saved manuals', () => {
         }
         const { open } = await setup('home-populated', { entries: [entry] })
         const title = fixture.entry.session.title
-        expect(screen.getByText(`Step 2 of ${total}`)).toBeTruthy()
+        expect(screen.getByText(`Step 2 of ${total} · Next: ${entry.session.reviewedSteps[1]!.title}`)).toBeTruthy()
         expect(screen.getByRole('progressbar', { name: `Steps done: 1 of ${total}` })).toBeTruthy()
         expect(screen.queryByText(/verified|facts confirmed|marked complete by you/i)).toBeNull()
-        // The card only says where the build stands; the primary is the one way in, and Add manual stays quiet beside it.
+        // The whole row is the manual action, including the thumbnail and progress.
         expect(screen.getByText(title)).toBeTruthy()
-        expect(screen.queryByRole('button', { name: `Open ${title}` })).toBeNull()
-        await fireEvent.press(screen.getByRole('button', { name: 'Keep building' }))
+        expect(within(screen.getByTestId('manual-card')).getAllByRole('button')).toHaveLength(1)
+        await fireEvent.press(screen.getByRole('button', { name: `Open ${title}` }))
         expect(open).toHaveBeenCalledTimes(1)
         expect(open).toHaveBeenLastCalledWith(entry.session.manualId, 'guide')
         expect(screen.getByRole('button', { name: 'Add manual' })).toBeTruthy()
+        expect(screen.getAllByTestId('home-add')).toHaveLength(1)
     })
 
     it.each([
@@ -363,21 +368,48 @@ describe('saved manuals', () => {
         expect(open).toHaveBeenCalledWith(entry.session.manualId, route)
     })
 
-    it('shows the first page as a small unstretched thumbnail when it is loaded, else the image icon, and never as a target', async () => {
-        const fixture = workflowPreviewFixture('home-populated')
-        const page = fixture.entry.session.pages[0]!
+    it('crops the first page into an 80-point cover or shows a blueprint tile without another action', async () => {
         await setup('home-populated')
         const thumb = (): Record<string, unknown> =>
             StyleSheet.flatten(screen.getByTestId('manual-thumb', { includeHiddenElements: true }).props.style)
-        expect(thumb().aspectRatio).toBeCloseTo(page.width / page.height, 6)
+        expect(thumb()).toMatchObject({ width: 80, height: 80, borderRadius: 12, overflow: 'hidden' })
         expect(screen.getByLabelText('First page of your manual', { includeHiddenElements: true })).toBeTruthy()
         expect(screen.queryByRole('button', { name: /First page/u })).toBeNull()
         await screen.unmount()
-        // Home clears the loaded pages: nothing is read for the thumbnail, so the icon stands in.
+        // Missing local pixels use the blueprint tile; nothing is loaded for the thumbnail.
         await setup('home-populated', { pageUris: {} })
-        expect(thumb().aspectRatio).toBeUndefined()
+        expect(screen.getByTestId('manual-blueprint', { includeHiddenElements: true })).toBeTruthy()
         expect(screen.queryByLabelText('First page of your manual', { includeHiddenElements: true })).toBeNull()
         expect(screen.getByRole('button', { name: 'Keep building' })).toBeTruthy()
+    })
+
+    it.each(['', '  ', 'Untitled', 'Untitled manual'])(
+        'uses an honest title for saved title %p, never a step title',
+        async (title) => {
+            const { entry } = workflowPreviewFixture('home-populated')
+            await setup('home-populated', { entries: [{ ...entry, session: { ...entry.session, title } }] })
+            expect(screen.getByRole('button', { name: 'Open Untitled manual' })).toBeTruthy()
+            expect(
+                within(screen.getByTestId('manual-card')).getByRole('header', { name: 'Untitled manual' }),
+            ).toBeTruthy()
+        },
+    )
+
+    it('trims a real saved title and shows the current step with only its known parts in the sole preview', async () => {
+        const { entry } = workflowPreviewFixture('home-populated')
+        const step = entry.session.reviewedSteps[1]!
+        await setup('home-populated', {
+            entries: [{ ...entry, stepIndex: 1, session: { ...entry.session, title: '  My shelf  ' } }],
+        })
+        expect(screen.getByRole('button', { name: 'Open My shelf' })).toBeTruthy()
+        const preview = within(screen.getByTestId('home-next-preview'))
+        expect(preview.getByText("What's next")).toBeTruthy()
+        expect(preview.getByText(step.title)).toBeTruthy()
+        for (const requirement of step.parts) {
+            const part = entry.session.parts.find((candidate) => candidate.partId === requirement.partId)
+            if (part?.name.state === 'known') expect(preview.getByText(part.name.value)).toBeTruthy()
+        }
+        expect(screen.queryByText('Pick up where you left off.')).toBeNull()
     })
 
     it('puts the same thumbnail in each row of several manuals without changing the row’s one action', async () => {
@@ -394,6 +426,8 @@ describe('saved manuals', () => {
         const second = { ...fixture.entry, session: { ...fixture.entry.session, manualId: 'second', title: 'Second' } }
         const { open } = await setup('home-populated', { entries: [fixture.entry, second] })
         expect(screen.getAllByTestId('manual-card')).toHaveLength(2)
+        expect(screen.queryByTestId('home-next-preview')).toBeNull()
+        expect(screen.getAllByRole('progressbar')).toHaveLength(2)
         expect(screen.queryByRole('button', { name: 'Keep building' })).toBeNull()
         expect(within(screen.getByTestId('bottom-bar')).getAllByRole('button')).toHaveLength(1)
         await fireEvent.press(screen.getByRole('button', { name: 'Open Second' }))

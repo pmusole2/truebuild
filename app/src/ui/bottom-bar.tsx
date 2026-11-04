@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { cloneElement, type ReactElement, type ReactNode } from 'react'
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CoachTarget } from '../features/onboarding/coach-provider'
@@ -7,7 +7,7 @@ import { space } from '../theme/tokens'
 import { AppButton, IconButton } from './button'
 import type { IconName } from './icons'
 import { useLargeText } from './large-text'
-import { Callout } from './text'
+import { Caption } from './text'
 import { useOriginNativeId } from './render-origin'
 
 export type BarAction = {
@@ -45,7 +45,11 @@ export function FixedBottomBar({
     reasonNativeID,
     placement = 'flow',
     onHeight,
+    navigation,
+    secondaryVariant = 'secondary',
 }: {
+    readonly navigation?: ReactElement<{ primary?: ReactNode; secondary?: ReactNode }>
+    readonly secondaryVariant?: 'quiet' | 'secondary'
     readonly primary: BarAction | null
     readonly secondary?: BarAction
     readonly reason?: string | null
@@ -103,14 +107,33 @@ export function FixedBottomBar({
                     style={{ maxHeight: Math.round(height * REASON_MAX_RATIO) }}
                     contentContainerStyle={styles.reason}
                 >
-                    <Callout tone="muted">{reason}</Callout>
+                    <Caption tone="muted">{reason}</Caption>
                 </ScrollView>
             ) : (
                 <View nativeID={reasonId} accessibilityLiveRegion="polite" style={styles.reason}>
-                    <Callout tone="muted">{reason}</Callout>
+                    <Caption tone="muted">{reason}</Caption>
                 </View>
             )}
-            {iconSecondary && primary !== null && secondary !== undefined ? (
+            {navigation !== undefined && primary !== null ? (
+                cloneElement(navigation, {
+                    primary: target(primary, <AppButton variant="accent" size="primary" {...shown(primary)} />),
+                    secondary:
+                        secondary === undefined
+                            ? undefined
+                            : target(
+                                  secondary,
+                                  <IconButton
+                                      label={secondary.accessibilityLabel ?? secondary.label}
+                                      icon={secondary.icon ?? 'more'}
+                                      variant={secondaryVariant}
+                                      disabled={secondary.disabled === true || secondary.busy === true}
+                                      testID={secondary.testID}
+                                      nativeID={secondary.nativeID}
+                                      onPress={secondary.onPress}
+                                  />,
+                              ),
+                })
+            ) : iconSecondary && primary !== null && secondary !== undefined ? (
                 <View style={styles.row}>
                     <View style={styles.grow}>
                         {target(primary, <AppButton variant="accent" size="primary" {...shown(primary)} />)}
@@ -134,7 +157,7 @@ export function FixedBottomBar({
                         : target(primary, <AppButton variant="accent" size="primary" {...shown(primary)} />)}
                     {secondary === undefined
                         ? null
-                        : target(secondary, <AppButton variant="quiet" {...shown(secondary)} />)}
+                        : target(secondary, <AppButton variant={secondaryVariant} {...shown(secondary)} />)}
                 </>
             )}
         </View>

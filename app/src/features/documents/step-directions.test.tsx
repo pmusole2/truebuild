@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
-import type { ReactElement } from 'react'
+import type * as ReactModule from 'react'
+import type * as ReactNative from 'react-native'
+import type { ReactElement, ReactNode } from 'react'
 import {
     assembleDocumentV2,
     buildFallbackProposalV2,
@@ -15,6 +17,32 @@ import {
 import { ThemeProvider } from '../../theme/theme'
 import { DocumentRenderer } from './document-renderer'
 import type { FrameBindings } from './types'
+let mockMotionStatus: 'motion' | 'fallback' = 'fallback'
+jest.mock('../step-motion/guide-step-motion', () => {
+    const React = jest.requireActual<typeof ReactModule>('react')
+    const { View } = jest.requireActual<typeof ReactNative>('react-native')
+    return {
+        GuideStepMotion: ({
+            fallback,
+            onAvailabilityChange,
+        }: {
+            fallback?: ReactNode
+            onAvailabilityChange?: (status: 'motion' | 'fallback') => void
+        }): ReactElement => {
+            React.useEffect(() => {
+                onAvailabilityChange?.(mockMotionStatus)
+            }, [onAvailabilityChange])
+            return React.createElement(
+                View,
+                { testID: 'fixture-motion-boundary' },
+                mockMotionStatus === 'motion' ? null : fallback,
+            )
+        },
+    }
+})
+beforeEach(() => {
+    mockMotionStatus = 'fallback'
+})
 jest.mock('react-native-reanimated', () => jest.requireActual('../../ui/test-support/reanimated-mock'))
 jest.mock(
     'react-native-safe-area-context',
@@ -139,7 +167,99 @@ const textsOf = (node: Tree): string[] =>
 const shownTexts = (): string[] => textsOf(screen.toJSON() as Tree)
 
 describe('step directions', () => {
-    it('shows sized and count-only parts in Directions using only this step’s quantities', async () => {
+    it('uses the step title as the page heading and omits its duplicate direction while preserving other facts', async () => {
+        const session = createDemoManual()
+        session.reviewedSteps[0]!.correction = null
+        await renderGuide(session)
+        expect(screen.getByRole('header', { name: session.reviewedSteps[0]!.title })).toBeTruthy()
+        expect(screen.getAllByText(session.reviewedSteps[0]!.title)).toHaveLength(1)
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.'])
+        expect(screen.getByText('Do this')).toBeTruthy()
+    })
+
+    it('moves end-state facts to checks only when no action facts exist and a motion is available', async () => {
+        mockMotionStatus = 'motion'
+        const session = createDemoManual()
+        session.reviewedSteps[0]!.correction = null
+        const document = composeGuide(session, undefined, false)
+        await renderGuide(session)
+        const directions = within(screen.getByTestId('guide-directions'))
+        expect(directions.getByText('Follow the motion above')).toBeTruthy()
+        const checks = within(screen.getByTestId('guide-checks'))
+        for (const fact of document.facts.filter((item) => item.kind === 'orientation' || item.kind === 'connection')) {
+            expect(directions.queryByText(fact.text)).toBeNull()
+            expect(checks.getByText(fact.text)).toBeTruthy()
+        }
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual([])
+        expect(screen.getAllByRole('link', { name: OPENER }).length).toBeGreaterThan(0)
+    })
+
+    it('keeps explicit action facts numbered when motion is available', async () => {
+        mockMotionStatus = 'motion'
+        await renderGuide(sessionWithActions(ACTIONS))
+        const directions = within(screen.getByTestId('guide-directions'))
+        for (const action of ACTIONS) expect(directions.getByText(action)).toBeTruthy()
+        expect(directions.queryByText('Follow the motion above')).toBeNull()
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
+    })
+
+    it('keeps legacy direction facts in their original group even with motion available', async () => {
+        mockMotionStatus = 'motion'
+        const session = createDemoManual()
+        const document = composeGuide(session, undefined, true)
+        await renderGuide(session, undefined, true)
+        for (const fact of document.facts.filter((item) => item.kind === 'orientation' || item.kind === 'connection'))
+            expect(screen.getByText(fact.text)).toBeTruthy()
+        expect(screen.queryByText('Follow the motion above')).toBeNull()
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual([])
+    })
+
+    it('keeps a source opener reachable in a title-less non-collapsible section', async () => {
+        await renderGuide(sessionWithSeparateRegions(), (proposal) => {
+            if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
+            proposal.body.children.unshift({
+                type: 'Section',
+                title: null,
+                collapsible: false,
+                initiallyOpen: true,
+                children: [
+                    {
+                        type: 'ManualPage',
+                        sources: [0],
+                        fit: 'contain',
+                        label: { kind: 'literal', text: 'Part pictures' },
+                        initiallyOpen: false,
+                    },
+                ],
+            })
+        })
+        const opener = screen.getByRole('link', { name: 'Part pictures' })
+        const before = screen.queryAllByText('This manual picture is unavailable.').length
+        await fireEvent.press(opener)
+        expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(before + 1)
+    })
+
+    it('keeps every extra manual image reachable when motion is unavailable', async () => {
+        await renderGuide(sessionWithSeparateRegions(), (proposal) => {
+            if (proposal.body.type !== 'Scroll') throw new Error('fixture body must scroll')
+            proposal.body.children.push({
+                type: 'Image',
+                source: { kind: 'source', index: 1 },
+                fit: 'contain',
+                ratio: 'wide',
+                caption: null,
+            })
+        })
+        const thumb = screen.getByTestId('guide-manual-thumb-1')
+        expect(thumb).toBeTruthy()
+        const button = thumb.parent
+        if (button === null) throw new Error('Missing manual thumbnail control')
+        await fireEvent.press(button)
+        expect(screen.getByTestId('more-sheet')).toBeTruthy()
+        expect(screen.getByTestId('diagram-0')).toBeTruthy()
+    })
+
+    it('shows sized and count-only parts once in compact parts using only this step’s quantities', async () => {
         const session = sessionWithActions(ACTIONS)
         const step = session.reviewedSteps[0]!
         session.parts[0]!.name = { state: 'known', value: 'Screw', sourceRefs: step.sourceRefs }
@@ -160,12 +280,15 @@ describe('step directions', () => {
         const document = composeGuide(session, undefined, false)
         expect(verifyDocumentAgainstInputsV2(document, guideInputs(session), sha256Hex)).toEqual([])
         await renderGuide(session)
-        expect(screen.getByText('Screw · 4 × 16 mm · ×4')).toBeTruthy()
-        const directions = within(screen.getByTestId('guide-directions'))
-        expect(directions.getByText('Screw · 4 × 16 mm · ×4')).toBeTruthy()
-        expect(directions.getByText('Screw · 4 × 16 mm · ×4').props.nativeID).toContain('truebuild-render-origin:shell')
-        expect(directions.getByText('Washer · ×6')).toBeTruthy()
-        expect(directions.queryByText(/Other screw|6 × 90 mm|×99|×50|×1$/u)).toBeNull()
+        const parts = within(screen.getByTestId('pieces-grid'))
+        expect(parts.getByText('Screw')).toBeTruthy()
+        expect(parts.getByText('4 × 16 mm')).toBeTruthy()
+        expect(parts.getByTestId('piece-tile-side-panel').props.nativeID).toContain('truebuild-render-origin:shell')
+        expect(parts.getByText('×4')).toBeTruthy()
+        expect(parts.getByText('Washer')).toBeTruthy()
+        expect(parts.getByText('×6')).toBeTruthy()
+        expect(parts.queryByText(/Other screw|6 × 90 mm|×99|×50|×1$/u)).toBeNull()
+        expect(within(screen.getByTestId('guide-directions')).queryByText('Screw')).toBeNull()
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
     })
 
@@ -175,10 +298,11 @@ describe('step directions', () => {
         session.parts[0]!.inventoryQuantity = 99
         session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason: 'Count is not printed.' }
         await renderGuide(session)
-        expect(screen.getByText('Side panel · 12 × 24 cm')).toBeTruthy()
-        const directions = within(screen.getByTestId('guide-directions'))
-        expect(directions.getByText('Side panel · 12 × 24 cm')).toBeTruthy()
-        expect(directions.queryByText(/×99/u)).toBeNull()
+        expect(screen.getByText('Side panel')).toBeTruthy()
+        const parts = within(screen.getByTestId('pieces-grid'))
+        expect(parts.getByText('12 × 24 cm')).toBeTruthy()
+        expect(parts.queryByText(/×99/u)).toBeNull()
+        expect(parts.queryByTestId('piece-quantity-side-panel')).toBeNull()
     })
 
     it('names every current-step part, even with no size and an unknown count, without its inventory count', async () => {
@@ -199,8 +323,8 @@ describe('step directions', () => {
             quantity: { state: 'unknown', reason: 'Count is not printed.' },
         }))
         await renderGuide(session)
-        const directions = within(screen.getByTestId('guide-directions'))
-        for (const name of names) expect(directions.getByText(name)).toBeTruthy()
+        const parts = within(screen.getByTestId('pieces-grid'))
+        for (const name of names) expect(parts.getByLabelText(name)).toBeTruthy()
         expect(shownTexts()).not.toContain('Unrelated clip')
         expect(shownTexts().filter((text) => /×\s*5\b/u.test(text))).toEqual([])
     })
@@ -248,15 +372,15 @@ describe('step directions', () => {
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
     })
 
-    it('numbers the saved title, orientation and connection as the Directions when the step has no actions', async () => {
+    it('numbers orientation and connection when no motion is available, with the title in the header', async () => {
         const session = createDemoManual()
         session.reviewedSteps[0]!.correction = null
         await renderGuide(session)
-        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.', '3.'])
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.'])
         expect(screen.getAllByText(session.reviewedSteps[0]!.title)).toHaveLength(1)
     })
 
-    it('shows a saved step title once, numbered as the first direction', async () => {
+    it('shows a saved step title once in the header before the first numbered direction', async () => {
         const session = createDemoManual()
         const step = session.reviewedSteps[0]!
         // An unclassified saved step with no actions: its title opens the Directions.
@@ -265,7 +389,7 @@ describe('step directions', () => {
         await renderGuide(session)
         expect(screen.getAllByText(step.title)).toHaveLength(1)
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))[0]).toBe('1.')
-        expect(shownTexts().indexOf(step.title)).toBeGreaterThan(shownTexts().indexOf('1.'))
+        expect(shownTexts().indexOf(step.title)).toBeLessThan(shownTexts().indexOf('1.'))
     })
 
     it('speaks each numbered direction as one item: its step number, then the exact instruction', async () => {
@@ -276,8 +400,40 @@ describe('step directions', () => {
         expect(shownTexts()).toEqual(expect.arrayContaining(ACTIONS))
     })
 
-    it('reports the Check your work disclosure as expanded, and collapses it on press', async () => {
-        await renderGuide(sessionWithActions(ACTIONS))
+    it('keeps a short check list open without an extra disclosure', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const document = composeGuide(session, undefined, false)
+        await renderGuide(session)
+        expect(screen.getByRole('header', { name: 'Check your work' })).toBeTruthy()
+        expect(screen.queryByRole('button', { name: 'Check your work' })).toBeNull()
+        const checks = within(screen.getByTestId('guide-checks'))
+        for (const fact of document.facts.filter((item) => ['orientation', 'connection', 'check'].includes(item.kind)))
+            expect(checks.getByText(fact.text)).toBeTruthy()
+    })
+
+    it('normalizes whitespace and trailing punctuation in title duplicates and renumbers the remaining action', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const step = session.reviewedSteps[0]!
+        const duplicate = `  ${step.title.toUpperCase()} ;  `
+        step.actions = [
+            { actionId: 'title-copy', instruction: duplicate, sourceRefs: step.sourceRefs },
+            { actionId: 'real-action', instruction: ACTIONS[1]!, sourceRefs: step.sourceRefs },
+        ]
+        await renderGuide(session)
+        expect(screen.queryByText(duplicate)).toBeNull()
+        expect(screen.getAllByText(step.title)).toHaveLength(1)
+        expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.'])
+        expect(screen.getByLabelText(`Step 1, ${ACTIONS[1]}`)).toBeTruthy()
+    })
+
+    it('keeps initiallyOpen semantics for a long Check your work disclosure, and collapses it on press', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const step = session.reviewedSteps[0]!
+        step.visibleChecks = Array.from({ length: 5 }, (_, index) => ({
+            checkId: `long-${index}`,
+            description: { state: 'known' as const, value: `Cited check ${index + 1}.`, sourceRefs: step.sourceRefs },
+        }))
+        await renderGuide(session)
         const check = screen.getByRole('button', { name: 'Check your work' })
         expect(check.props.accessibilityState).toMatchObject({ expanded: true })
         await fireEvent.press(check)
@@ -295,7 +451,7 @@ describe('step directions', () => {
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual([])
     })
 
-    it('draws a section source opener after its last numbered direction, even when a citation comes first', async () => {
+    it('draws a section source opener in its header before the numbered directions', async () => {
         await renderGuide(sessionWithActions(ACTIONS), (proposal) => {
             const insertCitation = (node: ScreenNodeV2): void => {
                 if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Directions')
@@ -308,7 +464,7 @@ describe('step directions', () => {
         // A caption-sized opener: its visible words are either the full opener or its short form.
         const openers = texts.flatMap((text, index) => (text === OPENER || text === 'Manual page' ? [index] : []))
         expect(openers).toHaveLength(1)
-        expect(openers[0]).toBeGreaterThan(texts.indexOf('3.'))
+        expect(openers[0]).toBeLessThan(texts.indexOf('1.'))
         expect(openers[0]).toBeLessThan(texts.indexOf('Check your work'))
     })
 

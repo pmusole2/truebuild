@@ -1,6 +1,8 @@
 import { waitCopyV2 } from '@truebuild/contracts'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import {
+    Image,
+    Platform,
     ScrollView,
     StyleSheet,
     View,
@@ -8,6 +10,7 @@ import {
     type NativeScrollEvent,
     type NativeSyntheticEvent,
 } from 'react-native'
+import Svg, { Path, SvgXml } from 'react-native-svg'
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated'
 import { useColdEntrance } from '../../ui/cold-start'
 import { useEntranceGroup, useEntranceTimeline } from '../../ui/motion'
@@ -17,19 +20,21 @@ import { ShowTipsAgainRow } from '../onboarding/tips-rows'
 import { FixedBottomBar } from '../../ui/bottom-bar'
 import { useFeedback } from '../../ui/feedback'
 import { MoreSheet } from '../../ui/sheet'
+import { SectionHeader } from '../../ui/headers'
+import { PartChip } from '../../ui/part-chip'
 import { Card, Stack } from '../../ui/surface'
-import { Body, Caption, Heading, Instruction, LargeTitle } from '../../ui/text'
+import { Body, Heading, Instruction, LargeTitle } from '../../ui/text'
 import { LoadingState } from '../../ui/states'
 import { ProgressBar } from '../../ui/progress'
 import { Icon } from '../../ui/icons'
 import { focusRingStyle, useFocusRing } from '../../ui/focus'
 import { PressMotion } from '../../ui/press-motion'
 import { useTheme } from '../../theme/theme'
-import { radius, space, touchTarget } from '../../theme/tokens'
+import { space, touchTarget } from '../../theme/tokens'
 import type { LibraryEntry } from './library'
 import { AboutThisCheck, HowItWorks } from './more-sections'
 import { plainNotice, plainPending, progressLine, stopFor } from './plain-copy'
-import { ManualImage } from './page-media'
+import { inlineSvgXml } from './page-media'
 import { PlainNotice, ScreenBody } from './screen-layout'
 import { InlineHeader, useMoreState, type ChromeProps } from './screen-header'
 import { defaultNav, type ScreenNav } from './screen-nav'
@@ -260,6 +265,7 @@ export function LibraryScreen({
         ? {
               label: 'Add manual',
               compactLabel: 'Add',
+              testID: 'home-add',
               onPress: addManual,
               disabled: true,
           }
@@ -294,6 +300,7 @@ export function LibraryScreen({
             ? {
                   label: 'Add manual',
                   icon: 'plus' as const,
+                  testID: 'home-add',
                   onPress: addManual,
               }
             : undefined
@@ -357,24 +364,18 @@ export function LibraryScreen({
                     ) : failed ? (
                         <Instruction>{recoveryCopy}</Instruction>
                     ) : empty ? (
-                        <View style={[styles.hero, overlay && styles.heroCentred]}>
-                            <Icon name="image" />
-                            <Instruction>Build furniture with step-by-step help.</Instruction>
-                        </View>
+                        <HomeEmptyState />
                     ) : null}
-                    {sole === undefined ? null : (
-                        <ContinueCard entry={sole} pageUris={state.pageUris} resumable={!state.storageReadOnly} />
-                    )}
-                    {entries.length > 1
-                        ? entries.map((entry) => (
-                              <ManualRow
-                                  key={entry.session.manualId}
-                                  entry={entry}
-                                  pageUris={state.pageUris}
-                                  onOpen={(): void => nav.openStop(entry)}
-                              />
-                          ))
-                        : null}
+                    {entries.map((entry) => (
+                        <ManualRow
+                            key={entry.session.manualId}
+                            entry={entry}
+                            pageUris={state.pageUris}
+                            disabled={state.pending !== null || state.storageReadOnly}
+                            onOpen={(): void => nav.openStop(entry)}
+                        />
+                    ))}
+                    {sole === undefined || state.storageReadOnly ? null : <WhatsNextPreview entry={sole} />}
                 </Animated.View>
             </ScrollView>
             <FixedBottomBar
@@ -395,12 +396,55 @@ export function LibraryScreen({
         </ScreenBody>
     )
 }
-const THUMB_WIDTH = 64
+/** Only the saved manual title names a manual; this session contract has no extracted product title. */
+export function savedManualTitle(entry: LibraryEntry): string {
+    const title = entry.session.title.trim()
+    return title === '' || /^untitled(?: manual)?$/iu.test(title) ? 'Untitled manual' : title
+}
 
-/**
- * The first manual page, small and at its own proportions, when the page is already loaded. Nothing is read for it:
- * Home clears the loaded pages, and then the existing image icon stands in. Decorative, never a target.
- */
+/** A static blueprint motif, shared by missing covers and the first-run invitation. */
+function BlueprintTile({ large = false }: { large?: boolean }): ReactElement {
+    const { colors } = useTheme()
+    return (
+        <View
+            testID="manual-blueprint"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[styles.blueprint, large && styles.blueprintLarge, { backgroundColor: colors.surfaceSunken }]}
+        >
+            <Svg width={large ? 112 : 54} height={large ? 112 : 54} viewBox="0 0 80 80" fill="none" aria-hidden>
+                <Path d="M12 16h56v48H12z M20 8v64 M60 8v64 M6 24h68 M6 56h68" stroke={colors.border} strokeWidth={1} />
+                <Path
+                    d="m25 31 17-9 16 9-17 9z M25 31v18l16 10 17-10V31 M41 40v19"
+                    stroke={colors.accent}
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+            </Svg>
+        </View>
+    )
+}
+
+export function HomeEmptyState({
+    nativeID,
+    subtitle = 'Photograph the pages. Build one step at a time.',
+}: {
+    nativeID?: string
+    subtitle?: string
+}): ReactElement {
+    return (
+        <View nativeID={nativeID} style={styles.hero}>
+            <BlueprintTile large />
+            <Heading style={styles.emptyTitle}>Add your first manual</Heading>
+            <Body tone="muted" style={styles.emptyDetail}>
+                {subtitle}
+            </Body>
+        </View>
+    )
+}
+
+/** An 80-point cover. Available pixels crop into the square; missing pixels keep the same blueprint tile. */
 function ManualThumb({
     entry,
     pageUris,
@@ -411,78 +455,74 @@ function ManualThumb({
     const { colors } = useTheme()
     const page = entry.session.pages[0]
     const uri = page === undefined ? undefined : pageUris[page.pageId]
-    const shown = page !== undefined && uri !== undefined
+    const xml = uri === undefined || Platform.OS === 'web' ? null : inlineSvgXml(uri)
     return (
         <View
             testID="manual-thumb"
-            accessibilityElementsHidden={true}
+            accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
-            style={[
-                styles.thumb,
-                {
-                    backgroundColor: colors.surfaceSunken,
-                },
-                shown
-                    ? {
-                          aspectRatio: page.width / page.height,
-                      }
-                    : styles.thumbFallback,
-            ]}
+            style={[styles.thumb, { backgroundColor: colors.surfaceSunken }]}
         >
-            {shown ? (
-                <ManualImage uri={uri} label="First page of your manual" />
+            {uri === undefined ? (
+                <BlueprintTile />
+            ) : xml === null ? (
+                <Image
+                    source={{ uri }}
+                    accessibilityLabel="First page of your manual"
+                    resizeMode="cover"
+                    style={StyleSheet.absoluteFill}
+                />
             ) : (
-                <Icon name="image" color={colors.inkMuted} />
+                <View
+                    accessibilityRole="image"
+                    accessibilityLabel="First page of your manual"
+                    style={StyleSheet.absoluteFill}
+                >
+                    <SvgXml xml={xml} width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />
+                </View>
             )}
         </View>
     )
 }
 
-/** Where the one manual stands. A summary, not a button: "Keep building" below is the single way in. */
-export function ContinueCard({
-    entry,
-    pageUris,
-    resumable,
-    nativeID,
-    showProgress = true,
-}: {
-    entry: LibraryEntry
-    pageUris: LibraryProps['state']['pageUris']
-    resumable: boolean
-    nativeID?: string
-    showProgress?: boolean
-}): ReactElement {
-    const total = entry.session.reviewedSteps.length
-    const completed = entry.completedStepIds.length
+/** Preview comes only from the current reviewed step and its known registry parts. It adds no invented facts. */
+export function WhatsNextPreview({ entry, nativeID }: { entry: LibraryEntry; nativeID?: string }): ReactElement | null {
+    const step = entry.session.reviewedSteps[entry.stepIndex]
+    if (step === undefined || stopFor(entry) !== 'guide') return null
+    const parts = step.parts.flatMap((requirement) => {
+        const part = entry.session.parts.find((candidate) => candidate.partId === requirement.partId)
+        return part?.name.state === 'known'
+            ? [{ id: part.partId, name: part.name.value, quantity: requirement.quantity }]
+            : []
+    })
     return (
-        <Card tone="raised" testID="manual-card" nativeID={nativeID}>
-            <View style={styles.summary}>
-                <ManualThumb entry={entry} pageUris={pageUris} />
-                <View style={styles.summaryText}>
-                    <Stack gap="xs">
-                        <Heading>{entry.session.title}</Heading>
-                        <Body>{progressLine(entry)}</Body>
-                        {total === 0 || !showProgress ? null : (
-                            <ProgressBar
-                                label={`Steps done: ${completed} of ${total}`}
-                                value={completed}
-                                total={total}
+        <View nativeID={nativeID} testID="home-next-preview" style={styles.preview}>
+            <SectionHeader title="What's next" />
+            <Card>
+                <Heading>{step.title}</Heading>
+                {parts.length === 0 ? null : (
+                    <View style={styles.parts}>
+                        {parts.map((part) => (
+                            <PartChip
+                                key={part.id}
+                                name={part.name}
+                                count={part.quantity.state === 'known' ? part.quantity.value : null}
                             />
-                        )}
-                        {resumable ? <Instruction>Pick up where you left off.</Instruction> : null}
-                    </Stack>
-                </View>
-            </View>
-        </Card>
+                        ))}
+                    </View>
+                )}
+            </Card>
+        </View>
     )
 }
+
 export function ManualRow({
     entry,
     pageUris,
     onOpen,
     nativeID,
     disabled = false,
-    showProgress = false,
+    showProgress = true,
 }: {
     entry: LibraryEntry
     pageUris: LibraryProps['state']['pageUris']
@@ -493,11 +533,16 @@ export function ManualRow({
 }): ReactElement {
     const { colors } = useTheme()
     const focus = useFocusRing()
+    const step = entry.session.reviewedSteps[entry.stepIndex]
+    const next =
+        stopFor(entry) === 'guide' && step !== undefined
+            ? `${progressLine(entry)} · Next: ${step.title}`
+            : progressLine(entry)
     return (
         <Card tone="raised" testID="manual-card" nativeID={nativeID}>
             <PressMotion
                 accessibilityRole="button"
-                accessibilityLabel={`Open ${entry.session.title}`}
+                accessibilityLabel={`Open ${savedManualTitle(entry)}`}
                 accessibilityState={{
                     disabled,
                 }}
@@ -509,8 +554,10 @@ export function ManualRow({
                 <ManualThumb entry={entry} pageUris={pageUris} />
                 <View style={styles.summaryText}>
                     <Stack gap="xs">
-                        <Heading>{entry.session.title}</Heading>
-                        <Caption>{progressLine(entry)}</Caption>
+                        <Heading numberOfLines={2}>{savedManualTitle(entry)}</Heading>
+                        <Body tone="muted" numberOfLines={1} style={styles.nextLine}>
+                            {next}
+                        </Body>
                         {showProgress && entry.session.reviewedSteps.length > 0 ? (
                             <ProgressBar
                                 label={`Steps done: ${entry.completedStepIds.length} of ${entry.session.reviewedSteps.length}`}
@@ -537,10 +584,6 @@ const styles = StyleSheet.create({
     fill: {
         flexGrow: 1,
     },
-    heroCentred: {
-        flex: 1,
-        justifyContent: 'center',
-    },
     group: {
         gap: space.md,
     },
@@ -548,29 +591,30 @@ const styles = StyleSheet.create({
         flexGrow: 1,
     },
     hero: {
-        gap: space.sm,
-        alignItems: 'flex-start',
+        flex: 1,
+        gap: space.md,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: space.xl,
     },
+    emptyTitle: { fontSize: 22, lineHeight: 28, fontWeight: '600', textAlign: 'center' },
+    emptyDetail: { fontSize: 15, lineHeight: 21, textAlign: 'center' },
+    blueprint: { flex: 1, alignItems: 'center', justifyContent: 'center', width: '100%' },
+    blueprintLarge: { flex: 0, width: 160, height: 144, borderRadius: 24, marginBottom: space.sm },
+    preview: { gap: 0 },
+    parts: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+    nextLine: { fontSize: 15, lineHeight: 21 },
     collapsing: {
         transformOrigin: 'left center',
-    },
-    summary: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: space.sm,
     },
     summaryText: {
         flex: 1,
     },
     thumb: {
-        width: THUMB_WIDTH,
-        borderRadius: radius.md,
+        width: 80,
+        height: 80,
+        borderRadius: 12,
         overflow: 'hidden',
-    },
-    thumbFallback: {
-        height: THUMB_WIDTH,
-        alignItems: 'center',
-        justifyContent: 'center',
     },
     row: {
         flexDirection: 'row',

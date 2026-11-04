@@ -1,3 +1,4 @@
+import { StyleSheet } from 'react-native'
 import { describe, expect, it } from '@jest/globals'
 import { render, screen } from '@testing-library/react-native'
 import { lightColors } from '../theme/tokens'
@@ -28,7 +29,7 @@ describe('typography primitives', () => {
         expect(screen.getByText('Part 1 of 2')).toHaveProp('maxFontSizeMultiplier', 0)
     })
 
-    it('captions and labels are muted, and labels retain their uppercase hierarchy', async () => {
+    it('captions and labels are muted, and labels are sentence case rather than uppercase', async () => {
         await render(
             <>
                 <Caption>Simulated photo</Caption>
@@ -36,7 +37,10 @@ describe('typography primitives', () => {
             </>,
         )
         expect(screen.getByText('Simulated photo')).toHaveStyle({ color: lightColors.inkMuted })
-        expect(screen.getByText('Stamp')).toHaveStyle({ textTransform: 'uppercase' })
+        expect(screen.getByText('Stamp')).toHaveStyle({ color: lightColors.inkMuted, fontSize: 13 })
+        expect(StyleSheet.flatten(screen.getByText('Stamp').props.style)).not.toMatchObject({
+            textTransform: 'uppercase',
+        })
     })
 
     it('a tone override replaces the default colour instead of being ignored', async () => {

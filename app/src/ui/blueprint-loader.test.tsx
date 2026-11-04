@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
-import { AccessibilityInfo, Text, View } from 'react-native'
+import { AccessibilityInfo, StyleSheet, Text, View } from 'react-native'
 import { BlueprintLoader, LoaderSwap, type BlueprintPhase } from './blueprint-loader'
 import { FeedbackProvider } from './feedback'
 import { spies } from './test-support/reanimated-mock'
@@ -240,4 +240,11 @@ it('cross-fades the same content slot for 200ms and reveals immediately with red
     expect(screen.getByText('Ready content')).toBeTruthy()
     expect(screen.getByTestId('swap')).not.toHaveStyle({ minHeight: 300 })
     expect(spies.withTiming).not.toHaveBeenCalled()
+})
+
+it('keeps the supplied fixed height inclusive of the scene card margins', async () => {
+    await render(frame(<BlueprintLoader phase="piece" height={240} />))
+    const style = StyleSheet.flatten(screen.getByTestId('blueprint-loader-piece').props.style)
+    expect(style.height + style.margin * 2).toBe(240)
+    expect(style.margin).toBe(24)
 })

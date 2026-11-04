@@ -80,7 +80,7 @@ afterEach(async () => {
     jest.restoreAllMocks()
 })
 
-it('places the motion hint directly after the directions, before the guide pieces', async () => {
+it('places the motion hero before directions and parts without changing the contract body', async () => {
     const manual = entry()
     mounted = await mount([manual], { screens: { generated: ['guide'] }, recordings: 'off' })
     await press('Continue building')
@@ -100,9 +100,10 @@ it('places the motion hint directly after the directions, before the guide piece
     walk(mounted.view.toJSON())
     const probe = tokens.indexOf('#motion-probe')
     expect(tokens.filter((token) => token === '#motion-probe')).toHaveLength(1)
-    expect(tokens.indexOf('"Directions"')).toBeGreaterThan(-1)
-    // It follows the last numbered direction, ahead of the source opener and the checks; the pieces follow it.
-    expect(tokens[probe - 1]).toBe('"Keep the panel free before seating the divider."')
+    expect(tokens.indexOf('"Do this"')).toBeGreaterThan(-1)
+    // Prompt25 re-slots the motion in the hero. The exported legacy helper remains independently covered below.
+    expect(probe).toBeLessThan(tokens.indexOf('"Do this"'))
+    expect(tokens.indexOf('"Watch it"')).toBeLessThan(probe)
     expect(probe).toBeLessThan(tokens.indexOf('"Check your work"'))
     expect(probe).toBeLessThan(tokens.indexOf('#guide-pieces-step-1'))
 })

@@ -494,7 +494,7 @@ describe('the actual v2 catalog renderer', () => {
                 expect(screen.queryByTestId('blueprint-loader-screen')).toBeNull()
                 expect(screen.getAllByRole('header', { name: copy.heading }).length).toBeGreaterThan(0)
                 expect(screen.getByTestId('frozen-photo-frame')).toBeTruthy()
-                expect(within(screen.getByTestId('bottom-bar')).getAllByText(copy.action)).toHaveLength(2)
+                expect(within(screen.getByTestId('bottom-bar')).getAllByText(copy.action)).toHaveLength(1)
                 expect(screen.getByRole('button', { name: primary, disabled: true })).toBeTruthy()
             }
             await view.rerender(wrap(<DocumentRenderer document={compose(answer)} bindings={bindings} />))
@@ -1050,7 +1050,7 @@ describe('the actual v2 catalog renderer', () => {
 
     it.each([
         { label: 'a legacy Guide with no stepActions echo', legacy: true, shown: 1 },
-        { label: 'a numbered Guide with the stepActions echo', legacy: false, shown: 3 },
+        { label: 'a numbered Guide with the stepActions echo', legacy: false, shown: 1 },
     ])('guards duplicate bound titles and subtitles only for $label', async ({ legacy, shown }) => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs, [
@@ -1089,7 +1089,8 @@ describe('the actual v2 catalog renderer', () => {
             uiState: homeUiState(bindings.live!.state.entries),
         }
         await view.rerender(wrap(<DocumentRenderer document={compose(homeInputs)} bindings={bindings} />))
-        expect(screen.getAllByText('Pick up where you left off.')).toHaveLength(1)
+        expect(screen.queryByText('Pick up where you left off.')).toBeNull()
+        expect(screen.getByText("What's next")).toBeTruthy()
     })
 
     it.each(['kind', 'manual', 'step', 'result capture', 'answer capture'] as const)(
@@ -1993,13 +1994,15 @@ it('shows a fallback Guide piece once, and a drag on its 3D view holds the page 
         wrap(<DocumentRenderer document={compose(inputs, [], 'fallback')} bindings={guideBindings} />),
     )
     try {
+        expect(screen.getByTestId(`piece-tile-${pieceId}`)).toBeTruthy()
+        await fireEvent.press(screen.getByTestId(`piece-tile-${pieceId}`))
         const card = screen.getByTestId(`piece-card-${pieceId}`)
         expect(within(card).queryByTestId('piece-viewer-fallback')).toBeNull()
         expect(screen.queryByTestId(`piece-placeholder-${pieceId}`)).toBeNull()
-        expect(screen.getAllByText(name)).toHaveLength(1)
-        expect(screen.getAllByText(/^×\s*2$/u)).toHaveLength(1)
+        expect(within(card).getAllByText(name)).toHaveLength(1)
+        expect(within(card).getAllByText(/^×\s*2$/u)).toHaveLength(1)
         expect(within(card).getByTestId('guide-piece-gl-surface')).toBeTruthy()
-        // The guide's 3D view sits in the page body, so its single-finger drag must hold that scroller until release.
+        // Selecting a chip opens the modal; the existing drag still locks its owning page scroll until release.
         const event = { nativeEvent: { touches: [] } } as unknown as GestureResponderEvent
         const touch: PanResponderGestureState = {
             stateID: 1,

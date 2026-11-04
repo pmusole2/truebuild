@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import type { ReactElement } from 'react'
 import {
     assembleDocumentV2,
@@ -123,8 +123,8 @@ it.each(['Hidden detail', 'Parts'])('keeps one opener per reference when %s open
     const missing = screen.queryAllByText('This manual picture is unavailable.').length
     await fireEvent.press(screen.getByRole('link', { name: 'See it in the manual' }))
     expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(missing + 2)
-    await fireEvent.press(screen.getByRole('link', { name: 'See it in the manual' }))
-    expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1)
+    await fireEvent.press(screen.getByRole('button', { name: 'Close sheet' }))
+    await waitFor(() => expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(1))
     await fireEvent.press(screen.getByRole('button', { name: first }))
     expect(screen.getAllByRole('link', { name: 'See it in the manual' })).toHaveLength(first === 'Parts' ? 2 : 1)
     await fireEvent.press(screen.getByRole('button', { name: second }))

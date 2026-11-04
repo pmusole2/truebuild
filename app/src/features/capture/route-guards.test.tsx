@@ -276,7 +276,11 @@ it('uses the document wrapping header while preserving the native navigator and 
     await act(async () => router.push('/guide/guard-manual'))
     await waitFor(() => expect(view.getPathname()).toBe('/guide/guard-manual'))
     await screen.findByTestId('guide-screen')
-    expect(screen.getByRole('header', { name: 'Step 1 of 2' }).props.maxFontSizeMultiplier).toBe(0)
+    expect(screen.getByText('Step 1 of 2').props.maxFontSizeMultiplier).toBe(0)
+    expect(
+        screen.getByRole('header', { name: entry('guard-manual').session.reviewedSteps[0]!.title }).props
+            .maxFontSizeMultiplier,
+    ).toBe(0)
     // One trailing control only: More. Back is the platform's own chevron.
     expect(screen.getAllByRole('button', { name: 'More' })).toHaveLength(1)
 })

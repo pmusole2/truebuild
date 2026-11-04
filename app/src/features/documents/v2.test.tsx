@@ -64,7 +64,7 @@ describe('ScreenDocumentV2 through the native renderer', () => {
         await render(wrap(<DocumentRenderer document={document} bindings={bindings()} />))
         expect(screen.getByTestId('document-screen')).toBeTruthy()
         expect(screen.getByTestId('bottom-bar')).toBeTruthy()
-        expect(screen.getByText(document.bar.primary.label)).toBeTruthy()
+        expect(screen.getByRole('button', { name: document.bar.primary.label })).toBeTruthy()
     })
 
     it('keeps camera as its own v2 document kind, never Guide wording', async () => {
