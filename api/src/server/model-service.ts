@@ -925,7 +925,8 @@ export function createModelHandlers(options: {
                         const transient =
                             error instanceof MetaProviderError &&
                             ((error.code === 'provider_error' &&
-                                (isRetryableUpstreamStatus(active.context.firstStatus) || active.context.retry === 'network')) ||
+                                (isRetryableUpstreamStatus(active.context.firstStatus) ||
+                                    active.context.retry === 'network')) ||
                                 (error.code === 'invalid_output' && error.unparseable === true))
                         const retryFits =
                             performance.now() - active.startedAt + checkTimeoutMs + CHECK_RETURN_MARGIN_MS <= duration
