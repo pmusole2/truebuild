@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native'
-import { AppState, Text, type AppStateStatus } from 'react-native'
+import { AppState, Pressable, Text, type AppStateStatus } from 'react-native'
 import type * as ReactModule from 'react'
 import type * as ReactNativeModule from 'react-native'
 import type { GLViewProps, ExpoWebGLRenderingContext } from 'expo-gl'
@@ -213,6 +213,14 @@ it('plays at most 30 frames a second to the end, then stops until Replay restart
     // Frames land every ~32ms, so the last frame before 9 s may fall just short; one more frame finishes the run.
     await advance(8_200)
     expect(screen.getByTestId('step-motion-replay')).toHaveStyle({ backgroundColor: lightColors.accent })
+    const viewport = screen.getByTestId('step-motion-viewport')
+    expect(viewport.props.pointerEvents).toBe('none')
+    let parent = screen.getByTestId('step-motion-replay').parent
+    while (parent !== null) {
+        expect(parent).not.toBe(viewport)
+        parent = parent.parent
+    }
+
     const drawsAtEnd = mockScene.draw.mock.calls.length
     await advance(5_000)
     expect(mockScene.draw.mock.calls.length).toBe(drawsAtEnd)
@@ -391,4 +399,24 @@ it('reserves a loading drawing for an inactive scene without a manual fallback',
     expect(screen.getByTestId('blueprint-loader-piece')).toBeTruthy()
     expect(screen.queryByTestId('step-motion-gl-surface')).toBeNull()
     expect(mockLoadScene).not.toHaveBeenCalled()
+})
+
+it('lets hero swipes pass through while the fallback image remains an interactive sibling', async () => {
+    const open = jest.fn()
+    const fallback = (
+        <Pressable accessibilityRole="button" accessibilityLabel="Open manual image" onPress={open}>
+            <Text>Manual picture</Text>
+        </Pressable>
+    )
+    await render(ui({ scene: null, fallback }))
+    const viewport = screen.getByTestId('step-motion-viewport')
+    expect(viewport.props.pointerEvents).toBe('none')
+    const picture = screen.getByRole('button', { name: 'Open manual image' })
+    let parent = picture.parent
+    while (parent !== null) {
+        expect(parent).not.toBe(viewport)
+        parent = parent.parent
+    }
+    await fireEvent.press(picture)
+    expect(open).toHaveBeenCalledTimes(1)
 })

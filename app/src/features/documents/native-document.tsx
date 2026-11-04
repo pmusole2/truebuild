@@ -2467,7 +2467,8 @@ export function NativeDocumentRenderer({
         available: false,
     })
     const motionIdentity = `${document.bound.manualId}:${document.bound.revision}:${document.bound.stepId}`
-    const motionAvailable = motionState.step === motionIdentity && motionState.available
+    const motionManualMatches = bindings.session?.manualId === document.bound.manualId
+    const motionAvailable = motionManualMatches && motionState.step === motionIdentity && motionState.available
     const motionChanged = useCallback(
         (status: 'motion' | 'loading' | 'fallback'): void => {
             setMotionState((current) =>
@@ -2800,27 +2801,28 @@ export function NativeDocumentRenderer({
             ) : (
                 <ReferenceImage node={reference.node} environment={environment} path={reference.path} hero />
             )
-        environment.motion =
-            __DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined ? (
-                <StepMotionHint
-                    scene={guideMotionPreview}
-                    fallback={fallback}
-                    active={scope.active && !attention}
-                    stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
-                    onAvailabilityChange={motionChanged}
-                />
-            ) : (
-                <GuideStepMotion
-                    session={bindings.session}
-                    stepId={document.bound.stepId}
-                    pageUris={bindings.pageUris}
-                    active={scope.active && !attention}
-                    readOnly={bindings.readOnly === true}
-                    fallback={fallback}
-                    stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
-                    onAvailabilityChange={motionChanged}
-                />
-            )
+        environment.motion = !motionManualMatches ? (
+            <StepMotionHint scene={null} fallback={fallback} />
+        ) : __DEV__ && DEMO_MODE === 'fixture' && guideMotionPreview !== undefined ? (
+            <StepMotionHint
+                scene={guideMotionPreview}
+                fallback={fallback}
+                active={scope.active && !attention}
+                stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
+                onAvailabilityChange={motionChanged}
+            />
+        ) : (
+            <GuideStepMotion
+                session={bindings.session}
+                stepId={document.bound.stepId}
+                pageUris={bindings.pageUris}
+                active={scope.active && !attention}
+                readOnly={bindings.readOnly === true}
+                fallback={fallback}
+                stepLabel={documentText(document, bindings, { kind: 'bound', key: 'step-position' })}
+                onAvailabilityChange={motionChanged}
+            />
+        )
         const slot = (item: { node: ScreenNodeV2; path: string }): ReactElement => (
             <Node
                 key={item.path}

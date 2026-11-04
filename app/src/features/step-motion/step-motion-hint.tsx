@@ -293,40 +293,46 @@ export function StepMotionHint({
     const loader = <BlueprintLoader phase="piece" label={copy.loading} compact height={viewportHeight} />
     return (
         <View testID="step-motion-hint" style={styles.root}>
-            <View
-                testID="step-motion-viewport"
-                style={[styles.viewport, { backgroundColor: colors.surfaceSunken }]}
-                onLayout={(event): void => {
-                    const height = event.nativeEvent.layout.height
-                    if (height > 0) setViewportHeight(height)
-                }}
-            >
-                <View pointerEvents={showFallback ? 'auto' : 'none'} style={styles.content}>
-                    {showFallback ? (
-                        fallback
-                    ) : parsed !== null && live ? (
-                        <GLBoundary key={generation} onFail={fail}>
-                            <Suspense fallback={null}>
-                                <LazyGLView style={styles.gl} onContextCreate={create} onLayout={redraw} />
-                            </Suspense>
-                        </GLBoundary>
-                    ) : null}
-                    {availability === 'loading' || (waitingForSurface && !showFallback) ? (
-                        <View pointerEvents="none" style={styles.content}>
-                            {loader}
-                        </View>
-                    ) : null}
-                </View>
-                {availability !== 'motion' || stepLabel === undefined ? null : (
-                    <View
-                        testID="step-motion-label"
-                        style={[styles.stepLabel, { backgroundColor: colors.surfaceRaised }]}
-                    >
-                        <Caption>{stepLabel}</Caption>
+            <View pointerEvents="box-none" style={styles.frame}>
+                <View
+                    testID="step-motion-viewport"
+                    pointerEvents="none"
+                    style={[styles.viewport, { backgroundColor: colors.surfaceSunken }]}
+                    onLayout={(event): void => {
+                        const height = event.nativeEvent.layout.height
+                        if (height > 0) setViewportHeight(height)
+                    }}
+                >
+                    <View style={styles.content}>
+                        {!showFallback && parsed !== null && live ? (
+                            <GLBoundary key={generation} onFail={fail}>
+                                <Suspense fallback={null}>
+                                    <LazyGLView style={styles.gl} onContextCreate={create} onLayout={redraw} />
+                                </Suspense>
+                            </GLBoundary>
+                        ) : null}
+                        {availability === 'loading' || (waitingForSurface && !showFallback) ? (
+                            <View pointerEvents="none" style={styles.content}>
+                                {loader}
+                            </View>
+                        ) : null}
                     </View>
-                )}
+                    {availability !== 'motion' || stepLabel === undefined ? null : (
+                        <View
+                            testID="step-motion-label"
+                            style={[styles.stepLabel, { backgroundColor: colors.surfaceRaised }]}
+                        >
+                            <Caption>{stepLabel}</Caption>
+                        </View>
+                    )}
+                </View>
+                {showFallback ? (
+                    <View pointerEvents="box-none" style={styles.content}>
+                        {fallback}
+                    </View>
+                ) : null}
                 {replayable && availability === 'motion' ? (
-                    <View style={styles.replay}>
+                    <View pointerEvents="box-none" style={styles.replay}>
                         <IconButton
                             testID="step-motion-replay"
                             label="Replay motion"
@@ -353,6 +359,7 @@ export function StepMotionHint({
 
 const styles = StyleSheet.create({
     root: { gap: space.xs },
+    frame: { borderRadius: radius.hero, overflow: 'hidden' },
     viewport: { aspectRatio: VIEWPORT_ASPECT, width: '100%', overflow: 'hidden', borderRadius: radius.hero },
     content: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
     gl: { flex: 1 },
