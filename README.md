@@ -207,7 +207,6 @@ Small test images Prince used while building TrueBuild, committed so anyone can 
 | File | What it is |
 | --- | --- |
 | `samples/treadmill/manual-p3.jpg` … `manual-p6.jpg` | Photos of a folding walking-pad treadmill manual, pages 3-6. Steps are on pages 5-6: place flat, raise the handrail and fix it with two knobs, fit the phone support with two screws. |
-| `samples/treadmill/build-step2.jpg` | A build photo of the treadmill with the handrail up (a step 2 check photo). |
 | `samples/drone/manual-p1.jpg` … `manual-p4.jpg` | Photos of a kids' 3-in-1 mini drone manual, pages 1-4 (fan blades and battery). Resized to 1600 px. |
 
 In fixture mode any image gets a synthetic answer. In live mode these give real model output.
