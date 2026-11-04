@@ -181,6 +181,30 @@ describe('step directions', () => {
         expect(directions.queryByText(/×99/u)).toBeNull()
     })
 
+    it('names every current-step part, even with no size and an unknown count, without its inventory count', async () => {
+        const session = sessionWithActions(ACTIONS)
+        const step = session.reviewedSteps[0]!
+        const names = ['Bolt', 'Washer', 'AA battery']
+        const named = (partId: string, value: string): ManualSession['parts'][number] => ({
+            ...session.parts[0]!,
+            partId,
+            name: { state: 'known', value, sourceRefs: step.sourceRefs },
+            dimensions: null,
+            inventoryQuantity: 5,
+        })
+        const bound = [named('side-panel', 'Bolt'), named('divider', 'Washer'), named('battery', 'AA battery')]
+        session.parts = [...bound, named('stray-clip', 'Unrelated clip')]
+        step.parts = bound.map((part) => ({
+            partId: part.partId,
+            quantity: { state: 'unknown', reason: 'Count is not printed.' },
+        }))
+        await renderGuide(session)
+        const directions = within(screen.getByTestId('guide-directions'))
+        for (const name of names) expect(directions.getByText(name)).toBeTruthy()
+        expect(shownTexts()).not.toContain('Unrelated clip')
+        expect(shownTexts().filter((text) => /×\s*5\b/u.test(text))).toEqual([])
+    })
+
     it('numbers each action once, in order, beside its exact instruction', async () => {
         const session = sessionWithActions(ACTIONS)
         const step = session.reviewedSteps[0]!

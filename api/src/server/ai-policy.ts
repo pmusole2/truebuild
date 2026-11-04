@@ -73,6 +73,8 @@ export const STEP_MOTION_POLICY = {
     maxOutputTokens: 14_000,
     maxContextBytes: 8_192,
     maxTextBytes: 32_768,
+    /** Server-validated previous geometry on the single repair has a separate bounded allowance. */
+    maxRepairContextBytes: 65_536,
     maxImageEdge: 1024,
     imageTokenAllowance: 8_192,
     plannedInputTokens: 40_960,

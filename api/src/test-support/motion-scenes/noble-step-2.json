@@ -1,0 +1,57 @@
+{
+    "scene": {
+        "caption": "Insert the casters into the upturned ends of the facedown chair base.",
+        "movers": [
+            {
+                "actionIndex": 1,
+                "label": "Casters (F)",
+                "motion": { "from": [0, 20, 0], "kind": "translate", "to": [0, 0, 0] },
+                "shapes": [
+                    {
+                        "bevel": 0,
+                        "depth": 0.5,
+                        "outline": [
+                            [0, 0],
+                            [1, 0],
+                            [1, 0],
+                            [1, 1]
+                        ],
+                        "position": [38, 11, 0],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    },
+                    {
+                        "bevel": 0,
+                        "depth": 0.5,
+                        "outline": [
+                            [0, 0],
+                            [1, 0],
+                            [1, 0],
+                            [1, 1]
+                        ],
+                        "position": [38, 19, 0],
+                        "rotation": [0, 0, 0],
+                        "type": "extrude"
+                    }
+                ]
+            }
+        ],
+        "stepId": "step-2",
+        "still": [
+            {
+                "bevel": 0,
+                "depth": 0.5,
+                "outline": [
+                    [0, 0],
+                    [1, 0],
+                    [1, 0],
+                    [1, 1]
+                ],
+                "position": [0, 0, 0],
+                "rotation": [0, 0, 0],
+                "type": "extrude"
+            }
+        ],
+        "version": 1
+    }
+}

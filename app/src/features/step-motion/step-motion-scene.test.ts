@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { Vector3, type Mesh } from 'three'
-import type { StepMotionScene } from '@truebuild/contracts'
+import { Box3, Vector3, type Mesh } from 'three'
+import { stepMotionResultSchema, type StepMotionScene } from '@truebuild/contracts'
+import { STEP_MOTION_EXAMPLE } from '../../../../api/src/providers/step-motion-prompt'
 import {
     createStepMotionObject,
     poseStepMotionObject,
@@ -100,4 +101,23 @@ describe('step motion pure model', () => {
         expect(stepMotionProgress({ finished: false, mover: 1, eased: 0.25 }, 2)).toBe(0)
         expect(stepMotionProgress({ finished: false, mover: null, eased: 1 }, 0)).toBe(1)
     })
+})
+
+it('embeds a schema-valid screw example that fits the rendered hole and ends touching the plate', () => {
+    const scene = stepMotionResultSchema.parse(STEP_MOTION_EXAMPLE).scene!
+    const object = createStepMotionObject(scene)
+    try {
+        poseStepMotionObject(object, { finished: true, mover: null, eased: 1 })
+        const plate = new Box3().setFromObject(object.root.children[0]!)
+        const [shaft, head] = object.movers[0]!.group.children
+        const shaftEnd = new Box3().setFromObject(shaft!)
+        const headEnd = new Box3().setFromObject(head!)
+        expect(shaftEnd.getSize(new Vector3()).y).toBeCloseTo(10)
+        expect(shaftEnd.max.y).toBeCloseTo(headEnd.min.y)
+        expect(headEnd.min.y).toBeCloseTo(plate.max.y)
+        poseStepMotionObject(object, { finished: false, mover: 0, eased: 0 })
+        expect(new Box3().setFromObject(shaft!).min.y).toBeCloseTo(shaftEnd.min.y + 10)
+    } finally {
+        disposePieceObject(object.root)
+    }
 })

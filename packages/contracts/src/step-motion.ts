@@ -4,7 +4,7 @@ import { pieceDrawingBoxSchema } from './piece-generation'
 import { extrudeBevelLimit, PIECE_SPEC_LIMITS, pieceSpecSchema } from './piece-spec'
 import { parseLanguageSchema } from './reading-language'
 
-export const STEP_MOTION_PROMPT_VERSION = 3
+export const STEP_MOTION_PROMPT_VERSION = 4
 /** Ten percent on each side, clamped to the cited page, keeps nearby movement marks in the crop. */
 export function paddedStepFigureBox(box: readonly [number, number, number, number]): [number, number, number, number] {
     const [x, y, width, height] = box
@@ -31,7 +31,7 @@ const motion = z.discriminatedUnion('kind', [
     }),
 ])
 
-/** Shared piece primitives, including their geometric refinements; no geometry is normalized or salvaged. */
+/** Shared piece primitives, including their strict geometric refinements after generated-output normalization. */
 const shape = pieceSpecSchema.shape.parts.element
 const plain = (max: number): z.ZodString =>
     z
@@ -70,10 +70,17 @@ export type StepMotionResult = z.infer<typeof stepMotionResultSchema>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value)
 const isFinitePoint = (value: unknown): value is [number, number] =>
-    Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === 'number' && Number.isFinite(part))
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every((part) => typeof part === 'number' && Number.isFinite(part))
 
 function clampShapeBevel(shape: unknown): unknown {
-    if (!isRecord(shape) || shape.type !== 'extrude' || typeof shape.bevel !== 'number' || !Number.isFinite(shape.bevel))
+    if (
+        !isRecord(shape) ||
+        shape.type !== 'extrude' ||
+        typeof shape.bevel !== 'number' ||
+        !Number.isFinite(shape.bevel)
+    )
         return shape
     const { depth, outline } = shape
     if (typeof depth !== 'number' || !Array.isArray(outline) || outline.length < 3) return shape
@@ -97,8 +104,96 @@ export function clampStepMotionBevels(value: unknown): unknown {
             ...scene,
             still: shapes(scene.still),
             movers: Array.isArray(scene.movers)
-                ? scene.movers.map((mover: unknown) => (isRecord(mover) ? { ...mover, shapes: shapes(mover.shapes) } : mover))
+                ? scene.movers.map((mover: unknown) =>
+                      isRecord(mover) ? { ...mover, shapes: shapes(mover.shapes) } : mover,
+                  )
                 : scene.movers,
+        },
+    }
+}
+
+/**
+ * Remove only exact adjacent/closing duplicates (the polygon is unchanged), then discard otherwise bounded extrudes
+ * with no area or sub-renderable depth. Malformed, crossing and unsupported shapes still fail the strict schema.
+ */
+export function dropDegenerateStepMotionShapes(value: unknown): unknown {
+    if (!isRecord(value) || !isRecord(value.scene)) return value
+    const dropped = Symbol('degenerate')
+    const normalize = (candidate: unknown): unknown => {
+        if (!isRecord(candidate) || candidate.type !== 'extrude') return candidate
+        const { outline, depth } = candidate
+        if (
+            !Array.isArray(outline) ||
+            outline.length < 3 ||
+            outline.length > PIECE_SPEC_LIMITS.outlinePoints ||
+            !outline.every(isFinitePoint) ||
+            outline.some((point) => point.some((n) => Math.abs(n) > PIECE_SPEC_LIMITS.extent))
+        )
+            return candidate
+        const points = outline.filter(
+            (point, index) => index === 0 || point[0] !== outline[index - 1]![0] || point[1] !== outline[index - 1]![1],
+        )
+        if (points.length > 1 && points[0]![0] === points.at(-1)![0] && points[0]![1] === points.at(-1)![1])
+            points.pop()
+        const normalized = { ...candidate, outline: points }
+        if (typeof depth !== 'number' || !Number.isFinite(depth) || depth < 0 || depth > PIECE_SPEC_LIMITS.extent)
+            return normalized
+        // A longest baseline is independent of the first vertex/edge. Only roundoff-sized distances count as
+        // collinear: a short initial edge must never turn a thin, nonzero-area outline into a discarded shape.
+        let first = points[0]!
+        let second = first
+        let longest = 0
+        for (const a of points)
+            for (const b of points) {
+                const distance = Math.hypot(b[0] - a[0], b[1] - a[1])
+                if (distance > longest) {
+                    first = a
+                    second = b
+                    longest = distance
+                }
+            }
+        const epsilon = Number.EPSILON * 16 * Math.max(1, longest, ...points.flatMap((point) => point.map(Math.abs)))
+        const collinear =
+            longest === 0 ||
+            points.every(
+                (point) =>
+                    Math.abs(
+                        (second[0] - first[0]) * (point[1] - first[1]) - (second[1] - first[1]) * (point[0] - first[0]),
+                    ) /
+                        longest <=
+                    epsilon,
+            )
+        if (!collinear && depth >= PIECE_SPEC_LIMITS.minDimension) return normalized
+        const probe = {
+            ...normalized,
+            depth: Math.max(depth, PIECE_SPEC_LIMITS.minDimension),
+            ...(collinear
+                ? {
+                      outline: [
+                          [0, 0],
+                          [1, 0],
+                          [0, 1],
+                      ],
+                  }
+                : {}),
+        }
+        // Validate every other field before dropping anything, including unknown keys, positions, rotations and bevel.
+        return shape.safeParse(probe).success ? dropped : normalized
+    }
+    const shapes = (list: unknown, limit: number): unknown =>
+        Array.isArray(list) && list.length <= limit
+            ? list.map(normalize).filter((candidate) => candidate !== dropped)
+            : list
+    return {
+        ...value,
+        scene: {
+            ...value.scene,
+            still: shapes(value.scene.still, 24),
+            movers: Array.isArray(value.scene.movers)
+                ? value.scene.movers.map((mover: unknown) =>
+                      isRecord(mover) ? { ...mover, shapes: shapes(mover.shapes, 16) } : mover,
+                  )
+                : value.scene.movers,
         },
     }
 }

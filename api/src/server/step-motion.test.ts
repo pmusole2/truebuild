@@ -46,7 +46,7 @@ const scene = {
     movers: [
         {
             label: 'Part',
-            shapes: [shape],
+            shapes: [{ ...shape, position: [0, 1, 0] }],
             motion: { kind: 'rotate', pivot: [0, 0, 0], axis: [0, 0, 1], fromDeg: -90, toDeg: 0 },
             actionIndex: 0,
         },
@@ -655,7 +655,7 @@ it('accepts a scene with an out-of-range extrude bevel by clamping that bevel to
         position: [0, 0, 0],
         rotation: [0, 0, 0],
     }
-    const { handler } = setup({ scene: { ...scene, still: [extrude] } })
+    const { handler } = setup({ scene: { ...scene, still: [{ ...extrude, position: [-3, 0, 0] }] } })
     const body = (await (await handler(await request())).json()) as { scene: { still: { bevel?: number }[] } | null }
     expect(body.scene?.still[0]?.bevel).toBeCloseTo(0.2 * 0.25)
 })
@@ -679,7 +679,11 @@ it('sends a narrow whole page with a 512px shorter side, and the cache keys the 
     const { handler, bodies, provider } = setup({ scene: null })
     const generation = vi.spyOn(provider, 'generateStepMotion')
     const narrow = await request(
-        { page: { ...metadata.page, width: 214, height: 1280 }, sourceRefs: [{ pageId: 'page-1', region: null }], figureBox: null },
+        {
+            page: { ...metadata.page, width: 214, height: 1280 },
+            sourceRefs: [{ pageId: 'page-1', region: null }],
+            figureBox: null,
+        },
         'motion-fixture-key',
         { bytes },
     )
@@ -732,3 +736,117 @@ it('does not charge the daily cap when the shared public claim refuses before di
     expect((await handler(await request())).status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 })
+
+it('repairs deep overlap exactly once with the validated previous scene and counts both paid dispatches', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+    let attempt = 0
+    const { handler, fetchImpl, counter, bodies } = setup(null, 8, () =>
+        response({ scene: ++attempt === 1 ? overlapping : scene }),
+    )
+    expect(await (await handler(await request())).json()).toEqual({ scene })
+    expect(counter.used).toBe(2)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const parts = (bodies[1]!.input as { content: { type: string; text?: string }[] }[])[0]!.content
+    expect(JSON.parse(parts.at(-1)!.text!)).toMatchObject({
+        repairIssues: ['movers.0.shapes.0:deep_static_overlap:still.0'],
+        previousScene: overlapping,
+    })
+    expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+})
+
+it.each([
+    { limit: 8, dailyLimit: 8, calls: 2, claims: 2, reason: 'overlap' },
+    { limit: 1, dailyLimit: 8, calls: 1, claims: 1, reason: 'overlap' },
+    { limit: 8, dailyLimit: 1, calls: 1, claims: 2, reason: 'overlap' },
+])(
+    'keeps overlap terminal with public limit $limit and daily cap $dailyLimit',
+    async ({ limit, dailyLimit, calls, claims, reason }) => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+        const { handler, fetchImpl, counter } = setup({ scene: overlapping }, limit, undefined, undefined, {
+            dailyLimit,
+        })
+        expect(await (await handler(await request())).json()).toEqual({ scene: null })
+        expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene: null })
+        expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        expect(counter.used).toBe(claims)
+        expect(
+            info.mock.calls.some(([line]) => {
+                const value = JSON.parse(String(line)) as Record<string, unknown>
+                return value.accepted === false && value.reason === reason
+            }),
+        ).toBe(true)
+    },
+)
+
+it('logs an intentional null scene as declined without echoing model text', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { handler, fetchImpl } = setup({ scene: null })
+    expect(await (await handler(await request())).json()).toEqual({ scene: null })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(info.mock.calls.some(([line]) => JSON.parse(String(line)).reason === 'declined')).toBe(true)
+})
+
+it.each([
+    { outcome: 'null', reason: 'declined' },
+    { outcome: 'wrong step', reason: 'step_id' },
+    { outcome: 'transport failure', reason: 'overlap' },
+])('keeps a $outcome repair terminal and logs its refusal', async ({ outcome, reason }) => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+    let attempt = 0
+    const { handler, fetchImpl, counter } = setup(null, 8, () => {
+        if (++attempt === 1) return response({ scene: overlapping })
+        if (outcome === 'transport failure') throw new Error('synthetic transport failure')
+        return response({ scene: outcome === 'null' ? null : { ...scene, stepId: 'step-9' } })
+    })
+    expect(await (await handler(await request())).json()).toEqual({ scene: null })
+    expect(await (await handler(await request({ cacheOnly: true }))).json()).toEqual({ scene: null })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(counter.used).toBe(2)
+    const logged = info.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((value) => value.event === 'step_motion_generation')
+    expect(logged.at(-1)).toMatchObject({ accepted: false, reason })
+    expect(JSON.stringify(logged)).not.toContain('synthetic transport failure')
+})
+
+it.each([
+    { stillCount: 3, moverShapes: 1, calls: 2 },
+    { stillCount: 24, moverShapes: 8, calls: 1 },
+])(
+    'bounds validated repair context separately for $stillCount stills and $moverShapes mover shapes',
+    async ({ stillCount, moverShapes, calls }) => {
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const outline = Array.from({ length: 64 }, (_, index) => [
+            Math.cos((index * Math.PI) / 32),
+            Math.sin((index * Math.PI) / 32),
+        ])
+        const detailed = { type: 'extrude', outline, depth: 1, bevel: 0, position: [0, 0, 0], rotation: [0, 0, 0] }
+        const overlapping = {
+            ...scene,
+            still: Array(stillCount).fill(detailed),
+            movers: [{ ...scene.movers[0], shapes: Array(moverShapes).fill(detailed) }],
+        }
+        const bytes = Buffer.byteLength(JSON.stringify(overlapping), 'utf8')
+        expect(bytes).toBeGreaterThan(STEP_MOTION_POLICY.maxContextBytes)
+        let attempt = 0
+        const { handler, fetchImpl, counter } = setup(null, 8, () =>
+            response({ scene: ++attempt === 1 ? overlapping : scene }),
+        )
+        expect(await (await handler(await request())).json()).toEqual({ scene: calls === 2 ? scene : null })
+        expect(fetchImpl).toHaveBeenCalledTimes(calls)
+        expect(counter.used).toBe(2)
+        if (calls === 1) {
+            expect(bytes).toBeGreaterThan(STEP_MOTION_POLICY.maxRepairContextBytes)
+            expect(
+                info.mock.calls.some(([line]) => {
+                    const logged = JSON.parse(String(line)) as Record<string, unknown>
+                    return logged.reason === 'overlap' && logged.repairReason === 'repair_budget'
+                }),
+            ).toBe(true)
+        }
+    },
+)

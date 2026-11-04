@@ -3,6 +3,7 @@ import sharp from 'sharp'
 import {
     canonicalJson,
     clampStepMotionBevels,
+    dropDegenerateStepMotionShapes,
     LIMITS,
     STEP_MOTION_PROMPT_VERSION,
     stepMotionCacheIdentity,
@@ -11,7 +12,12 @@ import {
     type StepMotionRequest,
     type StepMotionResult,
 } from '@truebuild/contracts'
-import { stepMotionTextBytes, type MetaProvider } from '../providers/meta-provider'
+import {
+    MetaProviderError,
+    stepMotionTextBytes,
+    type MetaProvider,
+    type ScreenGeneration,
+} from '../providers/meta-provider'
 import { STEP_MOTION_POLICY } from './ai-policy'
 import { AuthenticationError, type SharedKeyAuth } from './auth'
 import { BudgetError, ConcurrencyGate } from './budget'
@@ -25,6 +31,7 @@ import {
 } from './model-multipart'
 import { validateAndNormalizeImages, type ObservationImage } from './media'
 import type { BackgroundWork } from './screens/service'
+import { stepMotionOverlapIssues } from './step-motion-geometry'
 
 const EMPTY: StepMotionResult = { scene: null }
 /** Completed entries are bounded; at most two additional entries can be in flight. Restarts/replicas have separate caches. */
@@ -205,7 +212,7 @@ async function verifiedFigure(
     }
 }
 
-type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index'
+type SceneRejection = 'schema' | 'model' | 'effort' | 'step_id' | 'action_index' | 'declined' | 'overlap'
 
 /** The short code a generated result is refused for, or null when usable. Only codes are logged, never model text. */
 function sceneRejection(
@@ -217,7 +224,7 @@ function sceneRejection(
     if (telemetry.model !== STEP_MOTION_POLICY.model) return 'model'
     if (telemetry.effort !== STEP_MOTION_POLICY.effort) return 'effort'
     const scene = parsed.data.scene
-    if (scene === null) return null
+    if (scene === null) return 'declined'
     if (scene.stepId !== request.stepId) return 'step_id'
     if (scene.movers.some((mover) => mover.actionIndex !== null && mover.actionIndex >= request.actions.length))
         return 'action_index'
@@ -324,7 +331,21 @@ export function createStepMotionHandler(options: {
                         deadline.checkpoint()
                         // Once admitted, work has its own finite lifetime. A disconnected reader cannot erase a paid result.
                         generationDeadline = createDeadline(STEP_MOTION_POLICY.deadlineMs)
-                        const generation = await options.work.run(
+                        const log = (generation: ScreenGeneration, rejection: SceneRejection | null): void => {
+                            console.info(
+                                JSON.stringify({
+                                    event: 'step_motion_generation',
+                                    promptVersion: STEP_MOTION_PROMPT_VERSION,
+                                    accepted: rejection === null,
+                                    ...(rejection === null ? {} : { reason: rejection }),
+                                    model: generation.telemetry.model,
+                                    effort: generation.telemetry.effort,
+                                    usage: generation.telemetry.usage,
+                                    estimatedCostUsd: estimatedStepMotionCostUsd(generation.telemetry.usage),
+                                }),
+                            )
+                        }
+                        return await options.work.run(
                             {
                                 deadlineMs: STEP_MOTION_POLICY.deadlineMs,
                                 signal: generationDeadline.signal,
@@ -333,29 +354,66 @@ export function createStepMotionHandler(options: {
                                     dispatched = true
                                 },
                             },
-                            () => {
+                            async () => {
                                 deadline.checkpoint()
-                                return options.provider!.generateStepMotion!(
-                                    { request: metadata, image: cropped },
-                                    generationDeadline!.signal,
-                                )
+                                const generate = async (repair?: {
+                                    repairIssues: string[]
+                                    previousScene: NonNullable<StepMotionResult['scene']>
+                                }): Promise<ScreenGeneration> =>
+                                    options.provider!.generateStepMotion!(
+                                        { request: metadata, image: cropped, ...repair },
+                                        generationDeadline!.signal,
+                                    )
+                                const parse = (
+                                    generation: ScreenGeneration,
+                                ): ReturnType<typeof stepMotionResultSchema.safeParse> =>
+                                    stepMotionResultSchema.safeParse(
+                                        dropDegenerateStepMotionShapes(clampStepMotionBevels(generation.value)),
+                                    )
+                                const first = await generate()
+                                const parsed = parse(first)
+                                const rejection = sceneRejection(parsed, first.telemetry, metadata)
+                                if (rejection !== null || !parsed.success || parsed.data.scene === null) {
+                                    log(first, rejection)
+                                    return EMPTY
+                                }
+                                const repairIssues = stepMotionOverlapIssues(parsed.data.scene)
+                                if (repairIssues.length === 0) {
+                                    log(first, null)
+                                    return parsed.data
+                                }
+                                log(first, 'overlap')
+                                try {
+                                    // The existing one-shot runner shares deadline, public count and dispatch-day cap.
+                                    const repaired = await options.work.repair(() =>
+                                        generate({ repairIssues, previousScene: parsed.data.scene! }),
+                                    )
+                                    const result = parse(repaired)
+                                    const refused = sceneRejection(result, repaired.telemetry, metadata)
+                                    const overlap =
+                                        result.success &&
+                                        result.data.scene !== null &&
+                                        stepMotionOverlapIssues(result.data.scene).length > 0
+                                    const reason = refused ?? (overlap ? 'overlap' : null)
+                                    log(repaired, reason)
+                                    return reason === null && result.success ? result.data : EMPTY
+                                } catch (error: unknown) {
+                                    // A blocked/failed repair stays terminal, and never falls back to the overlapping scene.
+                                    console.info(
+                                        JSON.stringify({
+                                            event: 'step_motion_generation',
+                                            promptVersion: STEP_MOTION_PROMPT_VERSION,
+                                            accepted: false,
+                                            reason: 'overlap',
+                                            ...(error instanceof MetaProviderError && error.detail === 'repair_budget'
+                                                ? { repairReason: 'repair_budget' }
+                                                : {}),
+                                        }),
+                                    )
+                                    return EMPTY
+                                }
                             },
                         )
-                        const parsed = stepMotionResultSchema.safeParse(clampStepMotionBevels(generation.value))
-                        const rejection = sceneRejection(parsed, generation.telemetry, metadata)
-                        console.info(
-                            JSON.stringify({
-                                event: 'step_motion_generation',
-                                promptVersion: STEP_MOTION_PROMPT_VERSION,
-                                accepted: rejection === null,
-                                ...(rejection === null ? {} : { reason: rejection }),
-                                model: generation.telemetry.model,
-                                effort: generation.telemetry.effort,
-                                usage: generation.telemetry.usage,
-                                estimatedCostUsd: estimatedStepMotionCostUsd(generation.telemetry.usage),
-                            }),
-                        )
-                        return rejection === null && parsed.success ? parsed.data : EMPTY
                     } catch (error) {
                         if (!dispatched) {
                             throw new BeforeMotionDispatch(error)
