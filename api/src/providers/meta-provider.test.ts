@@ -438,11 +438,12 @@ describe('inactive direct Meta transport', (): void => {
                 requestId: input.requestId,
                 binding: { kind: 'manual', manualId: input.binding.manualId, revision: input.binding.revision },
                 pages: input.sourceImages,
+                stepFields: ['sourceText'],
             },
             signal(),
         )
         expect(parsed.steps[0]!.actions).toEqual(keepValid ? [good] : null)
-        expect(parsed.steps[0]).not.toHaveProperty('sourceText')
+        expect(parsed.steps[0]!.sourceText).toBe('An optional field from a later provider.')
         expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 

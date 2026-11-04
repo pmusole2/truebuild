@@ -66,7 +66,7 @@ describe('step extension registry', () => {
     const shape = manualStepSchema.shape as Record<string, z.ZodType>
     const extensionKeys = Object.keys(shape).filter((key) => !LEGACY_STEP_KEYS.includes(key))
 
-    it('names the planned step fields exactly once', () => {
+    it('names the supported step fields exactly once', () => {
         expect(SUPPORTED_STEP_EXTENSIONS).toEqual(['actions', 'sourceText'])
     })
 
@@ -153,10 +153,29 @@ describe('optional actions never fail a manual parse', () => {
         expect(parsed.steps.every((step) => step.actions === null)).toBe(true)
     })
 
-    it('projects a future sourceText field out of raw provider steps before the strict parse', () => {
-        const raw = rawWithSteps((step) => ({ ...step, sourceText: 'Future source words' }))
-        expect(parsedManualSchema.safeParse(raw).success).toBe(true)
-        expect(parsedManualSchema.safeParse(sanitizeManualStepActions(raw, pages)).success).toBe(true)
+    it('retains both modeled extensions through shared preprocessing', () => {
+        const sourceText = '  Printed source words.\nKeep this line.  '
+        const actions = [action('a1', 'Turn the panel.')]
+        const raw = rawWithSteps((step) => ({ ...step, actions, sourceText }))
+        const session = sessionWithActions(actions)
+        Object.assign(session.reviewedSteps[0]!, { sourceText })
+        const parsed = parsedManualSchema.parse(sanitizeManualStepActions(raw, pages))
+        session.rawExtraction = parsed
+        expect(parsed.steps[0]).toMatchObject({ actions, sourceText })
+        const saved = manualSessionSchema.parse(session)
+        expect(saved.reviewedSteps[0]).toMatchObject({ actions, sourceText })
+        expect(saved.rawExtraction!.steps[0]).toMatchObject({ actions, sourceText })
+    })
+
+    it.each(['', 'x'.repeat(601), 42])('drops malformed optional source text in raw and saved steps', (sourceText) => {
+        const raw = rawWithSteps((step) => ({ ...step, sourceText }))
+        const session = createDemoManual()
+        Object.assign(session.reviewedSteps[0]!, { sourceText })
+        Object.assign(session.rawExtraction!.steps[0]!, { sourceText })
+        expect(parsedManualSchema.parse(raw).steps[0]!.sourceText).toBeNull()
+        const saved = manualSessionSchema.parse(session)
+        expect(saved.reviewedSteps[0]!.sourceText).toBeNull()
+        expect(saved.rawExtraction!.steps[0]!.sourceText).toBeNull()
     })
 
     it('keeps the six-action limit and bounded instructions after cleanup', () => {

@@ -322,7 +322,7 @@ export async function postDocuments(options: {
         response = await awaitStopped(
             options.fetch(
                 new URL(
-                    `/api/screens/v2?guideRepair=1&waitCopy=2&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
+                    `/api/screens/v2?guideRepair=1&waitCopy=2&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
                     baseUrl,
                 ).toString(),
                 {

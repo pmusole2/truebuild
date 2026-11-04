@@ -9,6 +9,7 @@ import { createMetaProvider, type MetaProviderOptions, type ParseManualInput } f
 import type { ProviderMetrics } from './meta-transport'
 import { observed } from '../test-support/telemetry'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
+import legacyParsePrompts from './fixtures/parse-instructions-c03fa2d.json'
 
 /** `model` is what the response reports; a real response echoes the model it was asked for. */
 function envelope(value: unknown, model = 'muse-spark-1.3'): Record<string, unknown> {
@@ -81,7 +82,117 @@ function queued(
     return { provider: createMetaProvider({ apiKey: '<synthetic>', ...options, fetchImpl }), fetch: fetchImpl, bodies }
 }
 
+describe('negotiated parse prompt and schema', () => {
+    it.each([undefined, 'en', 'fr-CA'])(
+        'keeps c03fa2d instruction bytes through repair for language %s without sourceText',
+        async (language) => {
+            const { input, clean } = await fixture()
+            const { provider, bodies } = queued([missingConnection(clean), clean])
+            await provider.parseManual(
+                { ...input, ...(language === undefined ? {} : { language }), stepFields: ['actions'] },
+                new AbortController().signal,
+            )
+            const frozen = legacyParsePrompts.variants.find((variant) =>
+                language === 'fr-CA' ? variant.language === language : variant.language === null,
+            )!
+            expect(bodies.map((body) => body.instructions)).toEqual(frozen.instructions)
+            expect(bodies.map((body) => createHash('sha256').update(String(body.instructions)).digest('hex'))).toEqual(
+                frozen.sha256,
+            )
+        },
+    )
+
+    it('keeps the negotiated source-text variant and prefix key through repair', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([missingConnection(clean), clean])
+        await provider.parseManual({ ...input, stepFields: ['sourceText'] }, new AbortController().signal)
+        expect(bodies).toHaveLength(2)
+        for (const body of bodies) {
+            expect(body.instructions).toContain('Parse source text:')
+            expect(body.instructions).toContain('Never invent a crop.')
+            expect(JSON.stringify(body.text)).toContain('"sourceText"')
+        }
+        expect(bodies[0]!.prompt_cache_key).toBe(bodies[1]!.prompt_cache_key)
+    })
+
+    it('requests the sourceText schema and rule only for negotiated variants and separates provider prefix keys', async () => {
+        const { input, clean } = await fixture()
+        const { provider, bodies } = queued([clean, clean, clean, clean])
+        const variants: ParseManualInput['stepFields'][] = [
+            undefined,
+            ['actions'],
+            ['sourceText'],
+            ['actions', 'sourceText'],
+        ]
+        for (const stepFields of variants) {
+            await provider.parseManual(
+                { ...input, ...(stepFields === undefined ? {} : { stepFields }) },
+                new AbortController().signal,
+            )
+        }
+        for (const [index, body] of bodies.entries()) {
+            const sourceText = variants[index]?.includes('sourceText') === true
+            const instructions = String(body.instructions)
+            const schema = JSON.stringify(body.text)
+            expect(schema.includes('"sourceText"')).toBe(sourceText)
+            expect(instructions.includes('Parse source text:')).toBe(sourceText)
+            expect(instructions.match(/For each step, its sourceRefs.region should tightly enclose/gu)).toHaveLength(1)
+            expect(instructions).not.toContain('Parse step figures:')
+            if (sourceText) {
+                expect(schema).toContain('"maxLength":600')
+                expect(instructions.indexOf('Parse source text:')).toBeGreaterThan(
+                    instructions.indexOf('Parse actions:'),
+                )
+                expect(instructions).toContain('Do not truncate, translate, paraphrase or invent sourceText.')
+            } else {
+                expect(instructions).toBe(legacyParsePrompts.variants[0]!.instructions[0])
+            }
+        }
+        expect(bodies[0]!.prompt_cache_key).toBe(bodies[1]!.prompt_cache_key)
+        expect(bodies[2]!.prompt_cache_key).toBe(bodies[3]!.prompt_cache_key)
+        expect(bodies[0]!.prompt_cache_key).not.toBe(bodies[2]!.prompt_cache_key)
+    })
+})
+
 describe('bounded parse repair', () => {
+    it.each(['', 'x'.repeat(601)])(
+        'drops only invalid optional source text from an otherwise valid parse',
+        async (sourceText) => {
+            const { input, clean } = await fixture()
+            const value = structuredClone(clean)
+            value.steps[0]!.sourceText = sourceText
+            const { provider, fetch } = queued([value])
+            const parsed = await provider.parseManual(
+                { ...input, stepFields: ['sourceText'] },
+                new AbortController().signal,
+            )
+            expect(parsed.steps[0]).toEqual({ ...clean.steps[0], sourceText: null })
+            expect(parsed.parts).toEqual(clean.parts)
+            expect(fetch).toHaveBeenCalledTimes(1)
+        },
+    )
+
+    it.each(['title', 'safety'])(
+        'still rejects invalid core %s while discarding invalid optional source text',
+        async (field) => {
+            const { input, clean } = await fixture()
+            const value = structuredClone(clean)
+            value.steps[0]!.sourceText = 'x'.repeat(601)
+            if (field === 'title') value.steps[0]!.title = ''
+            else
+                value.steps[0]!.safetyNotes = [
+                    { noteId: 'note-1', note: { state: 'known', value: 'Do not touch.', sourceRefs: [] } },
+                ]
+            const { provider, fetch } = queued([value])
+            await expect(
+                provider.parseManual({ ...input, stepFields: ['sourceText'] }, new AbortController().signal),
+            ).rejects.toMatchObject({
+                code: 'invalid_output',
+            })
+            expect(fetch).toHaveBeenCalledTimes(1)
+        },
+    )
+
     it('returns a clean first extraction without authorizing another request', async () => {
         const { input, clean } = await fixture()
         const authorized = vi.fn()

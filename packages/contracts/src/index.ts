@@ -173,6 +173,8 @@ export const manualStepSchema = z
             .transform((actions) => actions.slice(0, 6))
             .nullable()
             .optional(),
+        /** Printed step instructions, unaltered in the source language; absent on older saved manuals. */
+        sourceText: z.string().min(1).max(600).nullable().optional(),
         kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route', 'remove']).nullable().optional(),
         requirements: z
             .strictObject({
@@ -270,13 +272,19 @@ function cleanStepActions(step: unknown, allowedPageIds: ReadonlySet<string> | u
 }
 
 /**
- * Prepares one raw step for the strict step schema: unmodeled registered fields (`sourceText` today) are projected
- * away, and optional `actions` entries that cannot be trusted are dropped so they never fail the manual. Dropped:
+ * Prepares one raw step for the strict step schema: unmodeled registered fields are projected away, malformed
+ * optional sourceText becomes null, and untrusted optional actions are dropped so they never fail the manual. Dropped:
  * invalid entries, entries citing a page outside `allowedPageIds` (when given), and a repeated actionId after the
  * first valid entry. A step left with none has `actions: null`. Every other field keeps its strict validation.
  */
 export function sanitizeOptionalStepActions(step: unknown, allowedPageIds?: ReadonlySet<string>): unknown {
-    return cleanStepActions(projectStepExtensions(step, MODELED_STEP_EXTENSIONS), allowedPageIds)
+    const projected = projectStepExtensions(step, MODELED_STEP_EXTENSIONS)
+    const cleaned =
+        isRecord(projected) && !manualStepSchema.shape.sourceText.safeParse(projected.sourceText).success
+            ? { ...projected, sourceText: null }
+            : projected
+
+    return cleanStepActions(cleaned, allowedPageIds)
 }
 
 /** `sanitizeOptionalStepActions` over a manual's steps, `reviewedSteps` and `rawExtraction.steps`. */
@@ -847,3 +855,4 @@ export * from './piece-spec'
 export * from './piece-generation'
 
 export * from './manual-session-extensions'
+export * from './step-motion'

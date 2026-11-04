@@ -74,6 +74,7 @@ import { ViewerScrollView } from '../pieces/viewer-scroll-lock'
 import { pieceIdsByPartId } from '../pieces/piece-registry'
 import { plainPending } from '../capture/plain-copy'
 import type { FrameBindings } from './types'
+import { GuideStepMotion } from '../step-motion/guide-step-motion'
 import { capturePlacement } from './capture-placement'
 import { manualDisplayTitle } from './manual-title'
 import Animated from 'react-native-reanimated'
@@ -197,6 +198,10 @@ type Environment = {
     sectionChanged: (path: string, open: boolean) => void
     leading: ReactNode
     trailing: ReactNode
+    /** The Guide's motion hint, rendered once under its directions Section or final flat instruction. */
+    motion: ReactNode
+    /** The innermost directions Section, or the last instruction Text when the body has no Section. */
+    motionPath: string | null
     /** Guide pills already shown by resolved text, so a repeated quantity or status reads once. */
     guidePillPaths: ReadonlySet<string>
     /** The body's own scroller, authored or supplied, so a new page can start at its top without remounting it. */
@@ -333,6 +338,7 @@ function duplicateFactPaths(
     const citationsByFact = new Map<string, Set<number>>()
     const resultText = new Map<string, { refs: Set<string>; indexes: Set<number> }>()
     let nativeResumeCard = false
+    let guideTitleFactShown = false
     const key = (ref: ScreenDocumentV2['sources'][number]): string =>
         JSON.stringify([
             ref.pageId,
@@ -342,6 +348,15 @@ function duplicateFactPaths(
         if (node.type === 'Section' && node.collapsible && !node.initiallyOpen && !containsSafety(node, document))
             return
         const live = bindings.live
+        // A numbered Guide shows its saved title as its first direction, so only a legacy Guide drops the repeated title.
+        if (
+            document.kind === 'guide' &&
+            document.metadata.stepActions !== 1 &&
+            node.type === 'Text' &&
+            node.content.kind === 'fact' &&
+            node.content.factId === 'title'
+        )
+            guideTitleFactShown = true
         if (
             document.kind === 'home' &&
             node.type === 'ManualList' &&
@@ -386,6 +401,14 @@ function duplicateFactPaths(
         node.children.forEach((child, index) => {
             const next = `${at}.${index}`
             if (
+                guideTitleFactShown &&
+                child.type === 'Text' &&
+                child.content.kind === 'bound' &&
+                child.content.key === 'step-title'
+            ) {
+                // Keep the full fact and its citation in the body; the generic title binding adds no new words.
+                omitted.add(next)
+            } else if (
                 nativeResumeCard &&
                 child.type === 'Text' &&
                 child.content.kind === 'literal' &&
@@ -591,6 +614,29 @@ function containsSafety(node: ScreenNodeV2, document: ScreenDocumentV2): boolean
             return true
     }
     return 'children' in node && node.children.some((child) => containsSafety(child, document))
+}
+
+/** A step's own direction: a manual fact of a direction basis. Matched by fact basis, never by the words of a title. */
+function containsDirection(node: ScreenNodeV2, document: ScreenDocumentV2): boolean {
+    if (node.type === 'Text' && node.content.kind === 'bound' && node.content.key === 'step-title') return true
+    if (node.type === 'Text' && node.content.kind === 'fact') {
+        const id = node.content.factId
+        if (
+            document.facts.some(
+                (fact) => fact.factId === id && (fact.basis === 'direction' || fact.basis === 'unclassified-step'),
+            )
+        )
+            return true
+    }
+    return 'children' in node && node.children.some((child) => containsDirection(child, document))
+}
+
+/**
+ * The motion hint follows its last numbered direction, so checks and source openers keep their own place after it.
+ * A Guide without numbered directions uses its last direction instruction.
+ */
+export function guideMotionInsertionPath(numbered: readonly string[], directions: readonly string[]): string | null {
+    return numbered.at(-1) ?? directions.at(-1) ?? null
 }
 
 /** Show known page count and the observed parse phase, with no per-page or percentage claim. */
@@ -1823,6 +1869,7 @@ function NodeContent({
                             <View style={styles.numberedText}>{line}</View>
                         </View>
                     )}
+                    {path === environment.motionPath ? environment.motion : null}
                 </View>
             )
         }
@@ -2268,6 +2315,20 @@ export function NativeDocumentRenderer({
     )
     const subtitle = selected.variant.header.subtitle
     const subtitleText = documentText(document, bindings, subtitle).trim().replace(/\s+/gu, ' ')
+    // A legacy Guide's subtitle is not repeated when a body instruction already says it; numbered Guides keep theirs.
+    let instructionInBody = false
+    if (document.kind === 'guide' && document.metadata.stepActions !== 1 && subtitleText !== '') {
+        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
+            if (
+                !hidden &&
+                path.startsWith(`${selected.prefix}body`) &&
+                !omitted.has(path) &&
+                node.type === 'Text' &&
+                documentText(document, bindings, node.content).trim().replace(/\s+/gu, ' ') === subtitleText
+            )
+                instructionInBody = true
+        })
+    }
     // Use the authored wait indicator when present; text-only variants receive the same scene in their body.
     let waitIndicator = false
     let bodyWaitHeading: string | null = null
@@ -2356,6 +2417,8 @@ export function NativeDocumentRenderer({
         citations,
         leading: null,
         trailing: null,
+        motion: null,
+        motionPath: null,
         guidePillPaths: new Set<string>(),
         rootScroll,
         scrollBottomPadding: document.kind === 'guide' ? barHeight : 0,
@@ -2387,6 +2450,24 @@ export function NativeDocumentRenderer({
             }
         })
         environment.guidePillPaths = paths
+    }
+    environment.motion =
+        document.kind === 'guide' && bindings.session?.manualId === document.bound.manualId ? (
+            <GuideStepMotion
+                session={bindings.session}
+                stepId={document.bound.stepId}
+                pageUris={bindings.pageUris}
+                active={scope.active && !attention && selected.name === 'ready'}
+                readOnly={bindings.readOnly === true}
+            />
+        ) : null
+    if (environment.motion !== null) {
+        const directions: string[] = []
+        visitVariantNodesV2(plannedVariant, selected.prefix, ({ node, path, hidden }) => {
+            if (hidden || !path.startsWith(`${selected.prefix}body`) || omitted.has(path)) return
+            if (node.type === 'Text' && containsDirection(node, document)) directions.push(path)
+        })
+        environment.motionPath = guideMotionInsertionPath(Object.keys(environment.actionNumbers), directions)
     }
     environment.trailing = (
         <>
@@ -2467,7 +2548,7 @@ export function NativeDocumentRenderer({
                             style={{ flex: 1, minWidth: 0, gap: space.xs }}
                         >
                             <Heading>{documentText(document, bindings, selected.variant.header.title)}</Heading>
-                            {subtitle === null || subtitleText === '' ? null : (
+                            {subtitle === null || subtitleText === '' || instructionInBody ? null : (
                                 <Caption>{documentText(document, bindings, subtitle)}</Caption>
                             )}
                         </View>

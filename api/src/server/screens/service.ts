@@ -45,7 +45,10 @@ type FallbackReason = NonNullable<ScreenMetadata['fallbackReason']>
  * `repair` is the one-shot runner for the single same-model repair, valid only inside this context.
  */
 export interface BackgroundWork {
-    run<T>(options: { deadlineMs: number; signal: AbortSignal }, work: () => Promise<T>): Promise<T>
+    run<T>(
+        options: { deadlineMs: number; signal: AbortSignal; beforeSend?: () => void },
+        work: () => Promise<T>,
+    ): Promise<T>
     repair<T>(work: () => Promise<T>): Promise<T>
     /** Foreground: fails fast (null) when too many provider calls are in flight. */
     tryAcquire(): (() => void) | null

@@ -15,6 +15,7 @@ const methods = new Map<string, 'GET' | 'POST'>([
     ['/api/session', 'GET'],
     ['/api/manuals/parse', 'POST'],
     ['/api/pieces', 'POST'],
+    ['/api/step-motion', 'POST'],
     ['/api/checks', 'POST'],
     ['/api/checks/second-opinion', 'POST'],
     ['/api/checks/overlay', 'POST'],
@@ -75,6 +76,7 @@ const routes = new Hono<ApiEnv>()
         }),
     )
     .post('/api/pieces', (context): Promise<Response> => context.get('runtime').model.pieces(context.req.raw))
+    .post('/api/step-motion', (context): Promise<Response> => context.get('runtime').model.stepMotion(context.req.raw))
     .post('/api/manuals/parse', (context): Promise<Response> => dispatch(context, 'parse'))
     .post('/api/checks/second-opinion', (context): Promise<Response> =>
         context.get('runtime').model.secondOpinion(context.req.raw),
@@ -138,6 +140,20 @@ export function createApp(
             if (method && request.method === 'OPTIONS') {
                 return preflight(request, method, runtime.allowedOrigins)
             }
+            if (context.req.path === '/api/step-motion' && !runtime.stepMotionEnabled) {
+                await request.body?.cancel().catch(() => {})
+                return corsResponse(
+                    request,
+                    Response.json(
+                        { status: 'unavailable', code: 'not_found' },
+                        {
+                            status: 404,
+                            headers: { 'cache-control': 'no-store' },
+                        },
+                    ),
+                    runtime.allowedOrigins,
+                )
+            }
             if (method && !['/health', '/api/health'].includes(context.req.path)) {
                 try {
                     runtime.auth.authenticate(request)
@@ -151,9 +167,16 @@ export function createApp(
             // Collection/cancellation spends no model calls and must remain available after a ceiling is reached.
             const generates =
                 method === 'POST' && !context.req.path.endsWith('/result') && !context.req.path.endsWith('/cancel')
+            const cacheOnly =
+                context.req.path === '/api/step-motion' && new URL(request.url).searchParams.get('cacheOnly') === '1'
             try {
                 if (generates)
-                    await runtime.counter.runForClient(request, context.req.path === '/api/manuals/parse', next)
+                    await runtime.counter.runForClient(
+                        request,
+                        context.req.path === '/api/manuals/parse',
+                        next,
+                        cacheOnly,
+                    )
                 else await next()
             } catch (error) {
                 if (!(error instanceof PublicLimitError)) throw error

@@ -1,6 +1,6 @@
 /**
- * Every optional step field this build names. `actions` is modeled by manualStepSchema; `sourceText` is a planned
- * field that is accepted and dropped until its schema exists. Fields outside this list stay strictly rejected.
+ * Every optional step field this build names. Both fields are modeled by manualStepSchema; registered fields may
+ * be projected away for an older reader. Fields outside this list stay strictly rejected.
  */
 export const SUPPORTED_STEP_EXTENSIONS = ['actions', 'sourceText'] as const
 export type StepExtension = (typeof SUPPORTED_STEP_EXTENSIONS)[number]

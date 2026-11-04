@@ -1048,6 +1048,28 @@ describe('the actual v2 catalog renderer', () => {
         expect(header.queryAll((node) => node.props.maxFontSizeMultiplier === 0).length).toBeGreaterThan(0)
     })
 
+    it.each([
+        { label: 'a legacy Guide with no stepActions echo', legacy: true, shown: 1 },
+        { label: 'a numbered Guide with the stepActions echo', legacy: false, shown: 3 },
+    ])('guards duplicate bound titles and subtitles only for $label', async ({ legacy, shown }) => {
+        const { inputs, bindings } = await setup()
+        const document = compose(inputs, [
+            {
+                type: 'Text',
+                content: { kind: 'bound', key: 'step-title' },
+                role: 'body',
+                emphasis: 'normal',
+                tone: 'neutral',
+                align: 'start',
+            },
+        ])
+        const direction = inputs.session!.reviewedSteps[0]!.title
+        document.header.subtitle = { kind: 'literal', text: direction }
+        if (legacy) delete document.metadata.stepActions
+        await render(wrap(<DocumentRenderer document={document} bindings={bindings} />))
+        expect(screen.getAllByText(direction)).toHaveLength(shown)
+    })
+
     it('shows Guide directions and Home resume copy once, with room below the final Guide piece', async () => {
         const { inputs, bindings } = await setup()
         const document = compose(inputs)

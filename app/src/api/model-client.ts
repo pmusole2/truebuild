@@ -6,9 +6,11 @@ import { appendMultipartImage, releaseMultipartImages } from './multipart-image'
 import { outgoingManualSession } from './outgoing-session'
 import {
     checkResultSchema,
+    isRecord,
     LIMITS,
     matchesBinding,
     parsedManualSchema,
+    projectStepExtensions,
     sanitizeManualStepActions,
     pieceBatchRequestSchema,
     pieceBatchResultSchema,
@@ -16,6 +18,8 @@ import {
     screensResultSchema,
     segmentEventSchema,
     SUPPORTED_STEP_EXTENSIONS,
+    stepMotionRequestSchema,
+    stepMotionResultSchema,
     type ApiResult,
     type CaptureBinding,
     type CheckResult,
@@ -30,6 +34,9 @@ import {
     type ScreenKind,
     type ScreensResult,
     type SegmentEvent,
+    type StepExtension,
+    type StepMotionRequest,
+    type StepMotionResult,
 } from '@truebuild/contracts'
 import {
     MAX_PARSE_PAGES,
@@ -315,6 +322,38 @@ async function readProgressStream(
     return { status: failed ? 502 : 200, text: JSON.stringify(result) }
 }
 
+/** A known refusal before model dispatch can be retried on a later visit; unknown outcomes must never be resent. */
+export type StepMotionAttempt = StepMotionResult | { status: 'not_sent' | 'unknown' }
+
+/** Set once an original generation is refused with 404: the endpoint is absent for the rest of this app session. */
+let stepMotionEndpointAbsent = false
+
+/** Forgets an earlier 404 so each test starts with the endpoint assumed present. */
+export function resetStepMotionEndpointForTests(): void {
+    stepMotionEndpointAbsent = false
+}
+
+/** The step fields the API applied, read only from its echo header; an absent header applies none. */
+const STEP_FIELDS_HEADER = 'x-truebuild-step-fields'
+
+function echoedStepFields(headers: Headers): ReadonlySet<StepExtension> {
+    const named = new Set((headers.get(STEP_FIELDS_HEADER) ?? '').split(',').map((name) => name.trim()))
+    return new Set(SUPPORTED_STEP_EXTENSIONS.filter((name) => named.has(name)))
+}
+
+/** Drops each optional step field the API did not echo before strict validation sees the steps. */
+function projectEchoedSteps(value: unknown, echoed: ReadonlySet<StepExtension>): unknown {
+    if (!isRecord(value) || !Array.isArray(value.steps)) return value
+    return { ...value, steps: value.steps.map((step: unknown) => projectStepExtensions(step, echoed)) }
+}
+
+function parsedManualValue(echoed: ReadonlySet<StepExtension>, pageIds: ReadonlySet<string>): z.ZodType<ParsedManual> {
+    return z.preprocess(
+        (value) => sanitizeManualStepActions(projectEchoedSteps(value, echoed), pageIds),
+        parsedManualSchema,
+    )
+}
+
 export class ModelApiClient {
     private readonly baseUrl: string
     private readonly secret: string
@@ -398,12 +437,13 @@ export class ModelApiClient {
 
         return this.post({
             // Query parameters are ignored by old APIs and do not alter their strict metadata or CORS contract.
-            path: `/api/manuals/parse?stepKinds=remove&stepActions=1&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
+            path: `/api/manuals/parse?stepKinds=remove&stepFields=${SUPPORTED_STEP_EXTENSIONS.join(',')}`,
             requestId: ctx.requestId,
             binding,
             form,
             timeoutMs: MODEL_PARSE_TIMEOUT_MS,
-            valueSchema: z.preprocess((value) => sanitizeManualStepActions(value, pageIds), parsedManualSchema),
+            // The steps' optional fields are judged by the API's echo header, read with the response, never by the request.
+            valueSchema: (headers: Headers) => parsedManualValue(echoedStepFields(headers), pageIds),
             accepts: (value: ParsedManual): boolean => everyRefInside(value, pageIds),
             signal: ctx.signal,
             checkpoint: ctx.checkpoint,
@@ -909,6 +949,76 @@ export class ModelApiClient {
         }
     }
 
+    /** Additive endpoint: an older server's 404 is an absent hint, with no fallback or retry. */
+    async stepMotion(
+        request: StepMotionRequest,
+        pageUris: Readonly<Record<string, string>>,
+    ): Promise<StepMotionAttempt> {
+        if (stepMotionEndpointAbsent) return { status: 'not_sent' }
+        if (this.consent !== null && !(await this.allowed(undefined, false))) return { status: 'not_sent' }
+        const valid = stepMotionRequestSchema.safeParse(request)
+        if (!valid.success) return { status: 'not_sent' }
+        const guard = createCallGuard(MODEL_PIECES_TIMEOUT_MS, undefined)
+        const form = new FormData()
+        const cacheOnly = valid.data.cacheOnly === true
+        let sent = false
+        try {
+            // A cache-only lookup sends metadata alone: it may read a finished scene but can never dispatch.
+            if (!cacheOnly) {
+                const page = valid.data.page
+                const bytes = bytesFromDataUri(pageUris[page.pageId], page.mimeType)
+                if (bytes === null || bytes.byteLength > LIMITS.imageBytes) return { status: 'not_sent' }
+                appendMultipartImage(form, `page:${page.pageId}`, { ...page, bytes }, page.pageId)
+            }
+            // Only a cache-only lookup carries the recovery flag; normal generation metadata never does.
+            const { cacheOnly: _flag, ...wire } = valid.data
+            form.append('metadata', JSON.stringify(cacheOnly ? valid.data : wire))
+            sent = true
+            const url = new URL('/api/step-motion', this.baseUrl)
+            // The query marks only the lookup, so the server can skip the paid-call admission check for it. Metadata alone
+            // never grants that: the server still refuses to dispatch on a lookup.
+            if (cacheOnly) url.searchParams.set('cacheOnly', '1')
+            const response = await awaitStopped(
+                this.fetchImpl(url.toString(), this.init(form, guard.signal)),
+                guard.signal,
+                discardResponse,
+            )
+            // Only a refused original generation latches, and before its body is read: a body failure cannot skip the latch.
+            // A cache-only miss on a 404 proves the endpoint exists, so it never latches.
+            if (!cacheOnly && response.status === 404) {
+                discardResponse(response)
+                stepMotionEndpointAbsent = true
+                return { status: 'not_sent' }
+            }
+            const text = await readBoundedText(response, guard.signal, guard.checkpoint, 500_000)
+            if (!response.ok) {
+                // A failed lookup can say nothing about the original paid call, so it never reads as not sent.
+                if (cacheOnly) return { status: 'unknown' }
+                if ([400, 401, 429].includes(response.status)) return { status: 'not_sent' }
+                const failure: unknown = JSON.parse(text)
+                if (
+                    typeof failure === 'object' &&
+                    failure !== null &&
+                    'notDispatched' in failure &&
+                    failure.notDispatched === true
+                )
+                    return { status: 'not_sent' }
+                return { status: 'unknown' }
+            }
+            const parsed = stepMotionResultSchema.safeParse(JSON.parse(text))
+            return parsed.success && (parsed.data.scene === null || parsed.data.scene.stepId === request.stepId)
+                ? parsed.data
+                : { status: 'unknown' }
+        } catch (error) {
+            if (error instanceof Error && ['ai_consent_required', 'request_stopped'].includes(error.message))
+                return { status: 'not_sent' }
+            return { status: sent ? 'unknown' : 'not_sent' }
+        } finally {
+            releaseMultipartImages(form)
+            guard.dispose()
+        }
+    }
+
     /** Recheck each batch so a backend rollback takes the strict legacy wire path without a POST retry. */
     private async supportsPieceFigureBox(signal: AbortSignal): Promise<boolean> {
         const guard = createCallGuard(5_000, signal)
@@ -942,7 +1052,8 @@ export class ModelApiClient {
         binding: ManualBinding | CaptureBinding
         form: FormData | string
         timeoutMs: number
-        valueSchema: z.ZodType<T>
+        /** A function receives the response headers, for a route whose value depends on what the response echoes. */
+        valueSchema: z.ZodType<T> | ((headers: Headers) => z.ZodType<T>)
         accepts: (value: T, binding: ManualBinding | CaptureBinding) => boolean
         signal: AbortSignal | undefined
         checkpoint: (() => void) | undefined
@@ -964,15 +1075,6 @@ export class ModelApiClient {
             return unavailableResult(requestId, binding, 'invalid_input', false)
         }
 
-        const call: Call<T> = {
-            path: spec.path,
-            requestId,
-            binding,
-            fields: {},
-            valueSchema: spec.valueSchema,
-            accepts: spec.accepts,
-            signal,
-        }
         const guard = createCallGuard(spec.timeoutMs, signal)
         const { checkpoint, outerExpired } = composeCheckpoint(guard, spec.checkpoint)
         let owned: Response | undefined
@@ -989,6 +1091,17 @@ export class ModelApiClient {
                 discardResponse,
             )
             checkpoint()
+            // A header-aware schema reads what the response echoes, so it is built only once the response has arrived.
+            const call: Call<T> = {
+                path: spec.path,
+                requestId,
+                binding,
+                fields: {},
+                valueSchema:
+                    typeof spec.valueSchema === 'function' ? spec.valueSchema(owned.headers) : spec.valueSchema,
+                accepts: spec.accepts,
+                signal,
+            }
             // Only a successful event stream is read as progress; any other answer keeps the legacy JSON envelope.
             const streamed =
                 onProgress !== undefined &&

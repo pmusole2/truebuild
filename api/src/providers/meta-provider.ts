@@ -15,6 +15,8 @@ import {
     manualBindingSchema,
     manualSessionSchema,
     sanitizeManualStepActions,
+    SUPPORTED_STEP_EXTENSIONS,
+    type StepExtension,
     questionTargetSchema,
     type AiEffort,
     type CaptureBinding,
@@ -33,11 +35,14 @@ import {
     type ManualPieceInput,
     manualPieceInputSchema,
     pieceIdSchema,
+    stepMotionRequestSchema,
+    type StepMotionRequest,
 } from '@truebuild/contracts'
 import { z } from 'zod'
 
 import {
     aiPolicyFromEnvironment,
+    STEP_MOTION_POLICY,
     DOCUMENT_MAX_OUTPUT_TOKENS,
     MAX_DEADLINE_MS,
     PIECES_DEADLINE_MS,
@@ -74,6 +79,7 @@ import {
     isIncompleteResponse,
     metaLayoutOutputSchemas,
     metaOutputSchemas,
+    metaParseSourceTextOutputSchema,
     providerCheckSchema,
     providerOverlaySchema,
     providerQuestionSchema,
@@ -83,6 +89,7 @@ import {
 } from './meta-schemas'
 import { DOCUMENT_INSTRUCTIONS, DOCUMENT_LANGUAGE_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
 import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
+import { STEP_MOTION_INSTRUCTIONS } from './step-motion-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
 import { SHOWN_FACT_LIMIT, shownScreenV2Schema, type ShownScreen } from './shown-screen'
 
@@ -244,6 +251,8 @@ export interface ParseManualInput {
     pages: SourceImage[]
     /** ISO-like language code of the manual blocks to read; defaults to English. */
     language?: string
+    /** Applied parse extensions negotiated by the route; absent for older callers. */
+    stepFields?: StepExtension[]
 }
 
 /** The generated step screen a check names, resolved by the server: identity plus validator-resolved facts only. */
@@ -272,6 +281,10 @@ export interface AnswerQuestionInput extends CheckStepInput {
 }
 
 export interface MetaProvider {
+    generateStepMotion?(
+        input: { request: StepMotionRequest; image: ObservationImage },
+        signal: AbortSignal,
+    ): Promise<ScreenGeneration>
     generatePieces?(
         input: {
             requestId: string
@@ -348,6 +361,7 @@ const parseInputSchema = z.strictObject({
     binding: manualBindingSchema,
     pages: z.array(sourceImageSchema).min(1).max(MAX_PARSE_PAGES),
     language: parseLanguageSchema.optional(),
+    stepFields: z.array(z.enum(SUPPORTED_STEP_EXTENSIONS)).optional(),
 })
 const checkInputSchema = z.strictObject({
     requestId: requestIdSchema,
@@ -706,16 +720,25 @@ const PARSE_PART_IDENTITIES =
 /** Plain-language procedure, used only by parse; check/ask instruction bytes remain unchanged. */
 const PARSE_ACTIONS =
     'Parse actions: Capture the procedure as actions [{actionId, instruction, sourceRefs}] in the selected reading language, with at most 6 actions and 120 characters per instruction. If a step needs more, group related motions into one action. They become numbered steps in the order they happen, with one physical action per entry. Start each instruction with a verb; conditional steps may start with If followed by the condition and a verb. Aim for about 12 words or fewer, using everyday words and the parts list name, with quantities when they matter. Add a short until cue only when it helps someone know they are done. Stay faithful to the manual text and figure: use a clearly depicted motion when text is terse, but never invent a step, part or tool; when neither supplies a concrete motion, keep the supported wording. Never use inspection jargon such as seated, corresponding, as shown in completed view, present, installed onto or fixed on, or equivalent jargon in another language. Keep orientation, connection and visibleChecks as short completed-state checklist statements, separate from actions. Return correction: null when the manual prints no fix; never add no-action or a made-up fix. Write repeated actions in full with the relevant parts and sides, rather than only Repeat step N. On wordless pages, read actions from the figure and name parts from the parts list or by shape and colour; never invent quantities that are not shown. If the figure and text disagree, follow the text and put the figure difference in a check, never an action. Every action needs a unique actionId and supporting supplied page sourceRefs.'
-const PARSE_INSTRUCTIONS =
+const PARSE_INSTRUCTION_PREFIX =
     INSTRUCTION_LINES.flatMap((line): string[] =>
         line.startsWith('Parse carried quantities')
             ? [line, CARRIED_OVER_REQUIRED]
             : line.startsWith('Parse corrections')
               ? [PARSE_SAFETY, line]
               : [line],
-    ).join(' ') +
-    ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES} ${PARSE_ACTIONS}` +
-    ' Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. A part box must enclose one complete physical outline, not a row of quantity copies. Exclude other items, hands, labels and borders. If an individual outline or its variant identity cannot be distinguished, use drawingBox:null and retain the step figure context; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; cite the whole page only when no tighter source region can be identified. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
+    ).join(' ') + ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES} ${PARSE_ACTIONS}`
+const PARSE_SOURCE_TEXT =
+    'Parse source text: For each step, set sourceText to its full printed instruction text verbatim in the manual language, at most 600 characters; use null for a wordless step or when the full printed text does not fit 600 characters. Do not truncate, translate, paraphrase or invent sourceText.'
+const PARSE_PARTS =
+    'Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. A part box must enclose one complete physical outline, not a row of quantity copies. Exclude other items, hands, labels and borders. If an individual outline or its variant identity cannot be distinguished, use drawingBox:null and retain the step figure context; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; cite the whole page only when no tighter source region can be identified. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
+
+/** The default remains byte-identical to c03fa2d; the printed source text is an explicit parse opt-in. */
+const PARSE_INSTRUCTIONS = `${PARSE_INSTRUCTION_PREFIX} ${PARSE_PARTS}`
+const PARSE_SOURCE_TEXT_INSTRUCTIONS = `${PARSE_INSTRUCTION_PREFIX} ${PARSE_SOURCE_TEXT} ${PARSE_PARTS.replace(
+    'cite the whole page only when no tighter source region can be identified.',
+    'use region:null to cite the whole page only when no tighter source region can be identified. Never invent a crop.',
+)}`
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -781,6 +804,49 @@ function guidance(proposed: Guidance, requested: boolean): Guidance {
         ...(proposed.nextPartRegion === undefined ? {} : { nextPartRegion: proposed.nextPartRegion }),
         ...(proposed.targetRegion === undefined ? {} : { targetRegion: proposed.targetRegion }),
     }
+}
+
+/** Shared format and text parts keep the admission budget identical to the provider payload. */
+const STEP_MOTION_FORMAT = {
+    type: 'json_schema',
+    name: 'truebuild_stepMotion',
+    schema: metaOutputSchemas.stepMotion,
+    strict: true,
+} as const
+
+type MotionTextPart = { type: 'input_text'; text: string }
+
+function stepMotionTextContent(context: Readonly<Record<string, unknown>>): [MotionTextPart, MotionTextPart] {
+    return [
+        {
+            type: 'input_text',
+            text: JSON.stringify({ instructionText: context.instructionText, sourceRefs: context.sourceRefs }),
+        },
+        {
+            type: 'input_text',
+            text: JSON.stringify({
+                requestId: context.requestId,
+                stepId: context.stepId,
+                readingLanguage: context.readingLanguage,
+                parts: context.parts,
+                actions: context.actions,
+                orientation: context.orientation,
+                connection: context.connection,
+            }),
+        },
+    ]
+}
+
+/** Exact UTF-8 size of the same instructions, output format and text parts sent by step-motion; images are budgeted separately. */
+export function stepMotionTextBytes(request: StepMotionRequest): number {
+    return Buffer.byteLength(
+        JSON.stringify({
+            instructions: STEP_MOTION_INSTRUCTIONS,
+            text: { format: STEP_MOTION_FORMAT },
+            input: stepMotionTextContent(request),
+        }),
+        'utf8',
+    )
 }
 
 /** Inactive by construction: imports and missing configuration never initiate media or network work. */
@@ -890,6 +956,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             case 'document':
                 return 'screens'
             case 'pieces':
+            case 'stepMotion':
                 return 'step-pages'
         }
     }
@@ -908,6 +975,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
         verdictOnly = false,
         effort: AiEffort = policy.stages[stage].effort,
         onParseProgress?: (phase: ParseProgress) => void,
+        parseSourceText = false,
     ): Promise<{ value: T; telemetry: VerifiedCallTelemetry }> {
         deadline.checkpoint()
         const clockStart = requestClock.getStore()?.start ?? performance.now()
@@ -921,20 +989,24 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 : undefined
         const operationInstructions =
             operation === 'parse'
-                ? PARSE_INSTRUCTIONS
+                ? parseSourceText
+                    ? PARSE_SOURCE_TEXT_INSTRUCTIONS
+                    : PARSE_INSTRUCTIONS
                 : operation === 'screen'
                   ? SCREEN_INSTRUCTIONS
                   : operation === 'pieces'
                     ? PIECE_GEOMETRY_INSTRUCTIONS
-                    : operation === 'document'
-                      ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
-                          ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
-                          : DOCUMENT_INSTRUCTIONS
-                      : operation === 'overlay'
-                        ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
-                        : withLayout
-                          ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
-                          : INSTRUCTIONS
+                    : operation === 'stepMotion'
+                      ? STEP_MOTION_INSTRUCTIONS
+                      : operation === 'document'
+                        ? documentLanguage?.success && documentLanguage.data.document.language !== 'en'
+                            ? `${DOCUMENT_INSTRUCTIONS} ${DOCUMENT_LANGUAGE_INSTRUCTIONS}`
+                            : DOCUMENT_INSTRUCTIONS
+                        : operation === 'overlay'
+                          ? `${INSTRUCTIONS} ${OVERLAY_INSTRUCTIONS}`
+                          : withLayout
+                            ? `${INSTRUCTIONS} ${LAYOUT_INSTRUCTIONS}`
+                            : INSTRUCTIONS
         const baseInstructions =
             language === undefined
                 ? operationInstructions
@@ -950,36 +1022,47 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             type: 'input_image',
             image_url: `data:image/jpeg;base64,${Buffer.from(image.bytes).toString('base64')}`,
         })
-        const content = [
-            { type: 'input_text', text: JSON.stringify({ manualContext: stable }) },
-            ...(textOnly ? [] : manualImages.map(imagePart)),
-            {
-                type: 'input_text',
-                text: JSON.stringify({
-                    operation,
-                    step,
-                    requestId,
-                    binding,
-                    question,
-                    target,
-                    // Per-request, so the shared instruction prefix stays identical across check and ask.
-                    ...(verdictOnly && operation === 'check' ? { verdictOnly: VERDICT_ONLY_INSTRUCTIONS } : {}),
-                    ...(typeof dynamic === 'object' && dynamic !== null ? dynamic : {}),
-                }),
-            },
-            ...observation.map(imagePart),
-        ]
-        const format = {
-            type: 'json_schema',
-            name: `truebuild_${operation}`,
-            schema:
-                verdictOnly && operation === 'check'
-                    ? metaVerdictOutputSchema
-                    : withLayout && (operation === 'check' || operation === 'question')
-                      ? metaLayoutOutputSchemas[operation]
-                      : metaOutputSchemas[operation],
-            strict: true,
-        }
+        const motionText = operation === 'stepMotion' ? stepMotionTextContent(context) : null
+        const content =
+            motionText !== null
+                ? [motionText[0], ...images.map(imagePart), motionText[1]]
+                : [
+                      { type: 'input_text', text: JSON.stringify({ manualContext: stable }) },
+                      ...(textOnly ? [] : manualImages.map(imagePart)),
+                      {
+                          type: 'input_text',
+                          text: JSON.stringify({
+                              operation,
+                              step,
+                              requestId,
+                              binding,
+                              question,
+                              target,
+                              // Per-request, so the shared instruction prefix stays identical across check and ask.
+                              ...(verdictOnly && operation === 'check'
+                                  ? { verdictOnly: VERDICT_ONLY_INSTRUCTIONS }
+                                  : {}),
+                              ...(typeof dynamic === 'object' && dynamic !== null ? dynamic : {}),
+                          }),
+                      },
+                      ...observation.map(imagePart),
+                  ]
+        const format =
+            operation === 'stepMotion'
+                ? STEP_MOTION_FORMAT
+                : {
+                      type: 'json_schema',
+                      name: `truebuild_${operation}`,
+                      schema:
+                          operation === 'parse' && parseSourceText
+                              ? metaParseSourceTextOutputSchema
+                              : verdictOnly && operation === 'check'
+                                ? metaVerdictOutputSchema
+                                : withLayout && (operation === 'check' || operation === 'question')
+                                  ? metaLayoutOutputSchemas[operation]
+                                  : metaOutputSchemas[operation],
+                      strict: true,
+                  }
         // https://dev.meta.ai/docs/prompt-caching: share the stable prompt/schema version, never a person or request key.
         const promptVersion = createHash('sha256')
             .update(baseInstructions)
@@ -993,9 +1076,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
             // Reasoning shares this output budget with the JSON. These are configured application values, not
             // measured needs or provider maxima; an incomplete response is reported, never treated as valid.
             max_output_tokens:
-                (operation === 'document' || operation === 'screen') && stage === 'step-pages'
-                    ? DOCUMENT_MAX_OUTPUT_TOKENS
-                    : stagePolicy.maxOutputTokens,
+                operation === 'stepMotion'
+                    ? STEP_MOTION_POLICY.maxOutputTokens
+                    : (operation === 'document' || operation === 'screen') && stage === 'step-pages'
+                      ? DOCUMENT_MAX_OUTPUT_TOKENS
+                      : stagePolicy.maxOutputTokens,
             reasoning: { effort, ...(streamingParse ? { summary: 'auto' } : {}) },
             prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
             instructions:
@@ -1033,10 +1118,10 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                 (status, latencyMs) => {
                     options.onMetrics?.({ operation: metricsOperation, model, status, latencyMs })
                 },
-                // One short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
-                2,
+                // Other operations allow one short Retry-After 429 and one eligible pre-response network retry, globally bounded to three sends.
+                operation === 'stepMotion' ? 1 : 2,
                 transportObservation,
-                2,
+                operation === 'stepMotion' ? 1 : 2,
             )
 
             // Even a response that settles beyond the absolute deadline retains explicit body custody.
@@ -1464,6 +1549,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                                     false,
                                     policy.stages.parse.effort,
                                     onProgress,
+                                    parsed.stepFields?.includes('sourceText') === true,
                                 )
                                 const value = sent.value
                                 lastTelemetry = sent.telemetry
@@ -1571,6 +1657,41 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                     return { value, telemetry }
                 },
             )
+        },
+
+        async generateStepMotion(input, signal): Promise<ScreenGeneration> {
+            const request = stepMotionRequestSchema.safeParse(input.request)
+            if (!request.success || request.data.cacheOnly) throw new MetaProviderError('invalid_input')
+            if (
+                Buffer.byteLength(JSON.stringify(request.data), 'utf8') > STEP_MOTION_POLICY.maxContextBytes ||
+                stepMotionTextBytes(request.data) > STEP_MOTION_POLICY.maxTextBytes ||
+                Math.max(input.image.width, input.image.height) > STEP_MOTION_POLICY.maxImageEdge
+            )
+                throw new MetaProviderError('invalid_input')
+            return execute(STEP_MOTION_POLICY.deadlineMs, signal, async (deadline): Promise<ScreenGeneration> => {
+                const images = await validateAndNormalizeImages([input.image], deadline.signal, 1, true)
+                const {
+                    page: _page,
+                    figureBox: _box,
+                    manualHash: _hash,
+                    cacheOnly: _cacheOnly,
+                    ...context
+                } = request.data
+                return dispatchDetailed(
+                    'stepMotion',
+                    context,
+                    images,
+                    z.unknown(),
+                    deadline,
+                    STEP_MOTION_POLICY.model,
+                    false,
+                    undefined,
+                    false,
+                    'step-pages',
+                    false,
+                    STEP_MOTION_POLICY.effort,
+                )
+            })
         },
 
         async generatePieces(input, signal): Promise<ScreenGeneration> {

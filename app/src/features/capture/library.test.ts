@@ -193,7 +193,7 @@ describe('durable manual library', () => {
         }
     })
 
-    it('restores a step action and drops a newer optional step field, but never an unrelated unknown key', async () => {
+    it('restores both registered step fields, but never an unrelated unknown key', async () => {
         const kv = memory()
         const store = new LibraryStorage(kv, digest)
         const manual = await entry()
@@ -215,7 +215,7 @@ describe('durable manual library', () => {
         const restored = await new LibraryStorage(kv, digest).restore()
         expect(restored.readOnly).toBe(false)
         expect(restored.entries[0]!.session.reviewedSteps[0]!.actions).toEqual(actions)
-        expect(restored.entries[0]!.session.reviewedSteps[0]).not.toHaveProperty('sourceText')
+        expect(restored.entries[0]!.session.reviewedSteps[0]!.sourceText).toBe(step.sourceText)
         step.mysteryField = 'unrelated'
         kv.data.set('truebuild/library/v1', JSON.stringify(saved))
         expect((await new LibraryStorage(kv, digest).restore()).readOnly).toBe(true)

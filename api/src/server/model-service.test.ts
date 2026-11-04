@@ -293,7 +293,7 @@ describe('protected model composition', (): void => {
         expect(questionCalls).toBe(1)
     })
 
-    it('accepts action/sourceText sessions on check, question, overlay and v1 screens without exposing future fields', async () => {
+    it('accepts modeled action/sourceText sessions on check, question, overlay and v1 screens', async () => {
         const state = await setup()
         const step = state.metadata.session.reviewedSteps[0]!
         step.actions = [{ actionId: 'turn', instruction: 'Turn the panel.', sourceRefs: step.sourceRefs }]
@@ -301,17 +301,20 @@ describe('protected model composition', (): void => {
         Object.assign(state.metadata.session.rawExtraction!.steps[0]!, { sourceText: 'Future extraction text.' })
         const checkInput = vi.fn<MetaProvider['checkStep']>(async (input) => {
             expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
-            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            expect(input.session.reviewedSteps[0]!.sourceText).toBe(step.sourceText)
+            expect(input.session.rawExtraction!.steps[0]!.sourceText).toBe('Future extraction text.')
             return checked
         })
         const questionInput = vi.fn<MetaProvider['answerQuestion']>(async (input) => {
             expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
-            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            expect(input.session.reviewedSteps[0]!.sourceText).toBe(step.sourceText)
+            expect(input.session.rawExtraction!.steps[0]!.sourceText).toBe('Future extraction text.')
             return { answer: 'Synthetic answer', sourceRefs: [], missingEvidence: [] }
         })
         const overlayInput = vi.fn<NonNullable<MetaProvider['overlay']>>(async (input) => {
             expect(input.session.reviewedSteps[0]!.actions).toEqual(step.actions)
-            expect(JSON.stringify(input.session)).not.toContain('sourceText')
+            expect(input.session.reviewedSteps[0]!.sourceText).toBe(step.sourceText)
+            expect(input.session.rawExtraction!.steps[0]!.sourceText).toBe('Future extraction text.')
             return {
                 value: { observedRegion: null, layout: undefined, nextPartRegion: undefined, targetRegion: undefined },
                 evidence: FIXTURE_EVIDENCE,
@@ -1239,6 +1242,7 @@ describe('parse removal compatibility at the response boundary', () => {
                 .array(
                     manualStepSchema.safeExtend({
                         actions: z.never().optional(),
+                        sourceText: z.never().optional(),
                         kind: z.enum(['assembly', 'adjust', 'connect', 'tighten', 'route']).nullable().optional(),
                     }),
                 )
@@ -1246,66 +1250,92 @@ describe('parse removal compatibility at the response boundary', () => {
         })
         .refine((value) => parsedManualSchema.safeParse(value).success)
 
-    it.each([
-        { stream: false, capable: false },
-        { stream: true, capable: false },
-        { stream: false, capable: true },
-        { stream: true, capable: true },
-    ])('preserves removal meaning for $stream streaming / $capable capable clients', async ({ stream, capable }) => {
-        const state = await setup()
-        const canonical = parsed()
-        canonical.steps[0] = {
-            ...canonical.steps[0]!,
-            title: 'Remove the divider',
-            kind: 'remove',
-            actions: [{ actionId: 'a1', instruction: 'Lift the divider.', sourceRefs: canonical.steps[0]!.sourceRefs }],
-        }
-        expect(oldParsedManual.safeParse(canonical).success).toBe(false)
-        const original = structuredClone(canonical)
-        const handlers = createModelHandlers({
-            ...state,
-            samProvider: null,
-            provider: {
-                ...provider(async () => checked),
-                parseManual: async (_input, _signal, progress) => {
-                    progress?.('reading')
-                    progress?.('output')
-                    return canonical
+    it.each(
+        [false, true].flatMap((stream) =>
+            [false, true].flatMap((removal) =>
+                [
+                    ...['', 'actions', 'sourceText', 'actions,sourceText', 'unknown', 'unknown,sourceText'].map(
+                        (fields) => ({ fields, legacyAlias: false }),
+                    ),
+                    { fields: 'actions,sourceText', legacyAlias: true },
+                ].map(({ fields, legacyAlias }) => ({ stream, removal, fields, legacyAlias })),
+            ),
+        ),
+    )(
+        'projects requested fields $fields / legacy=$legacyAlias for SSE=$stream / removal=$removal',
+        async ({ stream, removal, fields, legacyAlias }) => {
+            const state = await setup()
+            const canonical = parsed()
+            canonical.steps[0] = {
+                ...canonical.steps[0]!,
+                title: 'Remove the divider',
+                kind: 'remove',
+                actions: [
+                    { actionId: 'a1', instruction: 'Lift the divider.', sourceRefs: canonical.steps[0]!.sourceRefs },
+                ],
+                sourceText: '  Tournez la pièce.\nSerrez-la.  ',
+            }
+            expect(oldParsedManual.safeParse(canonical).success).toBe(false)
+            const original = structuredClone(canonical)
+            const requested = fields.split(',')
+            const applied = ['actions', 'sourceText'].filter(
+                (field) => requested.includes(field) && !(legacyAlias && field === 'sourceText'),
+            )
+            const handlers = createModelHandlers({
+                ...state,
+                samProvider: null,
+                provider: {
+                    ...provider(async () => checked),
+                    parseManual: async (input, _signal, progress) => {
+                        expect(input.stepFields).toEqual(applied)
+                        progress?.('reading')
+                        progress?.('output')
+                        return canonical
+                    },
                 },
-            },
-        })
-        const base = parseRequest(state)
-        const headers = new Headers(base.headers)
-        headers.delete('content-type')
-        if (stream) headers.set('accept', 'text/event-stream')
-        const response = await handlers.parse(
-            new Request(`${base.url}${capable ? '?stepKinds=remove&stepActions=1' : ''}`, {
-                headers,
-                method: 'POST',
-                body: await base.formData(),
-            }),
-        )
-        expect(response.status).toBe(200)
-        const wire = stream
-            ? (await response.text())
-                  .split('\n\n')
-                  .filter((block) => block.startsWith('data: '))
-                  .map((block) => JSON.parse(block.slice(6)) as { type: string; result?: { value: unknown } })
-                  .find((event) => event.type === 'result')!.result!
-            : ((await response.json()) as { value: unknown })
-        expect(parsedManualSchema.parse(wire.value)).toEqual({
-            ...original,
-            steps: original.steps.map((step) => {
-                const { actions, ...legacy } = step
-                return capable
-                    ? { ...legacy, ...(actions === undefined ? {} : { actions }) }
-                    : { ...legacy, ...(step.kind === 'remove' ? { kind: 'adjust' } : {}) }
-            }),
-        })
-        expect(oldParsedManual.safeParse(wire.value).success).toBe(!capable)
-        expect(canonical).toEqual(original)
-        expect(state.counter.used).toBe(1)
-    })
+            })
+            const base = parseRequest(state)
+            const headers = new Headers(base.headers)
+            headers.delete('content-type')
+            headers.set('origin', 'http://localhost:8081')
+            if (stream) headers.set('accept', 'text/event-stream')
+            const query = new URLSearchParams({ stepFields: fields })
+            if (legacyAlias) query.set('stepActions', '1')
+            if (removal) query.set('stepKinds', 'remove')
+            const response = await handlers.parse(
+                new Request(`${base.url}?${query}`, {
+                    headers,
+                    method: 'POST',
+                    body: await base.formData(),
+                }),
+            )
+            expect(response.status).toBe(200)
+            expect(response.headers.get('x-truebuild-step-fields')).toBe(applied.join(','))
+            expect(response.headers.get('access-control-expose-headers')).toContain('x-truebuild-step-fields')
+            const wire = stream
+                ? (await response.text())
+                      .split('\n\n')
+                      .filter((block) => block.startsWith('data: '))
+                      .map((block) => JSON.parse(block.slice(6)) as { type: string; result?: { value: unknown } })
+                      .find((event) => event.type === 'result')!.result!
+                : ((await response.json()) as { value: unknown })
+            expect(parsedManualSchema.parse(wire.value)).toEqual({
+                ...original,
+                steps: original.steps.map((step) => {
+                    const { actions, sourceText, ...legacy } = step
+                    return {
+                        ...legacy,
+                        ...(applied.includes('actions') && actions !== undefined ? { actions } : {}),
+                        ...(applied.includes('sourceText') && sourceText !== undefined ? { sourceText } : {}),
+                        ...(step.kind === 'remove' && !removal ? { kind: 'adjust' } : {}),
+                    }
+                }),
+            })
+            expect(oldParsedManual.safeParse(wire.value).success).toBe(!removal && applied.length === 0)
+            expect(canonical).toEqual(original)
+            expect(state.counter.used).toBe(1)
+        },
+    )
 })
 
 /** Records the provider-visible signal and lets a test decide the moment the parse settles. */

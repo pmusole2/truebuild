@@ -469,7 +469,7 @@ describe('v2 document transport', () => {
         const [url, init] = fetch.mock.calls[0]!
         expect(new URL(url).pathname).toBe('/api/screens/v2')
         expect(new URL(url).searchParams.get('guideRepair')).toBe('1')
-        expect(new URL(url).search).toBe('?guideRepair=1&waitCopy=2&stepActions=1&stepFields=actions,sourceText')
+        expect(new URL(url).search).toBe('?guideRepair=1&waitCopy=2&stepFields=actions,sourceText')
         expect(init).toMatchObject({
             credentials: 'omit',
             redirect: 'error',
