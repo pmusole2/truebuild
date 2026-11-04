@@ -87,7 +87,12 @@ import {
     providerVerdictSchema,
     metaVerdictOutputSchema,
 } from './meta-schemas'
-import { DOCUMENT_INSTRUCTIONS, DOCUMENT_LANGUAGE_INSTRUCTIONS, DOCUMENT_REPAIR_INSTRUCTIONS } from './document-prompt'
+import {
+    DOCUMENT_INSTRUCTIONS,
+    DOCUMENT_LANGUAGE_INSTRUCTIONS,
+    DOCUMENT_PROMPT_VERSION,
+    DOCUMENT_REPAIR_INSTRUCTIONS,
+} from './document-prompt'
 import { PIECE_GEOMETRY_INSTRUCTIONS } from './piece-prompt'
 import { STEP_MOTION_INSTRUCTIONS } from './step-motion-prompt'
 import { OVERLAY_INSTRUCTIONS, SCREEN_INSTRUCTIONS, SCREEN_REPAIR_INSTRUCTIONS } from './screen-prompt'
@@ -719,26 +724,27 @@ const PARSE_PART_IDENTITIES =
     'Parse inventory identities: Keep separate registry entries for distinct printed inventory labels or variants, even when they share one caption or grouped drawing. A group labelled A*2 B*2 describes two variants with two of each, not one generic four-piece part; retain each label in its name and label field. Link the variants the procedure actually uses, not an umbrella duplicate such as a generic accessory when it refers to those same labelled pieces. For assembly, replacement and removal, include the depicted host or base onto which a part is installed or from which it is removed as a step part when the supplied drawing clearly shows it being used. Use its source-grounded inventory name and printed or clearly depicted quantity; reuse its existing ID and carried quantity in later steps. Never invent an unseen host, a variant, or a quantity.'
 /** Plain-language procedure, used only by parse; check/ask instruction bytes remain unchanged. */
 const PARSE_ACTIONS =
-    'Parse actions: Capture the procedure as actions [{actionId, instruction, sourceRefs}] in the selected reading language, with at most 6 actions and 120 characters per instruction. If a step needs more, group related motions into one action. They become numbered steps in the order they happen, with one physical action per entry. Start each instruction with a verb; conditional steps may start with If followed by the condition and a verb. Aim for about 12 words or fewer, using everyday words and the parts list name, with quantities when they matter. Add a short until cue only when it helps someone know they are done. Stay faithful to the manual text and figure: use a clearly depicted motion when text is terse, but never invent a step, part or tool; when neither supplies a concrete motion, keep the supported wording. Never use inspection jargon such as seated, corresponding, as shown in completed view, present, installed onto or fixed on, or equivalent jargon in another language. Keep orientation, connection and visibleChecks as short completed-state checklist statements, separate from actions. Return correction: null when the manual prints no fix; never add no-action or a made-up fix. Write repeated actions in full with the relevant parts and sides, rather than only Repeat step N. On wordless pages, read actions from the figure and name parts from the parts list or by shape and colour; never invent quantities that are not shown. If the figure and text disagree, follow the text and put the figure difference in a check, never an action. Every action needs a unique actionId and supporting supplied page sourceRefs.'
+    'Parse actions: Capture the procedure as actions [{actionId, instruction, sourceRefs}] in the selected reading language, with at most 6 actions per step and 120 characters per instruction. Write exactly one action per direction line. If a step needs more than 6 actions, split the remaining actions into another ordered step; never put excess actions in unknowns. They become numbered steps in the order they happen, with one physical action per entry. Start each instruction with a verb; conditional steps may start with If followed by the condition and a verb. Aim for about 12 words or fewer, using everyday words and the parts list name, with quantities when they matter. Add a short until cue only when it helps someone know they are done. Stay faithful to the manual text and figure: use a clearly depicted motion when text is terse, but never invent a step, part or tool; when neither supplies a concrete motion, keep the supported wording. Never use inspection jargon such as seated, corresponding, as shown in completed view, present, installed onto or fixed on, or equivalent jargon in another language. Keep orientation, connection and visibleChecks as short completed-state checklist statements, separate from actions. Return correction: null when the manual prints no fix; never add no-action or a made-up fix. Write repeated actions in full with the relevant parts and sides, rather than only Repeat step N. On wordless pages, read actions from the figure and name parts from the parts list or by shape and colour; never invent quantities that are not shown. If the figure and text disagree, follow the text and put the figure difference in a check, never an action. Every action needs a unique actionId and supporting supplied page sourceRefs.'
+/** Parse-only procedure fidelity; kept together to avoid changing pinned check/ask instructions. */
+const PARSE_PROCEDURE_FIDELITY =
+    'Parse procedure fidelity (takes precedence over earlier quantity, option selection and safety wording): A singular named part without a shown quantity means quantity 1, with the supporting name or procedure citation, unless the manual explicitly leaves the count user-supplied or not specified; use unknown only when the count is truly ambiguous, including plural labels without counts. Preserve every numbered manual step and its order and keep unnumbered procedure actions, including preparation, adding materials and disconnecting power; do not collapse separate manual steps or omit non-assembly work. Keep If, when and until conditions attached to their actions, preserving their trigger and stopping condition. Write if/when triggers as If ..., verb ... and stopping conditions as ... until .... Spell out Repeat and for each with the stated count. Preserve explicit repeat counts and for-each quantities, naming each affected part or side; never replace a counted repeat with an unspecified repeat. For mutually exclusive or optional methods for the same goal, keep ONE parent step with every stated option and its conditions; never add an unchosen option to required parts. Never turn an optional method or conditional choice into an unconditional action or choose a physical route merely because it is printed first. Record each optional or mutually exclusive method in the step alternatives array with its cited description; set selectedAlternativeId only to a method the manual explicitly marks as the default. Without a marked default, keep every method as conditional actions with alternatives:null and selectedAlternativeId:null. For user-dependent options without a supplied user choice, write each option as a conditional action beginning If you have, and return alternatives:null and selectedAlternativeId:null rather than selecting a path. Each step has at most one short warning: combine all of its printed safety information into one safetyNotes entry, preserve every safety requirement and cited source, and never drop a prohibition or condition. Keep the note unknown when printed safety information cannot be read. Every direction line must contain exactly one action; never group multiple motions to fit the action limit. If a step needs more than 6 actions, split the remaining actions into another ordered step with at most 6 actions; never drop actions or put excess actions in unknowns.'
 const PARSE_INSTRUCTION_PREFIX =
-    INSTRUCTION_LINES.flatMap((line): string[] =>
-        line.startsWith('Parse carried quantities')
-            ? [line, CARRIED_OVER_REQUIRED]
-            : line.startsWith('Parse corrections')
-              ? [PARSE_SAFETY, line]
-              : [line],
-    ).join(' ') + ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES} ${PARSE_ACTIONS}`
+    INSTRUCTION_LINES.filter((line) => !line.startsWith('Parse alternatives:'))
+        .flatMap((line): string[] =>
+            line.startsWith('Parse carried quantities')
+                ? [line, CARRIED_OVER_REQUIRED]
+                : line.startsWith('Parse corrections')
+                  ? [PARSE_SAFETY, line]
+                  : [line],
+        )
+        .join(' ') + ` ${PARSE_REMOVAL_AND_TOOLS} ${PARSE_PART_IDENTITIES} ${PARSE_ACTIONS} ${PARSE_PROCEDURE_FIDELITY}`
 const PARSE_SOURCE_TEXT =
     'Parse source text: For each step, set sourceText to its full printed instruction text verbatim in the manual language, at most 600 characters; use null for a wordless step or when the full printed text does not fit 600 characters. Do not truncate, translate, paraphrase or invent sourceText.'
 const PARSE_PARTS =
-    'Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. A part box must enclose one complete physical outline, not a row of quantity copies. Exclude other items, hands, labels and borders. If an individual outline or its variant identity cannot be distinguished, use drawingBox:null and retain the step figure context; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; cite the whole page only when no tighter source region can be identified. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
-
-/** The default remains byte-identical to c03fa2d; the printed source text is an explicit parse opt-in. */
+    'Parse parts: Include in the top-level parts registry only parts referenced by at least one extracted step. Include removal and disassembly procedures in the ordered steps, not unknowns. Copy printed inventory label, dimensions and total inventory quantity into label, dimensions and inventoryQuantity; use null when not printed. Name sourceRefs must include the inventory page supplying those facts. For each part, prefer its own figure in a relevant step drawing; otherwise use a tight sub-box of its individual drawing inside a grouped inventory illustration. Put the supplied page ID containing that own drawing FIRST in name.sourceRefs, and retain the inventory citation afterward when it is a different page. drawingBox:[x,y,w,h] is its normalized 0–1 top-left rectangle on that FIRST cited page. Each distinct part needs its own drawingBox: never give two distinct parts the identical drawingBox on the same page. A part box must enclose one complete physical outline, not a row of quantity copies. Exclude other items, hands, labels and borders. If an individual outline or its variant identity cannot be distinguished, use drawingBox:null and retain the step figure context; never arbitrarily divide a group or invent coordinates. Use drawingBox:null when no own drawing is visible. For each step, its sourceRefs.region should tightly enclose the procedure figure when present, so it can be used as broader figure context when a part has no own drawing; use region:null when the step has no clear figure or no tighter source region can be identified. Never invent a crop. Boxes must have positive width/height and x+w<=1,y+h<=1. Do not infer dimensions or add a model call.'
+/** Default parse and the opt-in sourceText variant differ only by the sourceText rule and its schema field. */
 const PARSE_INSTRUCTIONS = `${PARSE_INSTRUCTION_PREFIX} ${PARSE_PARTS}`
-const PARSE_SOURCE_TEXT_INSTRUCTIONS = `${PARSE_INSTRUCTION_PREFIX} ${PARSE_SOURCE_TEXT} ${PARSE_PARTS.replace(
-    'cite the whole page only when no tighter source region can be identified.',
-    'use region:null to cite the whole page only when no tighter source region can be identified. Never invent a crop.',
-)}`
+const PARSE_SOURCE_TEXT_INSTRUCTIONS = `${PARSE_INSTRUCTION_PREFIX} ${PARSE_SOURCE_TEXT} ${PARSE_PARTS}`
 
 /** Appended only when MODEL_LAYOUT=1 (same single request). Ids and grid boxes only; no authored text of any kind. */
 const LAYOUT_INSTRUCTIONS =
@@ -1082,7 +1088,11 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
                       ? DOCUMENT_MAX_OUTPUT_TOKENS
                       : stagePolicy.maxOutputTokens,
             reasoning: { effort, ...(streamingParse ? { summary: 'auto' } : {}) },
-            prompt_cache_key: `truebuild_${operation}_${promptVersion}`,
+            // Parse also carries the document prompt release, so its cache prefix changes with that version.
+            prompt_cache_key:
+                operation === 'parse'
+                    ? `truebuild_parse_${DOCUMENT_PROMPT_VERSION}_${promptVersion}`
+                    : `truebuild_${operation}_${promptVersion}`,
             instructions:
                 repair === undefined
                     ? baseInstructions
@@ -1499,7 +1509,7 @@ export function createMetaProvider(options: MetaProviderOptions): MetaProvider {
     return {
         async parseManual(input, signal, onProgress): Promise<ParsedManual> {
             const startedAt = performance.now()
-            // The overall budget is the configured parse deadline (default 165 s); the route adds its own margin.
+            // The overall budget is the configured parse deadline (default 345 s); the route adds its own margin.
             const overallMs = policy.stages.parse.deadlineMs
             return execute(
                 overallMs,

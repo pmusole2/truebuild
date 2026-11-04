@@ -502,7 +502,7 @@ describe('inactive direct Meta transport', (): void => {
                     'about 12 words or fewer',
                     '120 characters',
                     'at most 6 actions',
-                    'group related motions into one action',
+                    'split the remaining actions into another ordered step',
                     'conditional steps may start with If',
                     'Write repeated actions in full',
                     'On wordless pages',

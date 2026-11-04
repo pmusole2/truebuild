@@ -159,8 +159,13 @@ describe.each(CASES)(
             expect(fetchImpl).toHaveBeenCalledTimes(1)
         })
 
-        it('keeps a truly unstated supplied part unknown and blocking after the single repair', async (): Promise<void> => {
+        it('keeps truly ambiguous plural supplied parts unknown and blocking after the single repair', async (): Promise<void> => {
             const unstated = change(extraction(fixture), 1, fresh, { quantity: UNKNOWN, quantityBasis: null })
+            unstated.parts = unstated.parts.map((part) =>
+                part.partId === fresh && part.name.state === 'known'
+                    ? { ...part, name: { ...part.name, value: `${part.name.value}s` } }
+                    : part,
+            )
             const { provider, fetchImpl } = queued([unstated, unstated])
             const result = await provider.parseManual(await parseInput(fixture), signal())
             expect(fetchImpl).toHaveBeenCalledTimes(2)

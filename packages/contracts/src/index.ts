@@ -302,11 +302,47 @@ export function sanitizeManualStepActions(value: unknown, allowedPageIds?: Reado
     }
 }
 
+/** A clearly singular name can waive a missing count only for one occurrence in the entire procedure. */
+function isSingleUseSingularPart(
+    part: PartRequirement,
+    steps: readonly ManualStep[],
+    parts: readonly ManualPart[],
+): boolean {
+    const { partId, quantity } = part
+    if (
+        quantity.state !== 'unknown' ||
+        !/\b(?:(?:not|n't) (?:state|show|specif|print|list|give|given|provid|indicat)|(?:no|missing|omitted|unstated|unspecified|absent).*?(?:quantity|count)|(?:quantity|count).*?(?:missing|omitted|unstated|unspecified|absent))/iu.test(
+            quantity.reason,
+        ) ||
+        /\d|\b(?:or|whether|between|either|ambig\w*|unclear|uncertain|hidden|occluded|may|might|could|vary|varies|variable|conflict\w*|blur\w*|illegib\w*|unread\w*|obscur\w*|one|two|three|four|five|six|several|multiple)\b/iu.test(
+            quantity.reason,
+        )
+    ) {
+        return false
+    }
+    const entries = parts.filter((part) => part.partId === partId)
+    if (entries.length !== 1 || entries[0]!.name.state !== 'known') return false
+    if (steps.reduce((count, step) => count + step.parts.filter((part) => part.partId === partId).length, 0) !== 1) {
+        return false
+    }
+    const name = entries[0]!.name.value.trim()
+    // Reject plural, collective and joined labels; unfamiliar grammatical forms remain blocked.
+    if (
+        /\b(?:and|or|pair|set|some|several|multiple|both|two|three|four|five|six|feet|teeth|people|children|mice|geese|oxen)\b|[&/]|\d/iu.test(
+            name,
+        )
+    ) {
+        return false
+    }
+    return /^[a-z][a-z '-]*[a-z]$/iu.test(name) && !/\b[a-z]+s\b/iu.test(name)
+}
+
 /** Validate every link by identity and order; the public numeric Fact shape stays unchanged. */
 export function hasValidQuantityEvidence(
     step: ManualStep,
     part: PartRequirement,
     steps: readonly ManualStep[],
+    parts: readonly ManualPart[] = [],
 ): boolean {
     let currentStep = step
     let currentPart = part
@@ -318,7 +354,11 @@ export function hasValidQuantityEvidence(
         }
         const basis = currentPart.quantityBasis
         if (basis?.kind !== 'carried_over') {
-            return currentPart.quantity.state === 'known' || basis != null
+            return (
+                currentPart.quantity.state === 'known' ||
+                basis != null ||
+                isSingleUseSingularPart(currentPart, steps, parts)
+            )
         }
         if (currentPart.quantity.state !== 'known' || visited.has(currentStep.stepId)) {
             return false
@@ -586,7 +626,9 @@ const strictManualSessionSchema = z
                     return (
                         step.sourceRefs.length === 0 ||
                         (required.parts && step.parts.length === 0) ||
-                        step.parts.some((part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps)) ||
+                        step.parts.some(
+                            (part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps, session.parts),
+                        ) ||
                         (required.orientation && step.orientation.state === 'unknown') ||
                         (required.connection && step.connection.state === 'unknown') ||
                         (required.visibleChecks && step.visibleChecks.length === 0) ||

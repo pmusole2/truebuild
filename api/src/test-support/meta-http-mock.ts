@@ -84,7 +84,7 @@ const requestSchema = z.strictObject({
     max_output_tokens: z.number().int().min(16).optional(),
     prompt_cache_key: z
         .string()
-        .regex(/^truebuild_(?:parse|check|question|overlay|screen|document)_[a-f0-9]{16}$/u)
+        .regex(/^truebuild_(?:parse_42|check|question|overlay|screen|document)_[a-f0-9]{16}$/u)
         .optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     instructions: z.string().optional(),

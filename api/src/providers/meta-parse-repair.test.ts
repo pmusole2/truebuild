@@ -9,7 +9,7 @@ import { createMetaProvider, type MetaProviderOptions, type ParseManualInput } f
 import type { ProviderMetrics } from './meta-transport'
 import { observed } from '../test-support/telemetry'
 import { aiPolicyFromEnvironment } from '../server/ai-policy'
-import legacyParsePrompts from './fixtures/parse-instructions-c03fa2d.json'
+import { PARSE_DEFAULT_OVERALL_MS } from '../server/parse-budget'
 
 /** `model` is what the response reports; a real response echoes the model it was asked for. */
 function envelope(value: unknown, model = 'muse-spark-1.3'): Record<string, unknown> {
@@ -82,9 +82,59 @@ function queued(
     return { provider: createMetaProvider({ apiKey: '<synthetic>', ...options, fetchImpl }), fetch: fetchImpl, bodies }
 }
 
+/** Removes the sourceText field and its required entry, so the source-text schema can be compared to the default one. */
+function withoutSourceText(value: unknown): unknown {
+    return JSON.parse(
+        JSON.stringify(value, (key, child: unknown) =>
+            key === 'sourceText'
+                ? undefined
+                : key === 'required' && Array.isArray(child)
+                  ? child.filter((name) => name !== 'sourceText')
+                  : child,
+        ),
+    )
+}
+
+describe('parse prompt crop and action rules in every emitted variant', () => {
+    const CROP_RULE =
+        'use region:null when the step has no clear figure or no tighter source region can be identified. Never invent a crop.'
+    const variants: [string, ParseManualInput['stepFields']][] = [
+        ['default', undefined],
+        ['sourceText', ['sourceText']],
+    ]
+
+    it.each(variants)(
+        'the %s variant states the crop rule once, splits over six actions and never regroups motions',
+        async (_variant, stepFields) => {
+            const { input, clean } = await fixture()
+            const { provider, bodies } = queued([clean])
+            await provider.parseManual(
+                { ...input, ...(stepFields === undefined ? {} : { stepFields }) },
+                new AbortController().signal,
+            )
+            const instructions = String(bodies[0]!.instructions)
+            expect(instructions.split(CROP_RULE)).toHaveLength(2)
+            expect(instructions).toMatch(
+                /more than 6 actions[^.]*split[^.]*into another ordered step[^.]*never[^.]*unknowns/u,
+            )
+            expect(instructions).not.toContain('report the bounded omission in unknowns')
+            expect(instructions).not.toContain('group related motions into one action')
+            // Every sentence that names grouping or merging of actions must forbid it.
+            const grouping = instructions
+                .split(/[.;]/u)
+                .filter(
+                    (sentence) =>
+                        /\b(group|merge|combine)\w*\b/iu.test(sentence) && /\b(actions?|motions?)\b/iu.test(sentence),
+                )
+            expect(grouping.length).toBeGreaterThan(0)
+            expect(grouping.every((sentence) => /\bnever\b/iu.test(sentence))).toBe(true)
+        },
+    )
+})
+
 describe('negotiated parse prompt and schema', () => {
     it.each([undefined, 'en', 'fr-CA'])(
-        'keeps c03fa2d instruction bytes through repair for language %s without sourceText',
+        'repair only appends its block to the default instructions for language %s without sourceText',
         async (language) => {
             const { input, clean } = await fixture()
             const { provider, bodies } = queued([missingConnection(clean), clean])
@@ -92,13 +142,12 @@ describe('negotiated parse prompt and schema', () => {
                 { ...input, ...(language === undefined ? {} : { language }), stepFields: ['actions'] },
                 new AbortController().signal,
             )
-            const frozen = legacyParsePrompts.variants.find((variant) =>
-                language === 'fr-CA' ? variant.language === language : variant.language === null,
-            )!
-            expect(bodies.map((body) => body.instructions)).toEqual(frozen.instructions)
-            expect(bodies.map((body) => createHash('sha256').update(String(body.instructions)).digest('hex'))).toEqual(
-                frozen.sha256,
-            )
+            const [first, repaired] = bodies.map((body) => String(body.instructions))
+            expect(first).toContain('Parse procedure fidelity')
+            expect(first).not.toContain('Parse source text:')
+            expect(repaired?.startsWith(`${first} Parse repair:`)).toBe(true)
+            expect(bodies[0]!.prompt_cache_key).toBe(bodies[1]!.prompt_cache_key)
+            expect(bodies[0]!.prompt_cache_key).toMatch(/^truebuild_parse_42_[a-f0-9]{16}$/u)
         },
     )
 
@@ -113,6 +162,7 @@ describe('negotiated parse prompt and schema', () => {
             expect(JSON.stringify(body.text)).toContain('"sourceText"')
         }
         expect(bodies[0]!.prompt_cache_key).toBe(bodies[1]!.prompt_cache_key)
+        expect(bodies[0]!.prompt_cache_key).toMatch(/^truebuild_parse_42_[a-f0-9]{16}$/u)
     })
 
     it('requests the sourceText schema and rule only for negotiated variants and separates provider prefix keys', async () => {
@@ -136,6 +186,7 @@ describe('negotiated parse prompt and schema', () => {
             const schema = JSON.stringify(body.text)
             expect(schema.includes('"sourceText"')).toBe(sourceText)
             expect(instructions.includes('Parse source text:')).toBe(sourceText)
+            expect(instructions).toContain('Parse procedure fidelity')
             expect(instructions.match(/For each step, its sourceRefs.region should tightly enclose/gu)).toHaveLength(1)
             expect(instructions).not.toContain('Parse step figures:')
             if (sourceText) {
@@ -144,13 +195,18 @@ describe('negotiated parse prompt and schema', () => {
                     instructions.indexOf('Parse actions:'),
                 )
                 expect(instructions).toContain('Do not truncate, translate, paraphrase or invent sourceText.')
-            } else {
-                expect(instructions).toBe(legacyParsePrompts.variants[0]!.instructions[0])
             }
         }
+        // The opt-in differs from the default only by its sourceText rule and schema field, nothing else.
+        const [plain, , sourceOnly] = bodies
+        expect(String(sourceOnly!.instructions).replace(/Parse source text: .*? invent sourceText\. /u, '')).toBe(
+            String(plain!.instructions),
+        )
+        expect(withoutSourceText(sourceOnly!.text)).toEqual(plain!.text)
         expect(bodies[0]!.prompt_cache_key).toBe(bodies[1]!.prompt_cache_key)
         expect(bodies[2]!.prompt_cache_key).toBe(bodies[3]!.prompt_cache_key)
         expect(bodies[0]!.prompt_cache_key).not.toBe(bodies[2]!.prompt_cache_key)
+        expect(bodies[2]!.prompt_cache_key).toMatch(/^truebuild_parse_42_[a-f0-9]{16}$/u)
     })
 })
 
@@ -695,7 +751,7 @@ describe('bounded parse repair', () => {
         })
         const runParseRepair: NonNullable<MetaProviderOptions['runParseRepair']> = async (work) => {
             // Include admission/pacing time in the absolute overall budget, outside either attempt's budget.
-            monotonic += 90_000
+            monotonic += PARSE_DEFAULT_OVERALL_MS - 75_000
             return work()
         }
         try {

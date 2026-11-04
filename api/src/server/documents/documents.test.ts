@@ -10,6 +10,7 @@ import {
     type ScreenNodeV2,
     type ScreenProposalV2,
     type ScreenKindV2,
+    semanticIssuesV2,
 } from '@truebuild/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -195,6 +196,48 @@ describe('mandatory omission and unsafe composition are rejected, never patched'
         expect(issues.join()).not.toContain(SAFETY_NOTE)
         const evaluated = evaluateWire(encodeWireProposal(dropFact(proposal, 'safety:n1')), guide)
         expect(evaluated.ok).toBe(false)
+    })
+
+    it('accepts a digit token only when the step states it verbatim, and rejects an invented one', () => {
+        const session = demoSession()
+        session.reviewedSteps[0]!.safetyNotes = [
+            {
+                noteId: 'n1',
+                note: {
+                    state: 'known',
+                    value: 'Fasten with M4x15 screws only.',
+                    sourceRefs: [{ pageId: 'demo-page-1', region: null }],
+                },
+            },
+        ]
+        const grounded = contextFor('guide', session)
+        const withLiteral = (text: string): ScreenProposalV2 => {
+            const proposal = editNodes(buildFallbackProposalV2(grounded.material), (node) =>
+                node.type === 'Text' && node.content.kind === 'fact' && node.content.factId === 'safety:n1'
+                    ? { ...node, content: { kind: 'literal', text } }
+                    : node,
+            )
+            expect(JSON.stringify(proposal)).toContain(`"text":${JSON.stringify(text)}`)
+            return { ...buildFallbackProposalV2(grounded.material), body: proposal.body }
+        }
+        const literalIssues = (issues: string[]): string[] =>
+            issues.filter((issue) => /:literal_(digits|not_listed)$/u.test(issue))
+        expect(literalIssues(semanticIssues(withLiteral('M4x15'), grounded))).toEqual([])
+        for (const invented of ['M6x20', 'M4x1', 'M4x15 bolts']) {
+            expect(literalIssues(semanticIssues(withLiteral(invented), grounded)).length).toBeGreaterThan(0)
+        }
+        // The client verifier keeps the strict rule: the same literal is still rejected without the server grounding.
+        expect(
+            semanticIssuesV2(withLiteral('M4x15'), grounded.material).some((issue) =>
+                issue.endsWith(':literal_digits'),
+            ),
+        ).toBe(true)
+        const evaluated = evaluateWire(encodeWireProposal(withLiteral('M4x15')), grounded)
+        expect(evaluated.ok, JSON.stringify(evaluated)).toBe(true)
+        if (!evaluated.ok) throw new Error('Grounded Guide rejected')
+        expect(semanticIssuesV2(evaluated.proposal, grounded.material)).toEqual([])
+        expect(guideQualityIssues(evaluated.proposal, grounded)).toEqual([])
+        expect(JSON.stringify(evaluated.proposal)).not.toContain('"text":"M4x15"')
     })
 
     it('rejects literal digits, an unlisted label, wrong coach copy and a foreign part', () => {
@@ -466,6 +509,62 @@ describe('service: synthetic fixture documents', () => {
 })
 
 describe('service: a live provider', () => {
+    // Synthetic provider replies exercise the real service and published client contract; no model call is made.
+    it.each([
+        { token: 'M4x15', sourceText: 'Fasten the side panel with M4x15 screws.', accepted: true },
+        { token: '2x4', sourceText: 'Place the 2x4 side panel upright.', accepted: true },
+        { token: 'M6x20', sourceText: 'Fasten the side panel with M4x15 screws.', accepted: false },
+    ])(
+        'publishes only a grounded Guide token from a fake provider: $token',
+        async ({ token, sourceText, accepted }) => {
+            const session = demoSession()
+            const step = session.reviewedSteps[0]!
+            const factId = 'action:token-action'
+            step.actions = [{ actionId: 'token-action', instruction: sourceText, sourceRefs: step.sourceRefs }]
+            const request = documentInputs('guide', session)
+            const context = buildDocumentContext(request)
+            const proposal = editNodes(buildFallbackProposalV2(context.material), (node) =>
+                node.type === 'Text' && node.content.kind === 'fact' && node.content.factId === factId
+                    ? { ...node, content: { kind: 'literal', text: token } }
+                    : node,
+            )
+            const wire = encodeWireProposal(proposal)
+            expect(wire.nodes).toContainEqual(
+                expect.objectContaining({ type: 'Text', content: { kind: 'literal', text: token } }),
+            )
+            expect(JSON.stringify(wire)).not.toContain(`"factId":"${factId}"`)
+            const live = liveService(accepted ? [wire] : [wire, wire])
+            const document = await live.service.generate(request)
+
+            expect(live.inputs).toHaveLength(accepted ? 1 : 2)
+            expect(live.inputs.map((input) => input.repairIssues === undefined)).toEqual(
+                accepted ? [true] : [true, false],
+            )
+            expect(document.metadata).toMatchObject({
+                source: accepted ? 'generated' : 'fallback',
+                repaired: !accepted,
+                fallbackReason: accepted ? null : 'repair_failed',
+            })
+            expect(document.facts).toContainEqual(
+                expect.objectContaining({ factId, text: sourceText, sourceRefs: step.sourceRefs }),
+            )
+            expect(JSON.stringify(document.body)).toContain(`"factId":"${factId}"`)
+            expect(JSON.stringify(document)).not.toContain(`"text":"${token}"`)
+            if (!accepted) {
+                expect(JSON.stringify(document)).not.toContain(token)
+                expect(live.inputs[1]!.repairIssues).toEqual(
+                    expect.arrayContaining([
+                        expect.stringMatching(/:literal_digits$/u),
+                        expect.stringMatching(/:literal_not_listed$/u),
+                    ]),
+                )
+            }
+            expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+            expect(semanticIssuesV2(document, context.material)).toEqual([])
+            expect(guideQualityIssues(document, context)).toEqual([])
+        },
+    )
+
     it('normalizes provider documents before repair, honors opt-out, preserves fixture gates and logs every dropped ID in bounded events', async () => {
         const log = vi.spyOn(console, 'info').mockImplementation(() => {})
         const good = goodWire('home')
@@ -892,7 +991,8 @@ describe('Guide usability floor', () => {
         expect(DOCUMENT_INSTRUCTIONS).toContain('document.directionFacts')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('document.instructionText')
         expect(DOCUMENT_INSTRUCTIONS).not.toContain('The instruction node is')
-        expect(DOCUMENT_PROMPT_VERSION).toBeGreaterThan(34)
+        expect(DOCUMENT_PROMPT_VERSION).toBe(42)
+        expect(DOCUMENT_INSTRUCTIONS).toContain('use codes, sizes, counts and numbers only exactly as they appear')
         const corrected = goodWire('guide', session)
         const evaluated = evaluateWire(normalizeDocumentWire(corrected, context).value, context)
         expect(evaluated.ok).toBe(true)

@@ -133,7 +133,7 @@ export function selectStepSourcePageIds(session: ManualSession, stepId: string):
     if (
         !step ||
         session.reviewStatus !== 'reviewed' ||
-        step.parts.some((part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps))
+        step.parts.some((part) => !hasValidQuantityEvidence(step, part, session.reviewedSteps, session.parts))
     ) {
         return null
     }
@@ -180,7 +180,7 @@ export function unresolvedCriticalFacts(session: Pick<ManualSession, 'parts' | '
             issues.push(`${label}: required parts are missing.`)
         }
         for (const part of step.parts) {
-            if (!hasValidQuantityEvidence(step, part, session.reviewedSteps)) {
+            if (!hasValidQuantityEvidence(step, part, session.reviewedSteps, session.parts)) {
                 const reason = part.quantity.state === 'unknown' ? part.quantity.reason : 'Invalid quantity evidence.'
                 issues.push(`${label}, quantity of ${part.partId}: ${reason}`)
             }

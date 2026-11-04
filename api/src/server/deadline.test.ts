@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createDeadline, RequestStoppedError } from './deadline'
+import { createDeadline, createParseDeadline, RequestStoppedError } from './deadline'
 
 afterEach((): void => {
     vi.restoreAllMocks()
@@ -76,4 +76,11 @@ it('supports an independent sixty-second follow-up without extending the primary
     expect(() => followup.checkpoint()).toThrow('timeout')
     primary.dispose()
     followup.dispose()
+})
+
+it('covers the maximum first parse attempt, repair and route return margin', () => {
+    const deadline = createParseDeadline(350_000)
+    expect(deadline.signal.aborted).toBe(false)
+    deadline.dispose()
+    expect(() => createParseDeadline(350_001)).toThrow('invalid_timeout')
 })

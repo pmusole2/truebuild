@@ -91,7 +91,7 @@ describe('AI policy', (): void => {
     })
 
     it('honors the documented parse deadline and reports the budgets that are actually executed', (): void => {
-        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(165_000)
+        expect(aiPolicyFromEnvironment({}, defaults).stages.parse.deadlineMs).toBe(345_000)
         const { stages } = aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)
         expect(stages.parse.deadlineMs).toBe(60_000)
         const described = describeAiPolicy(aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: '60000' }, defaults)) as {
@@ -107,8 +107,8 @@ describe('AI policy', (): void => {
             minimumRepairMs: 20_000,
             clientMinimumMs: 65_000,
         })
-        // Parse alone has a 165 s overall ceiling and a separate route return margin.
-        for (const value of ['165001', '999', '1e5', 'abc']) {
+        // Parse alone has a 345 s overall ceiling and a separate route return margin.
+        for (const value of ['345001', '999', '1e5', 'abc']) {
             expect(() => aiPolicyFromEnvironment({ AI_DEADLINE_PARSE_MS: value }, defaults)).toThrow(
                 'invalid_ai_deadline',
             )

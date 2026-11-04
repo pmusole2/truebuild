@@ -11,6 +11,7 @@ import {
     type TextRefV2,
     type VariantState,
     type ScreenVariantV2,
+    type FactV2,
 } from './document-v2'
 import { coachTargetsForV2, type DocumentMaterialV2 } from './document-v2-material'
 
@@ -456,10 +457,6 @@ export const UI_COPY_V2 = { common: COMMON, kind: KIND_COPY, state: STATE_COPY_V
 
 type DocumentLike = Parameters<typeof variantsOfV2>[0]
 
-function literalsOf(node: ScreenNodeV2): string[] {
-    const refs = nodeTextRefsV2(node).flatMap((ref: TextRefV2) => (ref.kind === 'literal' ? [ref.text] : []))
-    return node.type === 'TextField' && node.placeholder !== null ? [...refs, node.placeholder] : refs
-}
 const inList = (list: readonly string[], text: string): boolean =>
     list.some((entry) => normalizeCopy(entry) === normalizeCopy(text))
 const factEditorListed = (node: ScreenNodeV2): boolean =>
@@ -515,11 +512,17 @@ export function literalIssuesV2(
                 ? legacyWaitLiteralsV2(name === 'busy' ? material.inputs.uiState?.busy?.activity : null)
                 : []),
         ]
+        const listed = (text: string): boolean =>
+            inList(allowed, text) || (name === 'ready' && groundedFactV2(material, text, options) !== undefined)
         for (const ref of [variant.header.title, variant.header.subtitle]) {
-            if (ref?.kind === 'literal' && !inList(allowed, ref.text)) issues.add(`${prefix}header:literal_not_listed`)
+            if (ref?.kind === 'literal' && !listed(ref.text)) issues.add(`${prefix}header:literal_not_listed`)
         }
         visitVariantNodesV2(variant, prefix, ({ node, path }) => {
-            if (literalsOf(node).some((text) => !inList(allowed, text)) || !factEditorListed(node)) {
+            if (
+                nodeTextRefsV2(node).some((ref) => ref.kind === 'literal' && !listed(ref.text)) ||
+                (node.type === 'TextField' && node.placeholder !== null && !inList(allowed, node.placeholder)) ||
+                !factEditorListed(node)
+            ) {
                 issues.add(`${path}:literal_not_listed`)
             }
         })
@@ -685,8 +688,34 @@ export function earnedStateIssuesV2(document: DocumentLike, material: DocumentMa
     return [...issues]
 }
 
-/** Explicit client compatibility; server authoring remains strict by default. */
-export type WaitCompatibilityV2 = { readonly legacyWaitCopy?: boolean }
+/**
+ * Explicit gate options; both default off. `legacyWaitCopy` is client compatibility for the pre-Prompt40 wait wording.
+ * `groundedTokens` is server authoring only: ready Guide text may repeat verbatim text of the current step's facts.
+ */
+export type WaitCompatibilityV2 = { readonly legacyWaitCopy?: boolean; readonly groundedTokens?: boolean }
+
+/** Exact, bounded text only: do not accept a code prefix, strip a sign, or recombine unrelated words. */
+export function groundedFactV2(
+    material: DocumentMaterialV2,
+    text: string,
+    options: WaitCompatibilityV2 = {},
+): FactV2 | undefined {
+    if (options.groundedTokens !== true || material.inputs.kind !== 'guide' || material.step === null || !text.trim()) {
+        return undefined
+    }
+    const escaped = text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    const verbatim = new RegExp(`(?:^|[\\s("'“‘\\[])${escaped}(?=$|[\\s;:!?)"'”’\\]]|[.,](?![\\p{L}\\p{N}]))`, 'u')
+    const candidates = material.facts.filter(
+        (fact) =>
+            fact.sourceRefs.length > 0 &&
+            fact.basis !== 'result' &&
+            fact.basis !== 'overview' &&
+            verbatim.test(fact.text),
+    )
+    const exact = candidates.filter((fact) => fact.text === text)
+    return exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined
+}
+
 /** Exact pre-Prompt40 wait vocabulary, never admitted to ready, error or recovery. */
 export const LEGACY_WAIT_LITERALS_V2: readonly string[] = [
     ...legacyWaitCopy.headings,

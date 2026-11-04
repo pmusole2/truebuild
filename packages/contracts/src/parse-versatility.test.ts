@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createDemoManual, manualSessionSchema, manualStepSchema, stepEvidenceRequirements } from './index'
+import {
+    createDemoManual,
+    manualSessionSchema,
+    manualStepSchema,
+    stepEvidenceRequirements,
+    type ManualSession,
+} from './index'
 import { modelParseMetadataSchema, selectCompactStepSourcePageIds, unresolvedCriticalFacts } from './model'
 
 const cited = [{ pageId: 'demo-page-1', region: null }]
@@ -215,4 +221,59 @@ it('rejects a numeric quantity that contradicts a not-specified manual basis', (
             parts: [{ ...candidate.parts[0], quantityBasis: { kind: 'user_supplied', sourceRefs: cited } }],
         }).success,
     ).toBe(true)
+})
+
+describe('single-use singular quantities in review', () => {
+    function singleUse(name: string): ManualSession {
+        const session = createDemoManual()
+        session.rawExtraction = null
+        session.reviewedSteps = [session.reviewedSteps[0]!]
+        session.parts = [{ ...session.parts[0]!, name: { state: 'known', value: name, sourceRefs: cited } }]
+        session.reviewedSteps[0]!.parts[0]!.quantity = unknown
+        session.reviewedSteps[0]!.parts[0]!.quantityBasis = null
+        return session
+    }
+
+    it.each(['Side panel', 'A support', 'One bracket', 'Lower frame'])(
+        'allows the single-use singular name %s without manufacturing a quantity',
+        (name) => {
+            const session = singleUse(name)
+            expect(unresolvedCriticalFacts(session)).toEqual([])
+            const parsed = manualSessionSchema.safeParse(session)
+            expect(parsed.success).toBe(true)
+            if (parsed.success) expect(parsed.data.reviewedSteps[0]!.parts[0]!.quantity).toEqual(unknown)
+        },
+    )
+
+    it.each([
+        'Panels',
+        'Some supports',
+        'Panel and frame',
+        'Two brackets',
+        'Feet',
+        'Panels for frame',
+        'Feet for base',
+        'Few brackets',
+    ])('blocks ambiguous or plural name %s', (name) => {
+        const session = singleUse(name)
+        expect(unresolvedCriticalFacts(session).some((issue) => issue.includes('quantity'))).toBe(true)
+        expect(manualSessionSchema.safeParse(session).success).toBe(false)
+    })
+
+    it('blocks even a singular part when it is used by more than one step', () => {
+        const session = singleUse('Side panel')
+        session.reviewedSteps.push({ ...structuredClone(session.reviewedSteps[0]!), stepId: 'second', order: 2 })
+        expect(unresolvedCriticalFacts(session).filter((issue) => issue.includes('quantity'))).toHaveLength(2)
+        expect(manualSessionSchema.safeParse(session).success).toBe(false)
+    })
+
+    it.each(['Manual shows 1 or 2.', 'The count is blurred.', 'The manual does not specify whether one or two.'])(
+        'keeps a truly ambiguous singular count blocked: %s',
+        (reason) => {
+            const session = singleUse('Side panel')
+            session.reviewedSteps[0]!.parts[0]!.quantity = { state: 'unknown', reason }
+            expect(unresolvedCriticalFacts(session).some((issue) => issue.includes('quantity'))).toBe(true)
+            expect(manualSessionSchema.safeParse(session).success).toBe(false)
+        },
+    )
 })
