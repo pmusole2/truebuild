@@ -162,9 +162,7 @@ describe('parse prompt for versatile manuals', () => {
         expect(instructions).toContain('alternatives')
         expect(instructions).toContain('selectedAlternativeId')
         expect(instructions).not.toContain('choose the first alternative as printed')
-        expect(instructions).toMatch(
-            /takes precedence over earlier quantity, action grouping, option selection and safety/u,
-        )
+        expect(instructions).toMatch(/takes precedence over earlier quantity, option selection and safety/u)
         expect(instructions).toMatch(/without a supplied user choice.*conditional action beginning If you have/u)
         expect(instructions).toContain('alternatives:null and selectedAlternativeId:null rather than selecting a path')
         expect(instructions).toMatch(/never add an unchosen option to required parts/u)

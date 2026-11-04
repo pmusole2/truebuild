@@ -95,6 +95,43 @@ function withoutSourceText(value: unknown): unknown {
     )
 }
 
+describe('parse prompt crop and action rules in every emitted variant', () => {
+    const CROP_RULE =
+        'use region:null when the step has no clear figure or no tighter source region can be identified. Never invent a crop.'
+    const variants: [string, ParseManualInput['stepFields']][] = [
+        ['default', undefined],
+        ['sourceText', ['sourceText']],
+    ]
+
+    it.each(variants)(
+        'the %s variant states the crop rule once, splits over six actions and never regroups motions',
+        async (_variant, stepFields) => {
+            const { input, clean } = await fixture()
+            const { provider, bodies } = queued([clean])
+            await provider.parseManual(
+                { ...input, ...(stepFields === undefined ? {} : { stepFields }) },
+                new AbortController().signal,
+            )
+            const instructions = String(bodies[0]!.instructions)
+            expect(instructions.split(CROP_RULE)).toHaveLength(2)
+            expect(instructions).toMatch(
+                /more than 6 actions[^.]*split[^.]*into another ordered step[^.]*never[^.]*unknowns/u,
+            )
+            expect(instructions).not.toContain('report the bounded omission in unknowns')
+            expect(instructions).not.toContain('group related motions into one action')
+            // Every sentence that names grouping or merging of actions must forbid it.
+            const grouping = instructions
+                .split(/[.;]/u)
+                .filter(
+                    (sentence) =>
+                        /\b(group|merge|combine)\w*\b/iu.test(sentence) && /\b(actions?|motions?)\b/iu.test(sentence),
+                )
+            expect(grouping.length).toBeGreaterThan(0)
+            expect(grouping.every((sentence) => /\bnever\b/iu.test(sentence))).toBe(true)
+        },
+    )
+})
+
 describe('negotiated parse prompt and schema', () => {
     it.each([undefined, 'en', 'fr-CA'])(
         'repair only appends its block to the default instructions for language %s without sourceText',
