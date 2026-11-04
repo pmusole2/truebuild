@@ -686,6 +686,16 @@ function hasVisibleContent(node: ScreenNodeV2, path: string, environment: Enviro
     return true
 }
 
+/** A directions heading needs visible instruction text; auxiliary media and source openers still remain reachable. */
+function hasVisibleText(node: ScreenNodeV2, path: string, environment: Environment): boolean {
+    if (!hasVisibleContent(node, path, environment)) return false
+    return (
+        node.type === 'Text' ||
+        ('children' in node &&
+            node.children.some((child, index) => hasVisibleText(child, `${path}.${index}`, environment)))
+    )
+}
+
 /** Exact manual references are compact until opened; no second cropped page competes with the motion. */
 function GuideManualStrip({
     images,
@@ -1973,9 +1983,14 @@ function NodeContent({
             )
             if (
                 directions &&
-                !node.children.some((child, index) => hasVisibleContent(child, `${path}.${index}`, environment))
+                !node.children.some((child, index) => hasVisibleText(child, `${path}.${index}`, environment))
             )
-                return tail.length === 0 ? null : <View style={{ alignSelf: 'flex-end' }}>{tail}</View>
+                return (
+                    <>
+                        {children}
+                        {tail.length === 0 ? null : <View style={{ alignSelf: 'flex-end' }}>{tail}</View>}
+                    </>
+                )
             const sectionContent =
                 document.kind === 'guide' && title === 'Check your work' ? <Card>{content}</Card> : content
             return (

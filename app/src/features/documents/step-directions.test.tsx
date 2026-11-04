@@ -277,6 +277,29 @@ describe('step directions', () => {
         expect(screen.queryByText('Follow the motion above')).toBeNull()
     })
 
+    it('keeps an authored pill without a Do this heading when there is no direction text', async () => {
+        const session = createDemoManual()
+        const step = session.reviewedSteps[0]!
+        step.correction = null
+        step.orientation = { state: 'unknown', reason: 'Not printed.' }
+        step.connection = { state: 'unknown', reason: 'Not printed.' }
+        await renderGuide(session, (proposal) => {
+            const visit = (node: ScreenNodeV2): void => {
+                if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Directions')
+                    node.children.push({
+                        type: 'Badge',
+                        label: { kind: 'literal', text: 'Assembly note' },
+                        tone: 'neutral',
+                    })
+                else if ('children' in node) node.children.forEach(visit)
+            }
+            visit(proposal.body)
+        })
+        expect(screen.getByText('Assembly note')).toBeTruthy()
+        expect(screen.queryByText('Do this')).toBeNull()
+        expect(screen.queryByTestId('guide-directions')).toBeNull()
+    })
+
     it('keeps the Watch it and manual strip headings stable from loading to motion', async () => {
         const session = sessionWithActions(ACTIONS)
         for (const page of session.pages) Object.assign(page, { width: 600, height: 800, mimeType: 'image/png' })
