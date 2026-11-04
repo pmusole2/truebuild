@@ -357,6 +357,7 @@ describe('step directions', () => {
         await renderGuide(session, undefined, false, {
             bindings: { pageUris: { [page.pageId]: 'data:image/png;base64,AQID' }, pageImageStatus: 'ready' },
         })
+        expect(screen.getAllByText('From the manual')).toHaveLength(1)
         const thumb = screen.getByTestId('guide-manual-thumb-0')
         await fireEvent(thumb, 'layout', { nativeEvent: { layout: { width: 72, height: 72 } } })
         const image = within(thumb).getByLabelText('Picture from your manual')
@@ -684,6 +685,33 @@ describe('step directions', () => {
         await renderGuide(session, undefined, true)
         expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(['1.', '2.'])
     })
+
+    it.each([
+        { written: '1. ', numbers: ['1.', '2.'] },
+        { written: '2) ', numbers: ['1.', '2.'] },
+        { written: ' 3 . ', numbers: ['1.', '2.'] },
+        { written: '1.', numbers: ['1.', '2.', '3.'] },
+    ])(
+        'skips a compatibility direction already written as $written and numbers the plain rows contiguously',
+        async ({ written, numbers }) => {
+            const session = sessionWithActions(ACTIONS)
+            const document = composeGuide(session, undefined, false)
+            delete document.metadata.stepActions
+            expect(document.metadata.stepActions).toBeUndefined()
+            const first = document.facts.find((fact) => fact.factId === 'action:turn-1')!
+            const numbered = `${written}${first.text}`
+            first.text = numbered
+            await renderGuide(session, undefined, false, { document })
+            const directions = within(screen.getByTestId('guide-directions'))
+            expect(directions.getByText(numbered)).toBeTruthy()
+            expect(shownTexts().filter((text) => /^\d+\.$/u.test(text))).toEqual(numbers)
+            if (numbers.length === 2) {
+                expect(directions.queryByLabelText(`Step 1, ${numbered}`)).toBeNull()
+                expect(directions.getByLabelText(`Step 1, ${ACTIONS[1]}`)).toBeTruthy()
+                expect(directions.getByLabelText(`Step 2, ${ACTIONS[2]}`)).toBeTruthy()
+            }
+        },
+    )
 
     it('draws a section source opener in its header before the numbered directions', async () => {
         await renderGuide(sessionWithActions(ACTIONS), (proposal) => {
