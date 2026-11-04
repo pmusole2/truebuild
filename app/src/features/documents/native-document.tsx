@@ -110,6 +110,8 @@ const cancelsWork = (intent: ScreenVariantV2['bar']['primary']['intent']): boole
     (intent.target === 'back' || intent.target === 'home' || intent.target === 'pages' || intent.target === 'reading')
 const preparingAction = (bindings: FrameBindings, intent: ScreenVariantV2['bar']['primary']['intent']): boolean =>
     bindings.workInProgress === true && !cancelsWork(intent)
+// The preview must keep the photo's aspect, or it shows less than it captures.
+const CAMERA_PREVIEW_ASPECT = 3 / 4
 const FIXTURE_LABEL = 'Test fixture'
 // At accessibility text sizes the manual-page opener keeps to one line; its full wording stays the accessibility label.
 const MANUAL_OPENER = 'See it in the manual'
@@ -487,6 +489,7 @@ function duplicateFactPaths(
  * The Guide's Directions, numbered 1, 2, 3 in document order. The numbered facts are exactly the shared Directions group
  * of the document's facts, so the renderer never infers which fact is a direction. A repeat already omitted takes no
  * number. Only the number is added; the instruction's own words are shown unchanged, including compatibility documents.
+ * A direction already written with its own number, such as `1. `, keeps its words and takes none of ours.
  */
 function actionNumbers(environment: Environment, variant: ScreenVariantV2, prefix: string): Record<string, number> {
     const { document } = environment
@@ -503,7 +506,11 @@ function actionNumbers(environment: Environment, variant: ScreenVariantV2, prefi
         )
             return
         if (node.content.kind !== 'fact') return
-        if (directions.has(node.content.factId)) numbers[path] = ++next
+        if (
+            directions.has(node.content.factId) &&
+            !/^\s*\d+\s*[.)]\s/u.test(documentText(document, environment.bindings, node.content))
+        )
+            numbers[path] = ++next
     })
     return numbers
 }
@@ -700,9 +707,11 @@ function hasVisibleText(node: ScreenNodeV2, path: string, environment: Environme
 function GuideManualStrip({
     images,
     environment,
+    heading,
 }: {
     images: readonly { node: Extract<ScreenNodeV2, { type: 'Image' }>; path: string }[]
     environment: Environment
+    heading: boolean
 }): ReactElement | null {
     const [selected, setSelected] = useState<DocumentSourceV2 | null>(null)
     const session = environment.bindings.session
@@ -715,7 +724,7 @@ function GuideManualStrip({
     if (session === undefined || sources.length === 0) return null
     return (
         <>
-            <SectionHeader title="From the manual" />
+            {heading ? <SectionHeader title="From the manual" /> : null}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
                 {sources.map((source, index) => (
                     <Pressable
@@ -2861,7 +2870,8 @@ export function NativeDocumentRenderer({
                     </CoachTarget>
                 </CoachTarget>
                 {safetySlots.map(slot)}
-                <GuideManualStrip images={guideImages} environment={environment} />
+                {/* A fallback hero already reads From the manual, so the strip does not repeat it. */}
+                <GuideManualStrip images={guideImages} environment={environment} heading={motionHero} />
             </>
         )
         // Section source planning preceded title omissions, so their sources remain reachable.
@@ -3198,6 +3208,12 @@ const styles = StyleSheet.create({
     header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md, flexShrink: 0 },
     grow: { flex: 1, minWidth: 0 },
     touch: { minHeight: touchTarget, justifyContent: 'center', alignSelf: 'stretch', flexShrink: 0 },
-    camera: { height: 360, overflow: 'hidden', borderRadius: radius.lg },
+    camera: {
+        height: 360,
+        aspectRatio: CAMERA_PREVIEW_ASPECT,
+        alignSelf: 'center',
+        overflow: 'hidden',
+        borderRadius: radius.lg,
+    },
     judge: { gap: space.xs, padding: space.md },
 })

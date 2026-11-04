@@ -7,6 +7,7 @@ import {
     AccessibilityInfo,
     Dimensions,
     PanResponder,
+    PixelRatio,
     Platform,
     ScrollView,
     StyleSheet,
@@ -1626,6 +1627,63 @@ describe('the actual v2 catalog renderer', () => {
             expect(screen.getByText(bindings.live!.state.check!.reason)).toBeTruthy()
         }
     })
+
+    it.each([
+        { width: 375, height: 667, fontScale: 1 },
+        { width: 393, height: 852, fontScale: 1 },
+        { width: 375, height: 667, fontScale: 3 },
+    ])(
+        'keeps the step preview portrait inside its height cap at $width points and text scale $fontScale',
+        async (size) => {
+            const previous = { window: Dimensions.get('window'), screen: Dimensions.get('screen') }
+            const { inputs, bindings, controller } = await setup()
+            Dimensions.set({
+                window: { ...previous.window, ...size },
+                screen: { ...previous.screen, ...size },
+            })
+            try {
+                expect(PixelRatio.getFontScale()).toBe(size.fontScale)
+                const document = compose({
+                    ...inputs,
+                    kind: 'camera',
+                    uiState: { camera: { mode: 'build-photo', permission: 'granted' } },
+                })
+                await render(
+                    wrap(
+                        <DocumentRenderer
+                            document={document}
+                            bindings={{
+                                ...bindings,
+                                camera: {
+                                    permission: 'granted',
+                                    ready: true,
+                                    capture: (): void => undefined,
+                                    preview: <View testID="raw-camera-preview" />,
+                                },
+                            }}
+                        />,
+                    ),
+                )
+                const frame = StyleSheet.flatten(screen.getByTestId('raw-camera-preview').parent!.props.style)
+                expect(frame).toEqual(expect.objectContaining({ height: 360, aspectRatio: 3 / 4, alignSelf: 'center' }))
+                const width = frame.width ?? frame.height * frame.aspectRatio
+                expect(width).toBe(270)
+                expect(width / frame.height).toBe(3 / 4)
+                expect(width).toBeLessThanOrEqual(size.width - 2 * space.md)
+                expect(screen.getByRole('button', { name: 'Take photo' })).toBeEnabled()
+                const scroller = within(bodyScroller())
+                expect(scroller.getByTestId('raw-camera-preview')).toBeTruthy()
+                expect(scroller.queryByTestId('bottom-bar')).toBeNull()
+                expect(screen.getAllByTestId('bottom-bar')).toHaveLength(1)
+                expect(StyleSheet.flatten(screen.getByTestId('bottom-bar').props.style).flexShrink).toBe(0)
+            } finally {
+                await act(async () => {
+                    Dimensions.set(previous)
+                    controller.dispose()
+                })
+            }
+        },
+    )
 
     it('binds only the camera shutter to capture and routes Choose photos to the independent library capability', async () => {
         const { inputs, bindings, run } = await setup()
