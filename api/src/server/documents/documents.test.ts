@@ -509,6 +509,62 @@ describe('service: synthetic fixture documents', () => {
 })
 
 describe('service: a live provider', () => {
+    // Synthetic provider replies exercise the real service and published client contract; no model call is made.
+    it.each([
+        { token: 'M4x15', sourceText: 'Fasten the side panel with M4x15 screws.', accepted: true },
+        { token: '2x4', sourceText: 'Place the 2x4 side panel upright.', accepted: true },
+        { token: 'M6x20', sourceText: 'Fasten the side panel with M4x15 screws.', accepted: false },
+    ])(
+        'publishes only a grounded Guide token from a fake provider: $token',
+        async ({ token, sourceText, accepted }) => {
+            const session = demoSession()
+            const step = session.reviewedSteps[0]!
+            const factId = 'action:token-action'
+            step.actions = [{ actionId: 'token-action', instruction: sourceText, sourceRefs: step.sourceRefs }]
+            const request = documentInputs('guide', session)
+            const context = buildDocumentContext(request)
+            const proposal = editNodes(buildFallbackProposalV2(context.material), (node) =>
+                node.type === 'Text' && node.content.kind === 'fact' && node.content.factId === factId
+                    ? { ...node, content: { kind: 'literal', text: token } }
+                    : node,
+            )
+            const wire = encodeWireProposal(proposal)
+            expect(wire.nodes).toContainEqual(
+                expect.objectContaining({ type: 'Text', content: { kind: 'literal', text: token } }),
+            )
+            expect(JSON.stringify(wire)).not.toContain(`"factId":"${factId}"`)
+            const live = liveService(accepted ? [wire] : [wire, wire])
+            const document = await live.service.generate(request)
+
+            expect(live.inputs).toHaveLength(accepted ? 1 : 2)
+            expect(live.inputs.map((input) => input.repairIssues === undefined)).toEqual(
+                accepted ? [true] : [true, false],
+            )
+            expect(document.metadata).toMatchObject({
+                source: accepted ? 'generated' : 'fallback',
+                repaired: !accepted,
+                fallbackReason: accepted ? null : 'repair_failed',
+            })
+            expect(document.facts).toContainEqual(
+                expect.objectContaining({ factId, text: sourceText, sourceRefs: step.sourceRefs }),
+            )
+            expect(JSON.stringify(document.body)).toContain(`"factId":"${factId}"`)
+            expect(JSON.stringify(document)).not.toContain(`"text":"${token}"`)
+            if (!accepted) {
+                expect(JSON.stringify(document)).not.toContain(token)
+                expect(live.inputs[1]!.repairIssues).toEqual(
+                    expect.arrayContaining([
+                        expect.stringMatching(/:literal_digits$/u),
+                        expect.stringMatching(/:literal_not_listed$/u),
+                    ]),
+                )
+            }
+            expect(screenDocumentV2Schema.safeParse(document).success).toBe(true)
+            expect(semanticIssuesV2(document, context.material)).toEqual([])
+            expect(guideQualityIssues(document, context)).toEqual([])
+        },
+    )
+
     it('normalizes provider documents before repair, honors opt-out, preserves fixture gates and logs every dropped ID in bounded events', async () => {
         const log = vi.spyOn(console, 'info').mockImplementation(() => {})
         const good = goodWire('home')

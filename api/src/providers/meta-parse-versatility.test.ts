@@ -121,6 +121,29 @@ describe('parse prompt for versatile manuals', () => {
         expect(String(bodies[0]!.instructions)).toMatch(expected)
     })
 
+    it('retains a cited count of one for a singular part from a fake parse reply without repair', async () => {
+        const { input, clean } = await fixture()
+        const part = clean.steps[0]!.parts[0]!
+        const name = clean.parts.find((candidate) => candidate.partId === part.partId)!
+        name.name = { state: 'known', value: 'Side panel', sourceRefs: CITED }
+        part.quantity = { state: 'known', value: 1, sourceRefs: CITED }
+        part.quantityBasis = null
+        const { provider, fetchImpl, bodies } = queued([clean])
+
+        const parsed = await provider.parseManual(input, new AbortController().signal)
+
+        expect(parsed.parts.find((candidate) => candidate.partId === part.partId)!.name).toEqual(name.name)
+        expect(parsed.steps[0]!.parts.find((candidate) => candidate.partId === part.partId)!.quantity).toEqual({
+            state: 'known',
+            value: 1,
+            sourceRefs: CITED,
+        })
+        expect(String(bodies[0]!.instructions)).toMatch(
+            /singular named part without a shown quantity means quantity 1/u,
+        )
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
     it('preserves language-neutral diagram grounding while filtering printed text blocks', async () => {
         const { input, clean } = await fixture()
         const { provider, bodies } = queued([clean])
