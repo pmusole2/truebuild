@@ -851,6 +851,29 @@ describe('explicit acceptance of missing step facts', () => {
         expect(controller.current).toEqual(before)
     })
 
+    it('names an unnamed manual from the read, and never renames one the person named', async () => {
+        const named = async (title: string | null): Promise<string> => {
+            const runtime = setup(async (_url, init): Promise<Response> => {
+                const meta = JSON.parse(String((init.body as FormData).get('metadata'))) as {
+                    requestId: string
+                    binding: ApiResult<unknown>['binding']
+                    pages: { pageId: string }[]
+                }
+                const value = { ...parsed(meta.pages[0]!.pageId), productName: 'Folding Treadmill T200' }
+                return Response.json({ status: 'ok', mode: 'model', requestId: meta.requestId, binding: meta.binding, value })
+            })
+            controllers.push(runtime.controller)
+            await runtime.controller.restore()
+            await runtime.controller.createManual()
+            if (title !== null) await runtime.controller.rename(title)
+            await runtime.controller.importPages(async () => [photo])
+            await runtime.controller.parse()
+            return runtime.controller.current!.session.title
+        }
+        expect(await named(null)).toBe('Folding Treadmill T200')
+        expect(await named('Garage bike')).toBe('Garage bike')
+    })
+
     it('isolates all nested working facts from the preserved raw extraction after parsing', async () => {
         const { controller } = await ready()
         await controller.parse()
