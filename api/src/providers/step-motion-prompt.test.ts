@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { stepMotionResultSchema } from '@truebuild/contracts'
+import { stepMotionQualityIssues, stepMotionResultSchema } from '@truebuild/contracts'
 import { stepMotionOverlapIssues } from '../server/step-motion-geometry'
 import { STEP_MOTION_INSTRUCTIONS, STEP_MOTION_EXAMPLE } from './step-motion-prompt'
 
@@ -17,6 +17,12 @@ it('keeps motion instructions generic, manual-first, finished-pose and fail-clos
     expect(STEP_MOTION_INSTRUCTIONS).toContain('A part that swings into place ends with its end seated in its bracket.')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Do not pull a seated fastener out to avoid overlap')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Preserve the original parts and their scale')
+    expect(STEP_MOTION_INSTRUCTIONS).toContain(
+        'Always include, as still shapes, the main body that the moving parts attach to',
+    )
+    expect(STEP_MOTION_INSTRUCTIONS).toContain('lies flat unless the drawing shows it standing on edge')
+    for (const code of ['quality_no_anchor', 'quality_detached', 'quality_speck', 'suspect_on_edge'])
+        expect(STEP_MOTION_INSTRUCTIONS).toContain(code)
     expect(STEP_MOTION_INSTRUCTIONS).toContain('Return {scene:null}')
     expect(STEP_MOTION_INSTRUCTIONS).toContain('text and figure do not make the motion clear')
     expect(STEP_MOTION_INSTRUCTIONS).toContain(
@@ -28,4 +34,5 @@ it('embeds a schema-valid screw example with no deep overlap', () => {
     const scene = stepMotionResultSchema.parse(STEP_MOTION_EXAMPLE).scene!
     expect(STEP_MOTION_INSTRUCTIONS).toContain(JSON.stringify(STEP_MOTION_EXAMPLE))
     expect(stepMotionOverlapIssues(scene)).toEqual([])
+    expect(stepMotionQualityIssues(scene)).toEqual([])
 })

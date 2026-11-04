@@ -749,7 +749,7 @@ it('accepts a scene with an out-of-range extrude bevel by clamping that bevel to
         position: [0, 0, 0],
         rotation: [0, 0, 0],
     }
-    const { handler } = setup({ scene: { ...scene, still: [{ ...extrude, position: [-3, 0, 0] }] } })
+    const { handler } = setup({ scene: { ...scene, still: [{ ...extrude, position: [-1.5, 0, 0] }] } })
     const body = (await (await handler(await request())).json()) as { scene: { still: { bevel?: number }[] } | null }
     expect(body.scene?.still[0]?.bevel).toBeCloseTo(0.2 * 0.25)
 })
@@ -949,7 +949,7 @@ it.each([
         const repaired = {
             ...overlapping,
             movers: [
-                { ...overlapping.movers[0], shapes: Array(moverShapes).fill({ ...detailed, position: [3, 0, 0] }) },
+                { ...overlapping.movers[0], shapes: Array(moverShapes).fill({ ...detailed, position: [2, 0, 0] }) },
             ],
         }
         let attempt = 0
@@ -987,6 +987,8 @@ const degraded = {
     ],
 }
 const overlapping = { ...scene, movers: [{ ...scene.movers[0], shapes: [shape] }] }
+// The moving part ends far from the only still body: the confusing floating-part scene.
+const detached = { ...scene, still: [{ ...shape, position: [-5, 0, 0] }] }
 
 it.each([
     {
@@ -1010,6 +1012,14 @@ it.each([
         responses: [{ scene: overlapping }],
         status: 503,
         reason: 'repair_overlap',
+        calls: 2,
+        cacheOnly: 404,
+    },
+    {
+        name: 'quality repair still floating',
+        responses: [{ scene: detached }],
+        status: 503,
+        reason: 'repair_quality',
         calls: 2,
         cacheOnly: 404,
     },
@@ -1133,7 +1143,7 @@ it('clamps an out-of-range torus tube before the strict parse, as it clamps beve
     const torus = {
         type: 'torus',
         dimensions: { radius: 0.1, tube: 0.2 },
-        position: [-3, 0, 0],
+        position: [-0.7, 0.8, 0],
         rotation: [0, 0, 0],
     }
     const { handler } = setup({ scene: { ...scene, still: [torus] } })
@@ -1143,4 +1153,26 @@ it('clamps an out-of-range torus tube before the strict parse, as it clamps beve
         scene: { still: { dimensions: { radius: number; tube: number } }[] } | null
     }
     expect(body.scene?.still[0]?.dimensions.tube).toBeLessThan(0.1)
+})
+
+it('repairs a floating-part scene once with its quality codes and serves the seated repair', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    let attempt = 0
+    const { handler, fetchImpl, counter, bodies } = setup(null, 8, () =>
+        response({ scene: ++attempt === 1 ? detached : scene }),
+    )
+    const result = await handler(await request())
+    expect(result.status).toBe(200)
+    expect(await result.json()).toEqual({ scene })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(counter.used).toBe(2)
+    expect(JSON.stringify(bodies[1])).toContain('quality_detached:movers.0')
+    const logged = info.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+    expect(logged.filter((value) => value.event === 'step_motion_generation')).toMatchObject([
+        { accepted: false, reason: 'quality' },
+        { accepted: true },
+    ])
+    expect(logged.find((value) => value.event === 'step_motion_quality')).toMatchObject({
+        issues: ['quality_detached:movers.0'],
+    })
 })

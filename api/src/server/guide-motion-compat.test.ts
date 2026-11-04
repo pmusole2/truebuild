@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
 import type { Fact, ManualSession, ScreenContextInputsV2 } from '@truebuild/contracts'
 import type * as ContractExports from '@truebuild/contracts'
+import { stepMotionShapeWorldBounds } from '@truebuild/contracts'
 import type * as ModelExports from '@truebuild/contracts/model'
 import type * as ClientExports from '../../../app/src/api/model-client'
 import type * as DocumentExports from '../../../app/src/api/document-client'
@@ -412,8 +413,17 @@ it('keeps the actual installed clients compatible with pinned current-main and w
                                 const overlapping = fixtureScene('noble-step-1')
                                 // Preserve every shape and its size: a repair changes placement, not the modeled parts.
                                 const repaired = structuredClone(overlapping)
+                                // Slide the movers as one group along X until they rest against the still body: seated, not buried or floating.
+                                const stillMaxX = Math.max(
+                                    ...overlapping.still.map((shape) => stepMotionShapeWorldBounds(shape).max[0]),
+                                )
+                                const moverMinX = Math.min(
+                                    ...overlapping.movers.flatMap((mover) =>
+                                        mover.shapes.map((shape) => stepMotionShapeWorldBounds(shape).min[0]),
+                                    ),
+                                )
                                 for (const mover of repaired.movers)
-                                    for (const shape of mover.shapes) shape.position[0] += 200
+                                    for (const shape of mover.shapes) shape.position[0] += stillMaxX - moverMinX
                                 for (const accepted of [false, true]) {
                                     const operation = accepted ? 'motion-overlap-repaired' : 'motion-overlap-terminal'
                                     const motionRequest = registry.motionRequestForStep(
