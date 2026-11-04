@@ -1,3 +1,5 @@
+import type * as ReactModule from 'react'
+import type * as ReactNativeModule from 'react-native'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native'
 import { Text } from 'react-native'
 import {
@@ -63,8 +65,8 @@ jest.mock('./step-motion-registry', () => {
     }
 })
 jest.mock('./step-motion-hint', () => {
-    const { createElement } = jest.requireActual<typeof import('react')>('react')
-    const { Text: HostText } = jest.requireActual<typeof import('react-native')>('react-native')
+    const { createElement } = jest.requireActual<typeof ReactModule>('react')
+    const { Text: HostText } = jest.requireActual<typeof ReactNativeModule>('react-native')
     // Shows only what the real hint would present for this frame: its loader, its scene, or the manual reference.
     return {
         StepMotionHint: ({

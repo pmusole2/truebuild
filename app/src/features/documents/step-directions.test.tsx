@@ -250,6 +250,33 @@ describe('step directions', () => {
         expect(screen.getAllByText('This manual picture is unavailable.')).toHaveLength(unavailable + 1)
     })
 
+    it('preserves authored literal directions even when no fact rows can be numbered', async () => {
+        const session = createDemoManual()
+        const step = session.reviewedSteps[0]!
+        step.correction = null
+        step.orientation = { state: 'unknown', reason: 'Not printed.' }
+        step.connection = { state: 'unknown', reason: 'Not printed.' }
+        await renderGuide(session, (proposal) => {
+            const visit = (node: ScreenNodeV2): void => {
+                if (node.type === 'Section' && node.title?.kind === 'literal' && node.title.text === 'Directions')
+                    node.children.push({
+                        type: 'Text',
+                        content: { kind: 'literal', text: 'Keep the panel supported.' },
+                        role: 'body',
+                        emphasis: 'normal',
+                        tone: 'neutral',
+                        align: 'start',
+                    })
+                else if ('children' in node) node.children.forEach(visit)
+            }
+            visit(proposal.body)
+        })
+        const directions = within(screen.getByTestId('guide-directions'))
+        expect(directions.getByText('Do this')).toBeTruthy()
+        expect(directions.getByText('Keep the panel supported.')).toBeTruthy()
+        expect(screen.queryByText('Follow the motion above')).toBeNull()
+    })
+
     it('keeps the Watch it and manual strip headings stable from loading to motion', async () => {
         const session = sessionWithActions(ACTIONS)
         for (const page of session.pages) Object.assign(page, { width: 600, height: 800, mimeType: 'image/png' })

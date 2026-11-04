@@ -1971,7 +1971,10 @@ function NodeContent({
                     {children}
                 </>
             )
-            if (directions && !Object.keys(environment.actionNumbers).some((at) => at.startsWith(`${path}.`)))
+            if (
+                directions &&
+                !node.children.some((child, index) => hasVisibleContent(child, `${path}.${index}`, environment))
+            )
                 return tail.length === 0 ? null : <View style={{ alignSelf: 'flex-end' }}>{tail}</View>
             const sectionContent =
                 document.kind === 'guide' && title === 'Check your work' ? <Card>{content}</Card> : content
